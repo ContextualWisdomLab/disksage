@@ -48,13 +48,9 @@ jobs:
         with:
           workspaces: src-tauri
           cache-targets: false
-      - name: Rust tests (includes unix symlink test)
+      - name: Rust, cloud, and archive proof tests
         env:
           # Mutation fixtures require an owned runner path rather than the globally protected /tmp.
-          TMPDIR: ${{ runner.temp }}
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Headless cloud and archive proof tests
-        env:
           TMPDIR: ${{ runner.temp }}
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli,archive-cli
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

@@ -37,7 +37,11 @@ mod dataset_metadata;
 pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dupes;
+/// Public exact-duplicate boundary, including fail-closed legacy-report safety policy.
+#[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
+#[path = "duplicate_audit.rs"]
+mod duplicate_audit_implementation;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
@@ -45,6 +49,8 @@ pub mod git_clone_reclaim;
 pub mod git_worktree;
 pub mod generated_cache_reclaim;
 pub mod gradle_daemon_logs;
+/// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
+pub mod git_worktree_github_evidence;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
@@ -79,6 +85,11 @@ pub mod organization_lineage;
 mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod photo_similarity_audit;
+/// Privacy-safe desktop projection of read-only Podman reclaim evidence.
+pub mod podman_desktop;
+/// Distinct IPC registration for the privacy-safe Podman evidence contract.
+pub mod podman_desktop_bridge;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
@@ -97,10 +108,18 @@ mod reasoning;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules.rs"]
+mod rules_catalog;
+#[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules_authority.rs"]
 mod rules;
 /// Read-only VM-backed storage inspection plus explicit guest trim for Podman and Colima.
 pub mod runtime_storage;
 #[cfg_attr(coverage, allow(dead_code))]
+#[path = "safety.rs"]
+mod safety_core;
+#[cfg_attr(coverage, allow(dead_code))]
+#[path = "safety_authority.rs"]
 mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
@@ -160,10 +179,12 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
+            podman_desktop_bridge::inspect_podman_desktop_evidence,
             commands::execute_podman_dangling_image_prune,
             commands::inspect_runtime_storage,
             commands::execute_runtime_storage_trim,
             commands::execute_runtime_storage_recovery,
+            commands::execute_inactive_podman_machine_stop,
             container_orphan_commands::inspect_container_orphans,
             container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,

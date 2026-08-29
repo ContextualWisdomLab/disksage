@@ -17,14 +17,6 @@
   let busy = $state(false);
   let loadError = $state("");
   let cacheRetryMessage = $state("");
-  let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
-  let podmanBusy = $state(false);
-  let podmanError = $state("");
-  let podmanPruneBusy = $state(false);
-  let podmanPruneError = $state("");
-  let podmanPrunePhrase = $state("");
-  let podmanPruneRationale = $state("");
-  let podmanPruneExecution: api.PodmanDanglingImagePruneExecution | null = $state(null);
   let runtimeStoragePlans: api.RuntimeStoragePlan[] = $state([]);
   let runtimeStorageBusy = $state(false);
   let runtimeStorageError = $state("");
@@ -74,20 +66,6 @@
       loadVerdicts(artifacts.map((a) => a.path));
     } catch {
       loadError = "정리 대상을 불러오지 못했습니다. 저장 공간을 확인한 뒤 다시 시도하세요.";
-    }
-  }
-
-  async function inspectPodman() {
-    if (podmanBusy) return;
-    podmanBusy = true;
-    podmanError = "";
-    try {
-      podmanPlan = await api.inspectPodmanReclaim();
-    } catch {
-      podmanError = "Podman 상태를 확인하지 못했습니다. 다시 시도하십시오.";
-      podmanPlan = null;
-    } finally {
-      podmanBusy = false;
     }
   }
 
@@ -170,39 +148,6 @@
       runtimeStorageError = "연결을 복구하지 못했습니다. 실행 중인 작업을 확인한 뒤 다시 시도하세요.";
     } finally {
       runtimeStorageBusy = false;
-    }
-  }
-
-  function podmanPruneReady(): boolean {
-    const phrase = podmanPlan?.dangling_prune_approval_phrase;
-    return phrase !== null
-      && phrase !== undefined
-      && podmanPrunePhrase.trim() === phrase
-      && podmanPruneRationale.trim().length > 0
-      && !podmanPruneBusy;
-  }
-
-  async function prunePodmanDanglingImages() {
-    if (!podmanPlan || !podmanPruneReady()) return;
-    const okay = await confirm(
-      "사용하지 않는 Podman 이미지만 정리합니다. 다른 데이터는 건드리지 않습니다.\n\n실행 전에 목록을 다시 확인합니다.",
-      { title: "DiskSage Podman 정리", kind: "warning" },
-    );
-    if (!okay) return;
-    podmanPruneBusy = true;
-    podmanPruneError = "";
-    try {
-      podmanPruneExecution = await api.executePodmanDanglingImagePrune(
-        podmanPrunePhrase.trim(),
-        podmanPruneRationale.trim(),
-      );
-      podmanPrunePhrase = "";
-      podmanPruneRationale = "";
-      podmanPlan = await api.inspectPodmanReclaim();
-    } catch {
-      podmanPruneError = "Podman 이미지를 정리하지 못했습니다. 상태를 다시 확인하십시오.";
-    } finally {
-      podmanPruneBusy = false;
     }
   }
 
@@ -297,6 +242,7 @@
   }
 
   let failedResults = $derived(results.filter((r) => !r.ok));
+  let warningResults = $derived(results.filter((r) => r.ok && r.warning));
 </script>
 
 <section>
@@ -376,66 +322,17 @@
         {/each}
       </ul>
     {/if}
+    {#if warningResults.length > 0}
+      <ul class="warnings" role="status">
+        {#each warningResults as r (r.path)}
+          <li title={r.path}>이동은 완료됐지만 기록을 확인하지 못했습니다. 휴지통에서 항목을 확인한 뒤 다시 스캔하세요.</li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
-
-  <h3>Podman 저장 공간</h3>
-  <p class="notice">
-    Podman이 사용하는 저장 공간을 확인합니다. 정리는 목록을 확인하고 승인한 경우에만 실행합니다.
-  </p>
-  <button onclick={inspectPodman} disabled={podmanBusy}>
-    {podmanBusy ? "확인 중…" : "Podman 상태 확인"}
-  </button>
-  {#if podmanError}<p class="error" role="alert">Podman 상태를 다시 확인하세요. {podmanError}</p>{/if}
-  {#if podmanPlan}
-    <div class="podman-evidence" aria-live="polite">
-      <p>
-        {podmanPlan.evidence_complete ? "확인 완료" : "확인 불완전"} ·
-        사용 가능 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
-        정리 가능 {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
-          ? "미확인"
-          : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}
-      </p>
-      {#if podmanPlan.unused_images}
-        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
-      {/if}
-      {#if podmanPlan.dangling_prune_approval_phrase}
-        <div class="podman-prune">
-          <p>참조되지 않는 이미지만 정리 대상으로 확인되었습니다. 실행 전에 목록을 확인하세요.</p>
-          <label>정확한 승인 문구
-            <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
-          </label>
-          <label>정리 사유
-            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 다시 만들 수 있는 미사용 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
-          </label>
-          <button onclick={prunePodmanDanglingImages} disabled={!podmanPruneReady()}>
-            {podmanPruneBusy ? "목록 확인 후 이미지 정리 중…" : "확인한 이미지 정리"}
-          </button>
-          {#if podmanPruneError}<p class="error" role="alert">Podman 정리를 다시 시도하세요. {podmanPruneError}</p>{/if}
-        </div>
-      {/if}
-      {#if podmanPruneExecution}
-        <p class="notice">
-          실행 결과를 확인하세요: {podmanPruneExecution.executed ? "완료" : "실행되지 않음"} ·
-          저장 공간 변화 {podmanPruneExecution.observed_available_gain_bytes === null
-            ? "미확인"
-            : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
-        </p>
-      {/if}
-      {#if podmanPlan.system_df}
-        <p>사용하지 않는 저장 공간 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
-      {/if}
-      {#if podmanPlan.assessment.recommended_actions.length > 0}
-        <ul class="errors">
-          {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
-            <li>다음 단계: {action.rationale}</li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
-  {/if}
 
   <ContainerOrphanCleanup />
 
@@ -526,11 +423,9 @@
   .disabled { color: #aaa; }
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
-  .errors { font-size: 0.85rem; }
+  .errors, .warnings { font-size: 0.85rem; }
+  .warnings { color: #7a5a00; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
-  .podman-prune { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
-  .podman-prune label { display: grid; gap: 0.25rem; }
-  .podman-prune input, .podman-prune textarea { width: 100%; box-sizing: border-box; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
     font-size: 0.75rem; color: #fff;

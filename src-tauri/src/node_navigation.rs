@@ -14,7 +14,10 @@ const OUTSIDE_ROOT: &str = "path outside scanned root";
 const NOT_IN_SCAN: &str = "path unavailable in scan result";
 
 fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, String> {
-    if path.components().any(|component| matches!(component, Component::ParentDir)) {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
         return Err(OUTSIDE_ROOT.into());
     }
     if !path.starts_with(&res.root) {
@@ -48,7 +51,11 @@ fn entry_is_link_or_reparse(path: &Path, file_type: &std::fs::FileType) -> bool 
     }
 }
 
-fn scanned_directory_size(res: &ScanResult, display_path: &Path, canonical_path: &Path) -> Option<u64> {
+fn scanned_directory_size(
+    res: &ScanResult,
+    display_path: &Path,
+    canonical_path: &Path,
+) -> Option<u64> {
     res.dir_sizes
         .get(display_path)
         .or_else(|| res.dir_sizes.get(canonical_path))
@@ -59,9 +66,16 @@ fn scanned_directory_size(res: &ScanResult, display_path: &Path, canonical_path:
 /// canonical scanned root and was actually admitted by the scan. Directories pruned by scanner
 /// policy remain absent from navigation even though they still exist on disk.
 pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
+    node_view_after_snapshot(res, path, || {})
+}
+
+fn node_view_after_snapshot(
+    res: &ScanResult,
+    path: &Path,
+    after_snapshot: impl FnOnce(),
+) -> Result<NodeView, String> {
     let canonical_path = canonical_navigation_path(res, path)?;
-    let canonical_root =
-        std::fs::canonicalize(&res.root).map_err(|_| OUTSIDE_ROOT.to_string())?;
+    let canonical_root = std::fs::canonicalize(&res.root).map_err(|_| OUTSIDE_ROOT.to_string())?;
     let relative = canonical_path
         .strip_prefix(&canonical_root)
         .map_err(|_| OUTSIDE_ROOT.to_string())?;
@@ -79,10 +93,24 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         }
         None => return Err(NOT_IN_SCAN.into()),
     };
+    let directory_entries = std::fs::read_dir(&canonical_path)
+        .map_err(|_| "node directory unavailable".to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "node directory unavailable".to_string())?;
+    after_snapshot();
+    let captured_file_manifest =
+        crate::scanner::directory_file_manifest_from_entries(&directory_entries);
+    let complete_file_manifest_matches = !res.cancelled
+        && res
+            .directory_file_manifests
+            .get(&display_path)
+            .or_else(|| res.directory_file_manifests.get(&canonical_path))
+            .is_some_and(|expected| captured_file_manifest.as_ref() == Some(expected));
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())? {
-        let Ok(entry) = entry else { continue };
-        let Ok(file_type) = entry.file_type() else { continue };
+    for entry in directory_entries {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         let entry_path = entry.path();
         if entry_is_link_or_reparse(&entry_path, &file_type) {
             continue;
@@ -93,13 +121,21 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
                 continue;
             };
             (size, true)
-        } else {
+        } else if file_type.is_file() {
+            if !complete_file_manifest_matches
+                && !res.admitted_files.contains(&display_entry_path)
+                && !res.admitted_files.contains(&entry_path)
+            {
+                continue;
+            }
             (
                 std::fs::symlink_metadata(&entry_path)
                     .map(|metadata| metadata.len())
                     .unwrap_or_default(),
                 false,
             )
+        } else {
+            continue;
         };
         entries.push(EntryView {
             name: entry.file_name().to_string_lossy().into_owned(),
@@ -168,7 +204,10 @@ mod tests {
         result.dir_sizes.remove(&pruned);
 
         let root_view = node_view(&result, root.path()).unwrap();
-        assert!(root_view.entries.iter().any(|entry| entry.name == "visible"));
+        assert!(root_view
+            .entries
+            .iter()
+            .any(|entry| entry.name == "visible"));
         assert!(root_view
             .entries
             .iter()
@@ -191,6 +230,28 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_scan_hides_regular_files_without_admission_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let observed = root.path().join("observed.bin");
+        let unvisited = root.path().join("unvisited.bin");
+        std::fs::write(&observed, b"observed").unwrap();
+        std::fs::write(&unvisited, b"unvisited").unwrap();
+        let mut result = scan(root.path());
+        result.cancelled = true;
+        result.admitted_files.remove(&unvisited);
+
+        let view = node_view(&result, root.path()).unwrap();
+        assert!(view
+            .entries
+            .iter()
+            .any(|entry| entry.name == "observed.bin"));
+        assert!(view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "unvisited.bin"));
+    }
+
+    #[test]
     fn immediately_cancelled_scan_keeps_an_empty_root_view() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("unscanned.bin"), b"not observed").unwrap();
@@ -201,6 +262,41 @@ mod tests {
         let view = node_view(&result, root.path()).unwrap();
         assert_eq!(view.size, 0);
         assert!(view.entries.is_empty());
+    }
+
+    #[test]
+    fn file_created_after_directory_snapshot_is_not_returned() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("scanned.bin"), b"scanned").unwrap();
+        let result = scan(root.path());
+
+        let view = node_view_after_snapshot(&result, root.path(), || {
+            std::fs::write(root.path().join("post-scan.bin"), b"new").unwrap();
+        })
+        .unwrap();
+
+        assert!(view.entries.iter().any(|entry| entry.name == "scanned.bin"));
+        assert!(view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "post-scan.bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_is_not_returned_when_regular_file_manifest_matches() {
+        use std::os::unix::net::UnixListener;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("regular.bin"), b"regular").unwrap();
+        let socket_path = root.path().join("service.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let result = scan(root.path());
+
+        let view = node_view(&result, root.path()).unwrap();
+
+        assert!(view.entries.iter().any(|entry| entry.name == "regular.bin"));
+        assert!(view.entries.iter().all(|entry| entry.name != "service.sock"));
     }
 
     #[test]
@@ -244,7 +340,10 @@ mod tests {
         std::os::unix::fs::symlink(external.path(), &escape).unwrap();
         let result = scan(root.path());
 
-        assert_eq!(node_view(&result, &escape).err().as_deref(), Some(OUTSIDE_ROOT));
+        assert_eq!(
+            node_view(&result, &escape).err().as_deref(),
+            Some(OUTSIDE_ROOT)
+        );
     }
 
     #[cfg(unix)]

@@ -67,7 +67,11 @@ for required_name in \
   disksage-cloud-plan-windows-x86_64.exe \
   disksage-duplicate-audit-windows-x86_64.exe \
   disksage-cloud-plan-macos-arm64 \
-  disksage-duplicate-audit-macos-arm64; do
+  disksage-duplicate-audit-macos-arm64 \
+  disksage-cloud-local-eviction-batch-macos-arm64 \
+  disksage-icloud-local-eviction-batch-macos-arm64 \
+  disksage-cloud-local-inventory-macos-arm64 \
+  disksage-onedrive-finder-verify-macos-arm64; do
   require_exactly_one_file "$required_name"
   require_exactly_one_file "$required_name.sha256"
 done
@@ -75,8 +79,8 @@ done
 checksum_files=()
 checksum_file=""
 while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find "$artifact_root" -type f -name '*.sha256' -print0)
-if [[ ${#checksum_files[@]} -ne 6 ]]; then
-  printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+if [[ ${#checksum_files[@]} -ne 10 ]]; then
+  printf 'Expected ten operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
   exit 1
 fi
 
@@ -115,7 +119,7 @@ done
 regular_file_count=0
 matched_path=""
 while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
-if [[ $regular_file_count -ne 17 ]]; then
-  printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+if [[ $regular_file_count -ne 25 ]]; then
+  printf 'Unexpected release artifact entries: expected exactly 25 regular files, found %s.\n' "$regular_file_count" >&2
   exit 1
 fi

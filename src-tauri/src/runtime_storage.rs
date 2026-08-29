@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
@@ -44,13 +44,17 @@ pub struct RuntimeStoragePlan {
     pub executable_available: bool,
     pub guest_running: Option<bool>,
     pub guest_reachable: Option<bool>,
+    /// Fresh running-container count used only to authorize an inactive Podman machine stop.
+    pub running_container_count: Option<u64>,
     pub trim_command: Option<Vec<String>>,
+    pub stop_command: Option<Vec<String>>,
     pub recovery_command: Option<Vec<Vec<String>>>,
     pub host_compaction_supported: bool,
     pub host_compaction_blockers: Vec<String>,
     pub observed_at_ms: u64,
     pub plan_fingerprint: String,
     pub exact_approval_phrase: Option<String>,
+    pub stop_approval_phrase: Option<String>,
     pub recovery_approval_phrase: Option<String>,
     pub evidence_complete: bool,
     pub issue: Option<String>,
@@ -73,6 +77,10 @@ pub struct RuntimeStorageExecution {
     pub rationale: String,
     pub volume_comparison: Option<crate::volume_pressure::LocalVolumeComparison>,
     pub volume_evidence_error: Option<String>,
+    pub runtime_image_allocated_bytes_before: Option<u64>,
+    pub runtime_image_allocated_bytes_after: Option<u64>,
+    pub runtime_image_reclaimed_bytes: Option<u64>,
+    pub runtime_image_evidence_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -87,6 +95,31 @@ pub struct RuntimeStorageRecoveryExecution {
     pub executed: bool,
     pub executed_at_ms: u64,
     pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeStorageStopExecution {
+    pub schema_kind: &'static str,
+    pub schema_version: u32,
+    pub runtime: RuntimeStorageKind,
+    pub command: Vec<String>,
+    pub status_code: i32,
+    #[serde(skip_serializing)]
+    pub stdout: String,
+    #[serde(skip_serializing)]
+    pub stderr: String,
+    pub output_truncated: bool,
+    pub running_container_count_before: u64,
+    pub guest_running_after: Option<bool>,
+    pub executed: bool,
+    pub executed_at_ms: u64,
+    pub rationale: String,
+    pub volume_comparison: Option<crate::volume_pressure::LocalVolumeComparison>,
+    pub volume_evidence_error: Option<String>,
+    pub runtime_image_allocated_bytes_before: Option<u64>,
+    pub runtime_image_allocated_bytes_after: Option<u64>,
+    pub runtime_image_reclaimed_bytes: Option<u64>,
+    pub runtime_image_evidence_error: Option<String>,
 }
 
 fn fixed_binary(runtime: RuntimeStorageKind) -> PathBuf {
@@ -278,12 +311,14 @@ fn fingerprint(
     runtime: RuntimeStorageKind,
     running: Option<bool>,
     reachable: Option<bool>,
+    running_containers: Option<u64>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"disksage.runtime-storage-plan.v1\0");
     hasher.update(runtime.as_str().as_bytes());
     hasher.update([running.unwrap_or(false) as u8]);
     hasher.update([reachable.unwrap_or(false) as u8]);
+    hasher.update(running_containers.unwrap_or(u64::MAX).to_le_bytes());
     hasher
         .finalize()
         .iter()
@@ -352,7 +387,33 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
     } else {
         None
     };
-    let fingerprint = fingerprint(runtime, guest_running, guest_reachable);
+    let running_container_count = if runtime == RuntimeStorageKind::PodmanMachine
+        && guest_running == Some(true)
+        && guest_reachable == Some(true)
+    {
+        run_bounded(
+            &binary,
+            &[
+                "--connection",
+                "podman-machine-default",
+                "ps",
+                "--format",
+                "json",
+            ],
+        )
+        .ok()
+        .filter(|output| output.0 == 0 && !output.3)
+        .and_then(|output| serde_json::from_str::<serde_json::Value>(&output.1).ok())
+        .and_then(|value| value.as_array().map(|records| records.len() as u64))
+    } else {
+        None
+    };
+    let fingerprint = fingerprint(
+        runtime,
+        guest_running,
+        guest_reachable,
+        running_container_count,
+    );
     let ready =
         executable_available && guest_running == Some(true) && guest_reachable == Some(true);
     let recovery_ready =
@@ -388,7 +449,11 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
         executable_available,
         guest_running,
         guest_reachable,
+        running_container_count,
         trim_command: ready.then(|| trim_command(runtime)),
+        // Do not advertise an action that cannot be authorized atomically. The count probe and
+        // a later stop are separate Podman operations, so a container may start between them.
+        stop_command: None,
         recovery_command,
         host_compaction_supported: false,
         host_compaction_blockers: vec![
@@ -404,6 +469,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                 fingerprint
             )
         }),
+        // A count probe and a later stop are not one atomic runtime operation. Until Podman
+        // exposes a conditional stop boundary, automatic stop authority remains unavailable.
+        stop_approval_phrase: None,
         recovery_approval_phrase: recovery_ready.then(|| {
             format!(
                 "DiskSage {} 연결 복구 승인 {}",
@@ -416,6 +484,22 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
             && (guest_running != Some(true) || guest_reachable.is_some()),
         issue,
     }
+}
+
+/// Stop a reachable Podman machine only after a fresh native query proves zero running containers.
+pub fn execute_inactive_stop(
+    confirmation_phrase: &str,
+    rationale: &str,
+) -> Result<RuntimeStorageStopExecution, String> {
+    if rationale.trim().is_empty()
+        || rationale != rationale.trim()
+        || rationale.chars().count() > 1_000
+        || rationale.chars().any(char::is_control)
+    {
+        return Err("runtime-storage-rationale-invalid".into());
+    }
+    let _ = confirmation_phrase;
+    Err("runtime-storage-conditional-stop-unavailable".into())
 }
 
 /// Restart a runtime only when it reports running but its guest is unreachable.
@@ -483,6 +567,37 @@ pub fn inspect() -> Vec<RuntimeStoragePlan> {
     .collect()
 }
 
+fn compare_runtime_image_evidence(
+    before: crate::podman_reclaim::RawImageEvidence,
+    after: crate::podman_reclaim::RawImageEvidence,
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<String>) {
+    if before.path != after.path
+        || before.identity_sha256.is_none()
+        || before.identity_sha256 != after.identity_sha256
+    {
+        return (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-changed".into()),
+        );
+    }
+    let before_bytes = before.allocated_bytes;
+    let after_bytes = after.allocated_bytes;
+    match before_bytes.zip(after_bytes) {
+        Some((before, after)) if before >= after => {
+            (Some(before), Some(after), Some(before - after), None)
+        }
+        Some((before, after)) => (
+            Some(before),
+            Some(after),
+            None,
+            Some("runtime-storage-image-allocation-increased".into()),
+        ),
+        None => (before_bytes, after_bytes, None, None),
+    }
+}
+
 /// Run guest `fstrim` only after the exact, fresh plan phrase has been approved.
 pub fn execute_trim(
     runtime: RuntimeStorageKind,
@@ -524,11 +639,25 @@ pub fn execute_trim(
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
         .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
+    let image_before = (runtime == RuntimeStorageKind::PodmanMachine).then(|| {
+        crate::podman_reclaim::inspect_raw_image_evidence(
+            &fixed_binary(runtime),
+            crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
+            COMMAND_TIMEOUT,
+        )
+    });
     let output = run_bounded_with_timeout(&fixed_binary(runtime), args, RECOVERY_TIMEOUT)?;
     let after = home
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
         .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
+    let image_after = (runtime == RuntimeStorageKind::PodmanMachine).then(|| {
+        crate::podman_reclaim::inspect_raw_image_evidence(
+            &fixed_binary(runtime),
+            crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
+            COMMAND_TIMEOUT,
+        )
+    });
     let (volume_comparison, volume_evidence_error) = match (before, after) {
         (Ok(before), Ok(after)) => {
             match crate::volume_pressure::compare_snapshots(&before, &after, None) {
@@ -537,6 +666,22 @@ pub fn execute_trim(
             }
         }
         (Err(error), _) | (_, Err(error)) => (None, Some(error)),
+    };
+    let (
+        runtime_image_allocated_bytes_before,
+        runtime_image_allocated_bytes_after,
+        runtime_image_reclaimed_bytes,
+        runtime_image_evidence_error,
+    ) = match (image_before, image_after) {
+        (Some(Ok(before)), Some(Ok(after))) => compare_runtime_image_evidence(before, after),
+        (Some(Err(error)), _) | (_, Some(Err(error))) => (None, None, None, Some(error)),
+        (None, None) => (None, None, None, None),
+        _ => (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-evidence-incomplete".into()),
+        ),
     };
     Ok(RuntimeStorageExecution {
         schema_kind: "disksage.runtime-storage-execution",
@@ -552,6 +697,10 @@ pub fn execute_trim(
         rationale: rationale.into(),
         volume_comparison,
         volume_evidence_error,
+        runtime_image_allocated_bytes_before,
+        runtime_image_allocated_bytes_after,
+        runtime_image_reclaimed_bytes,
+        runtime_image_evidence_error,
     })
 }
 
@@ -580,8 +729,36 @@ mod tests {
     #[test]
     fn reachability_is_bound_into_the_plan_fingerprint() {
         assert_ne!(
-            fingerprint(RuntimeStorageKind::PodmanMachine, Some(true), Some(true)),
-            fingerprint(RuntimeStorageKind::PodmanMachine, Some(true), Some(false))
+            fingerprint(
+                RuntimeStorageKind::PodmanMachine,
+                Some(true),
+                Some(true),
+                Some(0)
+            ),
+            fingerprint(
+                RuntimeStorageKind::PodmanMachine,
+                Some(true),
+                Some(false),
+                Some(0)
+            )
+        );
+    }
+
+    #[test]
+    fn running_container_count_changes_stop_authority() {
+        assert_ne!(
+            fingerprint(
+                RuntimeStorageKind::PodmanMachine,
+                Some(true),
+                Some(true),
+                Some(0)
+            ),
+            fingerprint(
+                RuntimeStorageKind::PodmanMachine,
+                Some(true),
+                Some(true),
+                Some(1)
+            )
         );
     }
 
@@ -614,6 +791,40 @@ mod tests {
         assert_eq!(
             execute_trim(RuntimeStorageKind::Colima, "", "operator\u{0007}note").unwrap_err(),
             "runtime-storage-rationale-invalid"
+        );
+    }
+
+    #[test]
+    fn inactive_stop_is_unavailable_without_an_atomic_runtime_boundary() {
+        let plan = inspect_runtime(RuntimeStorageKind::PodmanMachine, 42);
+        assert!(plan.stop_command.is_none());
+        assert!(plan.stop_approval_phrase.is_none());
+        assert_eq!(
+            execute_inactive_stop("any", "customer requested stop").unwrap_err(),
+            "runtime-storage-conditional-stop-unavailable"
+        );
+    }
+
+    #[test]
+    fn image_comparison_rejects_replacement_and_allocation_growth() {
+        let evidence = |identity: &str, bytes| crate::podman_reclaim::RawImageEvidence {
+            path: "/tmp/machine.raw".into(),
+            logical_bytes: 100,
+            allocated_bytes: Some(bytes),
+            identity_sha256: Some(identity.into()),
+        };
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 80), evidence("b", 40)).3,
+            Some("runtime-storage-image-changed".into())
+        );
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 40), evidence("a", 80)),
+            (
+                Some(40),
+                Some(80),
+                None,
+                Some("runtime-storage-image-allocation-increased".into())
+            )
         );
     }
 }

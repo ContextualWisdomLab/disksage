@@ -1,4 +1,4 @@
-# ADR-0021: Use uv's native prune only after active-use evidence closes
+# ADR-0022: Use uv's native prune only after active-use evidence closes
 
 ## Status
 

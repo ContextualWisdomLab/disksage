@@ -502,44 +502,74 @@ where
     Ok(())
 }
 
-pub fn trash_delete_if_identity(
-    path: &Path,
-    expected_object_id: &str,
-    bytes: u64,
-    journal_path: &Path,
-    now_ms: u64,
-) -> Result<(), SafetyError> {
-    trash_delete_if_identity_with_manifest(path, expected_object_id, bytes, None, journal_path, now_ms)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashDeleteOutcome {
+    pub moved_to_trash: bool,
+    pub terminal_journal_error: Option<String>,
+    pub staging_cleanup_error: Option<String>,
 }
 
-/// Move one exact cache manifest to Trash after validating it at the staging boundary.
-pub fn trash_delete_cache_target_if_identity(
+/// Return post-mutation warnings without rewriting a completed Trash move as a failed mutation.
+pub fn trash_delete_outcome_warning(outcome: &TrashDeleteOutcome) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(error) = &outcome.terminal_journal_error {
+        warnings.push(format!("trash move completed but terminal audit record failed: {error}"));
+    }
+    if let Some(error) = &outcome.staging_cleanup_error {
+        warnings.push(error.clone());
+    }
+    (!warnings.is_empty()).then(|| warnings.join("; "))
+}
+
+fn trash_delete_outcome(
+    mutation: Result<(), SafetyError>,
+    terminal_journal: Result<(), SafetyError>,
+    staging_cleanup_error: Option<String>,
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    match mutation {
+        Ok(()) => Ok(TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: terminal_journal.err().map(|error| error.to_string()),
+            staging_cleanup_error,
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_empty_staging_dir(staging_dir: &Path) -> Option<String> {
+    std::fs::remove_dir(staging_dir)
+        .err()
+        .map(|error| format!("staging directory cleanup failed: {error}"))
+}
+
+pub fn trash_delete_if_identity_with_outcome(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,
-    expected_modified_ms: u64,
-    expected_manifest_fingerprint: &str,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<(), SafetyError> {
-    trash_delete_if_identity_with_manifest(
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_verifier(
         path,
         expected_object_id,
         bytes,
-        Some((expected_modified_ms, expected_manifest_fingerprint)),
         journal_path,
         now_ms,
+        |_| true,
     )
 }
 
-fn trash_delete_if_identity_with_manifest(
+fn trash_delete_if_identity_with_verifier<F>(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,
-    expected_manifest: Option<(u64, &str)>,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<(), SafetyError> {
+    evidence_matches: F,
+) -> Result<TrashDeleteOutcome, SafetyError>
+where
+    F: Fn(&Path) -> bool,
+{
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -581,23 +611,12 @@ fn trash_delete_if_identity_with_manifest(
         return Err(error);
     }
 
+    let mut staging_cleanup_error = None;
     let result = (|| -> Result<(), SafetyError> {
-        let manifest_matches = |candidate_path: &Path| {
-            expected_manifest.is_none_or(|(modified_ms, fingerprint)| {
-                crate::rules::cache_target(candidate_path)
-                    .ok()
-                    .is_some_and(|target| {
-                        target.object_id == expected_object_id
-                            && target.bytes == bytes
-                            && target.modified_ms == modified_ms
-                            && target.manifest_fingerprint == fingerprint
-                    })
-            })
-        };
-        if !manifest_matches(path) {
+        if !evidence_matches(path) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(
-                "cache manifest changed; rescan before deletion".into(),
+                "reviewed contents changed; rescan before moving to Trash".into(),
             ));
         }
         if let Err(error) = std::fs::rename(path, &staged) {
@@ -627,13 +646,13 @@ fn trash_delete_if_identity_with_manifest(
                 ))),
             };
         }
-        if !manifest_matches(&staged) {
+        if !evidence_matches(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(
-                    "staged cache manifest changed; nothing was trashed".into(),
+                    "staged contents changed; nothing was moved to Trash".into(),
                 )),
                 Err(restore_error) => Err(SafetyError::Trash(format!(
-                    "staged cache manifest changed; {restore_error}"
+                    "staged contents changed; {restore_error}"
                 ))),
             };
         }
@@ -645,14 +664,81 @@ fn trash_delete_if_identity_with_manifest(
                 }
             };
         }
+        staging_cleanup_error = cleanup_empty_staging_dir(&staging_dir);
         Ok(())
     })();
     entry.outcome = match &result {
         Ok(()) => "ok".into(),
         Err(error) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    let terminal_journal = journal_append(journal_path, &entry);
+    trash_delete_outcome(result, terminal_journal, staging_cleanup_error)
+}
+
+/// Move an unchanged cache target to Trash after revalidating its complete bounded manifest on
+/// both sides of the atomic staging rename.
+pub(crate) fn trash_delete_cache_target_with_outcome(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    expected_modified_ms: u64,
+    expected_manifest_fingerprint: &str,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_verifier(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+        |candidate_path| {
+            crate::rules::cache_target(candidate_path)
+                .ok()
+                .is_some_and(|target| {
+                    target.object_id == expected_object_id
+                        && target.bytes == bytes
+                        && target.modified_ms == expected_modified_ms
+                        && target.manifest_fingerprint == expected_manifest_fingerprint
+                })
+        },
+    )
+}
+
+pub fn trash_delete_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    let outcome = trash_delete_if_identity_with_outcome(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )?;
+    completed_trash_move(outcome)
+}
+
+/// Preserve truthful mutation and audit status for legacy callers that expose only one result.
+///
+/// Callers that can publish post-mutation warnings use `trash_delete_if_identity_with_outcome`.
+/// A terminal journal failure must reach legacy callers even though the completed OS Trash move
+/// remains represented by the outcome-aware API. Empty staging-directory cleanup is advisory.
+fn completed_trash_move(outcome: TrashDeleteOutcome) -> Result<(), SafetyError> {
+    if !outcome.moved_to_trash {
+        return Err(SafetyError::Trash(
+            "trash move did not complete; rescan before cleanup".into(),
+        ));
+    }
+    if let Some(error) = outcome.terminal_journal_error {
+        return Err(SafetyError::Journal(format!(
+            "trash move completed but its terminal audit record failed: {error}"
+        )));
+    }
+    Ok(())
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -761,8 +847,9 @@ pub fn permanent_delete_dir_if_identity(
         // The caller's probe precedes the atomic rename and therefore cannot close the final
         // open-handle race by itself.  Once staged, the original pathname is unavailable to new
         // users; recursively probe the exact staged object before the irreversible removal.
-        let active_use = crate::git_worktree::active_use_evidence(
+        let active_use = crate::git_worktree::active_use_evidence_with_command_path(
             &staged,
+            path,
             PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
             crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
             true,
@@ -967,6 +1054,53 @@ pub fn move_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_trash_preserves_moved_state_when_terminal_journal_fails() {
+        let outcome =
+            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into())), None)
+                .unwrap();
+        assert!(outcome.moved_to_trash);
+        assert_eq!(
+            outcome.terminal_journal_error.as_deref(),
+            Some("저널 기록 실패: disk-full")
+        );
+        let warning = trash_delete_outcome_warning(&outcome).unwrap();
+        assert!(warning.contains("terminal audit record failed"));
+        assert!(warning.contains("disk-full"));
+    }
+
+    #[test]
+    fn legacy_result_propagates_terminal_audit_failure_after_completed_move() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: Some("journal device full".into()),
+            staging_cleanup_error: None,
+        };
+
+        let error = completed_trash_move(outcome).unwrap_err();
+        assert!(matches!(error, SafetyError::Journal(message) if message.contains("journal device full")));
+    }
+
+    #[test]
+    fn legacy_result_keeps_completed_move_success_when_only_empty_staging_cleanup_fails() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: None,
+            staging_cleanup_error: Some("staging cleanup failed".into()),
+        };
+
+        assert!(completed_trash_move(outcome).is_ok());
+    }
+
+    #[test]
+    fn successful_trash_removes_its_empty_private_staging_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join(".disksage-trash-staging");
+        std::fs::create_dir(&staging).unwrap();
+        assert_eq!(cleanup_empty_staging_dir(&staging), None);
+        assert!(!staging.exists());
+    }
     use std::path::Path;
 
     #[test]
@@ -1752,26 +1886,30 @@ mod tests {
     }
 
     #[test]
-    fn trash_cache_target_rejects_changed_manifest_before_staging() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("cache-entry");
-        std::fs::create_dir(&cache).unwrap();
-        std::fs::write(cache.join("payload.bin"), b"old").unwrap();
-        let target = crate::rules::cache_target(&cache).unwrap();
-        std::fs::write(cache.join("payload.bin"), b"new").unwrap();
+    fn trash_staging_restores_when_manifest_changes_at_mutation_boundary() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let error = trash_delete_cache_target_if_identity(
-            &cache,
-            &target.object_id,
-            target.bytes,
-            target.modified_ms,
-            &target.manifest_fingerprint,
-            &tmp.path().join("journal.jsonl"),
-            1,
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("reviewed-cache");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("payload.bin"), b"reviewed").unwrap();
+        let object_id = filesystem_object_id(&target).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let probes = AtomicUsize::new(0);
+
+        let error = trash_delete_if_identity_with_verifier(
+            &target,
+            &object_id,
+            8,
+            &journal,
+            77,
+            |_| probes.fetch_add(1, Ordering::SeqCst) == 0,
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("cache manifest changed"));
-        assert_eq!(std::fs::read(cache.join("payload.bin")).unwrap(), b"new");
+        assert!(error.to_string().contains("staged contents changed"));
+        assert!(target.exists(), "the reviewed object must be restored");
+        assert_eq!(std::fs::read(target.join("payload.bin")).unwrap(), b"reviewed");
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
     }
 }

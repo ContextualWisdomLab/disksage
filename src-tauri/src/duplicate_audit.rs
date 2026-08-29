@@ -146,7 +146,10 @@ pub struct ExactDuplicateReclaimExecution {
     pub reclaim_plan_fingerprint: String,
     pub candidate_file_count: usize,
     pub removed_file_count: usize,
+    pub active_file_count: usize,
+    pub failed_file_count: usize,
     pub skipped_file_count: usize,
+    pub failure_reasons: Vec<String>,
     pub removed_allocated_bytes_upper_bound: u64,
     pub evidence_complete: bool,
     pub executed: bool,
@@ -286,10 +289,15 @@ fn metadata_fingerprint(metadata: &ExactDuplicateProductionMetadata) -> String {
 
 #[cfg(unix)]
 fn storage_identity_fingerprint(observation: &FileObservation) -> Option<String> {
+    storage_identity_fingerprint_from_metadata(observation.device, observation.inode)
+}
+
+#[cfg(unix)]
+fn storage_identity_fingerprint_from_metadata(device: u64, inode: u64) -> Option<String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-exact-duplicate-storage-identity-v1\0");
-    hash_value(&mut hasher, &observation.device.to_le_bytes());
-    hash_value(&mut hasher, &observation.inode.to_le_bytes());
+    hash_value(&mut hasher, &device.to_le_bytes());
+    hash_value(&mut hasher, &inode.to_le_bytes());
     Some(hasher.finalize().to_hex().to_string())
 }
 
@@ -488,7 +496,7 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+pub(crate) fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     let mut active = BTreeSet::new();
     for chunk in paths.chunks(64) {
         let mut command = Command::new("lsof");
@@ -532,8 +540,111 @@ fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, S
 }
 
 #[cfg(any(not(unix), coverage))]
-fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+pub(crate) fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     Err("duplicate-reclaim-active-use-unsupported-platform".into())
+}
+
+#[cfg(unix)]
+fn preserve_staged_candidate(
+    original: &Path,
+    staged: &Path,
+    staging_token: u64,
+) -> Result<(), String> {
+    if std::fs::symlink_metadata(original).is_err() {
+        return std::fs::rename(staged, original)
+            .map_err(|_| "duplicate-reclaim-recovery-failed".to_string());
+    }
+    let file_name = original
+        .file_name()
+        .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?
+        .to_string_lossy();
+    let recovery = original.with_file_name(format!(
+        "{file_name}.disksage-recovery-{staging_token}"
+    ));
+    if std::fs::symlink_metadata(&recovery).is_ok() {
+        return Err("duplicate-reclaim-recovery-location-occupied".into());
+    }
+    std::fs::rename(staged, recovery)
+        .map_err(|_| "duplicate-reclaim-recovery-failed".to_string())?;
+    Err("duplicate-reclaim-recovery-preserved".into())
+}
+
+#[cfg(unix)]
+fn remove_if_storage_identity(
+    path: &Path,
+    expected_storage_identity: &str,
+    expected_logical_bytes: u64,
+    expected_content_digests: &ContentDigests,
+    staging_token: u64,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
+    let (device, inode) = unix_identity(&metadata);
+    if storage_identity_fingerprint_from_metadata(device, inode).as_deref()
+        != Some(expected_storage_identity)
+    {
+        return Err("duplicate-reclaim-candidate-changed".into());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "duplicate-reclaim-candidate-parent-missing".to_string())?;
+    let staging_dir = parent.join(format!(
+        ".disksage-duplicate-stage-{}-{staging_token}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&staging_dir)
+        .map_err(|_| "duplicate-reclaim-staging-unavailable".to_string())?;
+    let staged = staging_dir.join(
+        path.file_name()
+            .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?,
+    );
+    if let Err(error) = std::fs::rename(path, &staged) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(format!("duplicate-reclaim-staging-failed:{error}"));
+    }
+    let staged_matches = std::fs::symlink_metadata(&staged)
+        .ok()
+        .map(|metadata| unix_identity(&metadata))
+        .and_then(|(device, inode)| storage_identity_fingerprint_from_metadata(device, inode))
+        .as_deref()
+        == Some(expected_storage_identity);
+    if !staged_matches {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return recovery.and(Err("duplicate-reclaim-candidate-changed-during-staging".into()));
+    }
+    let staged_observation = FileObservation {
+        path: staged.clone(),
+        relative_path: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        logical_bytes: expected_logical_bytes,
+        filesystem_created_ms: system_time_ms(metadata.created()),
+        filesystem_modified_ms: system_time_ms(metadata.modified()),
+        device,
+        inode,
+    };
+    if hash_stable_file(&staged_observation).as_ref() != Ok(expected_content_digests) {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return recovery.and(Err("duplicate-reclaim-candidate-content-changed".into()));
+    }
+    if let Err(error) = std::fs::remove_file(&staged) {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        if let Err(recovery_error) = recovery {
+            return Err(recovery_error);
+        }
+        return Err(format!("duplicate-reclaim-delete-failed:{error}"));
+    }
+    let _ = std::fs::remove_dir(&staging_dir);
+    Ok(())
+}
+
+fn removal_failure_code(error: &str) -> String {
+    error.split(':').next().unwrap_or(error).to_string()
 }
 
 /// Permanently remove only freshly re-hashed members of exact-content clusters while retaining
@@ -623,30 +734,57 @@ pub fn execute_exact_duplicate_reclaim_from_report(
                 return Err("duplicate-reclaim-candidate-changed".into());
             }
             if expected.member_fingerprint != retained {
-                verified.push((path, allocated_bytes(&metadata)));
+                verified.push((
+                    path,
+                    allocated_bytes(&metadata),
+                    expected.logical_bytes,
+                    cluster.content_digests.clone(),
+                    expected
+                        .storage_identity_fingerprint
+                        .clone()
+                        .ok_or_else(|| "duplicate-reclaim-storage-identity-missing".to_string())?,
+                ));
             }
         }
     }
     let active = active_duplicate_candidates(
         &verified
             .iter()
-            .map(|(path, _)| path.clone())
+            .map(|(path, _, _, _, _)| path.clone())
             .collect::<Vec<_>>(),
     )?;
     let removable = verified
         .into_iter()
-        .filter(|(path, _)| !active.contains(path))
+        .filter(|(path, _, _, _, _)| !active.contains(path))
         .collect::<Vec<_>>();
 
     let mut removed_file_count = 0usize;
     let mut removed_allocated_bytes_upper_bound = 0u64;
-    for (path, bytes) in removable {
-        if std::fs::remove_file(path).is_ok() {
-            removed_file_count = removed_file_count.saturating_add(1);
-            removed_allocated_bytes_upper_bound =
-                removed_allocated_bytes_upper_bound.saturating_add(bytes);
+    let mut failure_reasons = BTreeSet::new();
+    for (index, (path, bytes, logical_bytes, content_digests, storage_identity)) in
+        removable.into_iter().enumerate()
+    {
+        match remove_if_storage_identity(
+            &path,
+            &storage_identity,
+            logical_bytes,
+            &content_digests,
+            executed_at_ms.saturating_add(index as u64),
+        ) {
+            Ok(()) => {
+                removed_file_count = removed_file_count.saturating_add(1);
+                removed_allocated_bytes_upper_bound =
+                    removed_allocated_bytes_upper_bound.saturating_add(bytes);
+            }
+            Err(error) => {
+                failure_reasons.insert(removal_failure_code(&error));
+            }
         }
     }
+    let active_file_count = active.len();
+    let failed_file_count = candidate_file_count
+        .saturating_sub(active_file_count)
+        .saturating_sub(removed_file_count);
     let skipped_file_count = candidate_file_count.saturating_sub(removed_file_count);
     Ok(ExactDuplicateReclaimExecution {
         schema_version: EXACT_DUPLICATE_AUDIT_VERSION,
@@ -654,7 +792,10 @@ pub fn execute_exact_duplicate_reclaim_from_report(
         reclaim_plan_fingerprint: plan_fingerprint,
         candidate_file_count,
         removed_file_count,
+        active_file_count,
+        failed_file_count,
         skipped_file_count,
+        failure_reasons: failure_reasons.into_iter().collect(),
         removed_allocated_bytes_upper_bound,
         evidence_complete: skipped_file_count == 0,
         executed: true,
@@ -1304,6 +1445,9 @@ mod tests {
         .unwrap();
         assert_eq!(execution.candidate_file_count, 1);
         assert_eq!(execution.removed_file_count, 1);
+        assert_eq!(execution.active_file_count, 0);
+        assert_eq!(execution.failed_file_count, 0);
+        assert!(execution.failure_reasons.is_empty());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
@@ -1327,6 +1471,61 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_bound_remove_preserves_replacement_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement bytes").unwrap();
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            1,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.as_str(),
+            "duplicate-reclaim-candidate-changed"
+                | "duplicate-reclaim-candidate-content-changed"
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
+        assert_eq!(
+            removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
+            "duplicate-reclaim-delete-failed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_candidate_is_surfaced_when_original_name_is_occupied() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("duplicate.bin");
+        let staged = root.path().join(".hidden-stage");
+        std::fs::write(&original, b"replacement bytes").unwrap();
+        std::fs::write(&staged, b"approved bytes").unwrap();
+
+        assert_eq!(
+            preserve_staged_candidate(&original, &staged, 77).unwrap_err(),
+            "duplicate-reclaim-recovery-preserved"
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), b"replacement bytes");
+        assert_eq!(
+            std::fs::read(root.path().join("duplicate.bin.disksage-recovery-77")).unwrap(),
+            b"approved bytes"
+        );
+        assert!(!staged.exists());
     }
 
     #[test]

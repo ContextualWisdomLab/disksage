@@ -26,8 +26,9 @@ new numbered record rather than rewriting history.
 | [0018](0018-permanent-generated-artifact-failure-safety.md) | Retain failed permanent artifact deletions in private staging | Accepted |
 | [0019](0019-macos-file-provider-local-eviction.md) | Use each macOS File Provider domain for local-only eviction | Accepted |
 | [0020](0020-podman-native-storage-repair.md) | Use machine-scoped native Podman storage repair without force | Accepted |
-| [0021](0021-native-uv-cache-prune.md) | Use uv's native prune only after active-use evidence closes | Accepted |
-| [0022](0022-owner-controlled-checkout-leases.md) | Require owner-controlled durable checkout leases | Accepted |
+| [0021](0021-perceptual-photo-candidates.md) | Require measured evidence and a selected survivor for perceptual photo candidates | Accepted |
+| [0022](0022-native-uv-cache-prune.md) | Use uv's native prune only after active-use evidence closes | Accepted |
+| [0023](0023-owner-controlled-checkout-leases.md) | Require owner-controlled durable checkout leases | Accepted |
 | [0048](0048-generated-cache-evidence-boundary.md) | Bind generated-cache recovery to exact regeneration and activity evidence | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or

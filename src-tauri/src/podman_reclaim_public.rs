@@ -8,9 +8,9 @@ use std::path::Path;
 mod legacy_public;
 
 pub use legacy_public::{
-    plan_podman_storage_repair, probe_podman_reclaim, prune_dangling_images,
-    GuestFilesystemEvidence, PodmanDanglingImagePruneExecution, PodmanMachineEvidence,
-    PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
+    inspect_raw_image_evidence, plan_podman_storage_repair, probe_podman_reclaim,
+    prune_dangling_images, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
+    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
     PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStoreEvidence,
     PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
     RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
@@ -36,6 +36,28 @@ pub struct PodmanStorageRepairExecution {
     pub postcheck_complete: bool,
     pub executed_at_ms: u64,
     pub rationale: String,
+}
+
+fn public_repair_execution(
+    raw: legacy_public::PodmanStorageRepairExecution,
+) -> PodmanStorageRepairExecution {
+    let counts_verified = raw.postcheck_complete;
+    PodmanStorageRepairExecution {
+        schema_version: raw.schema_version,
+        machine: raw.machine,
+        candidate_set_sha256: raw.candidate_set_sha256,
+        command: raw.command,
+        status_code: raw.status_code,
+        command_attempted: raw.command_attempted,
+        execution_issue: raw.execution_issue,
+        executed: raw.executed,
+        repaired_layer_records: counts_verified.then_some(raw.repaired_layer_records),
+        remaining_damaged_layer_records: counts_verified
+            .then_some(raw.remaining_damaged_layer_records),
+        postcheck_complete: raw.postcheck_complete,
+        executed_at_ms: raw.executed_at_ms,
+        rationale: raw.rationale,
+    }
 }
 
 /// Execute one native non-forced Podman storage repair behind a bounded public request contract.
@@ -66,23 +88,46 @@ pub fn execute_podman_storage_repair(
         rationale,
         executed_at_ms,
     )?;
-    let counts_verified = raw.postcheck_complete;
-    let executed = raw.status_code == 0 || (counts_verified && raw.repaired_layer_records > 0);
+    Ok(public_repair_execution(raw))
+}
 
-    Ok(PodmanStorageRepairExecution {
-        schema_version: raw.schema_version,
-        machine: raw.machine,
-        candidate_set_sha256: raw.candidate_set_sha256,
-        command: raw.command,
-        status_code: raw.status_code,
-        command_attempted: raw.command_attempted,
-        execution_issue: raw.execution_issue,
-        executed,
-        repaired_layer_records: counts_verified.then_some(raw.repaired_layer_records),
-        remaining_damaged_layer_records: counts_verified
-            .then_some(raw.remaining_damaged_layer_records),
-        postcheck_complete: raw.postcheck_complete,
-        executed_at_ms: raw.executed_at_ms,
-        rationale: raw.rationale,
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_execution() -> legacy_public::PodmanStorageRepairExecution {
+        legacy_public::PodmanStorageRepairExecution {
+            schema_version: 1,
+            machine: "podman-machine-default".into(),
+            candidate_set_sha256: "a".repeat(64),
+            command: vec!["podman".into(), "system".into(), "check".into()],
+            status_code: 0,
+            command_attempted: true,
+            execution_issue: None,
+            executed: true,
+            repaired_layer_records: 2,
+            remaining_damaged_layer_records: 0,
+            postcheck_complete: true,
+            executed_at_ms: 42,
+            rationale: "reviewed".into(),
+        }
+    }
+
+    #[test]
+    fn public_receipt_never_upgrades_unverified_or_failed_repairs() {
+        let mut incomplete = raw_execution();
+        incomplete.postcheck_complete = false;
+        incomplete.executed = false;
+        incomplete.execution_issue = Some("podman-storage-repair-postcheck-incomplete".into());
+        let receipt = public_repair_execution(incomplete);
+        assert!(!receipt.executed);
+        assert_eq!(receipt.repaired_layer_records, None);
+
+        let mut nonzero = raw_execution();
+        nonzero.status_code = 1;
+        nonzero.executed = false;
+        let receipt = public_repair_execution(nonzero);
+        assert!(!receipt.executed);
+        assert_eq!(receipt.repaired_layer_records, Some(2));
+    }
 }

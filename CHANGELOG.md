@@ -5,6 +5,25 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
+  surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
+- Revalidate every selected photo group member and block the whole quarantine when a survivor or
+  candidate is active, replaced, dataless, or reachable through a hard-link alias.
+- Ship the macOS OneDrive Finder post-action verifier as a checksummed, provenance-attested
+  operational CLI, and require fresh provider-sync evidence before allocation reduction counts as
+  verified local-space recovery.
+- Revalidate OneDrive's exact File Provider item/version identity immediately
+  before the Foundation eviction call, including every latest sync, policy,
+  size, eviction-capability, and Files On-Demand gate, and let approved OneDrive batches use
+  the same immutable per-item execution/checkpoint path as iCloud. Finder
+  selection remains available only through the explicit `--finder-assistance`
+  fallback.
+- Keep cloud-inventory argument failures bounded on Unix by reading native
+  process arguments explicitly and rejecting non-UTF-8 option payloads with a
+  fixed diagnostic instead of allowing Rust's Unicode argument iterator to
+  terminate the process before DiskSage can report the next action.
+- Keep cloud-local inventory argument errors bounded by rejecting unknown
+  options without echoing attacker-controlled option payloads.
 
 - Add an exact-allowlist generated-cache auditor that defaults to dry-run, blocks live processes,
   tool locks, registered or dirty temporary Git workspaces, and provider/Photos/VM boundaries, and
@@ -22,10 +41,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Plan and execute uv's native `cache prune` without `--force`: bind the real executable and cache
   directory, veto active or incomplete `lsof` evidence, require a fresh exact fingerprint, and
   retain immutable approval/result records with filesystem-availability measurements.
+- Release verified OneDrive local copies through Foundation only after an exact item-and-version
+  fingerprint, current upload/materialization flags, `isKeepDownloaded = 0`, no active handle, and
+  attributed approval survive an immediate re-plan. Postchecks and immutable records distinguish
+  a successful request from measured allocation recovery; dataless files report zero reclaim.
+- Audit non-identical JPEG, PNG, TIFF, and WebP photo candidates with a standards-grounded DCT
+  perceptual hash, measured resolution/bit-depth/compression evidence, and an optional unweighted
+  Pareto-dominant survivor recommendation. Managed Photos libraries remain excluded; a user must
+  select one survivor per group before the other members can move reversibly to OS Trash under an
+  exact plan fingerprint and per-item receipt.
+- Admit iCloud local-copy eviction from Apple Foundation's public, per-item ubiquitous metadata
+  only when the item is uploaded, current, idle, conflict-free, error-free, and not excluded from
+  sync. Upload/download errors remain explicit blockers; exact approval is invalidated by the new
+  evidence schema, and postchecks now require an uploaded cloud item, `notDownloaded` local state,
+  retained ubiquitous path, and reduced allocated bytes.
 - Inspect completed DiskSage-owned top-level shared-temporary artifacts through create-only
   lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
   atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
   or a same-user marker never grants mutation authority.
+- Port the privacy-safe Podman desktop evidence projection into the runtime-orphan stack. The
+  customer screen now uses a dedicated read-only IPC schema, keeps every capacity domain optional
+  and separate, and no longer renders the detailed internal Podman reclaim plan.
 - Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
   squash-merged and detached intermediate commits can be classified without ancestry or branch
   guesses; any exact membership in an open PR takes precedence and preserves the worktree.
@@ -58,9 +94,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+- Ship that generic batch planner as a checksummed, provenance-attested macOS operational CLI so
+  installed release artifacts can reproduce the exact read-only plan. Linux and Windows remain
+  excluded until their provider-local observation paths have production evidence.
+- Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
+  generate the native Foundation-backed plan without compiling source; Linux and Windows retain
+  only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
+- Ship the read-only cloud-local allocation inventory as a checksummed macOS artifact so a
+  matching release can produce fresh candidate evidence before either batch planner runs. An
+  inventory from an older executable head remains stale and cannot authorize a new plan.
 
 ### Fixed
 
+- Preserve a failed Podman native storage-repair attempt as an explicit provider refusal when a
+  damaged layer remains container-referenced; DiskSage now directs a new lineage/removal evidence
+  cycle instead of retrying, forcing repair, or touching graph-driver storage.
+
+- Make the release-packaged cloud-local inventory producer return help on stdout with exit status
+  zero, while mixed help/runtime arguments remain a bounded failure.
+- Retry transient iCloud metadata failures during the bounded post-eviction check instead of
+  misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
   item is beneath its discovered cloud root; sibling roots remain rejected component by component.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
@@ -98,7 +151,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   calls consume one shared timeout budget rather than multiplying the configured wait per branch.
 - Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
   library selected as the scan root. External files remain auditable without interpreting Photos'
-  private databases and derivatives as independent duplicate-delete candidates.
+  private databases and derivatives as independent duplicate-delete candidates. Reclaim also
+  canonicalizes every approved member immediately before mutation and fails closed if a replaced
+  parent symlink redirects it outside the audited root or into a managed Photos library.
+- Stage each verified duplicate by filesystem identity before permanent removal, restoring rather
+  than deleting a pathname replacement that races the approved audit; receipts distinguish active
+  skips from failed removals and retain stable failure reasons.
+- Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
+  removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
+  each pull-request lookup.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution
@@ -110,6 +171,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
   by converting the human-readable listing with a unit heuristic; missing or mismatched identity
   evidence keeps the category blocked.
+- Pin Docker-native approval and execution to the same resolved daemon endpoint so mutable context
+  configuration cannot redirect an approved deletion.
+- Preserve an indeterminate mutation receipt after a started exact-delete command exits non-zero,
+  times out, or loses capture evidence; the UI directs customers to refresh instead of reporting
+  the partially applied operation as untouched.
 - Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
   current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
   Trash targets; the shared root and other-user/system-owned objects remain protected.
@@ -117,12 +183,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
   unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is
   rewritten by this feature.
+- Run bounded runtime trim and recovery waits on Tauri's blocking pool so long guest maintenance
+  cannot occupy asynchronous command workers.
+- Preserve Docker context TLS credentials by executing through the explicitly pinned context while
+  binding approval to the complete inspected context definition.
+- Surface an approved duplicate at a deterministic sibling recovery name when its original path is
+  concurrently occupied, and report preservation or rollback failure explicitly.
 - Detect a running but unreachable Podman/Colima guest, offer a separate exact-phrase-approved
   runtime-native stop/start recovery, and re-check reachability before enabling trim. Trim receipts
   now include bounded before/after host-volume evidence for the measured available-space change.
 
 ### Changed
 
+- Build cache cleanup fingerprints from complete bounded filesystem metadata instead of reading up
+  to 4 GiB of generated file content. Large and sparse cache entries remain reviewable, while exact
+  identity and metadata are revalidated immediately before any mutation.
+- Revalidate reviewed cache manifests on both sides of atomic Trash staging and restore the
+  original path when evidence changes instead of moving unreviewed contents.
+- Preserve the original approved pathname during final staged active-use probes so command-only
+  users block permanent cache and development-artifact deletion.
 - Stop descending once a marker-validated development artifact is found, avoiding a second full
   traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
 - Keep a partially failed permanent artifact deletion in its private staging location; never restore

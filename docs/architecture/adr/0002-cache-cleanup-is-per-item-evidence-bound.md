@@ -14,8 +14,11 @@ lineage and must not be uploaded to a cloud provider merely to reclaim local spa
 ## Decision
 
 DiskSage exposes known cache roots through the existing cache catalog, including the macOS uv
-cache. Cleanup uses the reviewed child manifest (`path`, byte count, modification time, and object
-identity) and revalidates that manifest immediately before mutation. Active-use evidence is
+cache. Cleanup uses a complete, entry-bounded metadata manifest (relative name, file type, object
+identity, logical size, modification/change time, allocation where the platform exposes it, and
+symlink destination without traversal) and revalidates that manifest immediately before mutation.
+The manifest never opens cache file content, so large and sparse generated artifacts remain
+reviewable without turning their logical size into scan work. Active-use evidence is
 collected independently for each reviewed child with bounded, path-local `lsof` evidence
 (recursive for directories and direct for regular files):
 
@@ -41,7 +44,8 @@ treated as evidence that the inactive entry is safe without its own probe.
 ## Consequences
 
 - A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
-- Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
+- Changed, replaced, symlinked, unsupported, or incompletely enumerated entries fail closed before
+  they reach the OS Trash.
 - Normal cache cleanup is reversible through the OS Trash. Permanent cache deletion exists only in
   the explicit proven-cache Trash purge, after the object is already in Trash and its known
   structure is revalidated.

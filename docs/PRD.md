@@ -22,6 +22,9 @@ an observation goal, never deletion authority.
 - Exact duplicates use content identity. Non-identical photos require measured media evidence and
   a human-selected survivor.
 - Container and VM maintenance never removes active resources or rewrites raw VM images.
+- Podman desktop evidence keeps configured capacity, raw logical size, host allocation, guest and
+  store usage, logical candidates, and verified physical reclaim separate; missing measurements
+  remain unavailable and the customer screen receives no local path or runtime diagnostic detail.
 - Worktrees and standalone clones require fresh exact Git/GitHub authority, clean and inactive
   state, complete and valid lease evidence, no active owner-created lease or Git worktree lock,
   explicit approval, and no branch deletion or Git pruning. Lease expiry is supplied by its owner;
