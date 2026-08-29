@@ -27,6 +27,7 @@ case " $* " in
     printf '%s' "$count" > "$root/check-count"
     if [ "$count" -le 2 ]; then
       echo "Damaged layer {layer_id}:"
+      echo "Error: damage detected in local storage"
       exit 1
     fi
     echo "postcheck unavailable" >&2

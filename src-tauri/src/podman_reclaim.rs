@@ -181,7 +181,7 @@ fn damaged_layer_ids(output: &str) -> Result<Vec<String>, String> {
         .lines()
         .filter_map(|line| line.strip_prefix("Damaged layer "))
         .filter_map(|line| line.strip_suffix(':'))
-        .map(str::to_string)
+        .map(str::to_ascii_lowercase)
         .collect::<Vec<_>>();
     if ids
         .iter()
@@ -204,6 +204,15 @@ fn storage_check_fingerprint(ids: &[String]) -> String {
     lower_hex(&digest.finalize())
 }
 
+fn storage_check_complete(status_code: i32, output: &str, ids: &[String]) -> bool {
+    let expected_damage_completion = output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line == "Error: damage detected in local storage");
+    (status_code == 0 && ids.is_empty()) || (!ids.is_empty() && expected_damage_completion)
+}
+
 pub fn plan_podman_storage_repair(
     podman_bin: &Path,
     machine: &str,
@@ -220,7 +229,7 @@ pub fn plan_podman_storage_repair(
     let combined = format!("{}\n{}", output.stdout, output.stderr);
     let ids = damaged_layer_ids(&combined)?;
     let fingerprint = storage_check_fingerprint(&ids);
-    let complete = output.status_code == 0 || !ids.is_empty();
+    let complete = storage_check_complete(output.status_code, &combined, &ids);
     Ok(PodmanStorageCheckPlan {
         schema_version: 1,
         machine: machine.to_string(),
@@ -1156,10 +1165,29 @@ mod tests {
             storage_check_fingerprint(&left),
             storage_check_fingerprint(&right)
         );
+        assert_eq!(left, vec!["a".repeat(64), "b".repeat(64)]);
         assert_eq!(
             damaged_layer_ids("Damaged layer not-a-layer:").unwrap_err(),
             "podman-storage-check-invalid-layer-id"
         );
+    }
+
+    #[test]
+    fn damaged_line_followed_by_fatal_error_is_incomplete() {
+        let ids = vec!["a".repeat(64)];
+        assert!(!storage_check_complete(
+            125,
+            &format!("Damaged layer {}:\nfatal transport error", ids[0]),
+            &ids,
+        ));
+        assert!(storage_check_complete(
+            125,
+            &format!(
+                "Damaged layer {}:\nError: damage detected in local storage",
+                ids[0]
+            ),
+            &ids,
+        ));
     }
 
     const INSPECT: &str = r#"[{"ConfigDir":{"Path":"/tmp/podman"},"Name":"podman-machine-default","State":"running","Resources":{"DiskSize":100}}]"#;
