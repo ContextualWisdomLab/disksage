@@ -534,7 +534,7 @@ pub type PullRequestCommits = BTreeSet<String>;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PullRequestCommitMembership {
     pub completed: PullRequestCommits,
-    pub open: PullRequestCommits,
+    pub open: BTreeMap<String, BTreeSet<u64>>,
 }
 
 fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads, String> {
@@ -1051,7 +1051,7 @@ pub fn github_pull_request_commit_membership(
         for head in heads {
             if pull_request_contains_commit(&commits.stdout, &head)? {
                 if open {
-                    membership.open.insert(head);
+                    membership.open.entry(head).or_default().insert(number);
                 } else {
                     membership.completed.insert(head);
                 }
@@ -1477,7 +1477,7 @@ fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
         Some(false) => blockers.push("worktree-dirty".into()),
         None => blockers.push("git-status-evidence-incomplete".into()),
     }
-    if input.open_pull_request_commit && !input.stale_open_pull_request_head {
+    if input.open_pull_request_commit {
         blockers.push("open-pull-request-commit".into());
     }
     match (
@@ -1564,7 +1564,7 @@ fn removal_authority_fingerprint(
         closed_pull_request_heads,
         &BTreeSet::new(),
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         None,
     )
 }
@@ -1574,7 +1574,7 @@ fn removal_authority_fingerprint_with_open(
     closed_pull_request_heads: &ClosedPullRequestHeads,
     stale_open_pull_request_heads: &StaleOpenPullRequestHeads,
     completed_pull_request_commits: &PullRequestCommits,
-    open_pull_request_commits: &PullRequestCommits,
+    open_pull_request_commits: &BTreeMap<String, BTreeSet<u64>>,
     stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -1613,9 +1613,12 @@ fn removal_authority_fingerprint_with_open(
         hash_field(&mut hasher, "completed-commit");
         hash_field(&mut hasher, oid);
     }
-    for oid in open_pull_request_commits {
+    for (oid, pull_request_numbers) in open_pull_request_commits {
         hash_field(&mut hasher, "open-commit-veto");
         hash_field(&mut hasher, oid);
+        for pull_request_number in pull_request_numbers {
+            hash_field(&mut hasher, &pull_request_number.to_string());
+        }
     }
     hasher.finalize().to_hex().to_string()
 }
@@ -2111,7 +2114,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         || pull_request_commits
             .completed
             .iter()
-            .chain(&pull_request_commits.open)
+            .chain(pull_request_commits.open.keys())
             .any(|oid| !is_oid(oid))
     {
         return Err("git-worktree-pull-request-commits-invalid".into());
@@ -2180,7 +2183,12 @@ pub fn audit_git_worktrees_with_pull_request_membership(
             stale_open_pull_request_heads.contains(&(branch_ref.clone(), raw.head.clone()))
         });
         let completed_pull_request_commit = pull_request_commits.completed.contains(&raw.head);
-        let open_pull_request_commit = pull_request_commits.open.contains(&raw.head);
+        let open_pull_request_commit = pull_request_commits
+            .open
+            .get(&raw.head)
+            .is_some_and(|pull_request_numbers| {
+                !stale_open_pull_request_head || pull_request_numbers.len() > 1
+            });
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
         let size = if path_valid {
             size_evidence(
@@ -2440,7 +2448,7 @@ fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), Str
                         && !entry.closed_pull_request_head
                         && !entry.completed_pull_request_commit
                         && !entry.stale_open_pull_request_head)
-                    || (entry.open_pull_request_commit && !entry.stale_open_pull_request_head)
+                    || entry.open_pull_request_commit
                     || entry.head_is_retained_tip
                     || entry.actor_cwd_inside != Some(false)
                     || !entry.size.evidence_complete
@@ -3391,7 +3399,8 @@ mod tests {
 
         let completed = PullRequestCommitMembership {
             completed: BTreeSet::from([intermediate.clone()]),
-            open: BTreeSet::new(),
+            open: BTreeMap::new(),
+            ..PullRequestCommitMembership::default()
         };
         let report = audit_git_worktrees_with_pull_request_membership(
             &repository,
@@ -3411,7 +3420,8 @@ mod tests {
 
         let open_veto = PullRequestCommitMembership {
             completed: BTreeSet::from([intermediate.clone()]),
-            open: BTreeSet::from([intermediate]),
+            open: BTreeMap::from([(intermediate, BTreeSet::from([1]))]),
+            ..PullRequestCommitMembership::default()
         };
         let report = audit_git_worktrees_with_pull_request_membership(
             &repository,
