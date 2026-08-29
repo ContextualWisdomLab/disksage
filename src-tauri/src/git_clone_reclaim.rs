@@ -821,7 +821,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stale_or_diverged_default_branch_evidence_never_authorizes() {
+    fn unpushed_diverged_head_never_receives_default_branch_authority() {
         let repository = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-b", "main"]);
         git(
@@ -846,7 +846,7 @@ mod tests {
         let evidence = DefaultBranchEvidence {
             reference: "refs/remotes/origin/main".into(),
             oid: default_oid,
-            observed_at_ms: 1,
+            observed_at_ms: 10,
         };
         let plan = plan_git_clone_reclaim_with_authority(
             repository.path(),
@@ -856,11 +856,68 @@ mod tests {
             None,
             Some(&evidence),
             GitWorktreeAuditOptions::default(),
-            MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS + 2,
+            11,
         )
         .unwrap();
         assert!(!plan.eligible_after_human_approval);
         assert!(!plan.head_is_default_branch_ancestor);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-pr-head-authority-missing".into()));
+        assert!(!plan
+            .blockers
+            .contains(&"git-clone-default-branch-evidence-stale".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_clone_never_receives_default_branch_authority() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/main", &head],
+        );
+        let evidence = DefaultBranchEvidence {
+            reference: "refs/remotes/origin/main".into(),
+            oid: head,
+            observed_at_ms: 10,
+        };
+        let mut child = Command::new("sh")
+            .args(["-c", "cd -- \"$1\" && exec sleep 5", "disksage-active"])
+            .arg(repository.path())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-active-use-detected".into()));
     }
 
     #[test]
