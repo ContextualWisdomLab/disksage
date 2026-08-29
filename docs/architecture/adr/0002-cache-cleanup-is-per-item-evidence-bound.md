@@ -79,7 +79,9 @@ active-use contract is independently established.
 Project-local `.mypy_cache`, `.pytest_cache`, and `.ruff_cache` directories are regenerable
 development artifacts. DiskSage admits them only beside a matching Python/tool configuration
 marker, then applies the existing bounded metadata manifest, filesystem-object identity, age,
-re-scan, journal, and reversible OS-Trash gates. A matching directory name without a project
+re-scan, bounded path-local active-use, journal, and reversible OS-Trash gates. Active,
+unsupported, timed-out, failed, or incomplete process evidence leaves the artifact untouched. A
+matching directory name without a project
 marker grants no cleanup authority. A 2026-08-29 temporary-checkout inventory observed about
 1.2 GiB of these caches, principally mypy metadata; that observation justifies discovery but does
 not bypass review or the mutation-time revalidation.

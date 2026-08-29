@@ -258,7 +258,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
-/// Re-scan and move only unchanged development artifacts to OS Trash.
+/// Re-scan and move only unchanged, provably idle development artifacts to OS Trash.
 ///
 /// The request manifest is deliberately compared against a fresh bounded scan. A path match is
 /// not sufficient because a recreated `target` or `node_modules` directory could otherwise cause
@@ -298,6 +298,20 @@ pub fn clean_artifacts(
                 };
             }
 
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&request.path),
+                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if let Some(error) = active_use_blocker(&active_use) {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.into(),
+                };
+            }
+
             match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
                 &request.object_id,
@@ -318,6 +332,18 @@ pub fn clean_artifacts(
             }
         })
         .collect()
+}
+
+fn active_use_blocker(
+    evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
+) -> Option<&'static str> {
+    if !evidence.assessed || !evidence.evidence_complete {
+        Some("development-artifact-active-use-evidence-incomplete")
+    } else if evidence.active {
+        Some("development-artifact-active-use-detected")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -439,5 +465,30 @@ mod tests {
         assert!(live.exists());
         assert!(original.exists());
         assert!(!journal.exists(), "stale identity must not create a journal");
+    }
+
+    #[test]
+    fn cleanup_fails_closed_when_active_use_is_detected_or_unavailable() {
+        let mut evidence = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            method: "test".into(),
+            assessed: true,
+            evidence_complete: true,
+            active: true,
+            observed_pids: vec![42],
+            results_truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-detected")
+        );
+
+        evidence.active = false;
+        evidence.evidence_complete = false;
+        evidence.error = Some("test-unavailable".into());
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-evidence-incomplete")
+        );
     }
 }
