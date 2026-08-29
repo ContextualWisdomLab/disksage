@@ -2,6 +2,10 @@
 export const GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE =
   "Git 저장소를 선택하지 못했습니다. 폴더 접근 권한과 저장소 위치를 확인한 뒤 다시 선택하세요.";
 
+/** Customer guidance shown when the native removal confirmation cannot be opened. */
+export const GIT_WORKTREE_CONFIRMATION_FAILURE =
+  "제거 확인 창을 열지 못했습니다. 다른 확인 창을 닫은 뒤 새 감사부터 다시 진행하세요.";
+
 /** Customer guidance shown when DiskSage cannot produce a fresh read-only worktree audit. */
 export const GIT_WORKTREE_AUDIT_FAILURE =
   "Git worktree 감사를 완료하지 못했습니다. 저장소 경로와 보존할 ref가 현재 로컬에서 해석되는지 확인한 뒤 다시 감사하세요.";

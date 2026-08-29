@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   GIT_WORKTREE_AUDIT_FAILURE,
+  GIT_WORKTREE_CONFIRMATION_FAILURE,
   GIT_WORKTREE_REMOVAL_FAILURE,
   GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE,
   GIT_WORKTREE_RESULT_RECORD_FAILURE,
@@ -34,6 +35,9 @@ describe("Git worktree privacy-safe failure feedback", () => {
     expect(GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE).toBe(
       "Git 저장소를 선택하지 못했습니다. 폴더 접근 권한과 저장소 위치를 확인한 뒤 다시 선택하세요.",
     );
+    expect(GIT_WORKTREE_CONFIRMATION_FAILURE).toBe(
+      "제거 확인 창을 열지 못했습니다. 다른 확인 창을 닫은 뒤 새 감사부터 다시 진행하세요.",
+    );
     expect(GIT_WORKTREE_AUDIT_FAILURE).toBe(
       "Git worktree 감사를 완료하지 못했습니다. 저장소 경로와 보존할 ref가 현재 로컬에서 해석되는지 확인한 뒤 다시 감사하세요.",
     );
@@ -46,6 +50,7 @@ describe("Git worktree privacy-safe failure feedback", () => {
 
     for (const message of [
       GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE,
+      GIT_WORKTREE_CONFIRMATION_FAILURE,
       GIT_WORKTREE_AUDIT_FAILURE,
       GIT_WORKTREE_REMOVAL_FAILURE,
       GIT_WORKTREE_RESULT_RECORD_FAILURE,
@@ -53,6 +58,19 @@ describe("Git worktree privacy-safe failure feedback", () => {
       expect(message).not.toMatch(/(?:\/Users\/|[A-Za-z]:\\|file:\/\/)/);
       expect(message).toMatch(/(?:확인|보관|선택|감사)/);
     }
+  });
+
+  it("serializes dialogs and discards superseded async results", () => {
+    const source = readSource("src/lib/GitWorktreeCleanup.svelte");
+
+    expect(source).toContain("const seq = ++selectionSeq;");
+    expect(source).toContain("if (seq !== selectionSeq || typeof selected !== \"string\") return;");
+    expect(source).toContain("const seq = ++auditSeq;");
+    expect(source).toContain("if (seq !== auditSeq) return;");
+    expect(source).toContain("const seq = ++removalSeq;");
+    expect(source).toContain("if (!approved || seq !== removalSeq || report !== approvedReport) return;");
+    expect(source).toContain("disabled={choosing || planning || confirming || executing}");
+    expect(source).toContain("report = null;");
   });
 
   it("turns every current evidence gap into bounded customer guidance", () => {
