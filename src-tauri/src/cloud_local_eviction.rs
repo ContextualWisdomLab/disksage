@@ -15,6 +15,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use unicode_normalization::UnicodeNormalization;
 
 pub const ICLOUD_LOCAL_EVICTION_VERSION: u32 = 2;
 const ACTIVE_USE_TIMEOUT_MS: u64 = 5_000;
@@ -170,6 +171,37 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
     metadata.len()
 }
 
+fn relative_path_with_normalization(root: &Path, path: &Path) -> Option<PathBuf> {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return Some(relative.to_path_buf());
+    }
+    let root = root.components().collect::<Vec<_>>();
+    let path = path.components().collect::<Vec<_>>();
+    if path.len() <= root.len()
+        || !root
+            .iter()
+            .zip(&path)
+            .all(|(left, right)| match (left, right) {
+                (std::path::Component::Normal(left), std::path::Component::Normal(right)) => left
+                    .to_str()
+                    .zip(right.to_str())
+                    .is_some_and(|(left, right)| left.nfc().eq(right.nfc())),
+                _ => left == right,
+            })
+    {
+        return None;
+    }
+    path[root.len()..]
+        .iter()
+        .try_fold(PathBuf::new(), |mut relative, component| {
+            let std::path::Component::Normal(segment) = component else {
+                return None;
+            };
+            relative.push(segment);
+            Some(relative)
+        })
+}
+
 fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservation, String> {
     if !matches!(
         root.provider,
@@ -181,9 +213,8 @@ fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservat
     if !absolute_without_parent(root_path) || !absolute_without_parent(path) {
         return Err("icloud-local-eviction-path-not-safe-absolute".into());
     }
-    let relative = path
-        .strip_prefix(root_path)
-        .map_err(|_| "icloud-local-eviction-path-outside-root".to_string())?;
+    let relative = relative_path_with_normalization(root_path, path)
+        .ok_or_else(|| "icloud-local-eviction-path-outside-root".to_string())?;
     if relative.as_os_str().is_empty() {
         return Err("icloud-local-eviction-root-not-file".into());
     }
@@ -1511,6 +1542,25 @@ mod tests {
         assert_eq!(plan.provider, CloudProvider::Onedrive);
         assert!(plan.eligible_after_human_approval);
         assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+    }
+
+    #[test]
+    fn cloud_containment_accepts_canonically_equivalent_root_spelling_only() {
+        let decomposed = Path::new(
+            "/Users/test/Library/CloudStorage/OneDrive-\u{1100}\u{1162}\u{110b}\u{1175}\u{11ab}",
+        );
+        let composed = Path::new("/Users/test/Library/CloudStorage/OneDrive-개인/Mplus/video.avi");
+        assert_eq!(
+            relative_path_with_normalization(decomposed, composed),
+            Some(PathBuf::from("Mplus/video.avi"))
+        );
+        assert_eq!(
+            relative_path_with_normalization(
+                decomposed,
+                Path::new("/Users/test/Library/CloudStorage/OneDrive-기업/video.avi")
+            ),
+            None
+        );
     }
 
     #[test]
