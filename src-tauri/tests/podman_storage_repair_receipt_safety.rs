@@ -193,46 +193,37 @@ fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
 }
 
 #[test]
-fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set() {
+fn native_repair_approval_binds_current_damage_and_rejects_stale_candidate_set() {
     let (temp, fake) = fake_scope_drift_podman();
     let first_plan = plan_podman_storage_repair(&fake, "podman-machine-default")
         .expect("initial damaged-layer evidence");
     let approval = first_plan
         .exact_approval_phrase
         .as_deref()
-        .expect("machine-scoped repair approval");
+        .expect("evidence-bound repair approval");
 
     assert!(
         approval.starts_with("DiskSage Podman machine storage repair 승인 "),
         "the approval text must name the broad native repair scope"
     );
     assert!(
-        !approval.contains(&first_plan.candidate_set_sha256),
-        "a broad native repair cannot truthfully bind authority to only the preflight IDs"
+        approval.contains(&first_plan.candidate_set_sha256),
+        "broad native repair authority must still bind the currently reviewed damage evidence"
     );
 
-    let receipt = execute_podman_storage_repair(
+    let error = execute_podman_storage_repair(
         &fake,
         "podman-machine-default",
         approval,
-        "approve the selected machine's native repair scope",
+        "require fresh approval after damage drift",
         2,
     )
-    .expect("candidate drift remains inside an explicitly machine-scoped approval");
+    .expect_err("candidate drift must require fresh human approval before mutation");
 
-    assert!(temp.path().join("repair-ran").exists());
-    assert_eq!(
-        receipt.command,
-        vec![
-            "podman",
-            "--connection",
-            "podman-machine-default",
-            "system",
-            "check",
-            "--quick",
-            "--repair"
-        ],
-        "the receipt must record the exact selected connection that was mutated"
+    assert_eq!(error, "podman-storage-repair-confirmation-mismatch");
+    assert!(
+        !temp.path().join("repair-ran").exists(),
+        "stale approval must not reach the broad native repair command"
     );
 }
 
