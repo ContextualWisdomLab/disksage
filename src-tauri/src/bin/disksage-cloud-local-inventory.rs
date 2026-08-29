@@ -99,7 +99,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
             "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
             "--help" | "-h" => return Err("--help는 단독으로 사용해야 함".into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("알 수 없는 인자".into()),
         }
         index += 1;
     }
