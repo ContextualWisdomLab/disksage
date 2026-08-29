@@ -75,6 +75,8 @@ pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+/// Read-only, stopped-VM Parallels disk reclaim evidence.
+pub mod parallels_disk_reclaim;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;

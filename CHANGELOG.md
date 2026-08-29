@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a macOS-only, read-only Parallels stopped-VM disk reclaim planner that binds bounded native
+  CLI evidence, canonical bundle/disk identity, allocated bytes, active-use state, and the native
+  compaction estimate while leaving every compact, delete, and cloud-move operation unavailable.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
