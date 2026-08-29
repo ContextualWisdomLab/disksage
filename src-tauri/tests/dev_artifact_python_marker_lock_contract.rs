@@ -13,6 +13,12 @@ fn setup_py_project_with_requirements_lock_remains_discoverable() {
         .expect("write recognized rebuild lock input");
     fs::write(venv.join("generated.bin"), vec![0x5a; 4096])
         .expect("write generated environment payload");
+    let unbound = temp.path().join("requirements-only");
+    fs::create_dir_all(unbound.join(".venv")).expect("create unbound environment");
+    fs::write(unbound.join("requirements.txt"), b"pytest==8.4.2\n")
+        .expect("write lone requirements file");
+    fs::write(unbound.join(".venv/generated.bin"), vec![0x5a; 4096])
+        .expect("write unbound generated payload");
 
     let found = find_artifacts(temp.path(), 0, u64::MAX);
 
@@ -21,4 +27,8 @@ fn setup_py_project_with_requirements_lock_remains_discoverable() {
     assert_eq!(found[0].project, "legacy-python-app");
     assert!(found[0].scan_complete);
     assert!(found[0].allocated_bytes > 0);
+    assert!(
+        !found.iter().any(|item| item.project == "requirements-only"),
+        "one file cannot serve as both project identity and rebuild authorization"
+    );
 }

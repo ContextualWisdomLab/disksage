@@ -147,7 +147,7 @@ fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
                 .any(|name| path.join(name).is_file())
         }
         ".venv" | "venv" => {
-            ["pyproject.toml", "requirements.txt", "setup.py"]
+            ["pyproject.toml", "setup.py"]
                 .iter()
                 .any(|name| path.join(name).is_file())
                 && ["uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"]
