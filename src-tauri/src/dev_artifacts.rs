@@ -544,7 +544,22 @@ fn clean_artifacts_with_disposition(
                     }
                 });
                 match crate::rules::cache_target(Path::new(&request.path)) {
-                    Ok(target) => Some(target),
+                    Ok(target) => {
+                        let post_bind = artifact_manifest(Path::new(&request.path));
+                        if !post_bind.scan_complete
+                            || post_bind.skipped != 0
+                            || post_bind.fingerprint != request.fingerprint
+                            || post_bind.object_id != request.object_id
+                        {
+                            return DevArtifactCleanResult {
+                                path: request.path.clone(),
+                                ok: false,
+                                error: "development artifact changed while binding deletion authority; rescan before cleanup"
+                                    .into(),
+                            };
+                        }
+                        Some(target)
+                    }
                     Err(_) => {
                         return DevArtifactCleanResult {
                             path: request.path.clone(),
