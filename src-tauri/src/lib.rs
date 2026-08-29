@@ -35,13 +35,18 @@ mod dataset_metadata;
 pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dupes;
+/// Public exact-duplicate boundary, including fail-closed legacy-report safety policy.
+#[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
-pub mod photo_similarity_audit;
+#[path = "duplicate_audit.rs"]
+mod duplicate_audit_implementation;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
 pub mod git_clone_reclaim;
 pub mod git_worktree;
+/// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
+pub mod git_worktree_github_evidence;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
@@ -72,6 +77,7 @@ pub mod organization_lineage;
 mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod photo_similarity_audit;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
