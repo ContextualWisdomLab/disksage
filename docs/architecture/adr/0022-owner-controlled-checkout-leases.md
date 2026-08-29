@@ -24,6 +24,13 @@ different lock inodes. A release is complete only after removing the lease and d
 directory. If that sync fails, DiskSage restores and syncs the exact lease before returning the
 failure, preserving the cleanup veto.
 
+The private lock root creates a missing platform data-directory hierarchy before validating the
+final lock directory as a non-symlink private directory. Platforms must also provide a tested
+directory-entry durability primitive. Unix uses a directory `fsync`; Windows lease acquisition and
+release fail closed until an equivalent native flush boundary is implemented and exercised on a
+Windows runner. DiskSage does not report a durable lease where the operating-system contract has
+not been proven.
+
 Registered linked worktrees continue to use Git's native durable `worktree lock` veto. Agent
 launchers must acquire the applicable lease or lock before yielding the checkout and release it
 only when no later turn will reuse that folder.
@@ -49,4 +56,5 @@ states the next action: finish the work, release preservation, and scan again.
 The focused regression proves an idle clone satisfying the explicit stale-open authority remains
 ineligible while an owner-created lease is active, that replacement of `.git/config` cannot bypass
 the lifecycle lock, a failed release leaves the exact lease active, and eligibility follows only
-an exact fingerprint-bound durable release.
+an exact fingerprint-bound durable release. Platform regressions also cover a fresh Linux-style
+profile with no existing local-data parents and Windows' explicit fail-closed durability boundary.

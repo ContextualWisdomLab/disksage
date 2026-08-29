@@ -324,12 +324,12 @@ fn checkout_lease_lock_root() -> Result<PathBuf, String> {
 #[cfg(unix)]
 fn create_private_lock_directory(lock_root: &Path) -> Result<(), String> {
     let mut builder = std::fs::DirBuilder::new();
-    builder.mode(0o700);
-    match builder.create(lock_root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(_) => return Err("git-checkout-lease-lock-unavailable".into()),
-    }
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(lock_root)
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
+    std::fs::set_permissions(lock_root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
     let metadata = std::fs::symlink_metadata(lock_root)
         .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
     if !metadata.is_dir()
@@ -377,7 +377,10 @@ fn sync_checkout_lease_directory(common_dir: &Path) -> Result<(), String> {
 
 #[cfg(not(unix))]
 fn sync_checkout_lease_directory(_common_dir: &Path) -> Result<(), String> {
-    Ok(())
+    // Rust's portable filesystem API cannot open and flush a Windows directory entry. Until a
+    // tested native boundary exists, reporting success here could lose an acquired lease (or
+    // resurrect a released one) after a crash. Keep lifecycle mutations fail-closed instead.
+    Err("git-checkout-lease-directory-sync-unsupported".into())
 }
 
 fn read_checkout_lease(common_dir: &Path) -> Result<Option<GitCheckoutLease>, String> {
@@ -1238,6 +1241,30 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().into()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_lease_lock_directory_creates_missing_parent_hierarchy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let lock_root = temporary.path().join("missing/data/local/lease-locks");
+        create_private_lock_directory(&lock_root).unwrap();
+        let metadata = std::fs::symlink_metadata(&lock_root).unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lease_directory_sync_fails_closed_without_native_durability() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert_eq!(
+            sync_checkout_lease_directory(temporary.path()).unwrap_err(),
+            "git-checkout-lease-directory-sync-unsupported"
+        );
     }
 
     #[cfg(unix)]
