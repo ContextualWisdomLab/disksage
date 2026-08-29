@@ -1178,4 +1178,74 @@ mod tests {
         assert!(Path::new(&result.immutable_receipt_path).is_file());
         assert!(!Path::new(&result.items[0].path).exists());
     }
+
+    #[test]
+    fn receipt_sealing_failure_removes_unstarted_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = ProviderCacheReclaimPlan {
+            schema_version: SCHEMA_VERSION,
+            platform: "test".into(),
+            observed_at_ms: 1,
+            installed_edge_version: None,
+            podman_machine_present: false,
+            podman_recreation_source: None,
+            evidence_complete: true,
+            candidates: Vec::new(),
+            issues: Vec::new(),
+            plan_fingerprint: "seal-failure".into(),
+            exact_approval_phrase: Some("permanent phrase".into()),
+            trash_approval_phrase: Some("trash phrase".into()),
+        };
+        let result = write_immutable_receipt_with_sealer(
+            temp.path(),
+            &plan,
+            &[],
+            "verified cache",
+            ProviderCacheCleanupMode::Trash,
+            "trash phrase",
+            7,
+            |_file| Err("provider-cache-receipt-permissions-failed".into()),
+        );
+        assert_eq!(
+            result,
+            Err("provider-cache-receipt-permissions-failed".into())
+        );
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_file_rollback_does_not_replace_recreated_provider_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let seed = temp.path().join("seed.raw.zst");
+        fs::write(&seed, b"approved-seed").unwrap();
+        let candidate = candidate(
+            ProviderCacheKind::PodmanMachineSeed,
+            &seed,
+            "recreation-source".into(),
+            Some(file_sha256(&seed).unwrap()),
+        )
+        .unwrap();
+        let staged = temp.path().join(format!(
+            ".disksage-provider-cache-purge-9-{}",
+            &candidate.evidence_fingerprint[..12]
+        ));
+        let result = permanently_purge_exact_with_after_stage(
+            &candidate,
+            &temp.path().join("journal.jsonl"),
+            9,
+            |actual_staged, original| {
+                assert_eq!(actual_staged, staged);
+                fs::write(actual_staged, b"tampered-staged-seed").unwrap();
+                fs::write(original, b"provider-recreated-seed").unwrap();
+                Ok(())
+            },
+        );
+        assert_eq!(
+            result,
+            Err("provider-cache-permanent-file-purge-restore-destination-exists".into())
+        );
+        assert_eq!(fs::read(&seed).unwrap(), b"provider-recreated-seed");
+        assert_eq!(fs::read(&staged).unwrap(), b"tampered-staged-seed");
+    }
 }
