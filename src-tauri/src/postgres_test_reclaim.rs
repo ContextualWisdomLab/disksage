@@ -783,6 +783,11 @@ pub fn execute_with_runner(
     {
         return Err("postgres-exact-approval-invalid".into());
     }
+    if now_ms < approved_plan.observed_at_ms
+        || now_ms - approved_plan.observed_at_ms > COMMAND_TIMEOUT.as_millis() as u64
+    {
+        return Err("postgres-exact-approval-expired".into());
+    }
     let live_plan = plan_with_runner(request, runner, now_ms)?;
     if live_plan.plan_fingerprint != approved_plan.plan_fingerprint {
         return Err("postgres-plan-stale".into());
@@ -1151,5 +1156,32 @@ mod tests {
             "postgres-record-directory-inside-cluster"
         );
         assert!(runner.alive.get());
+    }
+
+    #[test]
+    fn expired_approval_is_rejected_before_shutdown_or_journaling() {
+        let (temp, request, runner) = fixture();
+        let plan = plan_with_runner(&request, &runner, 7).unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let records = temp.path().join("records");
+        std::fs::create_dir(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(
+            execute_with_runner(
+                &request,
+                &plan,
+                &plan.exact_approval_phrase,
+                &records,
+                source.path(),
+                &runner,
+                15_008,
+            )
+            .unwrap_err(),
+            "postgres-exact-approval-expired"
+        );
+        assert!(runner.alive.get());
+        assert!(request.data_directory.exists());
+        assert_eq!(std::fs::read_dir(records).unwrap().count(), 0);
     }
 }
