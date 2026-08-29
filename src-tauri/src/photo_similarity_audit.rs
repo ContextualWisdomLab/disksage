@@ -9,12 +9,11 @@ use image::imageops::FilterType;
 use image::{ColorType, ImageFormat, ImageReader};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::Metadata;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 pub const PHOTO_SIMILARITY_AUDIT_VERSION: u32 = 1;
 pub const DEFAULT_MAX_ENTRIES: usize = 50_000;
 pub const MAX_ENTRIES: usize = 250_000;
-const MAX_DEPTH: usize = 64;
 const PHASH_HAMMING_THRESHOLD: u32 = 22;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -68,6 +67,7 @@ pub struct PhotoSimilarityAuditReport {
     pub group_count: usize,
     pub evidence_complete: bool,
     pub managed_library_excluded_count: usize,
+    pub dataless_photo_excluded_count: usize,
     pub issue_counts: BTreeMap<String, u64>,
     pub perceptual_algorithm: String,
     pub grouping_policy: String,
@@ -211,28 +211,34 @@ fn aspect_ratio(width: u32, height: u32) -> String {
 
 fn dct_perceptual_hash(image: &image::DynamicImage) -> String {
     let grayscale = image.to_luma8();
-    let resized = image::imageops::resize(&grayscale, 32, 32, FilterType::Lanczos3);
+    let resized = image::imageops::resize(&grayscale, 32, 32, FilterType::Triangle);
+    let basis = std::array::from_fn::<_, 8, _>(|frequency| {
+        std::array::from_fn::<_, 32, _>(|position| {
+            ((std::f64::consts::PI
+                * f64::from(2 * position as u32 + 1)
+                * f64::from(frequency as u32))
+                / 64.0)
+                .cos()
+        })
+    });
+    let row_transform = std::array::from_fn::<_, 32, _>(|y| {
+        std::array::from_fn::<_, 8, _>(|horizontal_frequency| {
+            (0..32)
+                .map(|x| {
+                    f64::from(resized.get_pixel(x, y as u32).0[0])
+                        * basis[horizontal_frequency][x as usize]
+                })
+                .sum::<f64>()
+        })
+    });
     let mut coefficients = Vec::with_capacity(64);
     for vertical_frequency in 0..8 {
         for horizontal_frequency in 0..8 {
-            let mut coefficient = 0.0f64;
-            for y in 0..32 {
-                for x in 0..32 {
-                    let pixel = f64::from(resized.get_pixel(x, y).0[0]);
-                    coefficient += pixel
-                        * ((std::f64::consts::PI
-                            * f64::from(2 * x + 1)
-                            * f64::from(horizontal_frequency))
-                            / 64.0)
-                            .cos()
-                        * ((std::f64::consts::PI
-                            * f64::from(2 * y + 1)
-                            * f64::from(vertical_frequency))
-                            / 64.0)
-                            .cos();
-                }
-            }
-            coefficients.push(coefficient);
+            coefficients.push(
+                (0..32)
+                    .map(|y| row_transform[y][horizontal_frequency] * basis[vertical_frequency][y])
+                    .sum::<f64>(),
+            );
         }
     }
     let mut ordered = coefficients.clone();
@@ -265,6 +271,13 @@ fn stable_content_blake3(path: &Path, metadata: &Metadata) -> Result<String, Str
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
+    before.len() == after.len()
+        && system_time_ms(before.modified()) == system_time_ms(after.modified())
+        && crate::safety::object_id_from_metadata(before)
+            == crate::safety::object_id_from_metadata(after)
+}
+
 fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<DecodedPhoto, String> {
     let relative = path
         .strip_prefix(root)
@@ -290,6 +303,14 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
     let image = reader
         .decode()
         .map_err(|_| "photo-audit-image-decode-failed".to_string())?;
+    let after_decode = std::fs::symlink_metadata(path)
+        .map_err(|_| "photo-audit-post-decode-stat-failed".to_string())?;
+    if after_decode.file_type().is_symlink()
+        || !after_decode.is_file()
+        || !metadata_unchanged(metadata, &after_decode)
+    {
+        return Err("photo-audit-source-changed-during-decode".into());
+    }
     let width = image.width();
     let height = image.height();
     if width == 0 || height == 0 {
@@ -478,11 +499,11 @@ pub fn collect_photo_similarity_audit(
         .to_string();
     let mut entries_seen = 0usize;
     let mut managed_library_excluded_count = 0usize;
+    let mut dataless_photo_excluded_count = 0usize;
     let mut evidence_complete = true;
     let mut issues = BTreeMap::new();
     let mut decoded = Vec::new();
     let walker = walkdir::WalkDir::new(&canonical_root)
-        .max_depth(MAX_DEPTH)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
@@ -518,6 +539,10 @@ pub fn collect_photo_similarity_audit(
                 continue;
             }
         };
+        if crate::cloud::metadata_is_dataless(&metadata) {
+            dataless_photo_excluded_count += 1;
+            continue;
+        }
         match decode_photo(&canonical_root, entry.path(), &metadata) {
             Ok(photo) => decoded.push(photo),
             Err(issue) => {
@@ -546,6 +571,8 @@ pub fn collect_photo_similarity_audit(
     hash_value(&mut audit_hasher, source_root_text.as_bytes());
     audit_hasher.update(&(max_entries as u64).to_le_bytes());
     audit_hasher.update(&(entries_seen as u64).to_le_bytes());
+    audit_hasher.update(&(managed_library_excluded_count as u64).to_le_bytes());
+    audit_hasher.update(&(dataless_photo_excluded_count as u64).to_le_bytes());
     audit_hasher.update(&[evidence_complete as u8]);
     for (issue, count) in &issues {
         hash_value(&mut audit_hasher, issue.as_bytes());
@@ -565,6 +592,7 @@ pub fn collect_photo_similarity_audit(
         group_count,
         evidence_complete,
         managed_library_excluded_count,
+        dataless_photo_excluded_count,
         issue_counts: issues,
         perceptual_algorithm: "Zauner DCT pHash: 32x32 luminance, 8x8 low-frequency DCT block, median bit quantization, 64-bit Hamming distance".into(),
         grouping_policy: "exact reduced aspect ratio plus pHash Hamming distance at most 22, the pHash reference implementation's published intra/inter-image separation threshold; distinct content digests only".into(),

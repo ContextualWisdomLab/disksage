@@ -28,7 +28,8 @@ The user selects exactly one survivor in every group. The selection set and audi
 an exact approval phrase. Execution repeats the full audit, checks active use and filesystem
 identity, stages each non-survivor atomically, and moves it to OS Trash with journal and item
 receipts. Permanent deletion is never available. Paths containing `.photoslibrary` or
-`.photolibrary` are pruned before traversal, and a managed-library root is rejected.
+`.photolibrary` are pruned before traversal, a managed-library root is rejected, and dataless cloud
+placeholders are excluded before any content read that could hydrate them.
 
 ## Consequences
 

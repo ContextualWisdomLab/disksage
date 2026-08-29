@@ -12,8 +12,9 @@ one item Pareto-dominates all others on the preservation dimensions; the custome
 survivor after viewing the images. SSIM (Wang et al., 2004) remains a documented rejected grouping
 gate until a representative labeled corpus can calibrate an operating point.
 
-Managed `.photoslibrary` and `.photolibrary` trees are never entered. Execution re-collects the
-same report, checks active use and exact filesystem identity, then uses DiskSage's existing atomic
+Managed `.photoslibrary` and `.photolibrary` trees are never entered, and dataless cloud
+placeholders are rejected before decoding so an audit cannot hydrate them. Execution re-collects
+the same report, checks active use and exact filesystem identity, then uses DiskSage's existing atomic
 OS-Trash boundary and append-only journal. There is no permanent-delete mode.
 
 ## References

@@ -1214,3 +1214,22 @@ runner's private workspace temp root instead of weakening the shared production 
   bytes to about 20.3 GiB; the bounded host observation increased APFS availability by
   22,816,916 KiB. The remaining stopped container and its volumes stay preserved because neither
   exact container removal nor non-forced repair can safely unlink its damaged writable layer.
+
+## 2026-08-29 perceptual photo evidence
+
+- A read-only audit of the user-owned `Pictures` root completed with fingerprint
+  `22c1fbfaa1f5bbb06c99ee7d693f40f1c3277b8951be2b3c36aab221daee9518`: 58 entries were
+  observed, 45 local photos decoded, one managed Photos Library pruned before descent, zero
+  dataless cloud placeholders read, and zero evidence gaps recorded.
+- Five distinct-content PNG files formed two exact-aspect-ratio DCT pHash candidate groups. The
+  first group contained three 8-bit lossless variants with maximum pairwise Hamming distance 4;
+  the 4,408×6,616 member uniquely Pareto-dominated the 2,204×3,308 and 551×827 variants and is shown
+  as a review recommendation, not deletion authority. The two lower-resolution encoded files total
+  172,074 logical bytes.
+- The second group contained two 9,921×14,031, 8-bit lossless variants with maximum pairwise
+  Hamming distance 4. Their measured preservation dimensions are equal, so file-size difference is
+  not converted into a quality claim and no survivor is recommended. Direct image/metadata review
+  and an explicit survivor selection remain required.
+- The audit performed no mutation. Quarantine planning cannot begin without one survivor per group;
+  execution additionally requires the exact plan phrase, fresh full re-audit, inactive files, and
+  unchanged filesystem identities before any non-survivor moves to OS Trash.

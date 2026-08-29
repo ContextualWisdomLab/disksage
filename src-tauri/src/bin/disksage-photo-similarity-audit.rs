@@ -212,6 +212,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Valu
         "decoded_photo_count": report.decoded_photo_count,
         "group_count": report.group_count,
         "managed_library_excluded_count": report.managed_library_excluded_count,
+        "dataless_photo_excluded_count": report.dataless_photo_excluded_count,
         "issue_counts": report.issue_counts,
         "audit_fingerprint": report.audit_fingerprint,
         "perceptual_algorithm": report.perceptual_algorithm,
