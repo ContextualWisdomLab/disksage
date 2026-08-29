@@ -181,6 +181,7 @@ fn unchanged_restart_evidence(
         && fresh.provider_temp_fingerprint == planned.provider_temp_fingerprint
         && fresh.provider_cache_allocated_bytes == planned.provider_cache_allocated_bytes
         && fresh.provider_temp_allocated_bytes == planned.provider_temp_allocated_bytes
+        && fresh.global_sync_state == planned.global_sync_state
         && matches!(
             fresh.global_sync_state,
             ProviderGlobalSyncState::Pending | ProviderGlobalSyncState::Error
@@ -653,6 +654,21 @@ mod tests {
             2_001,
         )
         .unwrap();
+        let mut changed_sync_state = current.clone();
+        changed_sync_state.observed_at_ms = 2_002;
+        changed_sync_state.global_sync_state = ProviderGlobalSyncState::Pending;
+        assert_eq!(
+            execute_restart_with(
+                &plan,
+                &approval,
+                changed_sync_state,
+                identity.clone(),
+                2_003,
+                || unreachable!("changed evidence must block before restart"),
+            )
+            .unwrap_err(),
+            "onedrive-restart-evidence-changed"
+        );
         let mut fresh = current.clone();
         fresh.observed_at_ms = 2_002;
         let after = current.clone();

@@ -273,8 +273,10 @@ pub fn restart_fixed_onedrive(
         if !run_bounded(Path::new("/usr/bin/open"), &["-a", FIXED_ONEDRIVE_APP])? {
             return Err("provider-recovery-launch-failed".into());
         }
-        std::thread::sleep(Duration::from_secs(1));
-        let post_runtime_observed = runtime_observation(CloudProvider::Onedrive, observed_at_ms);
+        let post_runtime_observed =
+            wait_for_runtime_start(Duration::from_secs(10), Duration::from_millis(250), || {
+                runtime_observation(CloudProvider::Onedrive, observed_at_ms)
+            });
         Ok(ProviderRecoveryOutput {
             schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
             provider: CloudProvider::Onedrive,
@@ -287,6 +289,22 @@ pub fn restart_fixed_onedrive(
             cloud_write_executed: false,
             source_eviction_executed: false,
         })
+    }
+}
+
+#[cfg(not(coverage))]
+fn wait_for_runtime_start(
+    timeout: Duration,
+    poll_interval: Duration,
+    mut observe: impl FnMut() -> Option<bool>,
+) -> Option<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let current = observe();
+        if current == Some(true) || Instant::now() >= deadline {
+            return current;
+        }
+        std::thread::sleep(poll_interval);
     }
 }
 
@@ -478,6 +496,22 @@ mod tests {
         assert_eq!(
             post_runtime_blockers(None),
             vec!["provider-client-runtime-evidence-unavailable-after-restart"]
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn delayed_runtime_start_is_observed_within_the_bounded_poll_window() {
+        let mut observations = vec![Some(false), None, Some(true)].into_iter();
+        assert_eq!(
+            wait_for_runtime_start(Duration::from_secs(1), Duration::ZERO, || {
+                observations.next().unwrap_or(Some(true))
+            }),
+            Some(true)
+        );
+        assert_eq!(
+            wait_for_runtime_start(Duration::ZERO, Duration::ZERO, || Some(false)),
+            Some(false)
         );
     }
 
