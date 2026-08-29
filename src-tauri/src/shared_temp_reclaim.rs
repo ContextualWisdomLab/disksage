@@ -154,6 +154,31 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
     metadata.len()
 }
 
+#[cfg(unix)]
+fn change_metadata_token(metadata: &Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        metadata.mode(),
+        metadata.uid(),
+        metadata.gid(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    )
+}
+
+#[cfg(not(unix))]
+fn change_metadata_token(metadata: &Metadata) -> String {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or_else(|| "modified-time-unavailable".into())
+}
+
 fn database_or_worktree_marker(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -251,10 +276,11 @@ fn tree_evidence(root: &Path) -> TreeEvidence {
             "o"
         };
         let bytes = allocated_bytes(&metadata);
+        let change_metadata = change_metadata_token(&metadata);
         evidence.allocated_bytes = evidence.allocated_bytes.saturating_add(bytes);
         evidence.entry_count = evidence.entry_count.saturating_add(1);
         records.push(format!(
-            "{kind}\0{relative}\0{identity}\0{}\0{bytes}",
+            "{kind}\0{relative}\0{identity}\0{}\0{bytes}\0{change_metadata}",
             metadata.len()
         ));
     }
@@ -498,25 +524,73 @@ fn receipt_id(receipt: &SharedTempReclaimReceipt) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn validate_receipt_path(shared_root: &Path, receipt_path: &Path) -> Result<(), String> {
-    if !receipt_path.is_absolute()
-        || receipt_path
+#[cfg(unix)]
+fn private_destination_path(
+    artifact_path: &Path,
+    destination: &Path,
+    error: &str,
+) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    if !destination.is_absolute()
+        || destination
             .components()
             .any(|part| matches!(part, Component::ParentDir))
-        || receipt_path.starts_with(shared_root)
-        || receipt_path.exists()
+        || destination.starts_with(artifact_path)
     {
+        return Err(error.into());
+    }
+    let parent = destination.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or_else(|| error.to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent).map_err(|_| error.to_string())?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || parent_metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(error.into());
+    }
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|_| error.to_string())?;
+    if canonical_parent.starts_with(artifact_path) {
+        return Err(error.into());
+    }
+    let file_name = destination
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| error.to_string())?;
+    Ok(canonical_parent.join(file_name))
+}
+
+#[cfg(unix)]
+fn validate_receipt_path(artifact_path: &Path, receipt_path: &Path) -> Result<PathBuf, String> {
+    let resolved = private_destination_path(
+        artifact_path,
+        receipt_path,
+        "shared-temp-receipt-parent-unsafe",
+    )?;
+    if std::fs::symlink_metadata(&resolved).is_ok() {
         return Err("shared-temp-receipt-path-invalid".into());
     }
-    let parent = receipt_path
-        .parent()
-        .ok_or_else(|| "shared-temp-receipt-parent-invalid".to_string())?;
-    let metadata = std::fs::symlink_metadata(parent)
-        .map_err(|_| "shared-temp-receipt-parent-unavailable".to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("shared-temp-receipt-parent-unsafe".into());
+    Ok(resolved)
+}
+
+#[cfg(unix)]
+fn validate_journal_path(artifact_path: &Path, journal_path: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let resolved = private_destination_path(
+        artifact_path,
+        journal_path,
+        "shared-temp-journal-path-unsafe",
+    )?;
+    match std::fs::symlink_metadata(&resolved) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.permissions().mode() & 0o022 == 0 =>
+        {
+            Ok(resolved)
+        }
+        Ok(_) => Err("shared-temp-journal-path-unsafe".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(resolved),
+        Err(_) => Err("shared-temp-journal-path-unsafe".into()),
     }
-    Ok(())
 }
 
 /// Freshly revalidate, permanently remove, and persist a create-only read-only receipt.
@@ -544,19 +618,21 @@ pub fn execute_shared_temp_reclaim(
     {
         return Err("shared-temp-live-plan-mismatch".into());
     }
+    let artifact_path = Path::new(&live.path);
     let shared_root = Path::new(&live.shared_root);
-    validate_receipt_path(shared_root, receipt_path)?;
+    let receipt_path = validate_receipt_path(artifact_path, receipt_path)?;
+    let journal_path = validate_journal_path(artifact_path, journal_path)?;
     let before = crate::volume_pressure::snapshot_volume(shared_root, requested_at_ms)
         .map_err(|_| "shared-temp-volume-before-unavailable".to_string())?;
     crate::safety::permanent_delete_dir_if_identity(
-        Path::new(&live.path),
+        artifact_path,
         &live.root_object_id,
         live.allocated_bytes,
-        journal_path,
+        &journal_path,
         requested_at_ms,
     )
     .map_err(|error| format!("shared-temp-permanent-delete-failed:{error}"))?;
-    let path_absence_verified = !Path::new(&live.path).exists();
+    let path_absence_verified = !artifact_path.exists();
     if !path_absence_verified {
         return Err("shared-temp-path-still-present".into());
     }
@@ -584,7 +660,7 @@ pub fn execute_shared_temp_reclaim(
         .write(true)
         .create_new(true)
         .mode(0o400)
-        .open(receipt_path)
+        .open(&receipt_path)
         .map_err(|_| "shared-temp-receipt-create-failed".to_string())?;
     file.write_all(&encoded)
         .and_then(|_| file.sync_all())
@@ -645,17 +721,12 @@ mod tests {
             approve_shared_temp_reclaim(&plan, &phrase, 12, "human:test", "verified completion")
                 .unwrap();
         std::fs::write(artifact.path().join("result.bin"), b"changed").unwrap();
-        let journal = artifact
-            .path()
-            .parent()
-            .unwrap()
-            .join(format!("journal-{}.jsonl", std::process::id()));
         let private = tempfile::tempdir().unwrap();
         assert_eq!(
             execute_shared_temp_reclaim(
                 &plan,
                 &approval,
-                &journal,
+                &private.path().join("journal.jsonl"),
                 &private.path().join("receipt.json"),
                 13
             )
@@ -663,7 +734,6 @@ mod tests {
             "shared-temp-live-plan-mismatch"
         );
         assert!(artifact.path().exists());
-        let _ = std::fs::remove_file(journal);
     }
 
     #[cfg(unix)]
@@ -707,12 +777,12 @@ mod tests {
         )
         .unwrap();
         let path = artifact.keep();
-        let journal = path.parent().unwrap().join(format!(
+        let private = tempfile::tempdir().unwrap();
+        let journal = private.path().join(format!(
             "disksage-shared-temp-journal-{}-{}.jsonl",
             std::process::id(),
             &plan.plan_fingerprint[..12]
         ));
-        let private = tempfile::tempdir().unwrap();
         let receipt_path = private.path().join("receipt.json");
         let receipt =
             execute_shared_temp_reclaim(&plan, &approval, &journal, &receipt_path, 13).unwrap();
