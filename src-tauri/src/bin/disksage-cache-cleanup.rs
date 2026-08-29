@@ -8,6 +8,7 @@ use disksage_lib::cache_cleanup::{
     clean_catalog_cache_headless, clean_inactive_npx_environments_headless,
     clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
 };
+use disksage_lib::cache_cleanup_preview::preview_catalog_cache_headless;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -116,9 +117,9 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     if permanent_cache && cache_id.is_none() {
         return Err("--permanent-cache requires --cache-id".into());
     }
-    // Permanent Gradle deletion is disabled at the executable authority boundary until the
-    // irreversible mutation path revalidates the complete target manifest and active-use evidence
-    // immediately before staging. Read-only previews remain available for operator inspection.
+    // `--permanent-cache` is an explicit opt-in rather than a parser-level disable. The parser
+    // only admits it with a named cache; the library remains responsible for the irreversible
+    // allowlist plus manifest and active-use revalidation at the mutation boundary.
     Ok(Some(Args {
         execute,
         npx_only,
@@ -154,6 +155,12 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         return Ok(());
     };
     if !args.execute {
+        let cache_targets = if let Some(cache_id) = args.cache_id.as_deref() {
+            serde_json::to_value(preview_catalog_cache_headless(cache_id)?)
+                .map_err(|error| error.to_string())?
+        } else {
+            serde_json::Value::Array(Vec::new())
+        };
         let cache_trash = if args.purge_proven_cache_trash {
             serde_json::to_value(proven_cache_trash_candidates(&home_directory()?))
                 .map_err(|error| error.to_string())?
@@ -169,6 +176,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "cache_id": args.cache_id,
                 "permanent_cache": args.permanent_cache,
+                "cache_targets": cache_targets,
                 "proven_cache_trash": cache_trash,
                 "notice": "pass --execute to perform the guarded OS-Trash operation"
             })

@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Recursive active-use probes for irreversible generated-tree deletion must accommodate real
+/// dependency trees while remaining bounded and fail-closed.
+pub(crate) const PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -505,6 +509,37 @@ pub fn trash_delete_if_identity(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
+    trash_delete_if_identity_with_manifest(path, expected_object_id, bytes, None, journal_path, now_ms)
+}
+
+/// Move one exact cache manifest to Trash after validating it at the staging boundary.
+pub fn trash_delete_cache_target_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    expected_modified_ms: u64,
+    expected_manifest_fingerprint: &str,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    trash_delete_if_identity_with_manifest(
+        path,
+        expected_object_id,
+        bytes,
+        Some((expected_modified_ms, expected_manifest_fingerprint)),
+        journal_path,
+        now_ms,
+    )
+}
+
+fn trash_delete_if_identity_with_manifest(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    expected_manifest: Option<(u64, &str)>,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -547,6 +582,24 @@ pub fn trash_delete_if_identity(
     }
 
     let result = (|| -> Result<(), SafetyError> {
+        let manifest_matches = |candidate_path: &Path| {
+            expected_manifest.is_none_or(|(modified_ms, fingerprint)| {
+                crate::rules::cache_target(candidate_path)
+                    .ok()
+                    .is_some_and(|target| {
+                        target.object_id == expected_object_id
+                            && target.bytes == bytes
+                            && target.modified_ms == modified_ms
+                            && target.manifest_fingerprint == fingerprint
+                    })
+            })
+        };
+        if !manifest_matches(path) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(
+                "cache manifest changed; rescan before deletion".into(),
+            ));
+        }
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(format!(
@@ -571,6 +624,16 @@ pub fn trash_delete_if_identity(
                 )),
                 Err(restore_error) => Err(SafetyError::Trash(format!(
                     "atomic staging move changed the filesystem object; {restore_error}"
+                ))),
+            };
+        }
+        if !manifest_matches(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "staged cache manifest changed; nothing was trashed".into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "staged cache manifest changed; {restore_error}"
                 ))),
             };
         }
@@ -700,7 +763,7 @@ pub fn permanent_delete_dir_if_identity(
         // users; recursively probe the exact staged object before the irreversible removal.
         let active_use = crate::git_worktree::active_use_evidence(
             &staged,
-            crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+            PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
             crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
             true,
         );
@@ -1686,5 +1749,29 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(std::fs::read(&dst).unwrap(), b"pre-existing");
         assert!(src.exists());
+    }
+
+    #[test]
+    fn trash_cache_target_rejects_changed_manifest_before_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache-entry");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::write(cache.join("payload.bin"), b"old").unwrap();
+        let target = crate::rules::cache_target(&cache).unwrap();
+        std::fs::write(cache.join("payload.bin"), b"new").unwrap();
+
+        let error = trash_delete_cache_target_if_identity(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &tmp.path().join("journal.jsonl"),
+            1,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("cache manifest changed"));
+        assert_eq!(std::fs::read(cache.join("payload.bin")).unwrap(), b"new");
     }
 }

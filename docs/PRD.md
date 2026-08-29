@@ -23,6 +23,8 @@ an observation goal, never deletion authority.
   a human-selected survivor.
 - Container and VM maintenance never removes active resources or rewrites raw VM images.
 - Worktrees and standalone clones require fresh exact Git/GitHub authority, clean and inactive
-  state, explicit approval, and no branch deletion or Git pruning.
+  state, complete and valid lease evidence, no active owner-created lease or Git worktree lock,
+  explicit approval, and no branch deletion or Git pruning. Lease expiry is supplied by its owner;
+  DiskSage never invents one.
 - All customer-visible text states what happened, what remains blocked, and the next safe action;
   it does not expose implementation boundaries.

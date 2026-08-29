@@ -55,6 +55,9 @@ pub struct CacheTrashCandidate {
     pub path: String,
     pub bytes: u64,
     pub signature: String,
+    pub object_id: String,
+    pub modified_ms: u64,
+    pub manifest_fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,14 +225,20 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
             continue;
         };
         let mut count = 0;
-        let Ok(bytes) = bounded_tree_size(&path, &mut count) else {
+        let Ok(_) = bounded_tree_size(&path, &mut count) else {
+            continue;
+        };
+        let Ok(target) = rules::cache_target(&path) else {
             continue;
         };
         candidates.push(CacheTrashCandidate {
             name,
             path: path.to_string_lossy().into_owned(),
-            bytes,
+            bytes: target.bytes,
             signature: signature.into(),
+            object_id: target.object_id,
+            modified_ms: target.modified_ms,
+            manifest_fingerprint: target.manifest_fingerprint,
         });
     }
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
@@ -247,29 +256,22 @@ pub fn purge_proven_cache_trash(
     let mut results = Vec::with_capacity(planned.len());
     for candidate in planned {
         let path = PathBuf::from(&candidate.path);
-        let mut entry = crate::safety::JournalEntry {
-            ts_ms: now_ms,
-            op: "permanent_cache_trash_delete".into(),
-            path: candidate.path.clone(),
-            bytes: candidate.bytes,
-            outcome: "pending".into(),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
         let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
             .is_some_and(|signature| signature == candidate.signature)
         {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            }
+            safety::permanent_delete_dir_if_identity(
+                &path,
+                &candidate.object_id,
+                candidate.bytes,
+                candidate.modified_ms,
+                &candidate.manifest_fingerprint,
+                journal_path,
+                now_ms,
+            )
+            .map_err(|error| error.to_string())
         } else {
             Err("cache-trash-signature-changed".into())
         };
-        entry.outcome = match &outcome {
-            Ok(()) => "ok".into(),
-            Err(error) => format!("error:{error}"),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
         results.push(CacheTrashPurgeResult {
             name: candidate.name,
             path: candidate.path,
@@ -298,7 +300,11 @@ fn automatic_cache_targets(
     cache_id: &str,
     path: &Path,
 ) -> Result<Vec<rules::CacheTarget>, String> {
-    let mut targets = rules::cache_targets(path)?;
+    let mut targets = if cache_id == "macos-app-support-cache" {
+        rules::named_cache_targets(path, &OBSERVED_UPDATER_CACHE_NAMES)?
+    } else {
+        rules::cache_targets(path)?
+    };
     if cache_id == "macos-app-support-cache" {
         targets.retain(|target| {
             let path = Path::new(&target.path);
@@ -352,6 +358,15 @@ fn clean_cache_contents_inner_for_id(
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
     }
+    if permanent_directories
+        && expected.iter().any(|target| {
+            std::fs::symlink_metadata(&target.path)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true)
+        })
+    {
+        return Err("permanent-cache-target-type-unsupported".into());
+    }
 
     Ok(expected
         .into_iter()
@@ -363,7 +378,11 @@ fn clean_cache_contents_inner_for_id(
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                if permanent_directories {
+                    crate::safety::PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS
+                } else {
+                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS
+                },
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );
@@ -375,10 +394,16 @@ fn clean_cache_contents_inner_for_id(
                 };
             }
             let path = Path::new(&target.path);
-            let permanent = permanent_directories
-                && std::fs::symlink_metadata(path)
-                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
-            let result = if permanent {
+            let result = if permanent_directories {
+                if !std::fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                {
+                    return CleanResult {
+                        path: target.path,
+                        ok: false,
+                        error: "permanent-cache-target-type-unsupported".into(),
+                    };
+                }
                 safety::permanent_delete_dir_if_identity(
                     path,
                     &target.object_id,
@@ -389,10 +414,12 @@ fn clean_cache_contents_inner_for_id(
                     now_ms,
                 )
             } else {
-                safety::trash_delete_if_identity(
+                safety::trash_delete_cache_target_if_identity(
                     path,
                     &target.object_id,
                     target.bytes,
+                    target.modified_ms,
+                    &target.manifest_fingerprint,
                     journal_path,
                     now_ms,
                 )
@@ -672,7 +699,7 @@ mod tests {
         assert!(results[0].purged);
         assert!(!npm.exists());
         let journal_text = fs::read_to_string(journal).unwrap();
-        assert!(journal_text.contains("permanent_cache_trash_delete"));
+        assert!(journal_text.contains("permanent_generated_directory_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
     }
 
@@ -715,6 +742,27 @@ mod tests {
         fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
 
         let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("cursor-updater"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_unreadable_cache_does_not_block_updater_discovery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let updater = tmp.path().join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let unrelated = tmp.path().join("unrelated-cache");
+        fs::create_dir(&unrelated).unwrap();
+        fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+
+        fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("cursor-updater"));
     }
