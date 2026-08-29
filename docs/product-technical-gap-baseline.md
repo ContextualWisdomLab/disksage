@@ -1197,9 +1197,14 @@ runner's private workspace temp root instead of weakening the shared production 
   bytes. Ten active candidates and one changed or incomplete manifest remained untouched. The
   private journal is `/private/tmp/disksage-dev-permanent-1787954077.jsonl`; concurrent provider
   and build writes mean this logical total is not presented as an APFS free-space increase.
-- The live Podman machine retains five running PostgreSQL containers and two recent stopped
-  PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
-  containers, no custom network is unused, and volume safety cannot be completed while one stopped
-  container has corrupt overlay metadata. The 100 GiB raw disk is already sparse and native
-  `fstrim --dry-run` reports 0 B, so DiskSage offers no destructive prune or unsupported host
-  compaction claim for this state.
+- A later exact-identity `/private/tmp/opencode` pass preserved all 128 registered review
+  worktrees, then removed only 146 generated Rust, Python, Node, and analysis-cache roots within
+  them. All candidates passed manifest, active-use, and current-object checks; the bounded APFS
+  observation increased by 6,487,040 KiB. Source checkouts and Git registrations were untouched.
+- The current Podman machine has one running and four stopped PostgreSQL test containers. Its
+  native orphan audit proves 74 unreferenced images (about 42.9 GB by record-size sum), but
+  `podman system df` and exact stopped-container removal fail because the store contains damaged
+  overlay layers, including a missing required lower directory. `podman system check --quick`
+  independently confirms the storage inconsistency. DiskSage therefore records no prune or
+  physical gain until an explicit native storage-repair plan preserves running-container and
+  data-volume dependencies, rechecks integrity, and regenerates the orphan fingerprint.
