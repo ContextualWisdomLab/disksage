@@ -107,6 +107,54 @@ fn stopped_vm_id_cannot_authorize_a_different_bundle() {
     assert_eq!(error, "parallels-vm-bundle-mismatch");
 }
 
+#[test]
+fn plan_fingerprint_changes_when_active_use_evidence_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let prlctl = root.join("prlctl");
+    let disk_tool = root.join("prl_disk_tool");
+    std::fs::write(&prlctl, b"fake").unwrap();
+    std::fs::write(&disk_tool, b"fake").unwrap();
+    let bundle = root.join("Work Windows.pvm");
+    let disk = bundle.join("Work Windows-0.hdd");
+    std::fs::create_dir_all(&disk).unwrap();
+    std::fs::write(disk.join("DiskDescriptor.xml"), b"descriptor").unwrap();
+    let runner = FakeRunner {
+        home: bundle.to_string_lossy().into_owned(),
+    };
+
+    let inactive_plan = plan_with_runner(
+        &runner,
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        123,
+        inactive(),
+    )
+    .unwrap();
+    let mut active_evidence = inactive();
+    active_evidence.active = true;
+    active_evidence.observed_pids = vec![4242];
+    let active_plan = plan_with_runner(
+        &runner,
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        123,
+        active_evidence,
+    )
+    .unwrap();
+
+    assert_ne!(
+        inactive_plan.plan_fingerprint, active_plan.plan_fingerprint,
+        "the plan identity must bind the active-use evidence that changes its blockers"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_bundle_is_rejected_before_provider_commands() {
