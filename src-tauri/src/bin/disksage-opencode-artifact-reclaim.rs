@@ -1,7 +1,8 @@
 //! Headless planner/executor for exact unreferenced OpenCode tool-output artifacts.
 
 use disksage_lib::opencode_artifact_reclaim;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: disksage-opencode-artifact-reclaim [--home ABSOLUTE_PATH] [--execute|--purge-quarantined --plan-fingerprint HEX64 --confirm EXACT_PHRASE --approved-by HUMAN_ID --rationale TEXT --journal-path ABSOLUTE_PATH --record-directory ABSOLUTE_PATH]";
 
@@ -18,12 +19,34 @@ struct Args {
     records: Option<PathBuf>,
 }
 
+fn validate_home_authority(process_home: &Path, requested_home: &Path) -> Result<PathBuf, String> {
+    if !requested_home.is_absolute() {
+        return Err("--home must be absolute".into());
+    }
+    let process_home = fs::canonicalize(process_home).map_err(|_| "HOME unavailable".to_string())?;
+    let requested_home = fs::canonicalize(requested_home)
+        .map_err(|_| "--home must match process HOME".to_string())?;
+    if requested_home != process_home {
+        return Err("--home must match process HOME".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(&requested_home)
+            .map_err(|_| "HOME unavailable".to_string())?;
+        if !metadata.is_dir() || metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("HOME must be owned by current user".into());
+        }
+    }
+    Ok(requested_home)
+}
+
 fn parse(raw: &[String]) -> Result<Args, String> {
-    let home = std::env::var_os("HOME")
+    let process_home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME unavailable".to_string())?;
     let mut args = Args {
-        home,
+        home: process_home.clone(),
         execute: false,
         purge_quarantined: false,
         fingerprint: None,
@@ -62,9 +85,7 @@ fn parse(raw: &[String]) -> Result<Args, String> {
         }
         index += 1;
     }
-    if !args.home.is_absolute() {
-        return Err("--home must be absolute".into());
-    }
+    args.home = validate_home_authority(&process_home, &args.home)?;
     let execution_input_missing = args.fingerprint.is_none()
         || args.confirmation.is_none()
         || args.approved_by.is_none()
