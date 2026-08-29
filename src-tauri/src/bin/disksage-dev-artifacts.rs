@@ -128,6 +128,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
             args.min_age_days,
             &args.journal_path,
             observed_at_ms,
+            true,
         )
     } else {
         Vec::new()
