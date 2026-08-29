@@ -19,7 +19,6 @@ pub const GIT_CLONE_RECLAIM_VERSION: u32 = 2;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1_000;
 const CHECKOUT_LEASE_FILENAME: &str = "disksage-checkout-lease.json";
-const CHECKOUT_LEASE_LOCK_FILENAME: &str = "disksage-checkout-lease.lock";
 const MAX_CHECKOUT_LEASE_BYTES: u64 = 16 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,12 +295,14 @@ fn checkout_lease_path(common_dir: &Path) -> PathBuf {
 }
 
 fn lock_checkout_lease(common_dir: &Path) -> Result<File, String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(common_dir.join(CHECKOUT_LEASE_LOCK_FILENAME))
+    let config_path = common_dir.join("config");
+    let metadata = std::fs::symlink_metadata(&config_path)
         .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("git-checkout-lease-lock-unavailable".into());
+    }
+    let file =
+        File::open(config_path).map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
     file.try_lock()
         .map_err(|_| "git-checkout-lease-operation-active".to_string())?;
     Ok(file)
@@ -459,7 +460,12 @@ pub fn acquire_git_checkout_lease(
         let _ = std::fs::remove_file(checkout_lease_path(&common_dir));
         return Err("git-checkout-lease-write-failed".into());
     }
-    sync_checkout_lease_directory(&common_dir)?;
+    if let Err(error) = sync_checkout_lease_directory(&common_dir) {
+        drop(file);
+        let _ = std::fs::remove_file(checkout_lease_path(&common_dir));
+        let _ = sync_checkout_lease_directory(&common_dir);
+        return Err(error);
+    }
     Ok(lease)
 }
 
@@ -480,7 +486,8 @@ pub fn release_git_checkout_lease(
         return Err("git-checkout-lease-fingerprint-mismatch".into());
     }
     std::fs::remove_file(checkout_lease_path(&common_dir))
-        .map_err(|_| "git-checkout-lease-release-failed".to_string())
+        .map_err(|_| "git-checkout-lease-release-failed".to_string())?;
+    sync_checkout_lease_directory(&common_dir)
 }
 
 fn plan_fingerprint(
@@ -959,12 +966,6 @@ fn execute_git_clone_reclaim_with_authority(
     }
     validate_journal_destination(Path::new(&approved_plan.repository_root), journal_path)?;
     let repository_root = Path::new(&approved_plan.repository_root);
-    let common_dir = std::fs::canonicalize(repository_root.join(".git"))
-        .map_err(|_| "git-clone-git-directory-unavailable".to_string())?;
-    if !has_bounded_standalone_git_directory(repository_root, &common_dir) {
-        return Err("git-clone-git-directory-not-real-or-bounded".into());
-    }
-    let _lease_guard = lock_checkout_lease(&common_dir)?;
     let closed = if include_closed_pull_requests {
         git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
     } else {
@@ -994,6 +995,19 @@ fn execute_git_clone_reclaim_with_authority(
         || !live.eligible_after_human_approval
     {
         return Err("git-clone-live-plan-mismatch".into());
+    }
+    let common_dir = std::fs::canonicalize(repository_root.join(".git"))
+        .map_err(|_| "git-clone-git-directory-unavailable".to_string())?;
+    if !has_bounded_standalone_git_directory(repository_root, &common_dir) {
+        return Err("git-clone-git-directory-not-real-or-bounded".into());
+    }
+    let _lease_guard = lock_checkout_lease(&common_dir)?;
+    let lease = read_checkout_lease(&common_dir)?;
+    if lease.is_some() != live.checkout_lease_fingerprint.is_some()
+        || lease.as_ref().map(|value| value.lease_fingerprint.as_str())
+            != live.checkout_lease_fingerprint.as_deref()
+    {
+        return Err("git-clone-live-lease-mismatch".into());
     }
     crate::safety::trash_delete_if_identity(
         Path::new(&live.repository_root),
