@@ -54,11 +54,13 @@
     if (!await confirm(`${fmtBytes(plan.size.allocated_bytes)}의 로컬 복사본을 휴지통으로 보냅니다. 계속하시겠습니까?`, { title: "저장소 복사본 정리", kind: "warning" })) return;
     busy = true;
     try {
-      await api.removeStaleGitClone(selected, [reference.trim()], true, null, plan.plan_fingerprint, phrase, rationale.trim());
+      const removal = await api.removeStaleGitClone(selected, [reference.trim()], true, null, plan.plan_fingerprint, phrase, rationale.trim());
       plan = null;
       clones = clones.filter((path) => path !== selected);
       selected = clones[0] ?? "";
-      message = "휴지통으로 이동했습니다. 필요하면 휴지통에서 복원할 수 있습니다.";
+      message = removal.result.post_mutation_warning
+        ? "파일은 휴지통으로 이동했지만 완료 상태를 확인하지 못했습니다. 휴지통을 비우지 말고 다시 확인하세요."
+        : "휴지통으로 이동했습니다. 필요하면 휴지통에서 복원할 수 있습니다.";
     } catch {
       message = "상태가 달라져 이동하지 않았습니다. 다시 확인한 뒤 승인하세요.";
     } finally {

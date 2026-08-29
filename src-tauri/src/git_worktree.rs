@@ -514,19 +514,21 @@ struct GitHubPullRequestHead {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GitHubSearchRepository {
-    #[serde(rename = "name")]
-    _name: String,
-    #[serde(rename = "nameWithOwner")]
+struct GitHubCommitAssociationRepository {
+    #[serde(rename = "full_name")]
     name_with_owner: String,
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GitHubSearchPullRequest {
+struct GitHubCommitAssociationBase {
+    repo: GitHubCommitAssociationRepository,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubCommitAssociation {
     number: u64,
     state: String,
-    repository: GitHubSearchRepository,
+    base: GitHubCommitAssociationBase,
 }
 
 pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
@@ -831,22 +833,26 @@ fn parse_open_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads,
         .collect()
 }
 
-fn parse_pull_request_search(bytes: &[u8], repository: &str) -> Result<Vec<(u64, bool)>, String> {
-    let records: Vec<GitHubSearchPullRequest> = serde_json::from_slice(bytes)
-        .map_err(|_| "github-pr-commit-search-json-invalid".to_string())?;
-    if records.len() > 100 {
-        return Err("github-pr-commit-search-incomplete".into());
+fn parse_commit_pull_request_associations(
+    bytes: &[u8],
+    repository: &str,
+) -> Result<Vec<(u64, bool)>, String> {
+    let pages: Vec<Vec<GitHubCommitAssociation>> = serde_json::from_slice(bytes)
+        .map_err(|_| "github-pr-commit-associations-json-invalid".to_string())?;
+    let records = pages.into_iter().flatten().collect::<Vec<_>>();
+    if records.len() > 10_000 {
+        return Err("github-pr-commit-associations-count-exceeds-limit".into());
     }
     records
         .into_iter()
         .map(|record| {
-            if record.repository.name_with_owner != repository || record.number == 0 {
-                return Err("github-pr-commit-search-repository-mismatch".into());
+            if record.base.repo.name_with_owner != repository || record.number == 0 {
+                return Err("github-pr-commit-associations-repository-mismatch".into());
             }
             match record.state.as_str() {
                 "open" => Ok((record.number, true)),
                 "closed" | "merged" => Ok((record.number, false)),
-                _ => Err("github-pr-commit-search-state-invalid".into()),
+                _ => Err("github-pr-commit-associations-state-invalid".into()),
             }
         })
         .collect()
@@ -1168,8 +1174,8 @@ pub fn github_closed_pull_request_heads_with_options(
 
 /// Resolve exact commit membership for the repository's registered worktrees.
 ///
-/// Search results are only discovery hints: every hit is rebound to the exact repository and then
-/// verified against the pull request's authoritative commit list. Open membership is retained
+/// GitHub's commit-association endpoint supplies bounded discovery records; every association is
+/// rebound to the exact base repository and verified against the pull request's commit list. Open membership is retained
 /// separately so it can veto every removal authority, including a second completed PR containing
 /// the same commit.
 pub fn github_pull_request_commit_membership(
@@ -1234,27 +1240,24 @@ pub fn github_pull_request_commit_membership(
         .into_iter()
         .collect::<Vec<_>>();
     let mut membership = PullRequestCommitMembership::default();
-    const SEARCH_CONCURRENCY: usize = 8;
+    const ASSOCIATION_CONCURRENCY: usize = 8;
     let mut discovered = Vec::new();
-    for chunk in heads.chunks(SEARCH_CONCURRENCY) {
+    for chunk in heads.chunks(ASSOCIATION_CONCURRENCY) {
         let timeout_ms = remaining();
         if timeout_ms == 0 {
-            return Err("github-pr-commit-search-timeout".into());
+            return Err("github-pr-commit-associations-timeout".into());
         }
         let results = thread::scope(|scope| {
             let workers = chunk
                 .iter()
                 .map(|head| {
                     let args = vec![
-                        OsString::from("search"),
-                        OsString::from("prs"),
-                        OsString::from(head),
-                        OsString::from("--repo"),
-                        OsString::from(repository),
-                        OsString::from("--limit"),
-                        OsString::from("101"),
-                        OsString::from("--json"),
-                        OsString::from("number,state,repository"),
+                        OsString::from("api"),
+                        OsString::from("--paginate"),
+                        OsString::from("--slurp"),
+                        OsString::from(format!(
+                            "repos/{repository}/commits/{head}/pulls?per_page=100"
+                        )),
                     ];
                     scope.spawn(move || {
                         run_bounded_command("gh", &args, repository_root, timeout_ms)
@@ -1267,22 +1270,22 @@ pub fn github_pull_request_commit_membership(
                 .map(|worker| {
                     worker
                         .join()
-                        .map_err(|_| "github-pr-commit-search-worker-failed".to_string())
+                        .map_err(|_| "github-pr-commit-associations-worker-failed".to_string())
                         .and_then(|result| result)
                 })
                 .collect::<Result<Vec<_>, String>>()
         })?;
         for (head, result) in results {
             if result.timed_out {
-                return Err("github-pr-commit-search-timeout".into());
+                return Err("github-pr-commit-associations-timeout".into());
             }
             if result.stdout_truncated || result.stderr_truncated {
-                return Err("github-pr-commit-search-output-truncated".into());
+                return Err("github-pr-commit-associations-output-truncated".into());
             }
             if result.status_code != Some(0) {
-                return Err("github-pr-commit-search-failed".into());
+                return Err("github-pr-commit-associations-failed".into());
             }
-            for candidate in parse_pull_request_search(&result.stdout, repository)? {
+            for candidate in parse_commit_pull_request_associations(&result.stdout, repository)? {
                 discovered.push((head.clone(), candidate));
             }
         }
@@ -3589,17 +3592,18 @@ mod tests {
 
     #[test]
     fn pull_request_commit_discovery_is_repository_bound_and_exact() {
-        let json = br#"[
-          {"number":1370,"state":"merged","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}},
-          {"number":1454,"state":"closed","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}}
-        ]"#;
+        let json = br#"[[
+          {"number":1370,"state":"merged","base":{"repo":{"full_name":"ContextualWisdomLab/disksage"}}},
+          {"number":1454,"state":"closed","base":{"repo":{"full_name":"ContextualWisdomLab/disksage"}}},
+          {"number":1600,"state":"open","base":{"repo":{"full_name":"ContextualWisdomLab/disksage"}}}
+        ]]"#;
         assert_eq!(
-            parse_pull_request_search(json, "ContextualWisdomLab/disksage").unwrap(),
-            vec![(1370, false), (1454, false)]
+            parse_commit_pull_request_associations(json, "ContextualWisdomLab/disksage").unwrap(),
+            vec![(1370, false), (1454, false), (1600, true)]
         );
         assert_eq!(
-            parse_pull_request_search(json, "ContextualWisdomLab/other").unwrap_err(),
-            "github-pr-commit-search-repository-mismatch"
+            parse_commit_pull_request_associations(json, "ContextualWisdomLab/other").unwrap_err(),
+            "github-pr-commit-associations-repository-mismatch"
         );
         assert!(pull_request_contains_commit(
             format!("{}\n{}\n", oid('a'), oid('b')).as_bytes(),

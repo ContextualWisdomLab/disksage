@@ -914,6 +914,7 @@ export interface GitCloneReclaimResult {
   branch_delete_command_executed: false;
   git_prune_executed: false;
   physically_reclaimed_bytes: number | null;
+  post_mutation_warning: string | null;
 }
 
 export interface StaleGitCloneRemovalOutput {
