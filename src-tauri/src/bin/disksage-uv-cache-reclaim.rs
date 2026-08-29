@@ -74,8 +74,8 @@ fn run() -> Result<(), String> {
     }
     let uv_path = uv_path.map(Ok).unwrap_or_else(fixed_uv_path)?;
     let now = disksage_lib::cloud::system_now_ms();
-    let output = if execute {
-        serde_json::to_value(execute_uv_cache_reclaim(
+    let (output, execution_failed) = if execute {
+        let receipt = execute_uv_cache_reclaim(
             &uv_path,
             fingerprint
                 .as_deref()
@@ -85,7 +85,11 @@ fn run() -> Result<(), String> {
             rationale.as_deref().ok_or("rationale-required")?,
             record_dir.as_deref().ok_or("record-dir-required")?,
             now,
-        )?)
+        )?;
+        let execution_failed = receipt.status_code != 0
+            || receipt.execution_error.is_some()
+            || receipt.output_truncated;
+        (serde_json::to_value(receipt), execution_failed)
     } else {
         if fingerprint.is_some()
             || confirmation.is_some()
@@ -95,13 +99,16 @@ fn run() -> Result<(), String> {
         {
             return Err("execution-authority-option-without-execute".into());
         }
-        serde_json::to_value(plan_uv_cache_reclaim(&uv_path, now)?)
-    }
-    .map_err(|error| error.to_string())?;
+        (serde_json::to_value(plan_uv_cache_reclaim(&uv_path, now)?), false)
+    };
+    let output = output.map_err(|error| error.to_string())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
     );
+    if execution_failed {
+        return Err("uv-cache-reclaim-command-failed".into());
+    }
     Ok(())
 }
 
