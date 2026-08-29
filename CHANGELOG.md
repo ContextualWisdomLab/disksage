@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add owner-created durable checkout leases for agent or human work that may be idle between turns.
+  Active or invalid lease evidence vetoes clone reclamation; expiry is supplied by the owner or the
+  lease remains active until exact fingerprint-bound release, without an inferred timeout.
 - Reclaim pip downloads, Corepack's Node.js package-manager archive, and each inactive npx
   environment through the existing identity-bound, active-use-checked regenerable-cache action.
 - Plan and execute uv's native `cache prune` without `--force`: bind the real executable and cache

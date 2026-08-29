@@ -843,11 +843,15 @@ export interface GitCloneReclaimPlan {
   head_is_default_branch_ancestor: boolean;
   size: GitWorktreeSizeEvidence;
   active_use: GitWorktreeActiveUseEvidence;
+  checkout_lease_active: boolean;
+  checkout_lease_expires_at_ms: number | null;
+  checkout_lease_fingerprint: string | null;
   authority_fingerprint: string;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
   eligible_after_human_approval: boolean;
   blockers: string[];
+  customer_next_action: string;
   filesystem_mutation_executed: false;
 }
 
