@@ -25,7 +25,7 @@ case "${{1:-}}" in
       exit 0
     fi
     if [ "${{2:-}}" = "inspect" ]; then
-      printf '%s\n' '[{{"Mounts":[]}}]'
+      printf '[{{"Id":"%s","Mounts":[]}}]\n' "${{3:-}}"
       exit 0
     fi
     exit 93
