@@ -46,6 +46,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
 - Ship that generic batch planner as a checksummed, provenance-attested operational CLI on Linux,
   Windows, and macOS so installed release artifacts can reproduce the exact read-only plan.
+- Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
+  generate the native Foundation-backed plan without compiling source; Linux and Windows retain
+  only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
 
 ### Fixed
 
