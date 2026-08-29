@@ -10,7 +10,11 @@ use crate::dev_artifacts::{
 };
 use crate::git_worktree::GitWorktreeActiveUseEvidence;
 
-const DISCOVERY_BUDGET: Duration = Duration::from_secs(2);
+// The shared development-artifact inspector has its own three-second manifest ceiling. Keep the
+// enclosing temp-root budget above that ceiling, then pass only the remaining wall-clock budget to
+// the potentially blocking active-handle probe so one candidate cannot turn this bounded planner
+// into a 30-second operation.
+const DISCOVERY_BUDGET: Duration = Duration::from_millis(3_500);
 const MAX_DISCOVERY_ENTRIES: usize = 4_096;
 const MAX_CANDIDATES: usize = 64;
 pub const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
@@ -133,13 +137,19 @@ fn marker_bound_temp_artifact(path: &Path) -> bool {
     )
 }
 
+fn remaining_discovery_timeout_ms(started: Instant) -> Option<u64> {
+    let remaining = DISCOVERY_BUDGET.checked_sub(started.elapsed())?;
+    let millis = remaining.as_millis();
+    (millis > 0).then(|| u64::try_from(millis).unwrap_or(u64::MAX))
+}
+
 fn plan_with_active<F>(
     requested: &Path,
     observed_at_ms: u64,
     active: F,
 ) -> Result<TempReclaimPlan, String>
 where
-    F: Fn(&Path) -> GitWorktreeActiveUseEvidence,
+    F: Fn(&Path, u64) -> GitWorktreeActiveUseEvidence,
 {
     let root = canonical_temp_root(requested)?;
     let started = Instant::now();
@@ -226,7 +236,14 @@ where
                 unavailable += 1;
                 continue;
             }
-            let use_evidence = active(&canonical);
+            let Some(active_timeout_ms) = remaining_discovery_timeout_ms(started) else {
+                complete = false;
+                break 'outer;
+            };
+            let use_evidence = active(&canonical, active_timeout_ms);
+            if started.elapsed() >= DISCOVERY_BUDGET {
+                complete = false;
+            }
             let mut blockers = Vec::new();
             if !artifact.scan_complete || artifact.skipped != 0 {
                 blockers.push("temporary-artifact-manifest-incomplete".into());
@@ -237,7 +254,7 @@ where
                 blockers.push("temporary-artifact-active-use-detected".into());
             }
             let fingerprint = candidate_fingerprint(&root, &artifact);
-            let eligible = blockers.is_empty();
+            let eligible = blockers.is_empty() && complete;
             let exact_approval_phrase =
                 eligible.then(|| approval_phrase_for_fingerprint(&fingerprint));
             candidates.push(TempReclaimCandidate {
@@ -255,6 +272,9 @@ where
                 }
                 .into(),
             });
+            if !complete {
+                break 'outer;
+            }
             if candidates.len() >= MAX_CANDIDATES {
                 complete = false;
                 break 'outer;
@@ -312,8 +332,8 @@ pub fn plan_native_temp_reclaim(observed_at_ms: u64) -> Result<TempReclaimPlan, 
     #[cfg(unix)]
     {
         let root = native_temp_root()?;
-        plan_with_active(&root, observed_at_ms, |path| {
-            crate::git_worktree::active_use_evidence(path, 30_000, 256, true)
+        plan_with_active(&root, observed_at_ms, |path, timeout_ms| {
+            crate::git_worktree::active_use_evidence(path, timeout_ms, 256, true)
         })
     }
 }
@@ -385,7 +405,7 @@ mod tests {
         std::fs::write(project.join("Cargo.toml"), b"[package]").unwrap();
         std::fs::write(project.join("target/output"), b"generated").unwrap();
         std::fs::create_dir_all(temp.path().join("unknown/private-data")).unwrap();
-        let plan = plan_with_active(temp.path(), 10, |_| idle()).unwrap();
+        let plan = plan_with_active(temp.path(), 10, |_, _| idle()).unwrap();
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].artifact.kind, "target");
         assert!(plan.candidates[0].eligible_for_approval);
@@ -404,7 +424,7 @@ mod tests {
         std::fs::create_dir_all(project.join("target")).unwrap();
         std::fs::write(project.join("Cargo.toml"), b"[package]").unwrap();
         std::fs::write(project.join("target/output"), b"generated").unwrap();
-        let plan = plan_with_active(temp.path(), 10, |_| idle()).unwrap();
+        let plan = plan_with_active(temp.path(), 10, |_, _| idle()).unwrap();
         let candidate = &plan.candidates[0];
         let result = execute_candidate(
             &plan,
