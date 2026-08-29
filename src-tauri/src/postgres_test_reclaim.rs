@@ -814,9 +814,9 @@ pub fn execute_with_runner(
             "-D".into(),
             approved_plan.data_directory.clone(),
             "-m".into(),
-            // Fast shutdown terminates racing client sessions and cannot leave a timed-out smart
-            // shutdown continuing after this bounded command returns.
-            "fast".into(),
+            // Smart shutdown closes admission to new sessions and waits for every racing client;
+            // a bounded timeout therefore fails closed without terminating active work.
+            "smart".into(),
             "-w".into(),
             "stop".into(),
         ],
@@ -943,7 +943,7 @@ mod tests {
             if args.last().map(String::as_str) == Some("stop") {
                 assert!(args
                     .windows(2)
-                    .any(|pair| pair[0] == "-m" && pair[1] == "fast"));
+                    .any(|pair| pair[0] == "-m" && pair[1] == "smart"));
                 self.alive.set(false);
                 let _ = std::fs::remove_file(self.data_directory.join("postmaster.pid"));
                 return Ok(CommandOutput {
