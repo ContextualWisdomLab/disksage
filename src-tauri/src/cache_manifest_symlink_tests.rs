@@ -10,8 +10,7 @@ fn nested_symlink_is_manifested_without_hiding_the_cache_target() {
     fs::write(target.join("bin").join("java"), b"generated-runtime")
         .expect("write generated runtime fixture");
     fs::create_dir(&outside).expect("create outside fixture");
-    fs::write(outside.join("keep.txt"), b"must-not-be-followed")
-        .expect("write outside fixture");
+    fs::write(outside.join("keep.txt"), b"must-not-be-followed").expect("write outside fixture");
     std::os::unix::fs::symlink(&outside, target.join("external-link"))
         .expect("create nested symlink fixture");
 
@@ -50,22 +49,29 @@ fn manifest_variable_fields_are_length_framed() {
     assert_eq!(targets.len(), 1);
     let target = &targets[0];
 
-    let mut expected = blake3::Hasher::new();
+    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
+    let reviewed_root = crate::rules::cache_metadata_fingerprint(&metadata);
+    let mut expected_stable_tree = blake3::Hasher::new();
     update_framed(
-        &mut expected,
+        &mut expected_stable_tree,
         target_path
             .file_name()
             .expect("fixture has a file name")
             .as_bytes(),
     );
-    expected.update(&[0]);
-    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
-    update_framed(&mut expected, crate::rules::cache_metadata_fingerprint(&metadata).as_bytes());
-    update_framed(&mut expected, target.object_id.as_bytes());
+    expected_stable_tree.update(&[0]);
+    update_framed(
+        &mut expected_stable_tree,
+        crate::rules::cache_root_relocation_metadata_fingerprint(&metadata).as_bytes(),
+    );
+    update_framed(&mut expected_stable_tree, target.object_id.as_bytes());
+    let expected = format!(
+        "v2:{reviewed_root}:{}",
+        expected_stable_tree.finalize().to_hex()
+    );
 
     assert_eq!(
-        target.manifest_fingerprint,
-        expected.finalize().to_hex().to_string(),
+        target.manifest_fingerprint, expected,
         "cache manifest must length-frame variable fields before hashing"
     );
 }
@@ -77,10 +83,10 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
     let temp = tempfile::tempdir().expect("temporary root-metadata fixture");
     let target = temp.path().join("generated-cache");
     fs::create_dir(&target).expect("create generated cache target");
-    fs::write(target.join("payload.bin"), b"generated")
-        .expect("write generated cache payload");
+    fs::write(target.join("payload.bin"), b"generated").expect("write generated cache payload");
 
-    let reviewed = crate::rules::cache_target(&target).expect("snapshot reviewed cache target");
+    let reviewed = crate::rules::cache_authority_target(&target)
+        .expect("snapshot reviewed cache authority target");
     let before = fs::symlink_metadata(&target).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
@@ -103,7 +109,8 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
         (after.ctime(), after.ctime_nsec()),
         "fixture must produce a ctime-only root metadata transition"
     );
-    let live = crate::rules::cache_target(&target).expect("snapshot live cache target");
+    let live = crate::rules::cache_authority_target(&target)
+        .expect("snapshot live cache authority target");
     assert_eq!(reviewed.object_id, live.object_id);
     assert_eq!(reviewed.modified_ms, live.modified_ms);
     assert_ne!(
@@ -121,7 +128,8 @@ fn permanent_delete_rejects_ctime_only_root_drift() {
     fs::create_dir(&target_path).expect("create generated cache target");
     fs::write(target_path.join("payload.bin"), b"generated")
         .expect("write generated cache payload");
-    let reviewed = crate::rules::cache_target(&target_path).expect("snapshot reviewed cache target");
+    let reviewed = crate::rules::cache_authority_target(&target_path)
+        .expect("snapshot reviewed cache authority target");
     let before = fs::symlink_metadata(&target_path).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
