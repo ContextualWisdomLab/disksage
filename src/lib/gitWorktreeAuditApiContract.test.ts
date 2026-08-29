@@ -1,24 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import backendContract from "../../contracts/git-worktree-audit-v4.json";
 import type { GitWorktreeAuditEntry, GitWorktreeAuditReport } from "./api";
 
-const backendSchemaKind: GitWorktreeAuditReport["schema_kind"] =
+const frontendSchemaKind: GitWorktreeAuditReport["schema_kind"] =
   "disksage.git-worktree-audit/v4";
-
-const backendMembershipFields: Pick<
-  GitWorktreeAuditEntry,
-  "completed_pull_request_commit" | "open_pull_request_commit"
-> = {
-  completed_pull_request_commit: true,
-  open_pull_request_commit: false,
-};
+const frontendMembershipFields: ReadonlyArray<keyof GitWorktreeAuditEntry> = [
+  "completed_pull_request_commit",
+  "open_pull_request_commit",
+];
 
 describe("Git worktree audit frontend contract", () => {
-  it("matches the backend v4 schema and PR membership fields", () => {
-    expect(backendSchemaKind).toBe("disksage.git-worktree-audit/v4");
-    expect(backendMembershipFields).toEqual({
-      completed_pull_request_commit: true,
-      open_pull_request_commit: false,
-    });
+  it("matches the shared backend/runtime v4 contract", () => {
+    expect(backendContract.schema_kind).toBe(frontendSchemaKind);
+    expect(backendContract.version).toBe(4);
+    expect(backendContract.entry_membership_fields).toEqual(frontendMembershipFields);
   });
 });
