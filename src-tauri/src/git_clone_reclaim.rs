@@ -31,6 +31,7 @@ pub struct CloneInventoryOptions {
     pub max_depth: usize,
     pub max_entries: usize,
     pub max_clones: usize,
+    pub repository_probe_timeout_ms: u64,
 }
 
 impl Default for CloneInventoryOptions {
@@ -39,6 +40,7 @@ impl Default for CloneInventoryOptions {
             max_depth: 4,
             max_entries: 100_000,
             max_clones: 1_000,
+            repository_probe_timeout_ms: 10_000,
         }
     }
 }
@@ -67,6 +69,8 @@ pub fn inventory_standalone_clones(
         || options.max_entries > 1_000_000
         || options.max_clones == 0
         || options.max_clones > 10_000
+        || options.repository_probe_timeout_ms == 0
+        || options.repository_probe_timeout_ms > 300_000
     {
         return Err("git-clone-inventory-options-invalid".into());
     }
@@ -84,10 +88,23 @@ pub fn inventory_standalone_clones(
         let canonical = std::fs::canonicalize(root)
             .map_err(|_| "git-clone-inventory-root-unavailable".to_string())?;
         normalized_roots.push(canonical.to_string_lossy().into_owned());
-        queue.push_back((canonical, 0usize));
     }
     normalized_roots.sort();
     normalized_roots.dedup();
+    let mut unique_roots = normalized_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    unique_roots.sort_by_key(|path| path.components().count());
+    let mut bounded_roots = Vec::<PathBuf>::new();
+    for root in unique_roots {
+        if !bounded_roots.iter().any(|parent| root.starts_with(parent)) {
+            bounded_roots.push(root);
+        }
+    }
+    for root in bounded_roots {
+        queue.push_back((root, 0usize));
+    }
     let mut clone_roots = Vec::new();
     let mut visited_entries = 0usize;
     let mut issues = Vec::new();
@@ -95,6 +112,10 @@ pub fn inventory_standalone_clones(
         let git_entry = directory.join(".git");
         if std::fs::symlink_metadata(&git_entry)
             .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+            && git_worktree::is_standalone_repository_root(
+                &directory,
+                options.repository_probe_timeout_ms,
+            )
         {
             clone_roots.push(directory.to_string_lossy().into_owned());
             if clone_roots.len() > options.max_clones {
@@ -105,6 +126,15 @@ pub fn inventory_standalone_clones(
             continue;
         }
         if depth >= options.max_depth {
+            if std::fs::read_dir(&directory).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    entry
+                        .file_type()
+                        .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                })
+            }) {
+                issues.push("git-clone-inventory-depth-limit-exceeded".into());
+            }
             continue;
         }
         let entries = match std::fs::read_dir(&directory) {
@@ -246,7 +276,6 @@ fn plan_fingerprint(
     if let Some(evidence) = default_branch_evidence {
         hash_field(&mut hasher, &evidence.reference);
         hash_field(&mut hasher, &evidence.oid);
-        hash_field(&mut hasher, &evidence.observed_at_ms.to_string());
     }
     hash_field(
         &mut hasher,
@@ -376,16 +405,22 @@ pub fn plan_git_clone_reclaim_with_authority(
             && generated_at_ms.saturating_sub(evidence.observed_at_ms)
                 <= MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS
     });
+    let mut default_branch_probe_incomplete = false;
     let head_is_default_branch_ancestor = if default_evidence_fresh {
         let evidence = default_branch_evidence.expect("checked Some above");
-        git_worktree::exact_reference_contains_commit(
+        match git_worktree::exact_reference_contains_commit(
             &repository_path,
             &evidence.reference,
             &evidence.oid,
             &primary.head,
             options.command_timeout_ms,
-        )
-        .unwrap_or(false)
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                default_branch_probe_incomplete = true;
+                false
+            }
+        }
     } else {
         false
     };
@@ -413,6 +448,9 @@ pub fn plan_git_clone_reclaim_with_authority(
     }
     if default_branch_evidence.is_some() && !default_evidence_fresh {
         blockers.push("git-clone-default-branch-evidence-stale".into());
+    }
+    if default_branch_probe_incomplete {
+        blockers.push("git-clone-default-branch-ancestry-evidence-incomplete".into());
     }
     if primary.head_is_retained_tip {
         blockers.push("git-clone-head-is-retained-tip".into());
@@ -817,6 +855,22 @@ mod tests {
         .unwrap();
         assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
         assert!(plan.head_is_default_branch_ancestor);
+        let refreshed_evidence = DefaultBranchEvidence {
+            observed_at_ms: 12,
+            ..evidence
+        };
+        let refreshed_plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&refreshed_evidence),
+            GitWorktreeAuditOptions::default(),
+            13,
+        )
+        .unwrap();
+        assert_eq!(plan.plan_fingerprint, refreshed_plan.plan_fingerprint);
     }
 
     #[cfg(unix)]
@@ -924,8 +978,13 @@ mod tests {
     fn multi_root_inventory_is_bounded_and_does_not_follow_symlinks() {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(first.path().join("nested/repo/.git")).unwrap();
-        std::fs::create_dir_all(second.path().join("repo/.git")).unwrap();
+        let first_repo = first.path().join("nested/repo");
+        let second_repo = second.path().join("repo");
+        std::fs::create_dir_all(&first_repo).unwrap();
+        std::fs::create_dir_all(&second_repo).unwrap();
+        git(&first_repo, &["init", "-b", "main"]);
+        git(&second_repo, &["init", "-b", "main"]);
+        std::fs::create_dir_all(second.path().join("not-a-repo/.git")).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             first.path().join("nested"),
@@ -939,7 +998,32 @@ mod tests {
         .unwrap();
         assert!(report.evidence_complete, "{:?}", report.issues);
         assert_eq!(report.clone_roots.len(), 2);
+        assert!(!report
+            .clone_roots
+            .iter()
+            .any(|path| path.ends_with("not-a-repo")));
         assert!(!report.filesystem_mutation_executed);
+    }
+
+    #[test]
+    fn depth_truncation_is_reported_as_incomplete_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let hidden = root.path().join("one/two/repo");
+        std::fs::create_dir_all(&hidden).unwrap();
+        git(&hidden, &["init", "-b", "main"]);
+        let report = inventory_standalone_clones(
+            &[root.path().to_path_buf()],
+            CloneInventoryOptions {
+                max_depth: 1,
+                ..CloneInventoryOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!report.evidence_complete);
+        assert!(report
+            .issues
+            .contains(&"git-clone-inventory-depth-limit-exceeded".into()));
+        assert!(report.clone_roots.is_empty());
     }
 
     #[cfg(unix)]

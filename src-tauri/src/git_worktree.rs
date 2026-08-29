@@ -583,6 +583,20 @@ pub(crate) fn exact_reference_contains_commit(
     Ok(ancestry.status_code == Some(0))
 }
 
+pub(crate) fn is_standalone_repository_root(repository_root: &Path, timeout_ms: u64) -> bool {
+    let Ok(common_dir) = resolve_common_dir(repository_root, timeout_ms) else {
+        return false;
+    };
+    let git_entry = repository_root.join(".git");
+    let Ok(metadata) = fs::symlink_metadata(&git_entry) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    fs::canonicalize(&git_entry).ok().as_deref() == Some(common_dir.as_path())
+}
+
 /// Resolve the provider's current default branch and exact OID through the authenticated GitHub
 /// CLI. The returned local reference must still be checked against this OID before use.
 pub(crate) fn github_default_branch_reference_oid(
@@ -635,6 +649,11 @@ pub(crate) fn github_default_branch_reference_oid(
     if remaining_ms == 0 {
         return Err("github-default-branch-timeout".into());
     }
+    let remote_name = matching_github_remote_name(repository_root, repository, remaining_ms)?;
+    let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+    if remaining_ms == 0 {
+        return Err("github-default-branch-timeout".into());
+    }
     let commit = run_bounded_command(
         "gh",
         &[
@@ -661,7 +680,71 @@ pub(crate) fn github_default_branch_reference_oid(
     if !is_oid(&oid) {
         return Err("github-default-branch-output-invalid".into());
     }
-    Ok((format!("refs/remotes/origin/{branch}"), oid))
+    Ok((format!("refs/remotes/{remote_name}/{branch}"), oid))
+}
+
+fn github_slug_from_remote_url(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/').trim_end_matches(".git");
+    let path = if let Some(value) = trimmed.strip_prefix("git@github.com:") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("ssh://git@github.com/") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("https://github.com/") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("http://github.com/") {
+        value
+    } else {
+        return None;
+    };
+    let mut parts = path.split('/');
+    let owner = parts.next().filter(|part| !part.is_empty())?;
+    let repository = parts.next().filter(|part| !part.is_empty())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repository}").to_ascii_lowercase())
+}
+
+fn matching_github_remote_name(
+    repository_root: &Path,
+    repository: &str,
+    timeout_ms: u64,
+) -> Result<String, String> {
+    let output = run_git(
+        repository_root,
+        &[
+            OsString::from("config"),
+            OsString::from("--get-regexp"),
+            OsString::from(r"^remote\..*\.url$"),
+        ],
+        timeout_ms,
+        "git-remote-config",
+    )?;
+    if output.status_code != Some(0) {
+        return Err("github-default-branch-remote-unavailable".into());
+    }
+    let expected = repository.to_ascii_lowercase();
+    let mut matches = BTreeSet::new();
+    for line in command_text(&output.stdout, "git-remote-config-not-utf8")?.lines() {
+        let Some((key, url)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(remote_name) = key
+            .strip_prefix("remote.")
+            .and_then(|value| value.strip_suffix(".url"))
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        validate_reference(&format!("refs/remotes/{remote_name}/placeholder"))?;
+        if github_slug_from_remote_url(url).as_deref() == Some(expected.as_str()) {
+            matches.insert(remote_name.to_string());
+        }
+    }
+    if matches.len() != 1 {
+        return Err("github-default-branch-remote-not-unique".into());
+    }
+    Ok(matches.into_iter().next().expect("one matching remote"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3306,6 +3389,47 @@ mod tests {
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
+    }
+
+    #[test]
+    fn github_remote_resolution_accepts_renamed_unique_remote_and_rejects_ambiguity() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "upstream",
+                "https://github.com/ContextualWisdomLab/example.git",
+            ])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            matching_github_remote_name(temp.path(), "ContextualWisdomLab/example", 5_000).unwrap(),
+            "upstream"
+        );
+        assert!(Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:contextualwisdomlab/example.git",
+            ])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            matching_github_remote_name(temp.path(), "ContextualWisdomLab/example", 5_000),
+            Err("github-default-branch-remote-not-unique".into())
+        );
     }
 
     #[cfg(unix)]
