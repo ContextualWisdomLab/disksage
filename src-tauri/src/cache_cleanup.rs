@@ -287,6 +287,7 @@ pub(crate) fn clean_cache_contents_inner(
                     path,
                     &target.object_id,
                     target.bytes,
+                    target.modified_ms,
                     journal_path,
                     now_ms,
                 )

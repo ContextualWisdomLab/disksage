@@ -533,10 +533,14 @@ fn clean_artifacts_with_disposition(
             }
 
             let mutation = if permanent {
+                let modified_ms = std::fs::symlink_metadata(&request.path)
+                    .map(|metadata| crate::rules::modified_ms(&metadata))
+                    .unwrap_or(0);
                 crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
                     &request.object_id,
                     request.bytes,
+                    modified_ms,
                     journal_path,
                     now_ms,
                 )

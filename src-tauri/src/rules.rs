@@ -583,13 +583,37 @@ pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
+pub(crate) fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
         .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
         .and_then(|value| u64::try_from(value.as_millis()).ok())
         .unwrap_or(0)
+}
+
+/// Snapshot one exact cache child with the complete mutation manifest used by catalog review.
+pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+        return Err("cache-target-type-unsupported".into());
+    }
+    let bytes = if metadata.is_dir() {
+        CatalogRoot::open(path)
+            .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
+            .directory_size()
+    } else {
+        metadata.len()
+    };
+    let object_id = crate::safety::filesystem_object_id(path)
+        .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+    Ok(CacheTarget {
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        modified_ms: modified_ms(&metadata),
+        object_id,
+    })
 }
 
 /// Return the exact direct children that a cache cleanup approval may move to Trash.
@@ -619,29 +643,14 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     }
     let mut targets = Vec::with_capacity(paths.len());
     for path in paths {
-        let metadata = std::fs::symlink_metadata(&path)
-            .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
-        if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
-            continue;
-        }
         if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
-        let bytes = if metadata.is_dir() {
-            CatalogRoot::open(&path)
-                .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
-                .directory_size()
-        } else {
-            metadata.len()
-        };
-        let object_id = crate::safety::filesystem_object_id(&path)
-            .map_err(|_| "cache-target-identity-unavailable".to_string())?;
-        targets.push(CacheTarget {
-            path: path.to_string_lossy().into_owned(),
-            bytes,
-            modified_ms: modified_ms(&metadata),
-            object_id,
-        });
+        match cache_target(&path) {
+            Ok(target) => targets.push(target),
+            Err(error) if error == "cache-target-type-unsupported" => continue,
+            Err(error) => return Err(error),
+        }
     }
     targets.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(targets)
