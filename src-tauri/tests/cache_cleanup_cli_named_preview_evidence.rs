@@ -52,10 +52,18 @@ fn named_cache_dry_run_publishes_target_manifest_and_active_use_evidence() {
     assert_eq!(target["path"], cache_child.to_string_lossy().as_ref());
     assert!(target["bytes"].as_u64().is_some_and(|bytes| bytes > 0));
     assert!(target["modified_ms"].as_u64().is_some());
-    assert!(target["object_id"].as_str().is_some_and(|value| !value.is_empty()));
-    assert!(target["manifest_fingerprint"]
+    assert!(target["object_id"]
         .as_str()
-        .is_some_and(|value| value.len() == 64));
+        .is_some_and(|value| !value.is_empty()));
+    let manifest = target["manifest_fingerprint"]
+        .as_str()
+        .expect("preview must publish the versioned cache authority manifest");
+    let components = manifest.split(':').collect::<Vec<_>>();
+    assert_eq!(components.first(), Some(&"v2"));
+    assert_eq!(components.len(), 3);
+    assert!(components[1..].iter().all(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }));
 
     let active_use = target["active_use"]
         .as_object()
@@ -64,11 +72,15 @@ fn named_cache_dry_run_publishes_target_manifest_and_active_use_evidence() {
         .get("method")
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
-    assert!(active_use.get("assessed").is_some_and(|value| value.is_boolean()));
+    assert!(active_use
+        .get("assessed")
+        .is_some_and(|value| value.is_boolean()));
     assert!(active_use
         .get("evidence_complete")
         .is_some_and(|value| value.is_boolean()));
-    assert!(active_use.get("active").is_some_and(|value| value.is_boolean()));
+    assert!(active_use
+        .get("active")
+        .is_some_and(|value| value.is_boolean()));
 
     fs::remove_dir_all(root).expect("remove fixture");
 }
