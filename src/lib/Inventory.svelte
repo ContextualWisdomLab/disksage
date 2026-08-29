@@ -14,7 +14,7 @@
   let busy = $state(false);
   let loadError = $state("");
   let loadGeneration = 0;
-  let observedRoot: string | null = scannedRoot;
+  let observedRoot: string | null = null;
 
   let model = $state<api.ModelStatus | null>(null);
   let modelBusy = $state(false);
