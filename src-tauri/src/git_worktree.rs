@@ -23,7 +23,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v3";
+pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v4";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
@@ -409,8 +409,6 @@ fn run_bounded_command(
         command.env_remove("GH_REPO");
     }
     #[cfg(unix)]
-    // Keep descendants in a private process group so a timeout cannot leave a Git helper holding
-    // stdout/stderr pipes open and make the bounded reader join hang indefinitely.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -723,10 +721,6 @@ fn parse_stale_open_pull_request_heads(
     Ok(stale_heads)
 }
 
-/// Resolve exact head OIDs for same-repository GitHub pull requests that are closed or merged.
-///
-/// The authenticated `gh` client resolves repository identity from the selected repository and
-/// returns only bounded JSON. Runtime diagnostics are never reflected to the caller.
 pub fn github_closed_pull_request_heads(
     repository_root: &Path,
     timeout_ms: u64,
@@ -740,7 +734,6 @@ pub fn github_closed_pull_request_heads(
     )
 }
 
-/// Resolve closed or merged pull-request heads within the caller's worktree bounds.
 pub fn github_closed_pull_request_heads_with_options(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
@@ -889,12 +882,6 @@ pub fn github_closed_pull_request_heads_with_options(
     Ok(heads)
 }
 
-/// Resolve exact commit membership for the repository's registered worktrees.
-///
-/// Search results are only discovery hints: every hit is rebound to the exact repository and then
-/// verified against the pull request's authoritative commit list. Open membership is retained
-/// separately so it can veto every removal authority, including a second completed PR containing
-/// the same commit.
 pub fn github_pull_request_commit_membership(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
@@ -1034,11 +1021,6 @@ pub fn github_pull_request_commit_membership(
     Ok(membership)
 }
 
-/// Resolve exact head OIDs for same-repository open pull requests created before an explicit cutoff.
-///
-/// The cutoff is supplied by the operator; DiskSage never chooses an age threshold implicitly.
-/// GitHub state, repository identity, branch name, head OID, and creation timestamp are all
-/// refreshed before a plan and before each removal.
 pub fn github_stale_open_pull_request_heads(
     repository_root: &Path,
     cutoff_ms: u64,
@@ -1836,8 +1818,6 @@ fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
         .map_err(|_| "git-worktree-admin-fallback-file-not-utf8".into())
 }
 
-/// Recover bounded registration facts when Git's porcelain listing hangs on a malformed entry.
-/// The returned records intentionally retain evidence gaps, so no removal operation can use them.
 fn admin_fallback_worktrees(
     common_dir: &Path,
     options: GitWorktreeAuditOptions,
@@ -1989,11 +1969,6 @@ fn canonical_actor_cwd() -> Option<PathBuf> {
         .and_then(|path| fs::canonicalize(path).ok())
 }
 
-/// Audit every linked worktree registered in one Git common directory.
-///
-/// The selected references are resolved once, then every worktree HEAD is checked against that
-/// exact OID set. Exact retained tips are preserved. No fetch, prune, remove, branch deletion, file
-/// deletion, or provider operation is performed.
 pub fn audit_git_worktrees(
     repository_root: &Path,
     retention_references: &[String],
@@ -2009,8 +1984,6 @@ pub fn audit_git_worktrees(
     )
 }
 
-/// Audit worktrees while accepting exact head OIDs from authoritatively closed pull requests as
-/// removal authority. Callers must refresh this evidence immediately before execution.
 pub fn audit_git_worktrees_with_closed_pull_request_heads(
     repository_root: &Path,
     retention_references: &[String],
@@ -2029,7 +2002,6 @@ pub fn audit_git_worktrees_with_closed_pull_request_heads(
     )
 }
 
-/// Audit worktrees with exact same-repository closed and explicitly stale-open PR head evidence.
 pub fn audit_git_worktrees_with_pull_request_heads(
     repository_root: &Path,
     retention_references: &[String],
@@ -2051,7 +2023,6 @@ pub fn audit_git_worktrees_with_pull_request_heads(
     )
 }
 
-/// Audit worktrees with exact PR-head evidence plus exact commit membership.
 pub fn audit_git_worktrees_with_pull_request_membership(
     repository_root: &Path,
     retention_references: &[String],
@@ -2287,7 +2258,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
 
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-        version: 3,
+        version: 4,
         repository_root: repository_root.to_string_lossy().into_owned(),
         common_dir: common_dir_string,
         generated_at_ms,
@@ -2366,7 +2337,7 @@ fn exact_removal_approval_phrase(
 
 fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
     if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
-        || report.version != 3
+        || report.version != 4
         || report.filesystem_mutation_executed
         || !Path::new(&report.repository_root).is_absolute()
         || !Path::new(&report.common_dir).is_absolute()
@@ -2480,7 +2451,6 @@ fn removal_approval_id_for(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Bind an attributed human decision to one exact, complete audit. This performs no mutation.
 pub fn approve_stale_worktree_removal(
     report: &GitWorktreeAuditReport,
     confirmation_exact_approval_phrase: &str,
@@ -2654,8 +2624,6 @@ fn pending_item(candidate: &GitWorktreeAuditEntry) -> GitWorktreeRemovalItemResu
     }
 }
 
-/// Re-audit the full plan and each individual candidate before invoking non-force Git worktree
-/// removal. No prune or branch-deletion command is reachable from this function.
 pub fn execute_stale_worktree_removal(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2673,7 +2641,6 @@ pub fn execute_stale_worktree_removal(
     )
 }
 
-/// Execute with freshly queried GitHub closed-PR evidence before the plan and every candidate.
 pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2693,7 +2660,6 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     )
 }
 
-/// Execute with freshly queried same-repository closed and explicitly stale-open PR evidence.
 pub fn execute_stale_worktree_removal_with_github_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2927,8 +2893,6 @@ fn absolute_without_parent(path: &Path) -> bool {
             .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
-/// Prepare private immutable-record storage outside the repository, common Git directory, and all
-/// audited worktrees, including when the app-data directory does not exist yet.
 pub fn prepare_worktree_record_directory(
     app_data_dir: &Path,
     report: &GitWorktreeAuditReport,
@@ -3005,7 +2969,6 @@ pub fn prepare_worktree_record_directory(
     Ok(canonical_record_dir)
 }
 
-/// Persist an approval or result using create-new semantics and make the completed file read-only.
 pub fn write_immutable_worktree_record<T: serde::Serialize>(
     record_dir: &Path,
     filename: &str,
@@ -3206,7 +3169,7 @@ mod tests {
             removal_plan_fingerprint(&common_dir, &authority_fingerprint, &entries);
         GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 3,
+            version: 4,
             repository_root: "/tmp/repository".into(),
             common_dir,
             generated_at_ms: 10,
@@ -3319,6 +3282,7 @@ mod tests {
         assert!(entry.closed_pull_request_head);
         assert_eq!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
     }
+
     #[cfg(all(unix, not(coverage)))]
     #[test]
     fn detached_intermediate_completed_commit_is_candidate_unless_an_open_pr_contains_it() {
@@ -3680,7 +3644,7 @@ mod tests {
     fn public_summary_redacts_local_identity_and_denies_execution_claims() {
         let report = GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 3,
+            version: 4,
             repository_root: "/private/repo".into(),
             common_dir: "/private/repo/.git".into(),
             generated_at_ms: 1,
