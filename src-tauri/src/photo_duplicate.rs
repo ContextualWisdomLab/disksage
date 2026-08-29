@@ -87,6 +87,9 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
         .read_info()
         .map_err(|_| "photo-codec-unsupported".to_string())?;
     let info = reader.info();
+    if info.is_animated() {
+        return Err("photo-animation-unsupported".into());
+    }
     let width = info.width;
     let height = info.height;
     let normalized_bytes = u64::from(width)
@@ -246,6 +249,9 @@ fn hash_current_file(
 }
 
 pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
+    if path.to_str().is_none() {
+        return Err("photo-input-path-encoding-unsupported".into());
+    }
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
     if let Some(blocker) = admission_blocker(path, &metadata) {
