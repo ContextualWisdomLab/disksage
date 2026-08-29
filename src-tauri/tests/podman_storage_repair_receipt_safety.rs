@@ -5,12 +5,21 @@ use disksage_lib::podman_reclaim::{
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
-fn fake_podman() -> (tempfile::TempDir, std::path::PathBuf) {
+fn write_fake_podman(script: &str) -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let fake = temp.path().join("podman");
+    fs::write(&fake, script).expect("write fake Podman");
+    let mut permissions = fs::metadata(&fake).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&fake, permissions).unwrap();
+    (temp, fake)
+}
+
+fn fake_podman() -> (tempfile::TempDir, PathBuf) {
     let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let script = format!(
+    write_fake_podman(&format!(
         r#"#!/bin/sh
 root="$(dirname "$0")"
 case " $* " in
@@ -37,28 +46,134 @@ esac
 echo "unexpected fake Podman invocation: $*" >&2
 exit 2
 "#
-    );
-    fs::write(&fake, script).expect("write fake Podman");
-    let mut permissions = fs::metadata(&fake).unwrap().permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&fake, permissions).unwrap();
-    (temp, fake)
+    ))
+}
+
+fn fake_scope_drift_podman() -> (tempfile::TempDir, PathBuf) {
+    let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+root="$(dirname "$0")"
+case " $* " in
+  *" system check --quick --repair "*)
+    touch "$root/repair-ran"
+    exit 0
+    ;;
+  *" system check --quick "*)
+    count=0
+    [ ! -f "$root/check-count" ] || count=$(cat "$root/check-count")
+    count=$((count + 1))
+    printf '%s' "$count" > "$root/check-count"
+    if [ "$count" -eq 1 ]; then
+      echo "Damaged layer {first}:"
+      echo "Error: damage detected in local storage"
+      exit 1
+    fi
+    if [ "$count" -eq 2 ]; then
+      echo "Damaged layer {second}:"
+      echo "Error: damage detected in local storage"
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
+fn fake_postcheck_parse_failure() -> (tempfile::TempDir, PathBuf) {
+    let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+root="$(dirname "$0")"
+case " $* " in
+  *" system check --quick --repair "*)
+    touch "$root/repair-ran"
+    exit 0
+    ;;
+  *" system check --quick "*)
+    count=0
+    [ ! -f "$root/check-count" ] || count=$(cat "$root/check-count")
+    count=$((count + 1))
+    printf '%s' "$count" > "$root/check-count"
+    if [ "$count" -le 2 ]; then
+      echo "Damaged layer {layer_id}:"
+      echo "Error: damage detected in local storage"
+      exit 1
+    fi
+    echo "Damaged layer not-a-valid-layer-id:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
+fn fake_replaced_damage_podman() -> (tempfile::TempDir, PathBuf) {
+    let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let replacement = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+root="$(dirname "$0")"
+case " $* " in
+  *" system check --quick --repair "*)
+    exit 0
+    ;;
+  *" system check --quick "*)
+    count=0
+    [ ! -f "$root/check-count" ] || count=$(cat "$root/check-count")
+    count=$((count + 1))
+    printf '%s' "$count" > "$root/check-count"
+    if [ "$count" -le 2 ]; then
+      echo "Damaged layer {first}:"
+      echo "Error: damage detected in local storage"
+      exit 1
+    fi
+    echo "Damaged layer {replacement}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
+fn single_damage_fake(layer_id: &str) -> (tempfile::TempDir, PathBuf) {
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+case " $* " in
+  *" system check --quick "*)
+    echo "Damaged layer {layer_id}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
+fn approval_for(fake: &Path) -> String {
+    plan_podman_storage_repair(fake, "podman-machine-default")
+        .expect("initial damaged-layer evidence")
+        .exact_approval_phrase
+        .expect("repair approval phrase")
 }
 
 #[test]
 fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
     let (_temp, fake) = fake_podman();
-    let plan = plan_podman_storage_repair(&fake, "podman-machine-default")
-        .expect("initial damaged-layer evidence");
-    let approval = plan
-        .exact_approval_phrase
-        .as_deref()
-        .expect("repair approval phrase");
+    let approval = approval_for(&fake);
 
     let receipt = execute_podman_storage_repair(
         &fake,
         "podman-machine-default",
-        approval,
+        &approval,
         "test incomplete postcheck",
         1,
     )
@@ -75,6 +190,103 @@ fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
         "remaining damaged layers are unknown when the postcheck is incomplete"
     );
     assert_eq!(json["executed"], false);
+}
+
+#[test]
+fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set() {
+    let (temp, fake) = fake_scope_drift_podman();
+    let first_plan = plan_podman_storage_repair(&fake, "podman-machine-default")
+        .expect("initial damaged-layer evidence");
+    let approval = first_plan
+        .exact_approval_phrase
+        .as_deref()
+        .expect("machine-scoped repair approval");
+
+    assert!(
+        approval.starts_with("DiskSage Podman machine storage repair 승인 "),
+        "the approval text must name the broad native repair scope"
+    );
+    assert!(
+        !approval.contains(&first_plan.candidate_set_sha256),
+        "a broad native repair cannot truthfully bind authority to only the preflight IDs"
+    );
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        approval,
+        "approve the selected machine's native repair scope",
+        2,
+    )
+    .expect("candidate drift remains inside an explicitly machine-scoped approval");
+
+    assert!(temp.path().join("repair-ran").exists());
+    assert_eq!(
+        receipt.command,
+        vec![
+            "podman",
+            "--connection",
+            "podman-machine-default",
+            "system",
+            "check",
+            "--quick",
+            "--repair"
+        ],
+        "the receipt must record the exact selected connection that was mutated"
+    );
+}
+
+#[test]
+fn a_failed_postcheck_after_mutation_still_returns_an_auditable_receipt() {
+    let (temp, fake) = fake_postcheck_parse_failure();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "preserve mutation evidence when verification fails",
+        3,
+    )
+    .expect("postcheck parsing failure after mutation must not erase the execution receipt");
+    let json = serde_json::to_value(receipt).expect("serialize receipt");
+
+    assert!(temp.path().join("repair-ran").exists());
+    assert_eq!(json["postcheck_complete"], false);
+    assert!(json["repaired_layer_records"].is_null());
+    assert!(json["remaining_damaged_layer_records"].is_null());
+}
+
+#[test]
+fn repair_counts_compare_damage_identities_instead_of_only_aggregate_counts() {
+    let (_temp, fake) = fake_replaced_damage_podman();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "measure repaired identities independently from new damage",
+        4,
+    )
+    .expect("complete pre/post evidence");
+
+    assert_eq!(receipt.repaired_layer_records, Some(1));
+    assert_eq!(receipt.remaining_damaged_layer_records, Some(1));
+}
+
+#[test]
+fn damaged_layer_hex_casing_does_not_change_the_precheck_fingerprint() {
+    let lower = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let upper = lower.to_ascii_uppercase();
+    let (_lower_temp, lower_fake) = single_damage_fake(lower);
+    let (_upper_temp, upper_fake) = single_damage_fake(&upper);
+
+    let lower_plan = plan_podman_storage_repair(&lower_fake, "podman-machine-default").unwrap();
+    let upper_plan = plan_podman_storage_repair(&upper_fake, "podman-machine-default").unwrap();
+
+    assert_eq!(lower_plan.candidate_set_sha256, upper_plan.candidate_set_sha256);
+    assert_eq!(lower_plan.exact_approval_phrase, upper_plan.exact_approval_phrase);
 }
 
 #[test]
