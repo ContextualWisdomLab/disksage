@@ -37,6 +37,7 @@ const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
 const ORPHAN_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
 const MAX_DOCKER_HOST_BYTES: usize = 2 * 1024;
+const INDETERMINATE_MUTATION_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
 
 /// Maximum number of network-inspect probes per audit; keeps the read-only pass bounded.
 pub const MAX_NETWORK_CANDIDATES: usize = 64;
@@ -896,6 +897,21 @@ fn command_capture(
     })
 }
 
+fn mutation_capture_result(
+    result: Result<CommandCapture, String>,
+    label: &str,
+) -> Result<CommandCapture, String> {
+    match result {
+        Ok(output) => Ok(output),
+        Err(error) if !error.starts_with(&format!("{label}-spawn:")) => Ok(CommandCapture {
+            status_code: -1,
+            stdout: String::new(),
+            stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
 fn command_text(
     executable: &Path,
     args: &[&str],
@@ -1301,7 +1317,10 @@ pub fn execute_container_orphan_prune(
     owned_args.extend(plan.candidate_ids.iter().cloned());
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
     let label = format!("orphan-prune-{}", category.as_str());
-    let output = command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label)?;
+    let output = mutation_capture_result(
+        command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label),
+        &label,
+    )?;
     let after_observed_at_ms = current_epoch_ms().max(executed_at_ms);
     let after_available_bytes = host_available_bytes(after_observed_at_ms);
     let observed_available_gain_bytes = before_available_bytes
@@ -1317,7 +1336,7 @@ pub fn execute_container_orphan_prune(
         stdout: output.stdout,
         stderr: output.stderr,
         output_truncated: false,
-        executed: output.status_code == 0,
+        executed: true,
         executed_at_ms,
         before_available_bytes,
         after_available_bytes,
@@ -1768,6 +1787,19 @@ mod tests {
 
         assert_eq!(result.unwrap_err(), "descendant-timeout-timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
+
+        let receipt = mutation_capture_result(
+            Err("descendant-timeout-timeout".into()),
+            "descendant-timeout",
+        )
+        .unwrap();
+        assert_eq!(receipt.status_code, -1);
+        assert_eq!(receipt.stderr, INDETERMINATE_MUTATION_OUTCOME);
+        assert!(mutation_capture_result(
+            Err("descendant-timeout-spawn:unavailable".into()),
+            "descendant-timeout",
+        )
+        .is_err());
     }
 
     #[test]

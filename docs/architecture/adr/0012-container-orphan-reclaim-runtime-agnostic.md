@@ -49,7 +49,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    identities remain private execution state: serialized plans and receipts expose only the
    fingerprint and a redacted `<candidate-set>` command marker.
 6. The receipt records bounded command output plus before/after host free-space observation.
-   Physical reclaim remains attribution-weak and is never claimed as proof.
+   Physical reclaim remains attribution-weak and is never claimed as proof. Once the exact-delete
+   subprocess starts, non-zero exits, timeouts, and capture failures return an indeterminate receipt
+   because an earlier identity may already have been removed.
 
 ## Consequences
 

@@ -88,6 +88,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   evidence keeps the category blocked.
 - Pin Docker-native approval and execution to the same resolved daemon endpoint so mutable context
   configuration cannot redirect an approved deletion.
+- Preserve an indeterminate mutation receipt after a started exact-delete command exits non-zero,
+  times out, or loses capture evidence; the UI directs customers to refresh instead of reporting
+  the partially applied operation as untouched.
 - Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
   current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
   Trash targets; the shared root and other-user/system-owned objects remain protected.
