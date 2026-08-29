@@ -1,4 +1,4 @@
-use disksage_lib::parallels_disk_reclaim::plan;
+use disksage_lib::parallels_disk_reclaim::{plan, validate_cli_argument_tokens};
 use std::path::PathBuf;
 
 fn value(args: &[String], flag: &str) -> Result<String, String> {
@@ -19,6 +19,7 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = (|| {
+        validate_cli_argument_tokens(&args)?;
         let prlctl = PathBuf::from(value(&args, "--prlctl")?);
         let disk_tool = PathBuf::from(value(&args, "--disk-tool")?);
         let vm_id = value(&args, "--vm-id")?;
