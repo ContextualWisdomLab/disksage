@@ -65,6 +65,10 @@ pub mod content_digest;
 pub mod container_orphan_reclaim;
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
 pub mod container_orphan_public;
+#[path = "duplicate_audit.rs"]
+mod duplicate_audit_implementation;
+/// Public exact-duplicate boundary, including fail-closed legacy-report safety policy.
+#[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
