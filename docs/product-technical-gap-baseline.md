@@ -1248,3 +1248,15 @@ runner's private workspace temp root instead of weakening the shared production 
   inactive environments totaling about 480 MiB. DiskSage now expands that root into one
   identity-bound target per environment, so active tools remain protected while an inactive npx
   installation can be reclaimed without treating the whole root as active.
+- Incident evidence: the first `--npx-only` execution at PR head `971f4136` permanently removed 12
+  regenerable environments totaling 616,388,619 logical bytes and recorded every pending/terminal
+  outcome in `~/Library/Application Support/com.contextualwisdomlab.disksage/journal.jsonl`.
+  The shared lsof-only active-use probe missed command-path-only MCP processes, so some running
+  environments were incorrectly included; their processes continued running, but this violated the
+  preservation contract. Head `441e4ca5` fixes the shared boundary by requiring both bounded lsof
+  and bounded process-command evidence. Its regression
+  `active_use_includes_process_command_paths_not_held_open` passes, and a same-head rerun preserved
+  the two remaining environments with `cache-target-active-use-detected`.
+- Regenerability was verified without stopping a customer process: an isolated npm cache executed
+  `semver 1.2.3`, its `_npx` environment was removed, and the same npm command returned `1.2.3`
+  while recreating the same cache environment. The isolated verification cache was then removed.
