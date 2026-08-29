@@ -18,7 +18,10 @@ authorize cleanup.
 
 ## Decision
 
-DiskSage v1 groups only byte-identical, currently materialized PNG files using BLAKE3. Before and
+DiskSage v1 records byte identity with BLAKE3 and groups currently materialized PNG files only
+when dimensions and normalized decoded RGBA16 pixels have the same domain-separated digest. This
+permits semantically identical lossless encodings with different compression or ancillary metadata
+to share a group without a perceptual-distance threshold. Before and
 after hashing, it verifies the filesystem-object identity and size, and it rejects symlinks,
 provider-managed paths, Photos library packages, dataless objects, unsupported codecs, and files
 whose active-use evidence is incomplete or positive.
@@ -30,8 +33,12 @@ descriptor and dataset-calibrated threshold artifact include provenance and a cr
 checksum. BRISQUE remains unavailable until its exact trained model artifact has equivalent
 provenance and checksum.
 
-Byte-identical members provide no evidence-based unique quality keeper. Consequently v1 neither
-selects a keeper nor mutates files. Cleanup execution and permanent deletion remain unavailable.
+Keeper evidence uses Pareto dominance only: losslessness, source bit depth, metadata completeness,
+and original/edit lineage must all be no worse and at least one must be better for exactly one
+member. File size, modification time, and filename have no quality authority. Ties and incomparable
+members require customer selection; byte-identical members therefore never receive an arbitrary
+automatic keeper. V1 may display a unique Pareto keeper but does not mutate files. Cleanup execution
+and permanent deletion remain unavailable.
 A later execution decision must bind an exact group identity, exact unique keeper identity, fresh
 approval, current inactive/materialized evidence, reversible Trash or quarantine, and a durable
 journal with undo.

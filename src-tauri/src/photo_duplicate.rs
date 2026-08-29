@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EvidenceState {
     Available,
@@ -22,6 +22,7 @@ pub struct PhotoEvidence {
     pub object_id: String,
     pub bytes: u64,
     pub blake3: String,
+    pub decoded_pixel_digest: String,
     pub width: u32,
     pub height: u32,
     pub bit_depth: u8,
@@ -37,6 +38,7 @@ pub struct PhotoEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ExactPhotoGroup {
     pub content_digest: String,
+    pub grouping_basis: String,
     pub members: Vec<PhotoEvidence>,
     pub keeper_path: Option<String>,
     pub keeper_blocker: Option<String>,
@@ -73,13 +75,25 @@ fn admission_blocker(path: &Path, metadata: &std::fs::Metadata) -> Option<&'stat
     None
 }
 
-fn read_png_evidence(path: &Path) -> Result<(u32, u32, u8), String> {
+fn read_png_evidence(path: &Path) -> Result<(u32, u32, u8, u32, String), String> {
     let file = std::fs::File::open(path).map_err(|_| "photo-input-open-failed".to_string())?;
-    let decoder = png::Decoder::new(std::io::BufReader::new(file));
-    let reader = decoder
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder
         .read_info()
         .map_err(|_| "photo-codec-unsupported".to_string())?;
     let info = reader.info();
+    let width = info.width;
+    let height = info.height;
+    let metadata_field_count = 3
+        + u32::from(info.exif_metadata.is_some())
+        + u32::from(info.icc_profile.is_some())
+        + u32::from(info.pixel_dims.is_some())
+        + u32::from(info.source_gamma.is_some())
+        + u32::from(info.source_chromaticities.is_some())
+        + info.uncompressed_latin1_text.len() as u32
+        + info.compressed_latin1_text.len() as u32
+        + info.utf8_text.len() as u32;
     let bit_depth = match info.bit_depth {
         png::BitDepth::One => 1,
         png::BitDepth::Two => 2,
@@ -87,7 +101,72 @@ fn read_png_evidence(path: &Path) -> Result<(u32, u32, u8), String> {
         png::BitDepth::Eight => 8,
         png::BitDepth::Sixteen => 16,
     };
-    Ok((info.width, info.height, bit_depth))
+    let mut decoded = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or("photo-decoded-size-unavailable")?
+    ];
+    let output = reader
+        .next_frame(&mut decoded)
+        .map_err(|_| "photo-decode-failed".to_string())?;
+    decoded.truncate(output.buffer_size());
+    let normalized = normalize_rgba16(&decoded, output.color_type, output.bit_depth)?;
+    let mut semantic = blake3::Hasher::new();
+    semantic.update(b"disksage-png-rgba16-v1\0");
+    semantic.update(&width.to_be_bytes());
+    semantic.update(&height.to_be_bytes());
+    semantic.update(&normalized);
+    Ok((
+        width,
+        height,
+        bit_depth,
+        metadata_field_count,
+        semantic.finalize().to_hex().to_string(),
+    ))
+}
+
+fn normalize_rgba16(
+    bytes: &[u8],
+    color: png::ColorType,
+    depth: png::BitDepth,
+) -> Result<Vec<u8>, String> {
+    if !matches!(depth, png::BitDepth::Eight | png::BitDepth::Sixteen) {
+        return Err("photo-normalized-depth-unsupported".into());
+    }
+    let channels = match color {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        png::ColorType::Indexed => return Err("photo-indexed-expansion-incomplete".into()),
+    };
+    let sample_bytes = usize::from(depth == png::BitDepth::Sixteen) + 1;
+    if bytes.len() % (channels * sample_bytes) != 0 {
+        return Err("photo-decoded-buffer-invalid".into());
+    }
+    let samples: Vec<u16> = if sample_bytes == 1 {
+        bytes.iter().map(|value| u16::from(*value) * 257).collect()
+    } else {
+        bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect()
+    };
+    let mut normalized = Vec::with_capacity(samples.len() / channels * 8);
+    for pixel in samples.chunks_exact(channels) {
+        let values = match color {
+            png::ColorType::Grayscale => [pixel[0], pixel[0], pixel[0], u16::MAX],
+            png::ColorType::GrayscaleAlpha => [pixel[0], pixel[0], pixel[0], pixel[1]],
+            png::ColorType::Rgb => [pixel[0], pixel[1], pixel[2], u16::MAX],
+            png::ColorType::Rgba => [pixel[0], pixel[1], pixel[2], pixel[3]],
+            png::ColorType::Indexed => unreachable!(),
+        };
+        for value in values {
+            normalized.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+    Ok(normalized)
 }
 
 fn hash_current_file(
@@ -146,7 +225,8 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     if !extension.eq_ignore_ascii_case("png") {
         return Err("photo-codec-unsupported".into());
     }
-    let (width, height, bit_depth) = read_png_evidence(path)?;
+    let (width, height, bit_depth, metadata_field_count, decoded_pixel_digest) =
+        read_png_evidence(path)?;
     let blake3 = hash_current_file(path, &metadata, &identity)?;
     if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(identity.as_str()) {
         return Err("photo-input-changed".into());
@@ -156,12 +236,13 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
         object_id: identity,
         bytes: metadata.len(),
         blake3,
+        decoded_pixel_digest,
         width,
         height,
         bit_depth,
         codec: "png".into(),
         codec_lossless: true,
-        metadata_field_count: 3,
+        metadata_field_count,
         original_edit_lineage: EvidenceState::Unavailable,
         no_reference_iqa: EvidenceState::Unavailable,
         perceptual_descriptor: EvidenceState::Unavailable,
@@ -178,7 +259,7 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
     for path in paths {
         if let Ok(evidence) = inspect_photo(path) {
             by_digest
-                .entry(evidence.blake3.clone())
+                .entry(evidence.decoded_pixel_digest.clone())
                 .or_default()
                 .push(evidence);
         }
@@ -188,13 +269,15 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
         .filter(|(_, members)| members.len() > 1)
         .map(|(content_digest, mut members)| {
             members.sort_by(|left, right| left.path.cmp(&right.path));
+            let keeper_path = unique_pareto_keeper(&members).map(|member| member.path.clone());
             ExactPhotoGroup {
                 content_digest,
+                grouping_basis: "decoded-pixel-rgba16-exact".into(),
                 members,
-                keeper_path: None,
-                keeper_blocker: Some(
-                    "photo-quality-evidence-does-not-identify-unique-keeper".into(),
-                ),
+                keeper_path: keeper_path.clone(),
+                keeper_blocker: keeper_path
+                    .is_none()
+                    .then(|| "photo-quality-evidence-requires-customer-selection".into()),
                 execution_available: false,
             }
         })
@@ -207,6 +290,33 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
         perceptual_grouping_blocker: "photo-perceptual-calibration-unavailable".into(),
         permanent_delete_available: false,
         filesystem_mutation_executed: false,
+    }
+}
+
+fn unique_pareto_keeper(members: &[PhotoEvidence]) -> Option<&PhotoEvidence> {
+    let dominates = |left: &PhotoEvidence, right: &PhotoEvidence| {
+        let no_worse = left.codec_lossless >= right.codec_lossless
+            && left.bit_depth >= right.bit_depth
+            && left.metadata_field_count >= right.metadata_field_count
+            && left.original_edit_lineage >= right.original_edit_lineage;
+        let better = left.codec_lossless > right.codec_lossless
+            || left.bit_depth > right.bit_depth
+            || left.metadata_field_count > right.metadata_field_count
+            || left.original_edit_lineage > right.original_edit_lineage;
+        no_worse && better
+    };
+    let candidates: Vec<_> = members
+        .iter()
+        .filter(|candidate| {
+            members
+                .iter()
+                .all(|other| std::ptr::eq(*candidate, other) || dominates(candidate, other))
+        })
+        .collect();
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
     }
 }
 
@@ -230,6 +340,35 @@ mod tests {
         writer
             .write_image_data(&vec![value; (width * height) as usize])
             .unwrap();
+    }
+
+    fn png_with_text(path: &Path, width: u32, height: u32, value: u8, text: Option<&str>) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        if let Some(text) = text {
+            encoder
+                .add_text_chunk("Description".into(), text.into())
+                .unwrap();
+        }
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&vec![value; (width * height) as usize])
+            .unwrap();
+    }
+
+    fn png_16(path: &Path, width: u32, height: u32, value: u8) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Sixteen);
+        let sample = (u16::from(value) * 257).to_be_bytes();
+        let bytes: Vec<_> = std::iter::repeat_n(sample, (width * height) as usize)
+            .flatten()
+            .collect();
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&bytes).unwrap();
     }
 
     #[test]
@@ -259,6 +398,57 @@ mod tests {
         assert_eq!(
             audit.perceptual_grouping_blocker,
             "photo-perceptual-calibration-unavailable"
+        );
+    }
+
+    #[test]
+    fn same_decoded_pixels_group_across_metadata_and_select_pareto_keeper() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = temp.path().join("plain.png");
+        let documented = temp.path().join("documented.png");
+        png_with_text(&plain, 12, 9, 80, None);
+        png_with_text(&documented, 12, 9, 80, Some("export provenance"));
+        let audit = audit_photos(&[plain, documented.clone()], 7);
+        assert_eq!(audit.exact_groups.len(), 1);
+        assert_eq!(
+            audit.exact_groups[0].grouping_basis,
+            "decoded-pixel-rgba16-exact"
+        );
+        assert_eq!(
+            audit.exact_groups[0].keeper_path.as_deref(),
+            Some(documented.to_string_lossy().as_ref())
+        );
+        assert!(!audit.exact_groups[0].execution_available);
+    }
+
+    #[test]
+    fn higher_bit_depth_is_the_unique_pareto_keeper_for_identical_samples() {
+        let temp = tempfile::tempdir().unwrap();
+        let eight = temp.path().join("eight.png");
+        let sixteen = temp.path().join("sixteen.png");
+        png(&eight, 10, 8, 42);
+        png_16(&sixteen, 10, 8, 42);
+        let audit = audit_photos(&[eight, sixteen.clone()], 7);
+        assert_eq!(audit.exact_groups.len(), 1);
+        assert_eq!(
+            audit.exact_groups[0].keeper_path.as_deref(),
+            Some(sixteen.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn equal_metadata_evidence_keeps_customer_selection_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.png");
+        let second = temp.path().join("second.png");
+        png_with_text(&first, 10, 8, 42, Some("one"));
+        png_with_text(&second, 10, 8, 42, Some("two"));
+        let audit = audit_photos(&[first, second], 7);
+        assert_eq!(audit.exact_groups.len(), 1);
+        assert!(audit.exact_groups[0].keeper_path.is_none());
+        assert_eq!(
+            audit.exact_groups[0].keeper_blocker.as_deref(),
+            Some("photo-quality-evidence-requires-customer-selection")
         );
     }
 
