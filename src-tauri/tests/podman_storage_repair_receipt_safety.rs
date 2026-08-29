@@ -193,7 +193,7 @@ fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
 }
 
 #[test]
-fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set() {
+fn native_repair_rejects_candidate_drift_after_machine_and_evidence_approval() {
     let (temp, fake) = fake_scope_drift_podman();
     let first_plan = plan_podman_storage_repair(&fake, "podman-machine-default")
         .expect("initial damaged-layer evidence");
@@ -207,33 +207,21 @@ fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set
         "the approval text must name the broad native repair scope"
     );
     assert!(
-        !approval.contains(&first_plan.candidate_set_sha256),
-        "a broad native repair cannot truthfully bind authority to only the preflight IDs"
+        approval.contains(&first_plan.candidate_set_sha256),
+        "machine-scoped repair approval must also bind the reviewed preflight evidence"
     );
 
-    let receipt = execute_podman_storage_repair(
+    let error = execute_podman_storage_repair(
         &fake,
         "podman-machine-default",
         approval,
         "approve the selected machine's native repair scope",
         2,
     )
-    .expect("candidate drift remains inside an explicitly machine-scoped approval");
+    .expect_err("candidate drift requires a fresh exact approval before native repair");
 
-    assert!(temp.path().join("repair-ran").exists());
-    assert_eq!(
-        receipt.command,
-        vec![
-            "podman",
-            "--connection",
-            "podman-machine-default",
-            "system",
-            "check",
-            "--quick",
-            "--repair"
-        ],
-        "the receipt must record the exact selected connection that was mutated"
-    );
+    assert_eq!(error, "podman-storage-repair-confirmation-mismatch");
+    assert!(!temp.path().join("repair-ran").exists());
 }
 
 #[test]
