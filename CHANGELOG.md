@@ -73,6 +73,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   built-in networks, and attached volumes are never candidates. Exposed via the Cleanup screen
   with confirmation gating, bounded rationale input, and actionable failure copy, plus a
   read-only `disksage-container-orphan-plan` CLI for headless evidence.
+- Preserve stopped containers whenever native inspection reports a storage mount, and fail the
+  container category closed when mount lineage cannot be inspected. This prevents a broken
+  container record from turning attached database data into a later dangling-volume target.
 - Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
   by converting the human-readable listing with a unit heuristic; missing or mismatched identity
   evidence keeps the category blocked.

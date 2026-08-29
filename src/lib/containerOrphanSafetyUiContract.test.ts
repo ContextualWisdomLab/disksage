@@ -14,7 +14,7 @@ describe("Container orphan cleanup safety UX", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
 
     expect(source).toContain("실행 중인 서비스와 기본 네트워크는 절대 건드리지 않습니다");
-    expect(source).toContain("실행 중·일시정지 컨테이너는 절대 대상에 포함되지 않습니다");
+    expect(source).toContain("실행 중이거나 저장 공간이 연결된 컨테이너는 보존합니다");
     expect(source).toContain(
       "태그가 붙은 이미지는 삭제되지 않고",
     );

@@ -23,6 +23,10 @@ case " $* " in
     printf '[{{"ID":"{container_id}","State":"exited","Names":["stale"]}}]\n'
     exit 0
     ;;
+  *" container inspect {container_id} "*)
+    printf '[{{"Id":"{container_id}","Mounts":[]}}]\n'
+    exit 0
+    ;;
   *" images "*)
     echo '[]'
     exit 0
