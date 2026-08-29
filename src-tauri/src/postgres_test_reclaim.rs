@@ -644,7 +644,7 @@ fn plan_fingerprint(plan: &PostgresTestClusterPlan) -> Result<String, String> {
 pub fn plan_with_runner(
     request: &PostgresTestClusterRequest,
     runner: &impl PostgresCommandRunner,
-    observed_at_ms: u64,
+    observation_started_at_ms: u64,
 ) -> Result<PostgresTestClusterPlan, String> {
     if !request.data_directory.is_absolute()
         || request.database_user.trim().is_empty()
@@ -727,6 +727,10 @@ pub fn plan_with_runner(
         .map_err(|_| "postgres-client-count-invalid".to_string())?;
     if external_client_count != 0 {
         return Err("postgres-external-clients-active".into());
+    }
+    let observed_at_ms = runner.event_time_ms();
+    if observed_at_ms == 0 || observed_at_ms < observation_started_at_ms {
+        return Err("postgres-event-clock-invalid".into());
     }
     let mut plan = PostgresTestClusterPlan {
         schema_version: SCHEMA_VERSION,
@@ -1043,7 +1047,7 @@ mod tests {
             databases: RefCell::new("suite_test\n".into()),
             clients: RefCell::new("0\n".into()),
             data_directory: data,
-            event_time_ms: Cell::new(8),
+            event_time_ms: Cell::new(7),
         };
         (temp, request, runner)
     }
@@ -1138,7 +1142,7 @@ mod tests {
         )
         .unwrap();
         assert!(evidence.outcome.completed);
-        assert_eq!(evidence.outcome.completed_at_ms, 9);
+        assert_eq!(evidence.outcome.completed_at_ms, 10);
         assert!(!request.data_directory.exists());
         assert!(evidence.pending.written && evidence.result.written);
         assert_eq!(std::fs::read_dir(&records).unwrap().count(), 2);
@@ -1153,7 +1157,7 @@ mod tests {
             })
             .map(|entry| serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap())
             .unwrap();
-        assert_eq!(pending.written_at_ms, 8);
+        assert_eq!(pending.written_at_ms, 9);
     }
 
     #[test]
@@ -1205,6 +1209,31 @@ mod tests {
         assert!(runner.alive.get());
         assert!(request.data_directory.exists());
         assert_eq!(std::fs::read_dir(records).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn approval_age_starts_after_a_long_successful_observation() {
+        let (temp, request, runner) = fixture();
+        runner.event_time_ms.set(60_000);
+        let plan = plan_with_runner(&request, &runner, 1).unwrap();
+        assert_eq!(plan.observed_at_ms, 60_000);
+        let source = tempfile::tempdir().unwrap();
+        let records = temp.path().join("records");
+        std::fs::create_dir(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let evidence = execute_with_runner(
+            &request,
+            &plan,
+            &plan.exact_approval_phrase,
+            &records,
+            source.path(),
+            &runner,
+            60_000,
+        )
+        .unwrap();
+
+        assert!(evidence.outcome.completed);
     }
 
     #[test]
