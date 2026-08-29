@@ -230,10 +230,39 @@ fn audit_authority_root(audit: &PhotoDuplicateAudit) -> Result<PathBuf, String> 
 }
 
 #[cfg(windows)]
+fn windows_authority_eq(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn CompareStringOrdinal(
+            left: *const u16,
+            left_length: i32,
+            right: *const u16,
+            right_length: i32,
+            ignore_case: i32,
+        ) -> i32;
+    }
+    const CSTR_EQUAL: i32 = 2;
+    let left = left.encode_wide().collect::<Vec<_>>();
+    let right = right.encode_wide().collect::<Vec<_>>();
+    let (Ok(left_length), Ok(right_length)) =
+        (i32::try_from(left.len()), i32::try_from(right.len()))
+    else {
+        return false;
+    };
+    // SAFETY: both pointers reference initialized UTF-16 buffers for the supplied explicit lengths.
+    unsafe {
+        CompareStringOrdinal(left.as_ptr(), left_length, right.as_ptr(), right_length, 1)
+            == CSTR_EQUAL
+    }
+}
+
+#[cfg(windows)]
 fn require_one_windows_authority(paths: &[PathBuf]) -> Result<(), String> {
     use std::path::Component;
 
-    let mut authority: Option<String> = None;
+    let mut authority: Option<std::ffi::OsString> = None;
     for path in paths {
         let Component::Prefix(prefix) = path
             .components()
@@ -242,14 +271,14 @@ fn require_one_windows_authority(paths: &[PathBuf]) -> Result<(), String> {
         else {
             return Err("photo-exact-audit-path-authority-unavailable".into());
         };
-        let current = prefix.as_os_str().to_string_lossy().into_owned();
+        let current = prefix.as_os_str();
         if authority
             .as_deref()
-            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&current))
+            .is_some_and(|expected| !windows_authority_eq(expected, current))
         {
             return Err("photo-exact-audit-select-one-drive-or-share".into());
         }
-        authority.get_or_insert(current);
+        authority.get_or_insert_with(|| current.to_os_string());
     }
     Ok(())
 }
@@ -260,9 +289,11 @@ fn require_one_unix_authority(paths: &[PathBuf]) -> Result<(), String> {
 
     let mut device = None;
     for path in paths {
-        let current = std::fs::symlink_metadata(path)
-            .map_err(|_| "photo-exact-audit-path-authority-unavailable".to_string())?
-            .dev();
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            // The audit records this input as rejected and returns incomplete evidence.
+            continue;
+        };
+        let current = metadata.dev();
         if device.is_some_and(|expected| expected != current) {
             return Err("photo-exact-audit-select-one-filesystem".into());
         }
@@ -323,13 +354,15 @@ pub async fn audit_exact_photo_duplicates(
         .map_err(|_| "photo-exact-audit-clock-unavailable".to_string())?
         .as_millis() as u64;
     let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-    #[cfg(windows)]
-    require_one_windows_authority(&paths)?;
-    #[cfg(unix)]
-    require_one_unix_authority(&paths)?;
-    tauri::async_runtime::spawn_blocking(move || Ok(audit_photos(&paths, generated_at_ms)))
-        .await
-        .map_err(|_| "photo-exact-audit-worker-unavailable".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        require_one_windows_authority(&paths)?;
+        #[cfg(unix)]
+        require_one_unix_authority(&paths)?;
+        Ok(audit_photos(&paths, generated_at_ms))
+    })
+    .await
+    .map_err(|_| "photo-exact-audit-worker-unavailable".to_string())?
 }
 
 /// Tauri boundary for the shared reversible quarantine executor.
@@ -483,6 +516,11 @@ mod tests {
             ]),
             Err("photo-exact-audit-select-one-drive-or-share".into())
         );
+        assert!(require_one_windows_authority(&[
+            PathBuf::from(r"\\SÉRVEUR\Photos\one.jpg"),
+            PathBuf::from(r"\\sérveur\photos\two.jpg"),
+        ])
+        .is_ok());
         assert_eq!(
             require_one_windows_authority(&[
                 PathBuf::from(r"\\server\one\same.jpg"),
@@ -502,5 +540,15 @@ mod tests {
             require_one_unix_authority(&[photo, PathBuf::from("/dev/null")]),
             Err("photo-exact-audit-select-one-filesystem".into())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_unix_input_is_left_for_the_incomplete_audit_report() {
+        let root = tempfile::tempdir().unwrap();
+        let photo = root.path().join("photo.png");
+        let missing = root.path().join("missing.png");
+        std::fs::write(&photo, b"fixture").unwrap();
+        assert_eq!(require_one_unix_authority(&[photo, missing]), Ok(()));
     }
 }
