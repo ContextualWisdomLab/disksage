@@ -136,6 +136,18 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn execution_receipt(args: &Args, results: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "executed": true,
+        "npx_only": args.npx_only,
+        "journal_path": args.journal_path,
+        "purge_proven_cache_trash": args.purge_proven_cache_trash,
+        "cache_id": args.cache_id.as_deref(),
+        "permanent_cache": args.permanent_cache,
+        "results": results
+    })
+}
+
 fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     let Some(args) = parse_args(raw_args)? else {
         println!("{USAGE}");
@@ -167,17 +179,13 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
-        println!(
-            "{}",
-            serde_json::json!({
-                "executed": true,
-                "npx_only": false,
-                "purge_proven_cache_trash": true,
-                "journal_path": args.journal_path,
-                "results": results
-            })
-        );
+        let results = serde_json::to_value(purge_proven_cache_trash(
+            &home_directory()?,
+            &args.journal_path,
+            now_ms(),
+        )?)
+        .map_err(|error| error.to_string())?;
+        println!("{}", execution_receipt(&args, results));
         return Ok(());
     }
     let evidence = if let Some(cache_id) = args.cache_id.as_deref() {
@@ -197,15 +205,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
     } else {
         clean_regenerable_caches_headless(&args.journal_path, now_ms())?
     };
-    println!(
-        "{}",
-        serde_json::json!({
-            "executed": true,
-            "npx_only": args.npx_only,
-            "journal_path": args.journal_path,
-            "results": evidence
-        })
-    );
+    println!("{}", execution_receipt(&args, evidence));
     Ok(())
 }
 
@@ -299,5 +299,21 @@ mod tests {
         assert!(args.execute);
         assert!(args.permanent_cache);
         assert_eq!(args.cache_id.as_deref(), Some("gradle-cache"));
+    }
+
+    #[test]
+    fn execution_receipt_preserves_selected_cache_mode() {
+        let args = Args {
+            execute: true,
+            npx_only: false,
+            cache_id: Some("gradle-cache".into()),
+            permanent_cache: false,
+            purge_proven_cache_trash: false,
+            journal_path: PathBuf::from("/tmp/disksage-journal.jsonl"),
+        };
+        let receipt = execution_receipt(&args, serde_json::json!([{"ok": true}]));
+        assert_eq!(receipt["cache_id"], "gradle-cache");
+        assert_eq!(receipt["permanent_cache"], false);
+        assert_eq!(receipt["executed"], true);
     }
 }
