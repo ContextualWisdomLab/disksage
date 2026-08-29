@@ -85,6 +85,9 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             Some("--execute") => execute = true,
             Some("--npx-only") => npx_only = true,
             Some("--cache-id") => {
+                if cache_id.is_some() {
+                    return Err("--cache-id may be supplied only once".into());
+                }
                 cache_id = Some(
                     args.next()
                         .and_then(|value| value.into_string().ok())
