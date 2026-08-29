@@ -174,6 +174,7 @@ pub fn run() {
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
             commands::plan_stale_git_clone,
+            commands::inventory_standalone_git_clones,
             commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,

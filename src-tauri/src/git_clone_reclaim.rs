@@ -9,11 +9,174 @@ use crate::git_worktree::{
     GitWorktreeAuditReport, GitWorktreeSizeEvidence, StaleOpenPullRequestHeads,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 pub const GIT_CLONE_RECLAIM_SCHEMA_KIND: &str = "disksage.git-clone-reclaim-plan";
 pub const GIT_CLONE_RECLAIM_VERSION: u32 = 1;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
+const MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultBranchEvidence {
+    pub reference: String,
+    pub oid: String,
+    pub observed_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloneInventoryOptions {
+    pub max_depth: usize,
+    pub max_entries: usize,
+    pub max_clones: usize,
+    pub repository_probe_timeout_ms: u64,
+}
+
+impl Default for CloneInventoryOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: 4,
+            max_entries: 100_000,
+            max_clones: 1_000,
+            repository_probe_timeout_ms: 10_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloneInventoryReport {
+    pub roots: Vec<String>,
+    pub clone_roots: Vec<String>,
+    pub visited_entries: usize,
+    pub evidence_complete: bool,
+    pub issues: Vec<String>,
+    pub filesystem_mutation_executed: bool,
+}
+
+/// Discover standalone clone roots beneath multiple customer-selected roots without following
+/// symlinks or descending into repositories. Limits are evidence boundaries, not age heuristics.
+pub fn inventory_standalone_clones(
+    roots: &[PathBuf],
+    options: CloneInventoryOptions,
+) -> Result<CloneInventoryReport, String> {
+    if roots.is_empty()
+        || roots.len() > 32
+        || options.max_depth > 8
+        || options.max_entries == 0
+        || options.max_entries > 1_000_000
+        || options.max_clones == 0
+        || options.max_clones > 10_000
+        || options.repository_probe_timeout_ms == 0
+        || options.repository_probe_timeout_ms > 300_000
+    {
+        return Err("git-clone-inventory-options-invalid".into());
+    }
+    let mut queue = VecDeque::new();
+    let mut normalized_roots = Vec::new();
+    for root in roots {
+        if !root.is_absolute() {
+            return Err("git-clone-inventory-root-not-absolute".into());
+        }
+        let metadata = std::fs::symlink_metadata(root)
+            .map_err(|_| "git-clone-inventory-root-unavailable".to_string())?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("git-clone-inventory-root-unsafe".into());
+        }
+        let canonical = std::fs::canonicalize(root)
+            .map_err(|_| "git-clone-inventory-root-unavailable".to_string())?;
+        normalized_roots.push(canonical.to_string_lossy().into_owned());
+    }
+    normalized_roots.sort();
+    normalized_roots.dedup();
+    let mut unique_roots = normalized_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    unique_roots.sort_by_key(|path| path.components().count());
+    let mut bounded_roots = Vec::<PathBuf>::new();
+    for root in unique_roots {
+        if !bounded_roots.iter().any(|parent| root.starts_with(parent)) {
+            bounded_roots.push(root);
+        }
+    }
+    for root in bounded_roots {
+        queue.push_back((root, 0usize));
+    }
+    let mut clone_roots = Vec::new();
+    let mut visited_entries = 0usize;
+    let mut issues = Vec::new();
+    while let Some((directory, depth)) = queue.pop_front() {
+        let git_entry = directory.join(".git");
+        let has_git_directory = std::fs::symlink_metadata(&git_entry)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if has_git_directory {
+            match git_worktree::is_standalone_repository_root(
+                &directory,
+                options.repository_probe_timeout_ms,
+            ) {
+                Ok(true) => {
+                    clone_roots.push(directory.to_string_lossy().into_owned());
+                    if clone_roots.len() > options.max_clones {
+                        clone_roots.truncate(options.max_clones);
+                        issues.push("git-clone-inventory-clone-limit-exceeded".into());
+                        break;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    issues.push("git-clone-inventory-repository-probe-failed".into());
+                    continue;
+                }
+            }
+        }
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                issues.push("git-clone-inventory-directory-unreadable".into());
+                continue;
+            }
+        };
+        for entry in entries {
+            visited_entries = visited_entries.saturating_add(1);
+            if visited_entries > options.max_entries {
+                issues.push("git-clone-inventory-entry-limit-exceeded".into());
+                queue.clear();
+                break;
+            }
+            let Ok(entry) = entry else {
+                issues.push("git-clone-inventory-entry-unreadable".into());
+                continue;
+            };
+            let Ok(kind) = entry.file_type() else {
+                issues.push("git-clone-inventory-entry-type-unavailable".into());
+                continue;
+            };
+            if kind.is_dir() && !kind.is_symlink() && entry.file_name() != ".git" {
+                if depth >= options.max_depth {
+                    issues.push("git-clone-inventory-depth-limit-exceeded".into());
+                } else {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+            }
+        }
+    }
+    clone_roots.sort();
+    clone_roots.dedup();
+    issues.sort();
+    issues.dedup();
+    Ok(CloneInventoryReport {
+        roots: normalized_roots,
+        clone_roots,
+        visited_entries,
+        evidence_complete: issues.is_empty(),
+        issues,
+        filesystem_mutation_executed: false,
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +191,14 @@ pub struct GitCloneReclaimPlan {
     pub closed_pull_request_head: bool,
     pub stale_open_pull_request_head: bool,
     pub stale_open_pull_request_cutoff_ms: Option<u64>,
+    #[serde(default)]
+    pub default_branch_reference: Option<String>,
+    #[serde(default)]
+    pub default_branch_oid: Option<String>,
+    #[serde(default)]
+    pub default_branch_observed_at_ms: Option<u64>,
+    #[serde(default)]
+    pub head_is_default_branch_ancestor: bool,
     pub size: GitWorktreeSizeEvidence,
     pub active_use: GitWorktreeActiveUseEvidence,
     pub authority_fingerprint: String,
@@ -84,6 +255,8 @@ fn plan_fingerprint(
     head: &str,
     branch: &str,
     size: &GitWorktreeSizeEvidence,
+    default_branch_evidence: Option<&DefaultBranchEvidence>,
+    head_is_default_branch_ancestor: bool,
     blockers: &[String],
 ) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -100,6 +273,18 @@ fn plan_fingerprint(
     ] {
         hash_field(&mut hasher, value);
     }
+    if let Some(evidence) = default_branch_evidence {
+        hash_field(&mut hasher, &evidence.reference);
+        hash_field(&mut hasher, &evidence.oid);
+    }
+    hash_field(
+        &mut hasher,
+        if head_is_default_branch_ancestor {
+            "1"
+        } else {
+            "0"
+        },
+    );
     for blocker in blockers {
         hash_field(&mut hasher, blocker);
     }
@@ -180,12 +365,13 @@ fn validate_journal_destination(repository_root: &Path, journal_path: &Path) -> 
 }
 
 /// Build a plan from already-resolved GitHub PR heads. This is also the deterministic test seam.
-pub fn plan_git_clone_reclaim_with_pull_request_heads(
+pub fn plan_git_clone_reclaim_with_authority(
     repository_root: &Path,
     retention_references: &[String],
     closed_pull_request_heads: &ClosedPullRequestHeads,
     stale_open_pull_request_heads: &StaleOpenPullRequestHeads,
     stale_open_pull_request_cutoff_ms: Option<u64>,
+    default_branch_evidence: Option<&DefaultBranchEvidence>,
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitCloneReclaimPlan, String> {
@@ -214,6 +400,30 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
     );
     let repository_object_id = crate::safety::filesystem_object_id(&repository_path)
         .map_err(|_| "git-clone-object-identity-unavailable".to_string())?;
+    let default_evidence_fresh = default_branch_evidence.is_some_and(|evidence| {
+        evidence.observed_at_ms <= generated_at_ms
+            && generated_at_ms.saturating_sub(evidence.observed_at_ms)
+                <= MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS
+    });
+    let mut default_branch_probe_incomplete = false;
+    let head_is_default_branch_ancestor = if default_evidence_fresh {
+        let evidence = default_branch_evidence.expect("checked Some above");
+        match git_worktree::exact_reference_contains_commit(
+            &repository_path,
+            &evidence.reference,
+            &evidence.oid,
+            &primary.head,
+            options.command_timeout_ms,
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                default_branch_probe_incomplete = true;
+                false
+            }
+        }
+    } else {
+        false
+    };
     let mut blockers = Vec::new();
     if !report.evidence_complete {
         blockers.push("git-clone-audit-evidence-incomplete".into());
@@ -230,8 +440,17 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
     if primary.status_clean != Some(true) {
         blockers.push("git-clone-working-tree-not-clean".into());
     }
-    if !primary.closed_pull_request_head && !primary.stale_open_pull_request_head {
+    if !primary.closed_pull_request_head
+        && !primary.stale_open_pull_request_head
+        && !head_is_default_branch_ancestor
+    {
         blockers.push("git-clone-pr-head-authority-missing".into());
+    }
+    if default_branch_evidence.is_some() && !default_evidence_fresh {
+        blockers.push("git-clone-default-branch-evidence-stale".into());
+    }
+    if default_branch_probe_incomplete {
+        blockers.push("git-clone-default-branch-ancestry-evidence-incomplete".into());
     }
     if primary.head_is_retained_tip {
         blockers.push("git-clone-head-is-retained-tip".into());
@@ -261,6 +480,8 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
         &primary.head,
         &branch,
         &primary.size,
+        default_branch_evidence,
+        head_is_default_branch_ancestor,
         &blockers,
     );
     let eligible = blockers.is_empty();
@@ -275,6 +496,10 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
         closed_pull_request_head: primary.closed_pull_request_head,
         stale_open_pull_request_head: primary.stale_open_pull_request_head,
         stale_open_pull_request_cutoff_ms,
+        default_branch_reference: default_branch_evidence.map(|value| value.reference.clone()),
+        default_branch_oid: default_branch_evidence.map(|value| value.oid.clone()),
+        default_branch_observed_at_ms: default_branch_evidence.map(|value| value.observed_at_ms),
+        head_is_default_branch_ancestor,
         size: primary.size.clone(),
         active_use,
         authority_fingerprint: report.removal_authority_fingerprint,
@@ -289,6 +514,28 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
         blockers,
         filesystem_mutation_executed: false,
     })
+}
+
+/// Build a plan from exact pull-request evidence without default-branch ancestry authority.
+pub fn plan_git_clone_reclaim_with_pull_request_heads(
+    repository_root: &Path,
+    retention_references: &[String],
+    closed_pull_request_heads: &ClosedPullRequestHeads,
+    stale_open_pull_request_heads: &StaleOpenPullRequestHeads,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    options: GitWorktreeAuditOptions,
+    generated_at_ms: u64,
+) -> Result<GitCloneReclaimPlan, String> {
+    plan_git_clone_reclaim_with_authority(
+        repository_root,
+        retention_references,
+        closed_pull_request_heads,
+        stale_open_pull_request_heads,
+        stale_open_pull_request_cutoff_ms,
+        None,
+        options,
+        generated_at_ms,
+    )
 }
 
 /// Resolve current GitHub evidence and build a read-only standalone-clone reclaim plan.
@@ -325,6 +572,65 @@ pub fn plan_git_clone_reclaim(
     )
 }
 
+/// Resolve fresh GitHub PR evidence first; query default-branch ancestry only when PR evidence does
+/// not already authorize the primary clone. Provider failure is therefore isolated from an exact
+/// closed/stale-open PR authority path while ancestry-only candidates remain fail-closed.
+pub fn plan_git_clone_reclaim_with_default_branch(
+    repository_root: &Path,
+    retention_references: &[String],
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    options: GitWorktreeAuditOptions,
+    generated_at_ms: u64,
+) -> Result<GitCloneReclaimPlan, String> {
+    let closed = if include_closed_pull_requests {
+        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
+    } else {
+        ClosedPullRequestHeads::new()
+    };
+    let stale_open = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
+        git_worktree::github_stale_open_pull_request_heads(
+            repository_root,
+            cutoff_ms,
+            options.command_timeout_ms,
+        )?
+    } else {
+        StaleOpenPullRequestHeads::new()
+    };
+    let pr_plan = plan_git_clone_reclaim_with_authority(
+        repository_root,
+        retention_references,
+        &closed,
+        &stale_open,
+        stale_open_pull_request_cutoff_ms,
+        None,
+        options,
+        generated_at_ms,
+    )?;
+    if pr_plan.closed_pull_request_head || pr_plan.stale_open_pull_request_head {
+        return Ok(pr_plan);
+    }
+    let (reference, oid) = git_worktree::github_default_branch_reference_oid(
+        repository_root,
+        options.command_timeout_ms,
+    )?;
+    let evidence = DefaultBranchEvidence {
+        reference,
+        oid,
+        observed_at_ms: generated_at_ms,
+    };
+    plan_git_clone_reclaim_with_authority(
+        repository_root,
+        retention_references,
+        &closed,
+        &stale_open,
+        stale_open_pull_request_cutoff_ms,
+        Some(&evidence),
+        options,
+        generated_at_ms,
+    )
+}
+
 pub fn approve_git_clone_reclaim(
     plan: &GitCloneReclaimPlan,
     exact_approval_phrase: &str,
@@ -353,12 +659,13 @@ pub fn approve_git_clone_reclaim(
 }
 
 /// Re-resolve GitHub and filesystem evidence, then move the exact clone object to OS Trash.
-pub fn execute_git_clone_reclaim(
+fn execute_git_clone_reclaim_with_authority(
     approved_plan: &GitCloneReclaimPlan,
     approval: &GitCloneReclaimApproval,
     retention_references: &[String],
     include_closed_pull_requests: bool,
     stale_open_pull_request_cutoff_ms: Option<u64>,
+    default_branch_evidence: Option<&DefaultBranchEvidence>,
     options: GitWorktreeAuditOptions,
     journal_path: &Path,
     requested_at_ms: u64,
@@ -373,11 +680,28 @@ pub fn execute_git_clone_reclaim(
         return Err("git-clone-execution-approval-invalid-or-stale".into());
     }
     validate_journal_destination(Path::new(&approved_plan.repository_root), journal_path)?;
-    let live = plan_git_clone_reclaim(
-        Path::new(&approved_plan.repository_root),
+    let repository_root = Path::new(&approved_plan.repository_root);
+    let closed = if include_closed_pull_requests {
+        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
+    } else {
+        ClosedPullRequestHeads::new()
+    };
+    let stale_open = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
+        git_worktree::github_stale_open_pull_request_heads(
+            repository_root,
+            cutoff_ms,
+            options.command_timeout_ms,
+        )?
+    } else {
+        StaleOpenPullRequestHeads::new()
+    };
+    let live = plan_git_clone_reclaim_with_authority(
+        repository_root,
         retention_references,
-        include_closed_pull_requests,
+        &closed,
+        &stale_open,
         stale_open_pull_request_cutoff_ms,
+        default_branch_evidence,
         options,
         requested_at_ms,
     )?;
@@ -417,6 +741,93 @@ pub fn execute_git_clone_reclaim(
     })
 }
 
+/// Revalidate PR authority and execute the existing reversible clone cleanup path.
+pub fn execute_git_clone_reclaim(
+    approved_plan: &GitCloneReclaimPlan,
+    approval: &GitCloneReclaimApproval,
+    retention_references: &[String],
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    options: GitWorktreeAuditOptions,
+    journal_path: &Path,
+    requested_at_ms: u64,
+) -> Result<GitCloneReclaimResult, String> {
+    execute_git_clone_reclaim_with_authority(
+        approved_plan,
+        approval,
+        retention_references,
+        include_closed_pull_requests,
+        stale_open_pull_request_cutoff_ms,
+        None,
+        options,
+        journal_path,
+        requested_at_ms,
+    )
+}
+
+/// Revalidate whichever authority path the approved plan actually bound. PR-authorized plans omit
+/// default-branch fields and re-query only PR evidence; ancestry-authorized plans must reproduce
+/// the exact provider reference/OID before execution.
+pub fn execute_git_clone_reclaim_with_default_branch(
+    approved_plan: &GitCloneReclaimPlan,
+    approval: &GitCloneReclaimApproval,
+    retention_references: &[String],
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    options: GitWorktreeAuditOptions,
+    journal_path: &Path,
+    requested_at_ms: u64,
+) -> Result<GitCloneReclaimResult, String> {
+    match (
+        approved_plan.default_branch_reference.as_deref(),
+        approved_plan.default_branch_oid.as_deref(),
+        approved_plan.default_branch_observed_at_ms,
+    ) {
+        (None, None, None)
+            if approved_plan.closed_pull_request_head
+                || approved_plan.stale_open_pull_request_head =>
+        {
+            execute_git_clone_reclaim_with_authority(
+                approved_plan,
+                approval,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                None,
+                options,
+                journal_path,
+                requested_at_ms,
+            )
+        }
+        (Some(expected_reference), Some(expected_oid), Some(observed_at_ms)) => {
+            let (reference, oid) = git_worktree::github_default_branch_reference_oid(
+                Path::new(&approved_plan.repository_root),
+                options.command_timeout_ms,
+            )?;
+            if reference != expected_reference || oid != expected_oid {
+                return Err("git-clone-default-branch-provider-drift".into());
+            }
+            let evidence = DefaultBranchEvidence {
+                reference,
+                oid,
+                observed_at_ms,
+            };
+            execute_git_clone_reclaim_with_authority(
+                approved_plan,
+                approval,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                Some(&evidence),
+                options,
+                journal_path,
+                requested_at_ms,
+            )
+        }
+        _ => Err("git-clone-default-branch-evidence-missing".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +846,222 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().into()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_exact_default_branch_ancestor_authorizes_clean_pushed_clone() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"base\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "base"]);
+        let ancestor = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(repository.path(), &["switch", "-c", "default-next"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"default next\n").unwrap();
+        git(repository.path(), &["commit", "-am", "default next"]);
+        let default_oid = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/main", &default_oid],
+        );
+        git(repository.path(), &["switch", "--detach", &ancestor]);
+        git(repository.path(), &["switch", "-c", "completed-local"]);
+        let evidence = DefaultBranchEvidence {
+            reference: "refs/remotes/origin/main".into(),
+            oid: default_oid,
+            observed_at_ms: 10,
+        };
+        let plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
+        assert!(plan.head_is_default_branch_ancestor);
+        let refreshed_evidence = DefaultBranchEvidence {
+            observed_at_ms: 12,
+            ..evidence
+        };
+        let refreshed_plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&refreshed_evidence),
+            GitWorktreeAuditOptions::default(),
+            13,
+        )
+        .unwrap();
+        assert_eq!(plan.plan_fingerprint, refreshed_plan.plan_fingerprint);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpushed_diverged_head_never_receives_default_branch_authority() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let default_oid = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/main", &default_oid],
+        );
+        git(repository.path(), &["switch", "-c", "unpushed"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"unpushed\n").unwrap();
+        git(repository.path(), &["commit", "-am", "unpushed"]);
+        let evidence = DefaultBranchEvidence {
+            reference: "refs/remotes/origin/main".into(),
+            oid: default_oid,
+            observed_at_ms: 10,
+        };
+        let plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(!plan.eligible_after_human_approval);
+        assert!(!plan.head_is_default_branch_ancestor);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-pr-head-authority-missing".into()));
+        assert!(!plan
+            .blockers
+            .contains(&"git-clone-default-branch-evidence-stale".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_clone_never_receives_default_branch_authority() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/main", &head],
+        );
+        let evidence = DefaultBranchEvidence {
+            reference: "refs/remotes/origin/main".into(),
+            oid: head,
+            observed_at_ms: 10,
+        };
+        let mut child = Command::new("sh")
+            .args(["-c", "cd -- \"$1\" && exec sleep 5", "disksage-active"])
+            .arg(repository.path())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let plan = plan_git_clone_reclaim_with_authority(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-active-use-detected".into()));
+    }
+
+    #[test]
+    fn multi_root_inventory_is_bounded_and_does_not_follow_symlinks() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_repo = first.path().join("nested/repo");
+        let second_repo = second.path().join("repo");
+        std::fs::create_dir_all(&first_repo).unwrap();
+        std::fs::create_dir_all(&second_repo).unwrap();
+        git(&first_repo, &["init", "-b", "main"]);
+        git(&second_repo, &["init", "-b", "main"]);
+        std::fs::create_dir_all(second.path().join("not-a-repo/.git")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            first.path().join("nested"),
+            second.path().join("linked-outside"),
+        )
+        .unwrap();
+        let report = inventory_standalone_clones(
+            &[first.path().to_path_buf(), second.path().to_path_buf()],
+            CloneInventoryOptions::default(),
+        )
+        .unwrap();
+        assert!(report.evidence_complete, "{:?}", report.issues);
+        assert_eq!(report.clone_roots.len(), 2);
+        assert!(!report
+            .clone_roots
+            .iter()
+            .any(|path| path.ends_with("not-a-repo")));
+        assert!(!report.filesystem_mutation_executed);
+    }
+
+    #[test]
+    fn depth_truncation_is_reported_as_incomplete_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let hidden = root.path().join("one/two/repo");
+        std::fs::create_dir_all(&hidden).unwrap();
+        git(&hidden, &["init", "-b", "main"]);
+        let report = inventory_standalone_clones(
+            &[root.path().to_path_buf()],
+            CloneInventoryOptions {
+                max_depth: 1,
+                ..CloneInventoryOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!report.evidence_complete);
+        assert!(report
+            .issues
+            .contains(&"git-clone-inventory-depth-limit-exceeded".into()));
+        assert!(report.clone_roots.is_empty());
     }
 
     #[cfg(unix)]
