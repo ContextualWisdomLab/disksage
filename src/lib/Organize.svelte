@@ -120,7 +120,7 @@
          미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
     <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
   </h2>
-  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
+  <p class="error live-region" role="alert" aria-live="assertive" aria-atomic="true">{loadError}</p>
 
   {#if plans.length === 0 && !busy}
     <p class="muted">미리보기를 눌러 정리 계획을 확인하세요.</p>
@@ -163,27 +163,26 @@
     {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
   {/if}
 
-  {#if resultAction === "undo" && results.length === 0}
-    <p role="status">되돌릴 최근 이동 기록이 없습니다.</p>
-  {/if}
+  <p class="result-status live-region" role="status" aria-live="polite" aria-atomic="true">
+    {#if resultAction === "undo" && results.length === 0}
+      되돌릴 최근 이동 기록이 없습니다.
+    {:else if results.length > 0 && resultAction === "undo"}
+      {results.filter((r) => r.ok).length}/{results.length}개 되돌리기를 완료했습니다. 다시 정리하려면 새 미리보기를 만드세요.
+    {:else if results.length > 0}
+      {results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.
+    {/if}
+  </p>
 
-  {#if results.length > 0}
-    {#if resultAction === "undo"}
-      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 되돌리기를 완료했습니다. 다시 정리하려면 새 미리보기를 만드세요.</p>
-    {:else}
-      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.</p>
-    {/if}
-    {#if results.some((r) => !r.ok)}
-      <ul class="errors">
-        {#each results.filter((r) => !r.ok) as r (r.path)}
-          {#if resultAction === "undo"}
-            <li title={r.path}>⚠ {r.path} — 현재 파일 위치와 원래 폴더의 접근 권한을 확인한 뒤 ‘마지막 이동 되돌리기’를 다시 실행하세요.</li>
-          {:else}
-            <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
-          {/if}
-        {/each}
-      </ul>
-    {/if}
+  {#if results.length > 0 && results.some((r) => !r.ok)}
+    <ul class="errors">
+      {#each results.filter((r) => !r.ok) as r (r.path)}
+        {#if resultAction === "undo"}
+          <li title={r.path}>⚠ {r.path} — 현재 파일 위치와 원래 폴더의 접근 권한을 확인한 뒤 ‘마지막 이동 되돌리기’를 다시 실행하세요.</li>
+        {:else}
+          <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
+        {/if}
+      {/each}
+    </ul>
   {/if}
 </section>
 
@@ -199,6 +198,7 @@
   .lineage { color: #666; font-size: 0.75rem; flex-shrink: 0; }
   .muted { color: #999; }
   .error { color: #b00; }
+  .live-region:empty { margin: 0; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .actions { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
   .undo { margin-left: auto; font-size: 0.85rem; }
