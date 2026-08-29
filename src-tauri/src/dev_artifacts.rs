@@ -254,6 +254,17 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+fn staged_manifest_matches_request(path: &Path, request: &DevArtifact) -> bool {
+    let manifest = artifact_manifest(path);
+    manifest.scan_complete
+        && manifest.skipped == 0
+        && manifest.object_id == request.object_id
+        && manifest.bytes == request.bytes
+        && manifest.allocated_bytes == request.allocated_bytes
+        && manifest.files == request.files
+        && manifest.fingerprint == request.fingerprint
+}
+
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
 /// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
@@ -422,12 +433,19 @@ pub fn clean_artifacts(
                 };
             }
 
-            match crate::safety::trash_delete_if_identity(
+            match crate::safety::trash_delete_if_identity_and_validate(
                 Path::new(&request.path),
                 &request.object_id,
                 request.allocated_bytes,
                 journal_path,
                 now_ms,
+                |staged| {
+                    staged_manifest_matches_request(staged, request)
+                        .then_some(())
+                        .ok_or_else(|| {
+                            "개발 빌드 파일이 변경되었습니다. 다시 확인하세요".to_string()
+                        })
+                },
             ) {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
