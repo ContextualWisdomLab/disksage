@@ -45,7 +45,7 @@ pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_ro
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn provider_home_root() -> Option<PathBuf> {
+pub(crate) fn provider_home_root() -> Option<PathBuf> {
     ["HOME", "USERPROFILE"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -63,7 +63,7 @@ fn is_windows_icloud_drive_root(path: &Path, home_root: &Path) -> bool {
     path == home_root.join("iCloud Drive")
 }
 
-fn is_within_managed_provider_scope(path: &Path, home_root: &Path) -> bool {
+pub(crate) fn is_within_managed_provider_scope(path: &Path, home_root: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
         return [
