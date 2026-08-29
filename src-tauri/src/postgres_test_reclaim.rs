@@ -1019,9 +1019,10 @@ mod tests {
 
     #[test]
     fn native_runner_drains_large_output_before_rejecting_it() {
+        let shell = std::fs::canonicalize("/bin/sh").unwrap();
         let error = NativePostgresCommandRunner
             .run(
-                Path::new("/bin/sh"),
+                &shell,
                 &["-c".into(), "yes x | head -c 70000".into()],
                 Duration::from_secs(2),
             )
