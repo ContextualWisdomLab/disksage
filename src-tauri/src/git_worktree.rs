@@ -1339,6 +1339,15 @@ fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
 }
 
 #[cfg(unix)]
+fn ps_command_args() -> Vec<OsString> {
+    let mut args = Vec::with_capacity(3);
+    #[cfg(target_os = "macos")]
+    args.push(OsString::from("-ww"));
+    args.extend([OsString::from("-axo"), OsString::from("pid=,command=")]);
+    args
+}
+
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -1439,12 +1448,7 @@ pub fn active_use_evidence(
         }
         pids.insert(pid);
     }
-    let ps = match run_bounded_command(
-        "ps",
-        &[OsString::from("-axo"), OsString::from("pid=,command=")],
-        command_cwd,
-        timeout_ms,
-    ) {
+    let ps = match run_bounded_command("ps", &ps_command_args(), command_cwd, timeout_ms) {
         Ok(result)
             if !result.timed_out
                 && !result.stdout_truncated
@@ -3196,6 +3200,32 @@ mod tests {
             b"/cache/env with spaces",
             true,
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn active_use_includes_path_beyond_default_macos_ps_width() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("long-command-environment");
+        fs::create_dir(&marker).unwrap();
+        let padding = "x".repeat(512);
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "sleep 20 & wait",
+                padding.as_str(),
+                marker.to_str().unwrap(),
+            ])
+            .spawn()
+            .unwrap();
+
+        let evidence = active_use_evidence(&marker, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
     }
 
     #[test]
