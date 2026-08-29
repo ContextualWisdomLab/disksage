@@ -47,6 +47,11 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
 }
 
+fn is_regular_marker(path: &Path) -> bool {
+    path.symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
@@ -170,7 +175,10 @@ pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
     let (kind, markers) = artifact_kind(&name)?;
     let parent = path.parent()?;
     if !path.is_dir()
-        || (!markers.is_empty() && !markers.iter().any(|marker| parent.join(marker).is_file()))
+        || (!markers.is_empty()
+            && !markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker))))
     {
         return None;
     }
@@ -242,7 +250,10 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker)));
         if marker_ok {
             candidates.push(path.to_path_buf());
         }
@@ -450,6 +461,23 @@ mod tests {
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_project_markers() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("linked-marker");
+        let artifact = project.join("target");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(artifact.join("payload.bin"), b"generated").unwrap();
+        fs::write(tmp.path().join("outside.toml"), b"[package]").unwrap();
+        symlink(tmp.path().join("outside.toml"), project.join("Cargo.toml")).unwrap();
+
+        assert!(inspect_artifact(&artifact, 0).is_none());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
