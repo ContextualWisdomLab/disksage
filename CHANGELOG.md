@@ -49,8 +49,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
-- Ship that generic batch planner as a checksummed, provenance-attested operational CLI on Linux,
-  Windows, and macOS so installed release artifacts can reproduce the exact read-only plan.
+- Ship that generic batch planner as a checksummed, provenance-attested macOS operational CLI so
+  installed release artifacts can reproduce the exact read-only plan. Linux and Windows remain
+  excluded until their provider-local observation paths have production evidence.
 - Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
   generate the native Foundation-backed plan without compiling source; Linux and Windows retain
   only the provider-generic planner because the iCloud Foundation contract is macOS-specific.

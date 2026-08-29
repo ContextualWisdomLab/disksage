@@ -17,10 +17,8 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
-  'disksage-cloud-local-eviction-batch-linux-x86_64',
   'disksage-cloud-plan-windows-x86_64.exe',
   'disksage-duplicate-audit-windows-x86_64.exe',
-  'disksage-cloud-local-eviction-batch-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
   'disksage-cloud-local-eviction-batch-macos-arm64',
