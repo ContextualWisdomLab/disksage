@@ -451,17 +451,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
         guest_reachable,
         running_container_count,
         trim_command: ready.then(|| trim_command(runtime)),
-        stop_command: (runtime == RuntimeStorageKind::PodmanMachine
-            && ready
-            && running_container_count == Some(0))
-        .then(|| {
-            vec![
-                "podman".into(),
-                "machine".into(),
-                "stop".into(),
-                "podman-machine-default".into(),
-            ]
-        }),
+        // Do not advertise an action that cannot be authorized atomically. The count probe and
+        // a later stop are separate Podman operations, so a container may start between them.
+        stop_command: None,
         recovery_command,
         host_compaction_supported: false,
         host_compaction_blockers: vec![
@@ -804,6 +796,9 @@ mod tests {
 
     #[test]
     fn inactive_stop_is_unavailable_without_an_atomic_runtime_boundary() {
+        let plan = inspect_runtime(RuntimeStorageKind::PodmanMachine, 42);
+        assert!(plan.stop_command.is_none());
+        assert!(plan.stop_approval_phrase.is_none());
         assert_eq!(
             execute_inactive_stop("any", "customer requested stop").unwrap_err(),
             "runtime-storage-conditional-stop-unavailable"
