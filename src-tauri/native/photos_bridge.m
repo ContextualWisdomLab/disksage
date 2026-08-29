@@ -41,20 +41,32 @@ static NSString *DSMetadataFingerprint(PHAsset *asset, PHAssetResource *resource
   return DSHex(digest, sizeof(digest));
 }
 
+int64_t ds_photos_select_still_resource_index(const int64_t *types, size_t count) {
+  int64_t photoIndex = -1;
+  int64_t fullSizeIndex = -1;
+  NSUInteger photoCount = 0;
+  NSUInteger fullSizeCount = 0;
+  for (size_t index = 0; index < count; index++) {
+    if (types[index] == PHAssetResourceTypePhoto) {
+      photoIndex = (int64_t)index;
+      photoCount++;
+    } else if (types[index] == PHAssetResourceTypeFullSizePhoto) {
+      fullSizeIndex = (int64_t)index;
+      fullSizeCount++;
+    }
+  }
+  if (photoCount == 1) return photoIndex;
+  if (photoCount > 1) return -1;
+  return fullSizeCount == 1 ? fullSizeIndex : -1;
+}
+
 static PHAssetResource *DSStillPhotoResource(NSArray<PHAssetResource *> *resources) {
-  NSPredicate *photoPredicate = [NSPredicate predicateWithBlock:^BOOL(PHAssetResource *resource, NSDictionary *bindings) {
-    (void)bindings;
-    return resource.type == PHAssetResourceTypePhoto;
-  }];
-  NSArray<PHAssetResource *> *photos = [resources filteredArrayUsingPredicate:photoPredicate];
-  if (photos.count == 1) return photos.firstObject;
-  if (photos.count > 1) return nil;
-  NSPredicate *fullSizePredicate = [NSPredicate predicateWithBlock:^BOOL(PHAssetResource *resource, NSDictionary *bindings) {
-    (void)bindings;
-    return resource.type == PHAssetResourceTypeFullSizePhoto;
-  }];
-  NSArray<PHAssetResource *> *fullSizePhotos = [resources filteredArrayUsingPredicate:fullSizePredicate];
-  return fullSizePhotos.count == 1 ? fullSizePhotos.firstObject : nil;
+  int64_t *types = calloc(resources.count, sizeof(int64_t));
+  if (!types && resources.count > 0) return nil;
+  for (NSUInteger index = 0; index < resources.count; index++) types[index] = resources[index].type;
+  int64_t selected = ds_photos_select_still_resource_index(types, resources.count);
+  free(types);
+  return selected >= 0 ? resources[(NSUInteger)selected] : nil;
 }
 
 static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {

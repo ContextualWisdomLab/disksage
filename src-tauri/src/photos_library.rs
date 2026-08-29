@@ -97,6 +97,26 @@ pub struct PhotosDeletionReceipt {
     pub next_action: String,
 }
 
+#[derive(Serialize)]
+struct PhotosDeletionReceiptRecord<'a> {
+    phase: &'static str,
+    receipt: &'a PhotosDeletionReceipt,
+}
+
+fn append_receipt_record(
+    file: &mut std::fs::File,
+    phase: &'static str,
+    receipt: &PhotosDeletionReceipt,
+) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec(&PhotosDeletionReceiptRecord { phase, receipt })
+        .map_err(|_| "photos-receipt-serialization-failed".to_string())?;
+    bytes.push(b'\n');
+    file.write_all(&bytes)
+        .map_err(|_| "photos-receipt-write-failed".to_string())?;
+    file.sync_all()
+        .map_err(|_| "photos-receipt-sync-failed".to_string())
+}
+
 fn hash_json<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes = serde_json::to_vec(value).map_err(|_| "photos-evidence-serialization-failed")?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
@@ -257,6 +277,8 @@ mod native {
         fn ds_photos_request_authorization() -> *mut c_char;
         fn ds_photos_inventory(max_assets: u32, max_bytes: u64) -> *mut c_char;
         fn ds_photos_delete(request_json: *const c_char) -> *mut c_char;
+        #[cfg(test)]
+        fn ds_photos_select_still_resource_index(types: *const i64, count: usize) -> i64;
     }
 
     fn take_json<T: for<'de> Deserialize<'de>>(pointer: *mut c_char) -> Result<T, String> {
@@ -305,6 +327,11 @@ mod native {
             return Err("photos-delete-result-incomplete".into());
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn select_still_resource(types: &[i64]) -> i64 {
+        unsafe { ds_photos_select_still_resource_index(types.as_ptr(), types.len()) }
     }
 }
 
@@ -406,8 +433,9 @@ pub async fn execute_photos_duplicate_deletion(
     let mut file = options
         .open(&path)
         .map_err(|_| "photos-receipt-create-failed")?;
-    let bytes =
-        serde_json::to_vec_pretty(&receipt).map_err(|_| "photos-receipt-serialization-failed")?;
+    let mut prepared_receipt = receipt.clone();
+    prepared_receipt.system_confirmation_completed = false;
+    append_receipt_record(&mut file, "prepared", &prepared_receipt)?;
     let native_plan = plan.clone();
     let native_result =
         match tauri::async_runtime::spawn_blocking(move || native::delete(&native_plan)).await {
@@ -419,9 +447,7 @@ pub async fn execute_photos_duplicate_deletion(
         let _ = std::fs::remove_file(path);
         return Err(error);
     }
-    file.write_all(&bytes)
-        .map_err(|_| "photos-receipt-write-failed")?;
-    file.sync_all().map_err(|_| "photos-receipt-sync-failed")?;
+    append_receipt_record(&mut file, "completed", &receipt)?;
     Ok(receipt)
 }
 
@@ -538,16 +564,57 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_selects_one_still_from_live_photos_and_bounds_callbacks() {
+    fn durable_receipt_records_prepared_then_completed_outcome() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("receipt.jsonl");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut receipt = PhotosDeletionReceipt {
+            schema_version: SCHEMA_VERSION,
+            receipt_id: "receipt".into(),
+            plan_fingerprint: "plan".into(),
+            executed_at_ms: 1,
+            rationale: "reviewed duplicate".into(),
+            deleted_count: 1,
+            system_confirmation_completed: false,
+            permanent_delete_requested: false,
+            next_action: "open-recently-deleted-to-restore-or-review-space".into(),
+        };
+        append_receipt_record(&mut file, "prepared", &receipt).unwrap();
+        receipt.system_confirmation_completed = true;
+        append_receipt_record(&mut file, "completed", &receipt).unwrap();
+        let records = std::fs::read_to_string(path).unwrap();
+        let records = records
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["phase"], "prepared");
+        assert_eq!(
+            records[0]["receipt"]["system_confirmation_completed"],
+            false
+        );
+        assert_eq!(records[1]["phase"], "completed");
+        assert_eq!(records[1]["receipt"]["system_confirmation_completed"], true);
+    }
+
+    #[test]
+    fn native_boundary_bounds_callbacks() {
         let source = include_str!("../native/photos_bridge.m");
-        assert!(source.contains("resource.type == PHAssetResourceTypePhoto"));
-        assert!(source.contains("resource.type == PHAssetResourceTypeFullSizePhoto"));
-        assert!(source.contains("photos.count == 1"));
-        assert!(source.contains("fullSizePhotos.count == 1"));
-        assert!(source.contains("compound-photo-still-resource-ambiguous"));
-        assert!(source.contains("exclude-unsupported-compound-assets-and-review-again"));
         assert!(source.contains("networkAccessAllowed = NO"));
         assert!(source.contains("cancelDataRequest:requestID"));
         assert!(source.contains("DSAuthorizationTimeoutNanos"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_still_selection_executes_live_photo_and_ambiguous_cases() {
+        assert_eq!(native::select_still_resource(&[1, 9]), 0);
+        assert_eq!(native::select_still_resource(&[9, 5]), 1);
+        assert_eq!(native::select_still_resource(&[1, 1, 9]), -1);
+        assert_eq!(native::select_still_resource(&[9]), -1);
     }
 }
