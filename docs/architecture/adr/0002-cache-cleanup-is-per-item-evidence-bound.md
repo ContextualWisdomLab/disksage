@@ -22,10 +22,10 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
-- the operation is journaled; npm, pip, and Corepack directory children may be deleted permanently
-  after the same complete inactive-use and exact-identity checks because their native managers
-  establish them as disposable package archives. Other normal cache cleanup remains reversible.
-- a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
+- normal cache cleanup is journaled and remains reversible through the OS Trash, including npm,
+  pip, and Corepack directory children; it does not grant an irreversible-delete authority merely
+  because a native manager can regenerate the cache;
+- a separate, explicit `--purge-proven-cache-trash` path may permanently remove only direct
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
   arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
@@ -38,18 +38,18 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
 - Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
-- The normal operation is reversible through the OS Trash. The npm/pip/Corepack exception reclaims
-  inactive directory children immediately; the explicit proven-cache purge remains limited to
-  structurally verified cache data already placed in Trash.
+- Normal cache cleanup is reversible through the OS Trash. Permanent cache deletion exists only in
+  the explicit proven-cache Trash purge, after the object is already in Trash and its known
+  structure is revalidated.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
   permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
 ## Alternatives rejected
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
-- **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is limited to inactive, identity-bound
-  npm/pip/Corepack directory children or structurally proven cache already in OS Trash.
+- **Direct recursive deletion of live cache roots:** not reversible and creates unnecessary
+  irreversible authority. Normal active-cache cleanup therefore uses the OS Trash; permanent
+  removal is confined to the explicit, structurally proven cache-data purge after Trash staging.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -62,8 +62,8 @@ and Playwright). This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
-probe target. The cache root is preserved, npm/pip/Corepack directories use the journaled permanent
-generated-directory primitive, other successful operations go to OS Trash, and any child in use is
+probe target. The cache root is preserved, every successful normal cleanup goes through the
+journaled OS-Trash path (including npm, pip, and Corepack directories), and any child in use is
 reported and left untouched.
 
 The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
@@ -93,7 +93,7 @@ untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd5
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this
 incident, DiskSage may expose them as read-only candidates and permanently remove them only when
-the operator passes --execute --purge-proven-cache-trash. The candidate scanner accepts only the
+the operator passes `--execute --purge-proven-cache-trash`. The candidate scanner accepts only the
 known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it bounds traversal,
 rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
 for both the pending and terminal outcome. This path never empties the Trash generally and never
