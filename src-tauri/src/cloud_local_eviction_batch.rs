@@ -123,6 +123,7 @@ pub struct OnedriveFinderAssistanceReceipt {
     pub receipt_id: String,
     pub batch_fingerprint: String,
     pub approval_id: String,
+    pub approval_evidence_sha256: String,
     pub requested_at_ms: u64,
     pub selected_count: u32,
     pub total_allocated_bytes_before: u64,
@@ -659,6 +660,7 @@ fn finder_receipt_id(receipt: &OnedriveFinderAssistanceReceipt) -> String {
     hasher.update(&receipt.version.to_le_bytes());
     hash_field(&mut hasher, receipt.batch_fingerprint.as_bytes());
     hash_field(&mut hasher, receipt.approval_id.as_bytes());
+    hash_field(&mut hasher, receipt.approval_evidence_sha256.as_bytes());
     hasher.update(&receipt.requested_at_ms.to_le_bytes());
     hasher.update(&receipt.selected_count.to_le_bytes());
     hasher.update(&receipt.total_allocated_bytes_before.to_le_bytes());
@@ -673,6 +675,46 @@ fn finder_receipt_id(receipt: &OnedriveFinderAssistanceReceipt) -> String {
     hasher.update(&[receipt.finder_selection_requested as u8]);
     hash_field(&mut hasher, receipt.customer_next_action.as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+fn approval_evidence_sha256(approval: &IcloudLocalEvictionBatchApproval) -> Result<String, String> {
+    let bytes = serde_json::to_vec(approval)
+        .map_err(|_| "onedrive-finder-assistance-approval-invalid".to_string())?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn authenticate_finder_approval(
+    receipt: &OnedriveFinderAssistanceReceipt,
+    record_dir: &Path,
+) -> Result<(), String> {
+    let path = record_dir.join(format!("{}.batch-approval.json", receipt.approval_id));
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|_| "onedrive-finder-assistance-approval-evidence-missing".to_string())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || !metadata.permissions().readonly()
+    {
+        return Err("onedrive-finder-assistance-approval-evidence-invalid".into());
+    }
+    let approval: IcloudLocalEvictionBatchApproval = serde_json::from_slice(
+        &std::fs::read(&path)
+            .map_err(|_| "onedrive-finder-assistance-approval-evidence-invalid".to_string())?,
+    )
+    .map_err(|_| "onedrive-finder-assistance-approval-evidence-invalid".to_string())?;
+    if approval.approval_id != receipt.approval_id
+        || approval.batch_fingerprint != receipt.batch_fingerprint
+        || approval.approval_id
+            != approval_id_for(
+                &approval.batch_fingerprint,
+                approval.approved_at_ms,
+                &approval.approved_by,
+                &approval.rationale,
+            )
+        || approval_evidence_sha256(&approval)? != receipt.approval_evidence_sha256
+    {
+        return Err("onedrive-finder-assistance-approval-evidence-invalid".into());
+    }
+    Ok(())
 }
 
 fn finder_verification_id(value: &OnedriveFinderAssistanceVerification) -> String {
@@ -769,6 +811,7 @@ where
         receipt_id: String::new(),
         batch_fingerprint: plan.batch_fingerprint.clone(),
         approval_id: approval.approval_id.clone(),
+        approval_evidence_sha256: approval_evidence_sha256(approval)?,
         requested_at_ms,
         selected_count: plan.planned_count,
         total_allocated_bytes_before: plan.total_allocated_bytes,
@@ -837,12 +880,14 @@ pub fn prepare_onedrive_finder_assistance(
 fn verify_onedrive_finder_assistance_with<P>(
     root: &CloudRoot,
     receipt: &OnedriveFinderAssistanceReceipt,
+    record_dir: &Path,
     verified_at_ms: u64,
     mut planner: P,
 ) -> Result<OnedriveFinderAssistanceVerification, String>
 where
     P: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
 {
+    authenticate_finder_approval(receipt, record_dir)?;
     if root.provider != CloudProvider::Onedrive
         || receipt.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
         || receipt.receipt_id != finder_receipt_id(receipt)
@@ -947,6 +992,7 @@ pub fn verify_onedrive_finder_assistance(
     let result = verify_onedrive_finder_assistance_with(
         root,
         receipt,
+        record_dir,
         verified_at_ms,
         plan_icloud_local_eviction,
     )?;
@@ -1444,9 +1490,13 @@ mod tests {
             serde_json::from_slice(&std::fs::read(pending_path).unwrap()).unwrap();
         assert!(!pending.finder_selection_requested);
         assert_eq!(
-            verify_onedrive_finder_assistance_with(&onedrive_root, &pending, 23, |_, _, _| {
-                Ok(item.clone())
-            })
+            verify_onedrive_finder_assistance_with(
+                &onedrive_root,
+                &pending,
+                records.path(),
+                23,
+                |_, _, _| { Ok(item.clone()) }
+            )
             .unwrap_err(),
             "onedrive-finder-assistance-receipt-invalid"
         );
@@ -1473,25 +1523,44 @@ mod tests {
             .join(format!("{}.finder-assistance.json", receipt.receipt_id))
             .is_file());
 
+        let forged_records = tempfile::tempdir().unwrap();
+        assert_eq!(
+            verify_onedrive_finder_assistance_with(
+                &onedrive_root,
+                &receipt,
+                forged_records.path(),
+                23,
+                |_, _, _| Ok(item.clone()),
+            )
+            .unwrap_err(),
+            "onedrive-finder-assistance-approval-evidence-missing"
+        );
+
         let mut online_only = item;
         online_only.allocated_bytes = 0;
         online_only.icloud_state.downloading_status_current = false;
         online_only.icloud_state.downloading_status_not_downloaded = true;
-        let verification =
-            verify_onedrive_finder_assistance_with(&onedrive_root, &receipt, 23, |_, _, _| {
-                Ok(online_only.clone())
-            })
-            .unwrap();
+        let verification = verify_onedrive_finder_assistance_with(
+            &onedrive_root,
+            &receipt,
+            records.path(),
+            23,
+            |_, _, _| Ok(online_only.clone()),
+        )
+        .unwrap();
         assert!(verification.verification_complete);
         assert_eq!(verification.observed_allocation_reduction_bytes, 2_000);
 
         let mut unsynced = online_only.clone();
         unsynced.icloud_state.is_uploaded = false;
-        let incomplete =
-            verify_onedrive_finder_assistance_with(&onedrive_root, &receipt, 24, |_, _, _| {
-                Ok(unsynced.clone())
-            })
-            .unwrap();
+        let incomplete = verify_onedrive_finder_assistance_with(
+            &onedrive_root,
+            &receipt,
+            records.path(),
+            24,
+            |_, _, _| Ok(unsynced.clone()),
+        )
+        .unwrap();
         assert!(!incomplete.verification_complete);
         assert_eq!(incomplete.verified_count, 0);
 
@@ -1499,9 +1568,13 @@ mod tests {
         tampered.total_allocated_bytes_before += 1;
         tampered.receipt_id = finder_receipt_id(&tampered);
         assert_eq!(
-            verify_onedrive_finder_assistance_with(&onedrive_root, &tampered, 24, |_, _, _| Ok(
-                online_only.clone()
-            ),)
+            verify_onedrive_finder_assistance_with(
+                &onedrive_root,
+                &tampered,
+                records.path(),
+                24,
+                |_, _, _| Ok(online_only.clone()),
+            )
             .unwrap_err(),
             "onedrive-finder-assistance-receipt-invalid"
         );
