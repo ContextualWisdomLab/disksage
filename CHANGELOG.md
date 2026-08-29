@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
   atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
   or a same-user marker never grants mutation authority.
+- Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
+  squash-merged and detached intermediate commits can be classified without ancestry or branch
+  guesses; any exact membership in an open PR takes precedence and preserves the worktree.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
@@ -78,6 +81,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
   registered as worktrees so repositories with long merged histories remain auditable. All lookup
   calls consume one shared timeout budget rather than multiplying the configured wait per branch.
+- Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
+  library selected as the scan root. External files remain auditable without interpreting Photos'
+  private databases and derivatives as independent duplicate-delete candidates.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution

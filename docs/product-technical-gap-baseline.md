@@ -1178,6 +1178,16 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 merged-worktree and isolated-project-cache execution
 
+### Exact PR commit membership boundary
+
+- The worktree authority now verifies each registered HEAD against the exact same-repository
+  GitHub pull-request commit list. This closes the squash/rebase ancestry gap and safely recognizes
+  detached intermediate commits without inferring identity from a directory or branch name.
+- A SHA may occur in more than one PR. Verified membership in any open PR is therefore a mandatory
+  preserve veto, even if another PR containing the same SHA is already closed or merged. Search
+  caps, pagination/output bounds, repository mismatch, authentication failure, and timeout remain
+  evidence gaps rather than cleanup authority.
+
 - A live Naruon audit exposed a second squash-merge boundary: PR #1370's clean, inactive worktree
   has the exact merged pull-request head, but that head is not an ancestor of the retained branch.
   DiskSage now obtains closed-unmerged heads separately and scopes merged queries to branches in
@@ -1188,6 +1198,11 @@ runner's private workspace temp root instead of weakening the shared production 
   path and Git registration absence were verified, the branch was retained, and the fresh audit
   reports 28 preserved worktrees, zero candidates, complete evidence, and zero gaps. Its
   253,673,472-byte allocated upper bound is not presented as physical APFS recovery.
+- The exact-duplicate collector now prunes `.photoslibrary` and `.photolibrary` packages and rejects
+  either package as a scan root. A regression test proves identical bytes inside a Photos package
+  cannot form a deletion cluster with an external file. The 44 external Pictures images currently
+  have unique exact-content digests; perceptual comparison and measured quality-survivor selection
+  remain an open product Gap and no non-identical photo was deleted.
 
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open
