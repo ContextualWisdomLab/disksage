@@ -21,6 +21,35 @@ pub struct ScanResult {
 
 pub const TOP_FILES_CAP: usize = 1000;
 
+#[cfg(target_os = "macos")]
+fn provider_managed_roots() -> Vec<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| {
+            vec![
+                home.join("Library").join("CloudStorage"),
+                home.join("Library").join("Mobile Documents"),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn provider_managed_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn is_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path == root || path.starts_with(root))
+}
+
+pub(crate) fn scan_root_access_issue(root: &Path) -> Option<&'static str> {
+    is_provider_managed_path(root, &provider_managed_roots()).then_some(
+        "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.",
+    )
+}
+
 pub fn scan_dir(
     root: &Path,
     cancel: &AtomicBool,
@@ -59,11 +88,25 @@ pub fn scan_dir_with_interval(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    let provider_roots = provider_managed_roots();
+
+    if is_provider_managed_path(&traversal_root, &provider_roots) {
+        stats.skipped = 1;
+        return ScanResult {
+            root: root.to_path_buf(),
+            dir_sizes,
+            top_files: Vec::new(),
+            stats,
+            cancelled,
+        };
+    }
 
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(keep_entry);
+        .filter_entry(|entry| {
+            keep_entry(entry) && !is_provider_managed_path(entry.path(), &provider_roots)
+        });
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -198,6 +241,19 @@ mod tests {
         write(&tmp.path().join("f.bin"), 1);
         let res = scan_dir_with_interval(tmp.path(), &AtomicBool::new(false), 0, noop);
         assert_eq!(res.stats.files, 1);
+    }
+
+    #[test]
+    fn provider_managed_path_matching_is_component_aware() {
+        let root = PathBuf::from("/home/customer/Library/CloudStorage");
+        assert!(is_provider_managed_path(
+            &root.join("provider/item.bin"),
+            std::slice::from_ref(&root),
+        ));
+        assert!(!is_provider_managed_path(
+            Path::new("/home/customer/Library/CloudStorage-backup"),
+            std::slice::from_ref(&root),
+        ));
     }
 
     #[test]
