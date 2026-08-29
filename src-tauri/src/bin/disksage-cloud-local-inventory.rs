@@ -98,7 +98,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
             "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
             "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
-            "--help" | "-h" => return Err(usage().into()),
+            "--help" | "-h" => return Err("--help는 단독으로 사용해야 함".into()),
             unknown => return Err(format!("알 수 없는 인자: {unknown}")),
         }
         index += 1;
@@ -531,6 +531,10 @@ fn run_watchdog(
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let discovery = cloud::discover_cloud_roots_report(&home_dir()?);
     if args.all_roots {

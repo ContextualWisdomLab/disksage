@@ -61,6 +61,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Make the release-packaged cloud-local inventory producer return help on stdout with exit status
+  zero, while mixed help/runtime arguments remain a bounded failure.
 - Retry transient iCloud metadata failures during the bounded post-eviction check instead of
   misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
