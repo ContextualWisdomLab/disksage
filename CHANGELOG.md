@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add an exact-allowlist generated-cache auditor that defaults to dry-run, blocks live processes,
+  tool locks, registered or dirty temporary Git workspaces, and provider/Photos/VM boundaries, and
+  requires a fingerprint-bound approval plus immutable private receipt before removal.
+
 ### Added
 
 - Add owner-created durable checkout leases for agent or human work that may be idle between turns.

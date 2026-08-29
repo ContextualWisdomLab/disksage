@@ -1159,6 +1159,13 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
+The generated-cache safety loop now has a reusable Rust boundary: exact regeneration contracts for
+Torch, Homebrew metadata, uv, and Playwright; recursive active-PID and lock evidence; bounded Git
+common-directory, registration, dirty-state, and live-use checks for temporary workspaces; and a
+hard deny boundary for cloud providers, Photos, Podman/Colima, and Parallels. Plans are dry-run by
+default. Removal requires an unchanged fingerprint, exact attributed approval, and a create-only
+private receipt. Remaining product work is wiring this engine into the customer cleanup surface.
+
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
 
 ### Podman external-container image authority

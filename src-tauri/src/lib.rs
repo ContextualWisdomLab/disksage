@@ -43,6 +43,7 @@ mod generic_cleanup;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
 pub mod git_clone_reclaim;
 pub mod git_worktree;
+pub mod generated_cache_reclaim;
 pub mod gradle_daemon_logs;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
