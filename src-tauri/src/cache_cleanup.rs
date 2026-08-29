@@ -327,10 +327,12 @@ pub(crate) fn clean_cache_contents_inner(
                     },
                 };
             }
-            match safety::trash_delete_if_identity_with_outcome(
+            match safety::trash_delete_cache_target_with_outcome(
                 path,
                 &target.object_id,
                 target.bytes,
+                target.modified_ms,
+                &target.manifest_fingerprint,
                 journal_path,
                 now_ms,
             ) {

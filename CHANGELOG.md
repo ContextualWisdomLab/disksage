@@ -192,6 +192,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Build cache cleanup fingerprints from complete bounded filesystem metadata instead of reading up
   to 4 GiB of generated file content. Large and sparse cache entries remain reviewable, while exact
   identity and metadata are revalidated immediately before any mutation.
+- Revalidate reviewed cache manifests on both sides of atomic Trash staging and restore the
+  original path when evidence changes instead of moving unreviewed contents.
+- Preserve the original approved pathname during final staged active-use probes so command-only
+  users block permanent cache and development-artifact deletion.
 - Stop descending once a marker-validated development artifact is found, avoiding a second full
   traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
 - Keep a partially failed permanent artifact deletion in its private staging location; never restore
