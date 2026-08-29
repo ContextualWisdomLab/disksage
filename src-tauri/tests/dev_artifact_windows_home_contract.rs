@@ -126,3 +126,47 @@ fn long_windows_build_paths_keep_physical_allocation_evidence_complete() {
             .is_some_and(|bytes| bytes > 0)
     );
 }
+
+#[test]
+fn absolute_windows_root_with_parent_component_keeps_manifest_complete() {
+    let temp = tempfile::tempdir().expect("create fixture root");
+    let home = temp.path().join("home");
+    let appdata = home.join("AppData/Roaming");
+    let workspace = temp.path().join("workspace");
+    let detour = workspace.join("detour");
+    let project = workspace.join("cargo-app");
+    let target = project.join("target");
+    fs::create_dir_all(&appdata).expect("create appdata");
+    fs::create_dir_all(&detour).expect("create detour directory");
+    fs::create_dir_all(&target).expect("create target");
+    fs::write(
+        project.join("Cargo.toml"),
+        b"[package]\nname='dot-fixture'\nversion='0.1.0'\n",
+    )
+    .expect("write Cargo marker");
+    fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lock");
+    fs::write(target.join("generated.bin"), [0x5a; 4096]).expect("write generated file");
+
+    let root_with_parent = detour.join("..");
+    assert!(root_with_parent.is_absolute());
+    assert!(root_with_parent.to_string_lossy().contains(".."));
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))
+        .args(["--root", root_with_parent.to_str().expect("UTF-8 root path")])
+        .env_remove("HOME")
+        .env("USERPROFILE", &home)
+        .env("APPDATA", &appdata)
+        .output()
+        .expect("run development artifact inventory through parent component");
+
+    assert!(
+        output.status.success(),
+        "parent-component inventory failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("inventory JSON");
+    assert_eq!(report["candidate_count"], 1);
+    assert_eq!(report["candidates"][0]["project"], "cargo-app");
+    assert_eq!(report["candidates"][0]["scan_complete"], true);
+    assert_eq!(report["candidates"][0]["skipped"], 0);
+    assert_eq!(report["candidates"][0]["files"], 1);
+}
