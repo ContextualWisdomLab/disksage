@@ -5,6 +5,10 @@
 
 **DiskSage** is a cross-platform (Windows / Linux / macOS) disk-space manager by [ContextualWisdomLab](https://github.com/ContextualWisdomLab). It scans your drives, shows what's actually there, and uses a fully offline on-device LLM to advise whether files are safe to delete — while an OWL ontology keeps your files organized.
 
+See the canonical [product requirements](docs/PRD.md) for supported outcomes, safety invariants,
+provider capabilities, and acceptance criteria. Current implementation and open work are tracked in
+the [product and technical gap baseline](docs/product-technical-gap-baseline.md).
+
 ## Features (v1 roadmap)
 
 - 🗺 **Large file explorer** — parallel scan with treemap visualization

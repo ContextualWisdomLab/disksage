@@ -1,5 +1,9 @@
 # DiskSage product and technical gap baseline
 
+The canonical product outcomes, supported capabilities, non-goals, and safety invariants are
+defined in the [DiskSage PRD](PRD.md). This dated baseline tracks implementation evidence and open
+work; it does not redefine the product contract.
+
 **Snapshot:** 2026-08-22 (Asia/Seoul)
 **Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
 supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
