@@ -583,18 +583,23 @@ pub(crate) fn exact_reference_contains_commit(
     Ok(ancestry.status_code == Some(0))
 }
 
-pub(crate) fn is_standalone_repository_root(repository_root: &Path, timeout_ms: u64) -> bool {
-    let Ok(common_dir) = resolve_common_dir(repository_root, timeout_ms) else {
-        return false;
+pub(crate) fn is_standalone_repository_root(
+    repository_root: &Path,
+    timeout_ms: u64,
+) -> Result<bool, String> {
+    let common_dir = match resolve_common_dir(repository_root, timeout_ms) {
+        Ok(path) => path,
+        Err(error) if error == "git-common-dir-resolve-failed" => return Ok(false),
+        Err(error) => return Err(error),
     };
     let git_entry = repository_root.join(".git");
     let Ok(metadata) = fs::symlink_metadata(&git_entry) else {
-        return false;
+        return Ok(false);
     };
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return false;
+        return Ok(false);
     }
-    fs::canonicalize(&git_entry).ok().as_deref() == Some(common_dir.as_path())
+    Ok(fs::canonicalize(&git_entry).ok().as_deref() == Some(common_dir.as_path()))
 }
 
 /// Resolve the provider's current default branch and exact OID through the authenticated GitHub

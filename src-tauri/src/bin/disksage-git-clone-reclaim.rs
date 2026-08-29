@@ -1,7 +1,8 @@
 //! Headless exact-evidence planning and OS Trash execution for stale PR clones.
 
 use disksage_lib::git_clone_reclaim::{
-    approve_git_clone_reclaim, execute_git_clone_reclaim, plan_git_clone_reclaim,
+    approve_git_clone_reclaim, execute_git_clone_reclaim_with_default_branch,
+    plan_git_clone_reclaim_with_default_branch,
 };
 use disksage_lib::git_worktree::{validate_reference, GitWorktreeAuditOptions};
 use std::ffi::OsString;
@@ -153,7 +154,7 @@ fn now_ms() -> u64 {
 
 fn run(args: Args) -> Result<serde_json::Value, String> {
     let options = GitWorktreeAuditOptions::default();
-    let plan = plan_git_clone_reclaim(
+    let plan = plan_git_clone_reclaim_with_default_branch(
         &args.repository_root,
         &args.retention_references,
         args.include_closed_pull_requests,
@@ -174,7 +175,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         &execution.approved_by,
         &execution.rationale,
     )?;
-    let result = execute_git_clone_reclaim(
+    let result = execute_git_clone_reclaim_with_default_branch(
         &plan,
         &approval,
         &args.retention_references,
