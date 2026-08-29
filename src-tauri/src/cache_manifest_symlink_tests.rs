@@ -71,7 +71,7 @@ fn manifest_variable_fields_are_length_framed() {
 }
 
 #[test]
-fn reviewed_directory_manifest_binds_root_ctime_before_staging() {
+fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let temp = tempfile::tempdir().expect("temporary root-metadata fixture");
@@ -107,7 +107,7 @@ fn reviewed_directory_manifest_binds_root_ctime_before_staging() {
     assert_eq!(reviewed.object_id, live.object_id);
     assert_eq!(reviewed.modified_ms, live.modified_ms);
     assert_ne!(
-        reviewed.manifest_fingerprint, live.manifest_fingerprint,
+        reviewed, live,
         "reviewed root metadata changes must invalidate destructive authority before staging"
     );
 }
