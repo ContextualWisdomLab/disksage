@@ -6,6 +6,11 @@ if [[ "$#" -lt 1 ]]; then
   exit 64
 fi
 
+if [[ "${GITHUB_ACTIONS:-}" != "true" || "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]]; then
+  echo "runner reclaim requires a GitHub-hosted Actions runner" >&2
+  exit 66
+fi
+
 summary_file="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 test_root="${DISKSAGE_RECLAIM_TEST_ROOT:-}"
 if [[ -n "$test_root" ]]; then

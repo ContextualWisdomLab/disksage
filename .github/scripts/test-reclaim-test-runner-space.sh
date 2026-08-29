@@ -11,6 +11,13 @@ mkdir -p "$fixture_root/sdk-root"
 dd if=/dev/zero of="$fixture_root/sdk-root/payload.bin" bs=4096 count=16 status=none
 summary_file="$work_dir/summary.md"
 
+if GITHUB_ACTIONS=false RUNNER_ENVIRONMENT=github-hosted \
+   DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   bash "$helper" "$fixture_root/sdk-root"; then
+  echo "expected reclaim outside GitHub Actions to fail closed" >&2
+  exit 1
+fi
+
 # Make filesystem-capacity evidence deterministic while still exercising a real
 # fixture deletion. The fake df deliberately reports no change for `/`, so a
 # helper that measures the global root filesystem instead of the fixture's own
@@ -45,6 +52,8 @@ chmod +x "$fake_bin/df"
 DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
 DISKSAGE_TEST_RECLAIM_ROOT="$fixture_root/sdk-root" \
 DISKSAGE_TEST_RECLAIM_MOUNT="/virtual-fixture-volume" \
+GITHUB_ACTIONS=true \
+RUNNER_ENVIRONMENT=github-hosted \
 GITHUB_STEP_SUMMARY="$summary_file" \
 PATH="$fake_bin:$PATH" \
   bash "$helper" "$fixture_root/sdk-root"
@@ -63,6 +72,8 @@ fi
 
 missing_summary="$work_dir/missing-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   GITHUB_ACTIONS=true \
+   RUNNER_ENVIRONMENT=github-hosted \
    GITHUB_STEP_SUMMARY="$missing_summary" \
    bash "$helper" "$fixture_root/missing-root"; then
   echo "expected an absent reclaim root to fail closed" >&2
@@ -73,6 +84,8 @@ mkdir -p "$fixture_root/real-root"
 ln -s "$fixture_root/real-root" "$fixture_root/link-root"
 symlink_summary="$work_dir/symlink-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   GITHUB_ACTIONS=true \
+   RUNNER_ENVIRONMENT=github-hosted \
    GITHUB_STEP_SUMMARY="$symlink_summary" \
    bash "$helper" "$fixture_root/link-root"; then
   echo "expected a symlink reclaim root to fail closed" >&2
