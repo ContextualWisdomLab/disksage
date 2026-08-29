@@ -31,7 +31,9 @@ could corrupt running workloads and data-bearing volumes.
 6. The standalone `disksage-runtime-storage` CLI calls the same Rust planner and executor as the
    desktop app. It does not add a second mutation implementation: inspection is the default, and
    execution requires the current exact phrase plus a rationale. It probes only the selected
-   runtime, and its bounded stdout and stderr are part of the versioned JSON receipt.
+   runtime, and its bounded stdout and stderr are part of the versioned headless JSON receipt.
+   The desktop serialization omits those diagnostic streams so local paths and runtime details do
+   not cross into the frontend.
 7. The Podman reclaim plan binds the exact machine and backing-file identity, active-container
    count, rollback policy, and restart policy before considering host compaction. Podman 5.8 has no
    runtime-native compact or shrink command, so the current plan is read-only, publishes no stop or

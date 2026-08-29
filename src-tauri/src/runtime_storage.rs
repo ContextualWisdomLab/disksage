@@ -63,7 +63,9 @@ pub struct RuntimeStorageExecution {
     pub runtime: RuntimeStorageKind,
     pub command: Vec<String>,
     pub status_code: i32,
+    #[serde(skip_serializing)]
     pub stdout: String,
+    #[serde(skip_serializing)]
     pub stderr: String,
     pub output_truncated: bool,
     pub executed: bool,

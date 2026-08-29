@@ -81,7 +81,14 @@ fn run(values: &[String]) -> Result<(String, bool), String> {
         (Some(confirmation), Some(rationale)) => {
             let execution = runtime_storage::execute_trim(args.runtime, confirmation, rationale)?;
             let successful = execution.executed;
-            (serde_json::to_value(execution), successful)
+            let stdout = execution.stdout.clone();
+            let stderr = execution.stderr.clone();
+            let mut value = serde_json::to_value(execution);
+            if let Ok(serde_json::Value::Object(object)) = &mut value {
+                object.insert("stdout".into(), stdout.into());
+                object.insert("stderr".into(), stderr.into());
+            }
+            (value, successful)
         }
         _ => {
             let plan = runtime_storage::inspect_one(args.runtime);
