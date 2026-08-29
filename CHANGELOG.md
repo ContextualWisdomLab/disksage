@@ -5,6 +5,12 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Keep cloud-inventory argument failures bounded on Unix by reading native
+  process arguments explicitly and rejecting non-UTF-8 option payloads with a
+  fixed diagnostic instead of allowing Rust's Unicode argument iterator to
+  terminate the process before DiskSage can report the next action.
+- Keep cloud-local inventory argument errors bounded by rejecting unknown
+  options without echoing attacker-controlled option payloads.
 
 ### Added
 
@@ -49,9 +55,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+- Ship that generic batch planner as a checksummed, provenance-attested macOS operational CLI so
+  installed release artifacts can reproduce the exact read-only plan. Linux and Windows remain
+  excluded until their provider-local observation paths have production evidence.
+- Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
+  generate the native Foundation-backed plan without compiling source; Linux and Windows retain
+  only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
+- Ship the read-only cloud-local allocation inventory as a checksummed macOS artifact so a
+  matching release can produce fresh candidate evidence before either batch planner runs. An
+  inventory from an older executable head remains stale and cannot authorize a new plan.
 
 ### Fixed
 
+- Make the release-packaged cloud-local inventory producer return help on stdout with exit status
+  zero, while mixed help/runtime arguments remain a bounded failure.
 - Retry transient iCloud metadata failures during the bounded post-eviction check instead of
   misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider

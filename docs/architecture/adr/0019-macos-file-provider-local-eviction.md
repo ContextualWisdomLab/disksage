@@ -66,6 +66,12 @@ observed 71 locally allocated items of at least 10 MiB (3,587,207,168 bytes); 61
 the observation loop, so these aggregate observations are fixture evidence, not an executable plan
 or approval.
 
+The macOS release contract packages and checksums both
+`disksage-cloud-local-inventory-macos-arm64` and
+`disksage-icloud-local-eviction-batch-macos-arm64`. The inventory producer must run read-only from
+the same exact-head artifact as the planner. Inventory output from a predecessor executable is
+stale evidence and cannot be reused to approve or execute a new plan.
+
 ## Rejected alternatives
 
 - Calling the iCloud ubiquitous-item API for OneDrive: the ownership contract is wrong.
