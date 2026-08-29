@@ -1,7 +1,7 @@
 # ADR-0014: Trim guest extents without rewriting Podman or Colima VM images
 
-**Status**: Accepted  
-**Date**: 2026-08-28  
+**Status**: Accepted
+**Date**: 2026-08-28
 **Scope**: `src-tauri/src/runtime_storage.rs`, Tauri commands, Cleanup screen
 
 ## Context

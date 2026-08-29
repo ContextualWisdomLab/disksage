@@ -1,6 +1,6 @@
 # ADR-0016: Bound shared temporary storage cleanup to ownership evidence
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-28
 
 ## Context
