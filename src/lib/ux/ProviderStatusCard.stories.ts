@@ -31,7 +31,7 @@ export const Clear: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.queryByRole("button", { name: "복사 취소 요청" })).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Finder 복사 취소" })).not.toBeInTheDocument();
     await expect(args.onCancel).not.toHaveBeenCalled();
   },
 };
@@ -43,7 +43,7 @@ export const MaterializationStalled: Story = {
     headingLevel: "h1",
     provider: "iCloud",
     state: "materialization-stalled",
-    details: "클라우드 확인이 진행률 없이 멈춰 새 복사와 원본 정리를 차단했습니다.",
+    details: "Finder 복사를 취소하고 잠시 후 상태를 다시 확인하세요. 완료 전에는 원본을 정리하지 않습니다.",
     observedAt: "2026-08-21 17:07 KST",
     blockedFor: "23분",
     canCancel: true,
@@ -52,8 +52,10 @@ export const MaterializationStalled: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     expect(canvasElement.ownerDocument.defaultView?.innerWidth).toBe(375);
+    expect(canvasElement.ownerDocument.documentElement.scrollWidth).toBeLessThanOrEqual(375);
+    expect(canvasElement.getBoundingClientRect().right).toBeLessThanOrEqual(375);
     await expect(canvas.getByRole("status")).toHaveTextContent("파일 준비 지연");
-    await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Finder 복사 취소" }));
     await expect(args.onCancel).toHaveBeenCalledOnce();
   },
 };
@@ -64,14 +66,14 @@ export const CheckingWithoutAction: Story = {
     headingLevel: "h1",
     provider: "Google Drive",
     state: "checking",
-    details: "클라우드 상태를 읽기 전용으로 확인하고 있습니다.",
+    details: "확인이 끝날 때까지 기다리세요. 이 화면에서는 파일을 변경하지 않습니다.",
     canCancel: true,
     onCancel: fn(),
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "복사 취소 요청" })).toBeDisabled();
-    await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
+    await expect(canvas.getByRole("button", { name: "Finder 복사 취소" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "Finder 복사 취소" }));
     await expect(args.onCancel).not.toHaveBeenCalled();
   },
 };
@@ -82,15 +84,15 @@ export const ProbeInFlight: Story = {
     headingLevel: "h1",
     provider: "OneDrive",
     state: "provider-sync-incomplete",
-    details: "새 확인을 기다리는 동안 이전 차단 상태를 표시합니다.",
+    details: "새 확인이 끝날 때까지 기다리세요. 이전 상태가 표시되는 동안 새 복사는 보류됩니다.",
     canCancel: true,
     cancelDisabled: true,
     onCancel: fn(),
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "복사 취소 요청" })).toBeDisabled();
-    await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
+    await expect(canvas.getByRole("button", { name: "Finder 복사 취소" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "Finder 복사 취소" }));
     await expect(args.onCancel).not.toHaveBeenCalled();
   },
 };
@@ -101,7 +103,7 @@ export const IncompleteEvidence: Story = {
     headingLevel: "h1",
     provider: "OneDrive",
     state: "provider-sync-incomplete",
-    details: "클라우드 상태를 확인할 수 없어 기존 목적지를 채택하지 않습니다.",
+    details: "클라우드 앱과 연결을 확인한 뒤 상태를 다시 확인하세요. 확인 전에는 원본을 정리하지 않습니다.",
     observedAt: "2026-08-21 17:30 KST",
   },
 };

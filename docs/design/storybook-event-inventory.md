@@ -13,8 +13,8 @@ eviction authority: every destructive action remains behind the Rust evidence an
 | Story | Trigger/event | Expected customer action | Accessibility and edge assertion |
 | --- | --- | --- | --- |
 | `Clear` | Provider observation is complete and quiet | Continue to per-file review; do not assume eviction | Status is announced politely; no destructive action is shown |
-| `IncompleteEvidence` | Provider evidence is missing or stale | Wait for the next bounded observation | State is text, not color alone; evidence time is visible |
-| `MaterializationStalled` | `no-progress`, timeout, or materialization failure is observed | Cancel the Finder copy, then recheck; do not retry immediately | Cancel button has an accessible name and invokes one bounded callback |
+| `IncompleteEvidence` | Cloud status is missing or stale | Check the cloud app and connection, then recheck | State is text, not color alone; last-check time is visible |
+| `MaterializationStalled` | File preparation has stopped | Cancel the Finder copy, then recheck; do not retry immediately | Cancel button has an accessible name and invokes one bounded callback |
 | `CheckingWithoutAction` | A read-only provider probe is running | Wait; do not cancel an operation that has no cancel authority | Action is disabled and exposes `aria-disabled` |
 | Scan start | Scan button activates | Review progress and wait for completion | Root is labelled; unavailable roots disable the action |
 | Scan failure | IPC/start or post-scan load fails | Read the error and retry | `role=alert` presents the next action; no `alert()` steals focus |

@@ -113,4 +113,29 @@ textarea {
     expect(workflow).toContain("npm run test-storybook");
     expect(read(".storybook/test-runner.ts")).toContain("setViewportSize");
   });
+
+  it("keeps Storybook customer copy actionable and free of implementation terms", () => {
+    const customerSources = [
+      read("src/lib/ux/ProviderStatusCard.svelte"),
+      read("src/lib/ux/ProviderStatusCard.stories.ts"),
+    ];
+    const customerCopy = customerSources
+      .flatMap((source) => [...source.matchAll(/["'`]([^"'`]*[가-힣][^"'`]*)["'`]/g)])
+      .map((match) => match[1])
+      .join("\n");
+
+    expect(customerCopy).toContain("상태를 다시 확인하세요");
+    expect(customerCopy).toContain("원본을 정리하지 않습니다");
+    expect(customerCopy).toContain("Finder 복사 취소");
+    for (const internalTerm of [
+      "전역 동기화",
+      "File Provider",
+      "materialization",
+      "staged item",
+      "admission",
+      "attestation",
+    ]) {
+      expect(customerCopy).not.toContain(internalTerm);
+    }
+  });
 });

@@ -23,16 +23,16 @@
     blockedFor = "",
     canCancel = false,
     cancelDisabled = false,
-    cancelLabel = "복사 취소 요청",
+    cancelLabel = "Finder 복사 취소",
     onCancel,
     statusId,
     headingLevel = "h2",
   }: Props = $props();
 
   const stateLabel: Record<ProviderStatusState, string> = {
-    clear: "새 복사 허용 가능",
+    clear: "지금 복사 가능",
     checking: "상태 확인 중",
-    "provider-sync-incomplete": "클라우드 상태 확인 불완전",
+    "provider-sync-incomplete": "복사 보류",
     "materialization-stalled": "파일 준비 지연",
   };
 
@@ -51,7 +51,7 @@
   aria-describedby={`${statusId}-details`}
 >
   <div class="status-heading">
-    <svelte:element this={headingLevel} id={`${statusId}-title`}>{provider} 전역 동기화</svelte:element>
+    <svelte:element this={headingLevel} id={`${statusId}-title`}>{provider} 복사 준비 상태</svelte:element>
     <span class="state" role="status" aria-live="polite">{stateLabel[state]}</span>
   </div>
   <p id={`${statusId}-details`}>{details}</p>
