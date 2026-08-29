@@ -874,7 +874,8 @@ fn plan_git_clone_reclaim_with_authority_and_membership(
         false
     };
     let short_branch = branch.strip_prefix("refs/heads/").unwrap_or(&branch);
-    let default_branch_protected = matches!(short_branch, "main" | "develop")
+    let default_branch_protected = head_is_default_branch_ancestor
+        || matches!(short_branch, "main" | "develop")
         || default_branch_evidence.is_some_and(|evidence| {
             default_branch_reference_protects(&evidence.reference, short_branch)
         });
@@ -1500,6 +1501,33 @@ mod tests {
             .blockers
             .contains(&"git-clone-pr-head-authority-missing".into()));
         assert!(plan.head_is_default_branch_ancestor);
+        let completed = ClosedPullRequestHeads::from([(
+            "refs/heads/completed-local".into(),
+            ancestor.clone(),
+        )]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([ancestor.clone()]),
+            ..PullRequestCommitMembership::default()
+        };
+        let completed_plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &completed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(completed_plan.completed_pull_request_commit);
+        assert!(completed_plan.head_is_default_branch_ancestor);
+        assert!(completed_plan.default_branch_protected);
+        assert!(!completed_plan.eligible_after_human_approval);
+        assert!(completed_plan
+            .blockers
+            .contains(&"git-clone-default-branch-protected".into()));
         let refreshed_evidence = DefaultBranchEvidence {
             observed_at_ms: 12,
             ..evidence
