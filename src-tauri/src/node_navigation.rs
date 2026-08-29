@@ -182,6 +182,19 @@ mod tests {
     }
 
     #[test]
+    fn immediately_cancelled_scan_keeps_an_empty_root_view() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("unscanned.bin"), b"not observed").unwrap();
+        let result = scan_dir_with_interval(root.path(), &AtomicBool::new(true), 1, |_| {});
+        assert!(result.cancelled);
+        assert!(result.dir_sizes.is_empty());
+
+        let view = node_view(&result, root.path()).unwrap();
+        assert_eq!(view.size, 0);
+        assert!(view.entries.is_empty());
+    }
+
+    #[test]
     fn lexical_parent_component_is_rejected() {
         let root = tempfile::tempdir().unwrap();
         let result = scan(root.path());
