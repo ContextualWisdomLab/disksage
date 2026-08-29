@@ -2,6 +2,9 @@
 
 **Status**: Accepted
 **Date**: 2026-08-28
+
+The desktop dispatches bounded trim and recovery subprocess waits through Tauri's blocking-task
+pool so a slow guest operation cannot occupy an asynchronous command worker.
 **Scope**: `src-tauri/src/runtime_storage.rs`, Tauri commands, Cleanup screen
 
 ## Context

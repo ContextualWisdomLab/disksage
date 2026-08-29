@@ -98,6 +98,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
   unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is
   rewritten by this feature.
+- Run bounded runtime trim and recovery waits on Tauri's blocking pool so long guest maintenance
+  cannot occupy asynchronous command workers.
 - Detect a running but unreachable Podman/Colima guest, offer a separate exact-phrase-approved
   runtime-native stop/start recovery, and re-check reachability before enabling trim. Trim receipts
   now include bounded before/after host-volume evidence for the measured available-space change.

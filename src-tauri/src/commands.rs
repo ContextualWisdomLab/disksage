@@ -528,7 +528,7 @@ pub fn inspect_runtime_storage() -> Vec<crate::runtime_storage::RuntimeStoragePl
 /// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn execute_runtime_storage_trim(
+pub async fn execute_runtime_storage_trim(
     runtime: String,
     confirmation_phrase: String,
     rationale: String,
@@ -538,13 +538,17 @@ pub fn execute_runtime_storage_trim(
         "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
         _ => return Err("runtime-storage-unknown-runtime".into()),
     };
-    crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-trim-task-failed".to_string())?
 }
 
 /// Restarts a runtime that reports running but cannot serve guest commands.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn execute_runtime_storage_recovery(
+pub async fn execute_runtime_storage_recovery(
     runtime: String,
     confirmation_phrase: String,
     rationale: String,
@@ -554,7 +558,11 @@ pub fn execute_runtime_storage_recovery(
         "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
         _ => return Err("runtime-storage-unknown-runtime".into()),
     };
-    crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-recovery-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
