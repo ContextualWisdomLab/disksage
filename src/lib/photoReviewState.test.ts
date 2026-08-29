@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+import {
+  isPhotoPathWithinRoot,
+  quarantineApprovalReady,
+  selectionsForGroups,
+  syncPhotoCandidatePaths,
+} from "./photoReviewState";
 import type { ExactPhotoGroup, PhotoQuarantinePlan } from "./api";
 
 const group = (digest: string): ExactPhotoGroup => ({
@@ -23,5 +28,23 @@ describe("photo review interaction state", () => {
     expect(quarantineApprovalReady(plan, "DiskSage 승인 exact ", "reviewed")).toBe(false);
     expect(quarantineApprovalReady(plan, "DiskSage 승인 exact", "  ")).toBe(false);
     expect(quarantineApprovalReady(plan, "DiskSage 승인 exact", "사본 검토 완료")).toBe(true);
+  });
+
+  it("refreshes scan-owned candidates after a rescan but preserves an explicit manual set", () => {
+    const first = [{ paths: ["/scan/a.png", "/scan/b.png"] }];
+    const second = [{ paths: ["/scan/c.png", "/scan/d.png"] }];
+
+    expect(syncPhotoCandidatePaths(first, [], "scan")).toEqual(["/scan/a.png", "/scan/b.png"]);
+    expect(syncPhotoCandidatePaths(second, ["/scan/a.png", "/scan/b.png"], "scan"))
+      .toEqual(["/scan/c.png", "/scan/d.png"]);
+    expect(syncPhotoCandidatePaths(second, ["/scan/manual-1.png", "/scan/manual-2.png"], "manual"))
+      .toEqual(["/scan/manual-1.png", "/scan/manual-2.png"]);
+  });
+
+  it("recognizes only descendants of the scanned root across native path separators", () => {
+    expect(isPhotoPathWithinRoot("/scan/photos", "/scan/photos/a.png")).toBe(true);
+    expect(isPhotoPathWithinRoot("/scan/photos", "/scan/photos-archive/a.png")).toBe(false);
+    expect(isPhotoPathWithinRoot("C:\\scan\\photos", "C:\\scan\\photos\\nested\\a.png")).toBe(true);
+    expect(isPhotoPathWithinRoot("C:\\scan\\photos", "C:\\other\\a.png")).toBe(false);
   });
 });
