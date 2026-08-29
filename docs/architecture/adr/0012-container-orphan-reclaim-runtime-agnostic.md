@@ -59,7 +59,7 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
   resources that become orphaned after the fresh audit cannot be swept into the mutation.
 - Positive: a stopped or broken container cannot be removed before its attached volume's data
   necessity is independently established.
-- Negative: exact deletion is capped at 64 candidates per category per execution so command
+- Negative: exact deletion is capped at 256 candidates per category per execution so command
   length and mutation scope remain bounded. Larger candidate sets fail closed and must be
   reduced before a new audited execution.
 - Neutral: no Figma redesign was required; the panel reuses Cleanup-screen patterns. If the
