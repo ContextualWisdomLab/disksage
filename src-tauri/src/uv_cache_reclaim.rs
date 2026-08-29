@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const SCHEMA_VERSION: u32 = 1;
-pub const RECEIPT_SCHEMA_VERSION: u32 = 2;
+pub const RECEIPT_SCHEMA_VERSION: u32 = 3;
 const COMMAND_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const EXECUTE_ARGUMENTS: [&str; 8] = [
@@ -76,6 +76,7 @@ pub struct UvCacheReclaimReceipt {
     pub capacity_postcheck_error: Option<String>,
     pub executed_at_ms: u64,
     pub result_record_path: String,
+    pub result_record_error: Option<String>,
 }
 
 struct CommandOutput {
@@ -345,6 +346,18 @@ fn valid_rationale(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+fn attempt_id(plan_fingerprint: &str, executed_at_ms: u64) -> Result<String, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|_| "uv-cache-reclaim-attempt-id-unavailable".to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-uv-cache-reclaim-attempt-v1\0");
+    hasher.update(plan_fingerprint.as_bytes());
+    hasher.update(&executed_at_ms.to_le_bytes());
+    hasher.update(&nonce);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 pub fn execute_uv_cache_reclaim(
     uv_path: &Path,
     approved_plan_fingerprint: &str,
@@ -380,11 +393,9 @@ pub fn execute_uv_cache_reclaim(
         rationale: rationale.into(),
         exact_approval_phrase: confirmation.into(),
     };
-    crate::cloud_local_eviction::write_immutable_record(
-        record_dir,
-        &format!("{}.approval.json", plan.plan_fingerprint),
-        &approval,
-    )?;
+    let attempt_id = attempt_id(&plan.plan_fingerprint, executed_at_ms)?;
+    let approval_name = format!("{}.{}.approval.json", plan.plan_fingerprint, attempt_id);
+    crate::cloud_local_eviction::write_immutable_record(record_dir, &approval_name, &approval)?;
     let cache_path_argument = plan.cache_path.clone();
     let mut args = EXECUTE_ARGUMENTS.to_vec();
     args.push(&cache_path_argument);
@@ -403,7 +414,8 @@ pub fn execute_uv_cache_reclaim(
         ),
         Err(error) => (-1, String::new(), String::new(), false, Some(error)),
     };
-    let result_name = format!("{}.result.json", plan.plan_fingerprint);
+    let result_name = format!("{}.{}.result.json", plan.plan_fingerprint, attempt_id);
+    let result_record_path = record_dir.join(&result_name).to_string_lossy().into_owned();
     let mut receipt = UvCacheReclaimReceipt {
         schema_version: RECEIPT_SCHEMA_VERSION,
         plan,
@@ -421,10 +433,14 @@ pub fn execute_uv_cache_reclaim(
         filesystem_available_delta_bytes: after.and_then(|value| value.checked_sub(before)),
         capacity_postcheck_error,
         executed_at_ms,
-        result_record_path: record_dir.join(&result_name).to_string_lossy().into_owned(),
+        result_record_path,
+        result_record_error: None,
     };
-    crate::cloud_local_eviction::write_immutable_record(record_dir, &result_name, &receipt)?;
-    receipt.result_record_path = record_dir.join(result_name).to_string_lossy().into_owned();
+    if let Err(error) =
+        crate::cloud_local_eviction::write_immutable_record(record_dir, &result_name, &receipt)
+    {
+        receipt.result_record_error = Some(error);
+    }
     Ok(receipt)
 }
 
