@@ -23,7 +23,9 @@ use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessme
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 use crate::provider_global_sync::{self, ProviderGlobalSyncReport, ProviderGlobalSyncState};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 7;
+/// Schema 8 adds explicit iCloud File Provider lock/stall blockers while preserving the
+/// path-free handoff shape; Naruon accepts it alongside schemas 3–7.
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 8;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -31,7 +33,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 22] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -45,6 +47,8 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
     "icloud-native-sync-down-pending",
     "icloud-file-provider-no-progress",
     "icloud-file-provider-materialization-failed",
+    "icloud-file-provider-item-locked",
+    "icloud-file-provider-stalled",
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
     "icloud-file-provider-transfer-active",
@@ -326,6 +330,20 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if materialization_failed {
             blockers.push("icloud-file-provider-materialization-failed".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            blockers.push("icloud-file-provider-item-locked".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-stale-error-observed")
+        {
+            blockers.push("icloud-file-provider-stalled".into());
         }
         if activity.sync_excluded_filename_count > 0 {
             blockers.push("icloud-file-provider-filename-excluded".into());
@@ -1184,6 +1202,20 @@ fn validate_icloud_admission_summary(
         }
         if materialization_failed {
             expected.push("icloud-file-provider-materialization-failed".to_string());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            expected.push("icloud-file-provider-item-locked".to_string());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-stale-error-observed")
+        {
+            expected.push("icloud-file-provider-stalled".to_string());
         }
         if activity.sync_excluded_filename_count > 0 {
             expected.push("icloud-file-provider-filename-excluded".to_string());
@@ -2056,7 +2088,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "958f7a8e2e595f119bfd38f0ee231436217e3cb97c4d2745fdcfb5e29b5a299c"
+            "6a69022601c4fc41c9e42360618e7e31728d8b9cf7757f15791832974f8e67bd"
         );
     }
 }

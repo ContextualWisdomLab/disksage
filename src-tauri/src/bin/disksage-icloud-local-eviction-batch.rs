@@ -11,6 +11,7 @@ use disksage_lib::cloud_local_eviction_batch::{
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -36,14 +37,24 @@ fn usage() -> &'static str {
      --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "icloud-local-eviction-batch-invalid-utf8-argument".to_string())
+}
+
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
+    if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
+        return Err(HELP_REQUESTED.into());
+    }
+
     let mut cloud_root = None;
     let mut manifest = None;
     let mut execute = false;
@@ -54,27 +65,60 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut record_dir = None;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--cloud-root" => {
-                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
+        match args[index].to_str() {
+            Some("--cloud-root") => {
+                if cloud_root.is_some() {
+                    return Err("--cloud-root는 한 번만 지정할 수 있음".into());
+                }
+                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
             }
-            "--manifest" => manifest = Some(PathBuf::from(value(args, &mut index, "--manifest")?)),
-            "--execute" => execute = true,
-            "--approved-batch-fingerprint" => {
+            Some("--manifest") => {
+                if manifest.is_some() {
+                    return Err("--manifest는 한 번만 지정할 수 있음".into());
+                }
+                manifest = Some(PathBuf::from(native_value(args, &mut index, "--manifest")?));
+            }
+            Some("--execute") => {
+                if execute {
+                    return Err("--execute는 한 번만 지정할 수 있음".into());
+                }
+                execute = true;
+            }
+            Some("--approved-batch-fingerprint") => {
+                if approved_batch_fingerprint.is_some() {
+                    return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 approved_batch_fingerprint =
-                    Some(value(args, &mut index, "--approved-batch-fingerprint")?)
+                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
             }
-            "--confirm-batch-fingerprint" => {
+            Some("--confirm-batch-fingerprint") => {
+                if confirm_batch_fingerprint.is_some() {
+                    return Err("--confirm-batch-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 confirm_batch_fingerprint =
-                    Some(value(args, &mut index, "--confirm-batch-fingerprint")?)
+                    Some(text_value(args, &mut index, "--confirm-batch-fingerprint")?)
             }
-            "--approved-by" => approved_by = Some(value(args, &mut index, "--approved-by")?),
-            "--rationale" => rationale = Some(value(args, &mut index, "--rationale")?),
-            "--record-dir" => {
-                record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
+            Some("--approved-by") => {
+                if approved_by.is_some() {
+                    return Err("--approved-by는 한 번만 지정할 수 있음".into());
+                }
+                approved_by = Some(text_value(args, &mut index, "--approved-by")?)
             }
-            "--help" | "-h" => return Err(HELP_REQUESTED.into()),
-            _unknown => return Err("알 수 없는 인자".into()),
+            Some("--rationale") => {
+                if rationale.is_some() {
+                    return Err("--rationale은 한 번만 지정할 수 있음".into());
+                }
+                rationale = Some(text_value(args, &mut index, "--rationale")?)
+            }
+            Some("--record-dir") => {
+                if record_dir.is_some() {
+                    return Err("--record-dir는 한 번만 지정할 수 있음".into());
+                }
+                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+            }
+            Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
+            Some(_) => return Err("알 수 없는 인자".into()),
+            None => return Err("icloud-local-eviction-batch-invalid-utf8-argument".into()),
         }
         index += 1;
     }
@@ -115,6 +159,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         rationale,
         record_dir,
     })
+}
+
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -336,8 +386,8 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let args = parse_args(&raw)?;
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let args = parse_args_os(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
     validate_control_locations(
