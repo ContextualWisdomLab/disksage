@@ -126,20 +126,28 @@ pub fn inventory_standalone_clones(
     let mut issues = Vec::new();
     while let Some((directory, depth)) = queue.pop_front() {
         let git_entry = directory.join(".git");
-        if std::fs::symlink_metadata(&git_entry)
-            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-            && git_worktree::is_standalone_repository_root(
+        let has_git_directory = std::fs::symlink_metadata(&git_entry)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if has_git_directory {
+            match git_worktree::is_standalone_repository_root(
                 &directory,
                 options.repository_probe_timeout_ms,
-            )
-        {
-            clone_roots.push(directory.to_string_lossy().into_owned());
-            if clone_roots.len() > options.max_clones {
-                clone_roots.truncate(options.max_clones);
-                issues.push("git-clone-inventory-clone-limit-exceeded".into());
-                break;
+            ) {
+                Ok(true) => {
+                    clone_roots.push(directory.to_string_lossy().into_owned());
+                    if clone_roots.len() > options.max_clones {
+                        clone_roots.truncate(options.max_clones);
+                        issues.push("git-clone-inventory-clone-limit-exceeded".into());
+                        break;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    issues.push("git-clone-inventory-repository-probe-failed".into());
+                    continue;
+                }
             }
-            continue;
         }
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -163,7 +171,7 @@ pub fn inventory_standalone_clones(
                 issues.push("git-clone-inventory-entry-type-unavailable".into());
                 continue;
             };
-            if kind.is_dir() && !kind.is_symlink() {
+            if kind.is_dir() && !kind.is_symlink() && entry.file_name() != ".git" {
                 if depth >= options.max_depth {
                     issues.push("git-clone-inventory-depth-limit-exceeded".into());
                 } else {
