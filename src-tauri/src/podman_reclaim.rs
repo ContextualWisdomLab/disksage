@@ -680,6 +680,39 @@ fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     })
 }
 
+/// Resolve and inspect only the sparse image configured for the selected machine.
+fn configured_raw_image_evidence(
+    record: &MachineInspectRecord,
+) -> Result<RawImageEvidence, String> {
+    let config_path = Path::new(&record.config_dir.path).join(format!("{}.json", record.name));
+    fs::read_to_string(&config_path)
+        .map_err(|error| format!("machine-config-read:{error}"))
+        .and_then(|output| parse_machine_config(&output))
+        .and_then(|path| raw_image_evidence(&path))
+}
+
+/// Inspect only the sparse image configured for the exact selected machine.
+pub fn inspect_raw_image_evidence(
+    podman_bin: &Path,
+    requested_machine: &str,
+    timeout: Duration,
+) -> Result<RawImageEvidence, String> {
+    if !valid_machine_name(requested_machine) {
+        return Err("unsafe-requested-machine-name".into());
+    }
+    let record = command_text(
+        podman_bin,
+        &["machine", "inspect", requested_machine],
+        timeout,
+        "podman-machine-inspect",
+    )
+    .and_then(|output| parse_machine_inspect(&output))?;
+    if record.name != requested_machine {
+        return Err("machine-name-mismatch".into());
+    }
+    configured_raw_image_evidence(&record)
+}
+
 fn host_compaction_plan(
     machine: Option<&PodmanMachineEvidence>,
     raw_image: Option<&RawImageEvidence>,
@@ -780,6 +813,7 @@ fn command_capture(
 ) -> Result<CommandCapture, String> {
     let mut child = Command::new(executable)
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1121,11 +1155,7 @@ pub fn probe_podman_reclaim(
     });
 
     let raw_image = inspect.as_ref().and_then(|record| {
-        let config_path = Path::new(&record.config_dir.path).join(format!("{}.json", record.name));
-        fs::read_to_string(&config_path)
-            .map_err(|error| format!("machine-config-read:{error}"))
-            .and_then(|output| parse_machine_config(&output))
-            .and_then(|path| raw_image_evidence(&path))
+        configured_raw_image_evidence(record)
             .map_err(|error| issues.push(error))
             .ok()
     });

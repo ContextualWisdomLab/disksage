@@ -260,13 +260,16 @@ export interface RuntimeStoragePlan {
   executable_available: boolean;
   guest_running: boolean | null;
   guest_reachable: boolean | null;
+  running_container_count: number | null;
   trim_command: string[] | null;
+  stop_command: string[] | null;
   recovery_command: string[][] | null;
   host_compaction_supported: boolean;
   host_compaction_blockers: string[];
   observed_at_ms: number;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
+  stop_approval_phrase: string | null;
   recovery_approval_phrase: string | null;
   evidence_complete: boolean;
   issue: string | null;
@@ -284,6 +287,10 @@ export interface RuntimeStorageExecution {
   rationale: string;
   volume_comparison: LocalVolumeComparison | null;
   volume_evidence_error: string | null;
+  runtime_image_allocated_bytes_before: number | null;
+  runtime_image_allocated_bytes_after: number | null;
+  runtime_image_reclaimed_bytes: number | null;
+  runtime_image_evidence_error: string | null;
 }
 
 export interface RuntimeStorageRecoveryExecution {
@@ -297,6 +304,12 @@ export interface RuntimeStorageRecoveryExecution {
   executed: boolean;
   executed_at_ms: number;
   rationale: string;
+}
+
+export interface RuntimeStorageStopExecution extends Omit<RuntimeStorageExecution, "schema_kind"> {
+  schema_kind: "disksage.runtime-storage-stop-execution";
+  running_container_count_before: number;
+  guest_running_after: boolean | null;
 }
 
 export const inspectRuntimeStorage = () =>
@@ -318,6 +331,14 @@ export const executeRuntimeStorageRecovery = (
   rationale: string,
 ) => invoke<RuntimeStorageRecoveryExecution>("execute_runtime_storage_recovery", {
   runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export const executeInactivePodmanMachineStop = (
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageStopExecution>("execute_inactive_podman_machine_stop", {
   confirmationPhrase,
   rationale,
 });
@@ -741,6 +762,8 @@ export interface GitWorktreeAuditEntry {
   status_entry_count: number | null;
   contained_in_reference: boolean | null;
   closed_pull_request_head: boolean;
+  completed_pull_request_commit: boolean;
+  open_pull_request_commit: boolean;
   stale_open_pull_request_head: boolean;
   head_is_retained_tip: boolean;
   actor_cwd_inside: boolean | null;
@@ -757,7 +780,7 @@ export interface GitWorktreeReferenceBinding {
 }
 
 export interface GitWorktreeAuditReport {
-  schema_kind: "disksage.git-worktree-audit/v3";
+  schema_kind: "disksage.git-worktree-audit/v4";
   version: number;
   repository_root: string;
   common_dir: string;

@@ -543,6 +543,16 @@ pub fn execute_runtime_storage_trim(
     crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
 }
 
+/// Stops an idle Podman machine after a fresh native query proves no containers are running.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_inactive_podman_machine_stop(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageStopExecution, String> {
+    crate::runtime_storage::execute_inactive_stop(&confirmation_phrase, &rationale)
+}
+
 /// Restarts a runtime that reports running but cannot serve guest commands.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
@@ -1015,11 +1025,24 @@ pub async fn plan_stale_git_worktrees(
         } else {
             Default::default()
         };
-        git_worktree::audit_git_worktrees_with_pull_request_heads(
+        let mut pull_request_commits =
+            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
+                git_worktree::github_pull_request_commit_membership(
+                    Path::new(&repository_root),
+                    git_worktree::GitWorktreeAuditOptions::default(),
+                )?
+            } else {
+                Default::default()
+            };
+        if !include_closed_pull_requests {
+            pull_request_commits.completed.clear();
+        }
+        git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
             &stale_open_heads,
+            &pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             git_worktree::GitWorktreeAuditOptions::default(),
             cloud::system_now_ms(),
@@ -1078,11 +1101,24 @@ pub async fn remove_stale_git_worktrees(
         } else {
             Default::default()
         };
-        let report = git_worktree::audit_git_worktrees_with_pull_request_heads(
+        let mut pull_request_commits =
+            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
+                git_worktree::github_pull_request_commit_membership(
+                    Path::new(&repository_root),
+                    options,
+                )?
+            } else {
+                Default::default()
+            };
+        if !include_closed_pull_requests {
+            pull_request_commits.completed.clear();
+        }
+        let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
             &stale_open_heads,
+            &pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),

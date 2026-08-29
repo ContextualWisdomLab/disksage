@@ -1,4 +1,4 @@
-# ADR-0021: Preserve OpenCode history and reclaim only unreferenced tool outputs
+# ADR-0023: Preserve OpenCode history and reclaim only unreferenced tool outputs
 
 - Status: Accepted
 - Date: 2026-08-29

@@ -4,30 +4,36 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str, &str, &str); 4] = [
+const BINARIES: [(&str, &str, &str, Option<&str>); 5] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "icloud-local-eviction-unknown-argument",
-        "icloud-local-eviction-invalid-utf8-argument",
+        Some("icloud-local-eviction-invalid-utf8-argument"),
     ),
     (
         "disksage-incomplete-download-destination-plan",
         "usage: disksage-incomplete-download-destination-plan --source-root ABSOLUTE_PATH --cloud-root ABSOLUTE_PATH --destination-subdirectory RELATIVE_PATH (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--capacity-reserve-mib 0..=1048576] [--private-output ABSOLUTE_NEW_FILE.json]",
         "incomplete-download-destination-plan-unknown-argument",
-        "incomplete-download-destination-plan-invalid-utf8-argument",
+        Some("incomplete-download-destination-plan-invalid-utf8-argument"),
     ),
     (
         "disksage-cloud-local-eviction-batch",
-        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
-        "icloud-local-eviction-batch-invalid-utf8-argument",
+        Some("icloud-local-eviction-batch-invalid-utf8-argument"),
     ),
     (
         "disksage-icloud-local-eviction-batch",
-        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
-        "icloud-local-eviction-batch-invalid-utf8-argument",
+        Some("icloud-local-eviction-batch-invalid-utf8-argument"),
+    ),
+    (
+        "disksage-cloud-local-inventory",
+        "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]",
+        "알 수 없는 인자",
+        Some("cloud-local-inventory-invalid-utf8-argument"),
     ),
 ];
 
@@ -35,9 +41,12 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(cargo);
-    command
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["build", "--locked", "--features", "cloud-cli"]);
+    command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+        "build",
+        "--locked",
+        "--features",
+        "cloud-cli",
+    ]);
     for (binary, _, _, _) in BINARIES {
         command.args(["--bin", binary]);
     }
@@ -139,7 +148,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "mixed invalid invocation must remain visible"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -166,7 +178,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path, expected_diagnostic: &str)
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         stderr.contains(expected_diagnostic),
         "invalid non-UTF-8 input must emit its fixed bounded diagnostic"
@@ -205,7 +220,11 @@ fn assert_native_path_values_are_not_forced_through_utf8(binaries: &[PathBuf]) {
         .arg(&native_path)
         .arg("--cloud-root")
         .arg(&native_path)
-        .args(["--destination-subdirectory", "Recovered", "--capacity-snapshot"])
+        .args([
+            "--destination-subdirectory",
+            "Recovered",
+            "--capacity-snapshot",
+        ])
         .arg(&capacity)
         .output()
         .expect("destination-plan CLI must launch with native path values");
@@ -239,7 +258,9 @@ fn eviction_and_destination_help_are_successful_and_invalid_arguments_are_bounde
         assert_invalid_argument_is_bounded(binary, expected_unknown);
         assert_help_does_not_hide_invalid_argument(binary);
         #[cfg(unix)]
-        assert_non_utf8_argument_is_bounded(binary, expected_invalid_utf8);
+        if let Some(expected_invalid_utf8) = expected_invalid_utf8 {
+            assert_non_utf8_argument_is_bounded(binary, expected_invalid_utf8);
+        }
     }
     #[cfg(unix)]
     assert_native_path_values_are_not_forced_through_utf8(&binaries);

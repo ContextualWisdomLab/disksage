@@ -1,7 +1,7 @@
 //! Regression contract for OneDrive local-space recovery under provider-wide backlog.
 
 #[test]
-fn onedrive_unpin_does_not_reuse_new_copy_admission() {
+fn onedrive_native_eviction_uses_foundation_after_exact_live_revalidation() {
     let source = include_str!("../src/cloud_local_eviction.rs");
     let function = source
         .split_once("fn request_native_icloud_eviction")
@@ -11,7 +11,9 @@ fn onedrive_unpin_does_not_reuse_new_copy_admission() {
         .expect("native eviction function boundary")
         .0;
 
-    assert!(function.contains("unpin_onedrive_local_copy"));
+    assert!(function.contains("evictUbiquitousItemAtURL_error"));
+    assert!(function.contains("native-file-provider-item-identity-unconfirmed"));
+    assert!(!function.contains("unpin_onedrive_local_copy"));
     assert!(!function.contains("inspect_new_copy_admission"));
     assert!(!function.contains("require_new_copy_admission"));
 }

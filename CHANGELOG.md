@@ -5,6 +5,21 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Ship the macOS OneDrive Finder post-action verifier as a checksummed, provenance-attested
+  operational CLI, and require fresh provider-sync evidence before allocation reduction counts as
+  verified local-space recovery.
+- Revalidate OneDrive's exact File Provider item/version identity immediately
+  before the Foundation eviction call, including every latest sync, policy,
+  size, eviction-capability, and Files On-Demand gate, and let approved OneDrive batches use
+  the same immutable per-item execution/checkpoint path as iCloud. Finder
+  selection remains available only through the explicit `--finder-assistance`
+  fallback.
+- Keep cloud-inventory argument failures bounded on Unix by reading native
+  process arguments explicitly and rejecting non-UTF-8 option payloads with a
+  fixed diagnostic instead of allowing Rust's Unicode argument iterator to
+  terminate the process before DiskSage can report the next action.
+- Keep cloud-local inventory argument errors bounded by rejecting unknown
+  options without echoing attacker-controlled option payloads.
 
 ### Added
 
@@ -20,10 +35,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   preserve exact candidates while read-only planning remains available. Trash and permanent purge
   execution are disabled until authenticated batch lineage, identity-bound OS mutation, and
   restart-safe immutable per-item outcomes are implemented.
+- Release verified OneDrive local copies through Foundation only after an exact item-and-version
+  fingerprint, current upload/materialization flags, `isKeepDownloaded = 0`, no active handle, and
+  attributed approval survive an immediate re-plan. Postchecks and immutable records distinguish
+  a successful request from measured allocation recovery; dataless files report zero reclaim.
+- Audit non-identical JPEG, PNG, TIFF, and WebP photo candidates with a standards-grounded DCT
+  perceptual hash, measured resolution/bit-depth/compression evidence, and an optional unweighted
+  Pareto-dominant survivor recommendation. Managed Photos libraries remain excluded; a user must
+  select one survivor per group before the other members can move reversibly to OS Trash under an
+  exact plan fingerprint and per-item receipt.
+- Admit iCloud local-copy eviction from Apple Foundation's public, per-item ubiquitous metadata
+  only when the item is uploaded, current, idle, conflict-free, error-free, and not excluded from
+  sync. Upload/download errors remain explicit blockers; exact approval is invalidated by the new
+  evidence schema, and postchecks now require an uploaded cloud item, `notDownloaded` local state,
+  retained ubiquitous path, and reduced allocated bytes.
 - Inspect completed DiskSage-owned top-level shared-temporary artifacts through create-only
   lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
   atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
   or a same-user marker never grants mutation authority.
+- Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
+  squash-merged and detached intermediate commits can be classified without ancestry or branch
+  guesses; any exact membership in an open PR takes precedence and preserves the worktree.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
@@ -35,23 +67,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
   environment trees without recursively scanning them, and the
   cleanup screen names each Python cache and test environment so the next action is clear.
-- Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
-  command after stopping the sync app, then restart sync and verify allocation reduction while
-  retaining the cloud item and the existing approval and receipt contract. Provider-wide
+- Probe Apple's public File Provider identity boundary for uploaded, current, idle OneDrive files
+  without changing materialization. The real provider returned `ProviderNotFound`, so execution
+  remains blocked while retaining the existing approval and receipt contract. Provider-wide
   new-copy admission remains confined to copy/upload workflows and cannot deadlock local-space
   recovery while unrelated downloads, indexing, or historical provider errors exist. If the
-  normal quit request stalls, DiskSage uses one bounded graceful `SIGTERM` fallback and never
-  force-kills the client; the stop check distinguishes the desktop app from its resident File
-  Provider helper. The execution path uses the already-bound File Provider item evidence instead
-  of making the vendor's optional `/getpin` query a second, weaker prerequisite.
+  native completion stalls, DiskSage terminates only its private helper process group. The macOS 11
+  helper binds item and domain identity and rejects replacement paths; vendor-private `/unpin`,
+  OAuth, and cloud-object deletion are not used.
+- Select only freshly replanned, fingerprint-approved OneDrive items in Finder through public
+  AppKit, then direct the customer to choose **Free Up Space** and verify retained provider identity
+  plus reduced allocated bytes. Finder selection is recorded as non-mutating assistance and never
+  reported as reclaimed capacity; private action invocation and Accessibility automation remain
+  excluded.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+- Ship that generic batch planner as a checksummed, provenance-attested macOS operational CLI so
+  installed release artifacts can reproduce the exact read-only plan. Linux and Windows remain
+  excluded until their provider-local observation paths have production evidence.
+- Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
+  generate the native Foundation-backed plan without compiling source; Linux and Windows retain
+  only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
+- Ship the read-only cloud-local allocation inventory as a checksummed macOS artifact so a
+  matching release can produce fresh candidate evidence before either batch planner runs. An
+  inventory from an older executable head remains stale and cannot authorize a new plan.
 
 ### Fixed
 
+- Preserve a failed Podman native storage-repair attempt as an explicit provider refusal when a
+  damaged layer remains container-referenced; DiskSage now directs a new lineage/removal evidence
+  cycle instead of retrying, forcing repair, or touching graph-driver storage.
+
+- Make the release-packaged cloud-local inventory producer return help on stdout with exit status
+  zero, while mixed help/runtime arguments remain a bounded failure.
+- Retry transient iCloud metadata failures during the bounded post-eviction check instead of
+  misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
   item is beneath its discovered cloud root; sibling roots remain rejected component by component.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
@@ -84,6 +137,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
   registered as worktrees so repositories with long merged histories remain auditable. All lookup
   calls consume one shared timeout budget rather than multiplying the configured wait per branch.
+- Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
+  library selected as the scan root. External files remain auditable without interpreting Photos'
+  private databases and derivatives as independent duplicate-delete candidates.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution

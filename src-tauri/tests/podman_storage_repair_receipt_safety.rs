@@ -1,8 +1,6 @@
 #![cfg(unix)]
 
-use disksage_lib::podman_reclaim::{
-    execute_podman_storage_repair, plan_podman_storage_repair,
-};
+use disksage_lib::podman_reclaim::{execute_podman_storage_repair, plan_podman_storage_repair};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -44,6 +42,26 @@ case " $* " in
     ;;
 esac
 echo "unexpected fake Podman invocation: $*" >&2
+exit 2
+"#
+    ))
+}
+
+fn fake_container_referenced_damage_podman() -> (tempfile::TempDir, PathBuf) {
+    let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+case " $* " in
+  *" system check --quick --repair "*)
+    echo "Error: layer {layer_id} is in use by container 111111111111" >&2
+    exit 125
+    ;;
+  *" system check --quick "*)
+    echo "Damaged layer {layer_id}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
 exit 2
 "#
     ))
@@ -215,7 +233,30 @@ fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
 }
 
 #[test]
-fn native_repair_rejects_candidate_drift_after_machine_and_evidence_approval() {
+fn provider_refusal_identifies_a_container_referenced_damaged_layer() {
+    let (_temp, fake) = fake_container_referenced_damage_podman();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "retain the damaged container for an evidence-guided remediation",
+        6,
+    )
+    .expect("a provider refusal remains an auditable non-executed attempt");
+
+    assert!(!receipt.executed);
+    assert_eq!(receipt.status_code, 125);
+    assert_eq!(
+        receipt.execution_issue.as_deref(),
+        Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+    );
+    assert_eq!(receipt.remaining_damaged_layer_records, Some(1));
+}
+
+#[test]
+fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set() {
     let (temp, fake) = fake_scope_drift_podman();
     let first_plan = plan_podman_storage_repair(&fake, "podman-machine-default")
         .expect("initial damaged-layer evidence");
@@ -229,21 +270,36 @@ fn native_repair_rejects_candidate_drift_after_machine_and_evidence_approval() {
         "the approval text must name the broad native repair scope"
     );
     assert!(
-        approval.contains(&first_plan.candidate_set_sha256),
-        "machine-scoped repair approval must also bind the reviewed preflight evidence"
+        !approval.contains(&first_plan.candidate_set_sha256),
+        "a broad native repair cannot truthfully bind authority to only the preflight IDs"
     );
 
-    let error = execute_podman_storage_repair(
+    let receipt = execute_podman_storage_repair(
         &fake,
         "podman-machine-default",
         approval,
         "approve the selected machine's native repair scope",
         2,
     )
-    .expect_err("candidate drift requires a fresh exact approval before native repair");
+    .expect("candidate drift remains inside an explicitly machine-scoped approval");
 
-    assert_eq!(error, "podman-storage-repair-confirmation-mismatch");
-    assert!(!temp.path().join("repair-ran").exists());
+    assert!(
+        temp.path().join("repair-ran").exists(),
+        "the explicitly approved machine-scoped repair must run"
+    );
+    assert_eq!(
+        receipt.command,
+        vec![
+            "podman",
+            "--connection",
+            "podman-machine-default",
+            "system",
+            "check",
+            "--quick",
+            "--repair"
+        ],
+        "the receipt must record the exact selected connection that was mutated"
+    );
 }
 
 #[test]
@@ -318,8 +374,14 @@ fn damaged_layer_hex_casing_does_not_change_the_precheck_fingerprint() {
     let lower_plan = plan_podman_storage_repair(&lower_fake, "podman-machine-default").unwrap();
     let upper_plan = plan_podman_storage_repair(&upper_fake, "podman-machine-default").unwrap();
 
-    assert_eq!(lower_plan.candidate_set_sha256, upper_plan.candidate_set_sha256);
-    assert_eq!(lower_plan.exact_approval_phrase, upper_plan.exact_approval_phrase);
+    assert_eq!(
+        lower_plan.candidate_set_sha256,
+        upper_plan.candidate_set_sha256
+    );
+    assert_eq!(
+        lower_plan.exact_approval_phrase,
+        upper_plan.exact_approval_phrase
+    );
 }
 
 #[test]
@@ -327,14 +389,8 @@ fn storage_repair_rejects_unbounded_or_control_character_rationales_before_probe
     let (_temp, fake) = fake_podman();
     let overlong = "x".repeat(1_001);
     assert_eq!(
-        execute_podman_storage_repair(
-            &fake,
-            "podman-machine-default",
-            "unused",
-            &overlong,
-            1,
-        )
-        .unwrap_err(),
+        execute_podman_storage_repair(&fake, "podman-machine-default", "unused", &overlong, 1,)
+            .unwrap_err(),
         "podman-storage-repair-request-invalid"
     );
     assert_eq!(
