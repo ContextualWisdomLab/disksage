@@ -21,6 +21,7 @@ pub struct ScanResult {
 
 pub const TOP_FILES_CAP: usize = 1000;
 const CLOUD_SCAN_GUIDANCE: &str = "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
+const FILE_PROVIDER_STORAGE_COMPONENT: &str = "File Provider Storage";
 
 fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
     vec![
@@ -32,11 +33,52 @@ fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
     ]
 }
 
+fn path_has_file_provider_storage_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+    })
+}
+
+fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> bool {
+    roots
+        .iter()
+        .filter(|root| root.file_name() == Some(std::ffi::OsStr::new("CloudStorage")))
+        .filter_map(|root| root.parent())
+        .any(|library| {
+            let containers = library.join("Containers");
+            if let Ok(relative) = path.strip_prefix(&containers) {
+                let components = relative.components().collect::<Vec<_>>();
+                if components.len() >= 3
+                    && components[1].as_os_str() == std::ffi::OsStr::new("Data")
+                    && components[2..].iter().any(|component| {
+                        component.as_os_str()
+                            == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+                    })
+                {
+                    return true;
+                }
+            }
+
+            let group_containers = library.join("Group Containers");
+            if let Ok(relative) = path.strip_prefix(&group_containers) {
+                let components = relative.components().collect::<Vec<_>>();
+                if components.len() >= 2
+                    && components[1..].iter().any(|component| {
+                        component.as_os_str()
+                            == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+                    })
+                {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
 fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path == root || path.starts_with(root))
-        || path.components().any(|component| {
-            component.as_os_str() == std::ffi::OsStr::new("File Provider Storage")
-        })
+        || (path_has_file_provider_storage_component(path)
+            && is_private_macos_file_provider_storage(path, roots))
 }
 
 #[cfg(target_os = "macos")]
@@ -92,12 +134,7 @@ pub fn scan_dir(
 }
 
 pub(crate) fn read_only_traversal_root(root: &Path) -> PathBuf {
-    match std::fs::symlink_metadata(root) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
-        }
-        _ => root.to_path_buf(),
-    }
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
 pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
