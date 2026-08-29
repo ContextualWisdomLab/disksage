@@ -288,4 +288,20 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, "permanent-cache-execution-disabled");
     }
+
+    #[test]
+    fn execution_receipt_preserves_selected_cache_mode() {
+        let args = Args {
+            execute: true,
+            npx_only: false,
+            cache_id: Some("gradle-cache".into()),
+            permanent_cache: false,
+            purge_proven_cache_trash: false,
+            journal_path: PathBuf::from("/tmp/disksage-journal.jsonl"),
+        };
+        let receipt = execution_receipt(&args, serde_json::json!([{"ok": true}]));
+        assert_eq!(receipt["cache_id"], "gradle-cache");
+        assert_eq!(receipt["permanent_cache"], false);
+        assert_eq!(receipt["executed"], true);
+    }
 }
