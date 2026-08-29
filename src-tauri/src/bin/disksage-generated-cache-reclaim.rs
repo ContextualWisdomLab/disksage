@@ -1,21 +1,19 @@
 use disksage_lib::generated_cache_reclaim::{
-    approve, audit, execute_and_record, remove_regenerable_root,
+    approve, audit, execute_and_record, stage_and_remove_regenerable_root,
 };
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Usage: disksage-generated-cache-reclaim --root ABSOLUTE_PATH --home ABSOLUTE_PATH [--execute --approved-plan-fingerprint HEX --confirm PHRASE --approved-by ID --rationale TEXT --record PATH]\nWithout --execute, prints a read-only plan. Temporary Git workspaces are audit-only and must use DiskSage's specialized Git or shared-temp executor.";
+const USAGE: &str = "Usage: disksage-generated-cache-reclaim --root ABSOLUTE_PATH [--execute --approved-plan-fingerprint HEX --confirm PHRASE --approved-by ID --rationale TEXT]\nWithout --execute, prints a read-only plan. Receipts use DiskSage's private application-data directory. Temporary Git workspaces are audit-only and must use DiskSage's specialized Git or shared-temp executor.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     root: PathBuf,
-    home: PathBuf,
     execute: bool,
     fingerprint: Option<String>,
     confirmation: Option<String>,
     approved_by: Option<String>,
     rationale: Option<String>,
-    record: Option<PathBuf>,
 }
 
 fn next_value(args: &[OsString], index: &mut usize, name: &str) -> Result<OsString, String> {
@@ -35,14 +33,9 @@ fn parse(args: &[OsString]) -> Result<Option<Options>, String> {
     if args.len() == 1 && matches!(args[0].to_str(), Some("-h" | "--help")) {
         return Ok(None);
     }
-    let mut root = None;
-    let mut home = None;
+    let (mut root, mut fingerprint, mut confirmation, mut approved_by, mut rationale) =
+        (None, None, None, None, None);
     let mut execute = false;
-    let mut fingerprint = None;
-    let mut confirmation = None;
-    let mut approved_by = None;
-    let mut rationale = None;
-    let mut record = None;
     let mut index = 0;
     while index < args.len() {
         let option = args[index].to_str().ok_or("invalid-utf8-option")?;
@@ -50,9 +43,6 @@ fn parse(args: &[OsString]) -> Result<Option<Options>, String> {
         match option {
             "--root" if root.is_none() => {
                 root = Some(PathBuf::from(next_value(args, &mut index, "root")?))
-            }
-            "--home" if home.is_none() => {
-                home = Some(PathBuf::from(next_value(args, &mut index, "home")?))
             }
             "--execute" if !execute => execute = true,
             "--approved-plan-fingerprint" if fingerprint.is_none() => {
@@ -79,36 +69,59 @@ fn parse(args: &[OsString]) -> Result<Option<Options>, String> {
                     "invalid-rationale",
                 )?)
             }
-            "--record" if record.is_none() => {
-                record = Some(PathBuf::from(next_value(args, &mut index, "record")?))
-            }
             "-h" | "--help" => return Err("help-must-be-used-alone".into()),
             _ => return Err(format!("unknown-or-duplicate-option: {option}")),
         }
     }
     let options = Options {
         root: root.ok_or("root-required")?,
-        home: home.ok_or("home-required")?,
         execute,
         fingerprint,
         confirmation,
         approved_by,
         rationale,
-        record,
     };
-    if !options.root.is_absolute() || !options.home.is_absolute() {
-        return Err("absolute-root-and-home-required".into());
+    if !options.root.is_absolute() {
+        return Err("absolute-root-required".into());
     }
     if !options.execute
         && (options.fingerprint.is_some()
             || options.confirmation.is_some()
             || options.approved_by.is_some()
-            || options.rationale.is_some()
-            || options.record.is_some())
+            || options.rationale.is_some())
     {
         return Err("execution-authority-option-without-execute".into());
     }
     Ok(Some(options))
+}
+
+fn fixed_home() -> Result<PathBuf, String> {
+    let home = dirs::home_dir()
+        .filter(|path| path.is_absolute())
+        .ok_or("home-directory-unavailable")?;
+    std::fs::canonicalize(home).map_err(|_| "home-directory-unavailable".into())
+}
+
+fn fixed_receipt_path(home: &Path, fingerprint: &str, now_ms: u64) -> Result<PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = home.join(
+        "Library/Application Support/com.contextualwisdomlab.disksage/generated-cache-receipts",
+    );
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|_| "generated-cache-receipt-directory-create-failed")?;
+    let canonical = std::fs::canonicalize(&directory)
+        .map_err(|_| "generated-cache-receipt-directory-unavailable")?;
+    if !canonical.starts_with(home)
+        || std::fs::symlink_metadata(&directory).map_or(true, |metadata| {
+            !metadata.is_dir() || metadata.file_type().is_symlink()
+        })
+    {
+        return Err("generated-cache-receipt-directory-unsafe".into());
+    }
+    Ok(canonical.join(format!("{now_ms}-{}.jsonl", &fingerprint[..16])))
 }
 
 fn run() -> Result<(), String> {
@@ -117,8 +130,9 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     };
+    let home = fixed_home()?;
     let now = disksage_lib::cloud::system_now_ms();
-    let plan = audit(&options.root, &options.home, now)?;
+    let plan = audit(&options.root, &home, now)?;
     if !options.execute {
         println!(
             "{}",
@@ -142,18 +156,16 @@ fn run() -> Result<(), String> {
         options.rationale.as_deref().ok_or("rationale-required")?,
         now,
     )?;
-    let fresh = audit(
-        &options.root,
-        &options.home,
-        disksage_lib::cloud::system_now_ms(),
-    )?;
+    let fresh = audit(&options.root, &home, disksage_lib::cloud::system_now_ms())?;
+    let attempted_at_ms = disksage_lib::cloud::system_now_ms();
+    let receipt_path = fixed_receipt_path(&home, &plan.plan_fingerprint, attempted_at_ms)?;
     let receipt = execute_and_record(
         &plan,
         &approval,
         &fresh,
-        disksage_lib::cloud::system_now_ms(),
-        options.record.as_deref().ok_or("record-required")?,
-        |path| remove_regenerable_root(path, &options.home),
+        attempted_at_ms,
+        &receipt_path,
+        |path| stage_and_remove_regenerable_root(&plan, path, &home, attempted_at_ms),
     )?;
     println!(
         "{}",
@@ -175,46 +187,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn strings(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
     }
-
     #[test]
     fn help_is_standalone_and_plan_is_default() {
         assert_eq!(parse(&strings(&["--help"])).unwrap(), None);
-        let options = parse(&strings(&[
-            "--root",
-            "/Users/test/.cache/torch",
-            "--home",
-            "/Users/test",
-        ]))
-        .unwrap()
-        .unwrap();
-        assert!(!options.execute);
-        assert!(options.record.is_none());
+        assert!(
+            !parse(&strings(&["--root", "/Users/test/.cache/torch"]))
+                .unwrap()
+                .unwrap()
+                .execute
+        );
     }
-
     #[test]
-    fn authority_requires_execute_and_duplicate_options_fail() {
+    fn authority_and_paths_are_not_caller_controlled() {
         assert!(parse(&strings(&[
             "--root",
             "/Users/test/.cache/torch",
-            "--home",
-            "/Users/test",
             "--confirm",
-            "x",
+            "x"
         ]))
         .is_err());
-        assert!(parse(&strings(&[
-            "--root",
-            "/a",
-            "--root",
-            "/b",
-            "--home",
-            "/Users/test",
-        ]))
-        .is_err());
-        assert!(parse(&strings(&["--root", "relative", "--home", "/Users/test"])).is_err());
+        assert!(parse(&strings(&["--root", "/a", "--root", "/b"])).is_err());
+        assert!(parse(&strings(&["--root", "relative"])).is_err());
+        assert!(parse(&strings(&["--root", "/a", "--home", "/tmp"])).is_err());
+        assert!(parse(&strings(&["--root", "/a", "--record", "/tmp/x"])).is_err());
     }
 }

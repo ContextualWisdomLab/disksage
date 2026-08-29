@@ -172,8 +172,6 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         hasher.update(&metadata.len().to_le_bytes());
         hasher.update(&metadata.mtime().to_le_bytes());
         hasher.update(&metadata.mtime_nsec().to_le_bytes());
-        hasher.update(&metadata.ctime().to_le_bytes());
-        hasher.update(&metadata.ctime_nsec().to_le_bytes());
         if current.file_name().is_some_and(|name| name == ".lock") {
             locks.push(current.to_string_lossy().into_owned());
         }
@@ -411,6 +409,68 @@ pub fn remove_regenerable_root(path: &Path, home: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(path).map_err(|_| "generated-cache-remove-failed".into())
 }
 
+/// Atomically stage and permanently remove the exact approved cache object.
+pub fn stage_and_remove_regenerable_root(
+    plan: &GeneratedCachePlan,
+    path: &Path,
+    home: &Path,
+    now_ms: u64,
+) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt;
+    if plan.root != path.to_string_lossy()
+        || plan.contract
+            != regeneration_contract(path, home).ok_or("generated-cache-removal-boundary-denied")?
+    {
+        return Err("generated-cache-removal-boundary-denied".into());
+    }
+    let immediate = audit(path, home, now_ms)?;
+    if immediate.plan_fingerprint != plan.plan_fingerprint || !immediate.blockers.is_empty() {
+        return Err("generated-cache-prestage-evidence-mismatch".into());
+    }
+    let parent = path.parent().ok_or("generated-cache-parent-unavailable")?;
+    let name = path.file_name().ok_or("generated-cache-name-unavailable")?;
+    let staging = parent.join(format!(
+        ".disksage-generated-cache-staging-{}",
+        &plan.plan_fingerprint[..16]
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&staging)
+        .map_err(|_| "generated-cache-staging-create-failed")?;
+    let staged = staging.join(name);
+    if let Err(error) = std::fs::rename(path, &staged) {
+        let _ = std::fs::remove_dir(&staging);
+        return Err(format!("generated-cache-staging-rename-failed:{error}"));
+    }
+    let restore = || {
+        if !path.exists() {
+            std::fs::rename(&staged, path).map_err(|_| "generated-cache-staging-restore-failed")?;
+        }
+        std::fs::remove_dir(&staging).map_err(|_| "generated-cache-staging-cleanup-failed")
+    };
+    let staged_result = (|| {
+        let active = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        if !active.assessed || !active.evidence_complete || active.active {
+            return Err("generated-cache-staged-active-use".to_string());
+        }
+        let (_, _, fingerprint, locks) = observe_tree(&staged)?;
+        if fingerprint != plan.content_fingerprint || !locks.is_empty() {
+            return Err("generated-cache-staged-manifest-mismatch".into());
+        }
+        std::fs::remove_dir_all(&staged)
+            .map_err(|_| "generated-cache-remove-failed".to_string())?;
+        std::fs::remove_dir(&staging)
+            .map_err(|_| "generated-cache-staging-cleanup-failed".to_string())
+    })();
+    if let Err(error) = staged_result {
+        return match restore() {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!("{error}:{restore_error}")),
+        };
+    }
+    Ok(())
+}
+
 pub fn write_immutable_receipt(path: &Path, receipt: &GeneratedCacheReceipt) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -466,6 +526,12 @@ where
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_all())
         .map_err(|_| "generated-cache-receipt-pending-write-failed".to_string())?;
+    let receipt_parent = receipt_path
+        .parent()
+        .ok_or("generated-cache-receipt-parent-unavailable")?;
+    std::fs::File::open(receipt_parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "generated-cache-receipt-parent-sync-failed".to_string())?;
     let receipt = execute_with(plan, approval, fresh, attempted_at_ms, remove)?;
     let bytes = serde_json::to_vec(&receipt)
         .map_err(|_| "generated-cache-receipt-encode-failed".to_string())?;
@@ -658,5 +724,24 @@ mod tests {
         std::fs::write(root.join("renamed.bin"), b"bbbb").unwrap();
         let replaced = plan_with_evidence(&root, home, inactive(), 4).unwrap();
         assert_ne!(renamed.plan_fingerprint, replaced.plan_fingerprint);
+    }
+
+    #[test]
+    fn exact_cache_is_staged_rechecked_and_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("model.bin"), b"regenerable").unwrap();
+        let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
+        stage_and_remove_regenerable_root(&plan, &root, home, 2).unwrap();
+        assert!(!root.exists());
+        assert!(!home
+            .join(".cache")
+            .join(format!(
+                ".disksage-generated-cache-staging-{}",
+                &plan.plan_fingerprint[..16]
+            ))
+            .exists());
     }
 }

@@ -17,11 +17,18 @@ Execution requires an unchanged content-and-activity fingerprint, the exact appr
 reviewer attribution and rationale, bounded work, and a create-only mode-0600 JSON Lines journal.
 The fingerprint binds relative names, entry type, filesystem identity, precise timestamps and
 ownership metadata, and bounded file content. Execution accepts only a matching re-observation
-collected after approval and no later than the attempt.
+collected after approval and no later than the attempt. Immediately before removal it repeats the
+audit, atomically renames the exact tree into a private same-filesystem staging directory, then
+repeats active-use and complete-manifest checks on that staged object. A failed check restores the
+object and never follows a replacement at the approved pathname.
 The journal durably records a complete `pending` event before mutation and appends a terminal
 receipt afterward. A journal ending in `pending` requires reconciliation, a new observation, and a
 new approval; it is never automatic retry authority. Provider data mutation remains false in every
 event.
+
+The CLI derives the canonical current-user home instead of accepting an authorization root. It
+writes receipts only below DiskSage's fixed private application-data directory. The pending file
+and its containing directory are synced before staging starts.
 
 Temporary Git workspaces are audit-only here. Even a clean, inactive workspace is routed to the
 existing Git-worktree or shared-temporary-artifact executor, which owns repository identity,

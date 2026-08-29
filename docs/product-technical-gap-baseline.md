@@ -1172,6 +1172,10 @@ specialized Git/shared-temp workflow and are never removed by the generic cache 
 remaining product gap is the graphical cleanup surface: it must translate each evidence code into
 the customer's next safe action without exposing internal implementation boundaries.
 
+Permanent cache removal now atomically stages the identity-bound tree on the same filesystem and
+rechecks active use and the complete manifest before unlinking it. The CLI obtains the canonical
+current-user home and uses a fixed private receipt directory; neither boundary is caller-selected.
+
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
 
 ### Podman external-container image authority
