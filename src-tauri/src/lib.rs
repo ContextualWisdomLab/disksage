@@ -106,6 +106,10 @@ mod reasoning;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules.rs"]
+mod rules_catalog;
+#[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules_authority.rs"]
 mod rules;
 /// Read-only VM-backed storage inspection plus explicit guest trim for Podman and Colima.
 pub mod runtime_storage;
