@@ -292,6 +292,13 @@ mod tests {
             OsString::from("--npx-only"),
         ])
         .is_err());
+        assert!(parse_args([
+            OsString::from("--cache-id"),
+            OsString::from("gradle-cache"),
+            OsString::from("--cache-id"),
+            OsString::from("gradle-wrapper-cache"),
+        ])
+        .is_err());
     }
 
     #[test]
