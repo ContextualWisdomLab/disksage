@@ -677,6 +677,26 @@ pub fn permanent_delete_dir_if_identity(
                 ))),
             };
         }
+        // The caller's probe precedes the atomic rename and therefore cannot close the final
+        // open-handle race by itself.  Once staged, the original pathname is unavailable to new
+        // users; recursively probe the exact staged object before the irreversible removal.
+        let active_use = crate::git_worktree::active_use_evidence(
+            &staged,
+            crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+            crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+            true,
+        );
+        if !active_use.assessed || !active_use.evidence_complete || active_use.active {
+            let reason = if active_use.active {
+                "staged generated directory is still in active use"
+            } else {
+                "staged generated directory active-use evidence is incomplete"
+            };
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(format!("{reason}; nothing was deleted"))),
+                Err(restore_error) => Err(SafetyError::Trash(format!("{reason}; {restore_error}"))),
+            };
+        }
         remove_staged_permanently_with(&staged, &staging_dir, |path| std::fs::remove_dir_all(path))
     })();
     entry.outcome = match &result {
@@ -1100,6 +1120,26 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".disksage-trash-")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_generated_directory_delete_restores_an_open_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("generated-cache");
+        std::fs::create_dir(&generated).unwrap();
+        let open_file = std::fs::File::create(generated.join("in-use.bin")).unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let result = permanent_delete_dir_if_identity(&generated, &object_id, 0, &journal, 2);
+
+        drop(open_file);
+        assert!(result.is_err());
+        assert!(generated.exists());
+        assert!(journal_recent(&journal, 2)[0]
+            .outcome
+            .contains("active use"));
     }
 
     #[test]

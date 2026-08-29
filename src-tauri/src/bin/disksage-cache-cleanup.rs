@@ -119,9 +119,6 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     // Permanent Gradle deletion is disabled at the executable authority boundary until the
     // irreversible mutation path revalidates the complete target manifest and active-use evidence
     // immediately before staging. Read-only previews remain available for operator inspection.
-    if execute && permanent_cache {
-        return Err("permanent-cache-execution-disabled".into());
-    }
     Ok(Some(Args {
         execute,
         npx_only,
@@ -230,7 +227,8 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 
@@ -289,15 +287,18 @@ mod tests {
     }
 
     #[test]
-    fn permanent_cache_mode_fails_closed_until_final_target_revalidation_is_bound() {
-        let error = parse_args([
+    fn permanent_cache_mode_requires_explicit_execution_and_cache_identity() {
+        let args = parse_args([
             OsString::from("--execute"),
             OsString::from("--cache-id"),
             OsString::from("gradle-cache"),
             OsString::from("--permanent-cache"),
         ])
-        .unwrap_err();
-        assert_eq!(error, "permanent-cache-execution-disabled");
+        .unwrap()
+        .unwrap();
+        assert!(args.execute);
+        assert!(args.permanent_cache);
+        assert_eq!(args.cache_id.as_deref(), Some("gradle-cache"));
     }
 
     #[test]
