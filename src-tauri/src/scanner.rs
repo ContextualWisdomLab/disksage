@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -13,6 +13,8 @@ pub struct ScanStats {
 pub struct ScanResult {
     pub root: PathBuf,
     pub dir_sizes: HashMap<PathBuf, u64>,
+    /// Exact regular-file paths admitted before cancellation or policy pruning.
+    pub admitted_files: BTreeSet<PathBuf>,
     /// 내림차순 정렬, TOP_FILES_CAP 개로 제한
     pub top_files: Vec<(PathBuf, u64)>,
     pub stats: ScanStats,
@@ -185,6 +187,7 @@ pub fn scan_dir_with_interval(
 ) -> ScanResult {
     let progress_every = progress_every.max(1);
     let mut dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
+    let mut admitted_files = BTreeSet::new();
     // min-heap: 가장 작은 항목이 루트에 오도록 Reverse
     let mut top: BinaryHeap<std::cmp::Reverse<(u64, PathBuf)>> = BinaryHeap::new();
     let mut stats = ScanStats::default();
@@ -198,6 +201,7 @@ pub fn scan_dir_with_interval(
         return ScanResult {
             root: root.to_path_buf(),
             dir_sizes,
+            admitted_files,
             top_files: Vec::new(),
             stats,
             cancelled,
@@ -235,6 +239,7 @@ pub fn scan_dir_with_interval(
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
+            admitted_files.insert(logical_path.clone());
             top.push(std::cmp::Reverse((size, logical_path.clone())));
             if top.len() > TOP_FILES_CAP {
                 top.pop();
@@ -266,6 +271,7 @@ pub fn scan_dir_with_interval(
     ScanResult {
         root: root.to_path_buf(),
         dir_sizes,
+        admitted_files,
         top_files,
         stats,
         cancelled,
