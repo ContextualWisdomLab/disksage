@@ -146,7 +146,10 @@ pub struct ExactDuplicateReclaimExecution {
     pub reclaim_plan_fingerprint: String,
     pub candidate_file_count: usize,
     pub removed_file_count: usize,
+    pub active_file_count: usize,
+    pub failed_file_count: usize,
     pub skipped_file_count: usize,
+    pub failure_reasons: Vec<String>,
     pub removed_allocated_bytes_upper_bound: u64,
     pub evidence_complete: bool,
     pub executed: bool,
@@ -596,6 +599,10 @@ fn remove_if_storage_identity(
     Ok(())
 }
 
+fn removal_failure_code(error: &str) -> String {
+    error.split(':').next().unwrap_or(error).to_string()
+}
+
 /// Permanently remove only freshly re-hashed members of exact-content clusters while retaining
 /// one provenance-preferred, byte-identical canonical member in every cluster.
 #[cfg(not(coverage))]
@@ -707,19 +714,27 @@ pub fn execute_exact_duplicate_reclaim_from_report(
 
     let mut removed_file_count = 0usize;
     let mut removed_allocated_bytes_upper_bound = 0u64;
+    let mut failure_reasons = BTreeSet::new();
     for (index, (path, bytes, storage_identity)) in removable.into_iter().enumerate() {
-        if remove_if_storage_identity(
+        match remove_if_storage_identity(
             &path,
             &storage_identity,
             executed_at_ms.saturating_add(index as u64),
-        )
-        .is_ok()
-        {
-            removed_file_count = removed_file_count.saturating_add(1);
-            removed_allocated_bytes_upper_bound =
-                removed_allocated_bytes_upper_bound.saturating_add(bytes);
+        ) {
+            Ok(()) => {
+                removed_file_count = removed_file_count.saturating_add(1);
+                removed_allocated_bytes_upper_bound =
+                    removed_allocated_bytes_upper_bound.saturating_add(bytes);
+            }
+            Err(error) => {
+                failure_reasons.insert(removal_failure_code(&error));
+            }
         }
     }
+    let active_file_count = active.len();
+    let failed_file_count = candidate_file_count
+        .saturating_sub(active_file_count)
+        .saturating_sub(removed_file_count);
     let skipped_file_count = candidate_file_count.saturating_sub(removed_file_count);
     Ok(ExactDuplicateReclaimExecution {
         schema_version: EXACT_DUPLICATE_AUDIT_VERSION,
@@ -727,7 +742,10 @@ pub fn execute_exact_duplicate_reclaim_from_report(
         reclaim_plan_fingerprint: plan_fingerprint,
         candidate_file_count,
         removed_file_count,
+        active_file_count,
+        failed_file_count,
         skipped_file_count,
+        failure_reasons: failure_reasons.into_iter().collect(),
         removed_allocated_bytes_upper_bound,
         evidence_complete: skipped_file_count == 0,
         executed: true,
@@ -1377,6 +1395,9 @@ mod tests {
         .unwrap();
         assert_eq!(execution.candidate_file_count, 1);
         assert_eq!(execution.removed_file_count, 1);
+        assert_eq!(execution.active_file_count, 0);
+        assert_eq!(execution.failed_file_count, 0);
+        assert!(execution.failure_reasons.is_empty());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
@@ -1419,6 +1440,10 @@ mod tests {
             "duplicate-reclaim-candidate-changed"
         );
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
+        assert_eq!(
+            removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
+            "duplicate-reclaim-delete-failed"
+        );
     }
 
     #[test]
