@@ -22,7 +22,9 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
-- the operation is journaled; the normal path never permanently deletes cache content.
+- the operation is journaled; pip and Corepack directory children may be deleted permanently after
+  the same complete inactive-use and exact-identity checks because their native managers establish
+  them as disposable download archives. Other normal cache cleanup remains reversible.
 - a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
@@ -36,10 +38,9 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
 - Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
-- The normal operation is reversible through the OS Trash; physical space is not claimed until the
-  user empties that Trash, and APFS shared blocks may make physical reclaim smaller than logical
-  size. The explicit proven-cache purge is irreversible by design and is limited to cache data
-  already placed in Trash.
+- The normal operation is reversible through the OS Trash. The pip/Corepack exception reclaims
+  inactive directory children immediately; the explicit proven-cache purge remains limited to
+  structurally verified cache data already placed in Trash.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
   permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
@@ -47,8 +48,8 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
 - **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is allowed only for a structurally proven cache
-  already in OS Trash through the separate explicit flag.
+  identity at mutation time. Permanent deletion is limited to inactive, identity-bound pip/Corepack
+  directory children or structurally proven cache already in OS Trash.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -56,12 +57,14 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 When provider upload is blocked and local pressure is high, DiskSage may run the
 `clean_regenerable_caches` command without a second approval prompt for the observed regenerable
-macOS roots (npm, uv, pnpm, Adobe, Microsoft Edge, and Trivy). This is a narrow policy, not a
+macOS roots (npm, pip, Corepack/Node.js, uv, pnpm, Adobe, Microsoft Edge, Trivy, AppMap, Superset,
+and Playwright). This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
-probe target. The cache root is preserved, successful operations go to OS Trash, and a journal
-entry is written. Any child in use is reported and left untouched.
+probe target. The cache root is preserved, pip/Corepack directories use the journaled permanent
+generated-directory primitive, other successful operations go to OS Trash, and any child in use is
+reported and left untouched.
 
 The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
 `cargo-registry-source` for explicit review because it is regenerable but may require network
@@ -70,10 +73,10 @@ the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage develop
 observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
 package archives, git checkouts, all user files, and provider-managed data.
 
-The observed `~/.cache/node`, `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
+The observed `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
 catalogued as explicit manual-review targets for the same reason. Their paths are now stable
 catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CACHE_IDS`; the
-automatic action remains limited to the six incident-approved roots until each tool's rebuild and
+automatic action remains limited to the incident-approved roots until each tool's rebuild and
 active-use contract is independently established.
 
 The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was

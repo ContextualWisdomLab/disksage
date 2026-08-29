@@ -1231,3 +1231,16 @@ runner's private workspace temp root instead of weakening the shared production 
 - Focused Rust verification regenerated 2.2 GiB of local build output. Native `cargo clean`
   immediately returned 2,203,364 KiB of measured data-volume availability; this build cleanup is
   recorded separately from the blocked uv cache and does not imply uv reclamation.
+
+## 2026-08-29 inactive package cache follow-up
+
+- The existing cache catalog already named pip and Node.js caches, but the approval-free action did
+  not route them through its per-child identity and active-use checks. They now use that shared
+  path; PyTorch checkpoints and GitHub Actions log archives remain review-only because their local
+  value is not disproved merely by a cache-directory name.
+- A bounded live inspection found no open file descriptors below either cache. The package
+  managers' native cleanup commands removed 49,584 KiB from pip and 74,296 KiB from Corepack,
+  123,880 KiB of allocated cache blocks in total. Concurrent Rust builds reduced the filesystem's
+  reported free-space counter during the observation, so only the direct allocation delta is
+  attributed to this cleanup. After focused verification, `cargo clean` removed its 1.5 GiB target
+  and increased APFS availability by 1,528,696 KiB; that build cleanup is accounted separately.

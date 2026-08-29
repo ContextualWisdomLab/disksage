@@ -10,12 +10,14 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 10] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 12] = [
     "npm-cache",
+    "pip-cache",
     "pnpm-cache",
     "adobe-cache",
     "edge-cache",
     "uv-cache",
+    "node-cache",
     "trivy-cache",
     "appmap-download-cache",
     "superset-http-cache",
@@ -242,6 +244,7 @@ pub(crate) fn clean_cache_contents_inner(
     requested_targets: &[rules::CacheTarget],
     journal_path: &Path,
     now_ms: u64,
+    permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
@@ -275,13 +278,28 @@ pub(crate) fn clean_cache_contents_inner(
                     error: error.into(),
                 };
             }
-            match safety::trash_delete_if_identity(
-                Path::new(&target.path),
-                &target.object_id,
-                target.bytes,
-                journal_path,
-                now_ms,
-            ) {
+            let path = Path::new(&target.path);
+            let permanent = permanent_directories
+                && std::fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+            let result = if permanent {
+                safety::permanent_delete_dir_if_identity(
+                    path,
+                    &target.object_id,
+                    target.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            } else {
+                safety::trash_delete_if_identity(
+                    path,
+                    &target.object_id,
+                    target.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            };
+            match result {
                 Ok(()) => CleanResult {
                     path: target.path,
                     ok: true,
@@ -312,7 +330,14 @@ pub(crate) fn clean_regenerable_caches_inner(
             match rules::cache_targets(&path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
-                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms)
+                    clean_cache_contents_inner(
+                        bases,
+                        &path,
+                        &targets,
+                        journal_path,
+                        now_ms,
+                        matches!(candidate.id.as_str(), "pip-cache" | "node-cache"),
+                    )
                         .unwrap_or_else(|error| {
                             vec![CleanResult {
                                 path: candidate.path,
@@ -368,6 +393,7 @@ pub fn clean_cache_contents(
         &targets,
         &journal_path,
         crate::commands::now_ms(),
+        false,
     )
 }
 
@@ -391,7 +417,7 @@ mod tests {
         fs::create_dir(&bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1)
+        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1, false)
             .err()
             .expect("non-catalog root must be rejected");
 
@@ -409,7 +435,7 @@ mod tests {
         let mut targets = rules::cache_targets(&bases.temp).unwrap();
         targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
             .err()
             .expect("stale target snapshot must be rejected");
 
@@ -446,6 +472,26 @@ mod tests {
             active_use_blocker(&active),
             Some("cache-target-active-use-detected")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn automatic_node_cache_cleanup_reclaims_directories_permanently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let corepack = bases.local_data.join("node/corepack");
+        fs::create_dir_all(&corepack).unwrap();
+        fs::write(corepack.join("archive.bin"), b"regenerable").unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let results = clean_regenerable_caches_inner(&bases, &journal, 7);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok);
+        assert!(!corepack.exists());
+        assert!(fs::read_to_string(journal)
+            .unwrap()
+            .contains("permanent_generated_directory_delete"));
     }
 
     #[test]
@@ -488,7 +534,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1, false)
             .err()
             .expect("symlink root must be rejected");
 
