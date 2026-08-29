@@ -33,7 +33,7 @@ The integrated contract comes from `docs/product-requirements.md` and ADR-0001 t
 | #295 | `9ac7cea769aac0cb19b9e9c7ee299e69385563bf` | `feat/native-uv-cache-reclaim-v1` | ready, dirty | Reclaim observed macOS generated caches |
 | #298 | `ebcd89508443d0081447b61d60b94a495a6b9ce7` | `main` | ready, blocked | Bound test-runner disk use |
 | #303 | `16406f3182fdfdc5f1922ed29fd6b3685c9de2bf` | `main` | ready, blocked | Evidence-bound provider-cache reclaim |
-| #304 | `d3ff9d57443185bade5ef692fa14e4bdd8d16a18` | `main` | ready, blocked | Diagnose OneDrive temporary-storage pressure and offer an exactly reviewed quit, reopen, and rescan path without reset, provider-storage deletion, OAuth, or validation-time live mutation; hosted checks are queued or running, two new actionable review threads remain unresolved, and no exact-head approval exists |
+| #304 | `6f1ac405b3f689cd89b02397000fa0d74971bb38` | `main` | ready, blocked | Diagnose OneDrive temporary-storage pressure and offer an exactly reviewed quit, reopen, and rescan path without reset, provider-storage deletion, OAuth, or validation-time live mutation; hosted checks are queued or running, three unresolved threads are information-only, and no exact-head approval exists |
 | #305 | `0ae083005232f9e2f8a76ccc9423546abffc54c5` | `main` | ready, blocked | Reclaim explicitly identified PostgreSQL test clusters |
 | #306 | `bb22a5b3683227477e4606d2c1a45c129efbe333` | `main` | ready, blocked | Reclaim Python tool caches while excluding provider-managed roots |
 | #308 | `67306e9c262d76d721edde8edf2c38a96e125956` | `main` | ready, blocked | Bind release verification to platform artifact namespaces |
