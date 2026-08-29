@@ -27,6 +27,11 @@ pub fn preview_catalog_cache_headless(
         .ok_or_else(|| "cache-base-directories-unavailable".to_string())?;
     let root = crate::rules::cache_catalog_path(&bases, cache_id)
         .ok_or_else(|| "cache-id-not-in-catalog".to_string())?;
+    match std::fs::symlink_metadata(&root) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("cache-target-metadata-unavailable".into()),
+    }
     let targets = crate::rules::cache_targets(&root)?;
 
     Ok(targets
