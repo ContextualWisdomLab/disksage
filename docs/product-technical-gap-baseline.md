@@ -1260,3 +1260,16 @@ runner's private workspace temp root instead of weakening the shared production 
 - Regenerability was verified without stopping a customer process: an isolated npm cache executed
   `semver 1.2.3`, its `_npx` environment was removed, and the same npm command returned `1.2.3`
   while recreating the same cache environment. The isolated verification cache was then removed.
+
+## 2026-08-29 Gradle regeneration-root follow-up
+
+- The existing `gradle-cache` catalog entry covered only `~/.gradle/caches`, which was already
+  absent at the observation point. DiskSage therefore reported none of the remaining 1,897,284 KiB
+  under `~/.gradle`: wrapper distributions used 898,108 KiB, downloaded toolchain JDKs 496,800 KiB,
+  and inactive daemon records 493,140 KiB. No Gradle or Gradle-hosting Java process was running.
+- DiskSage now catalogues those three regeneration roots separately and the headless CLI accepts
+  an exact catalog ID. Every direct child still passes the existing identity snapshot, recursive
+  active-use evidence, immediate identity revalidation, and journal contract. Irreversible mode is
+  rejected for every non-Gradle catalog ID and cannot accept an arbitrary filesystem path.
+- Physical reclamation remains pending until this stacked head is compiled and the current cache
+  children pass a fresh complete active-use probe; build output is not counted as recovered space.

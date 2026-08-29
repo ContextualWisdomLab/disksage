@@ -4,13 +4,14 @@
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
 use disksage_lib::cache_cleanup::{
-    clean_inactive_npx_environments_headless, clean_regenerable_caches_headless,
+    clean_catalog_cache_headless, clean_inactive_npx_environments_headless,
+    clean_regenerable_caches_headless,
     proven_cache_trash_candidates, purge_proven_cache_trash,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--npx-only | --purge-proven-cache-trash] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--cache-id ID [--permanent-cache] | --npx-only | --purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
 inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
 only structurally proven cache directories already in OS Trash.";
@@ -19,6 +20,8 @@ only structurally proven cache directories already in OS Trash.";
 struct Args {
     execute: bool,
     npx_only: bool,
+    cache_id: Option<String>,
+    permanent_cache: bool,
     purge_proven_cache_trash: bool,
     journal_path: PathBuf,
 }
@@ -70,6 +73,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
 
     let mut execute = false;
     let mut npx_only = false;
+    let mut cache_id = None;
+    let mut permanent_cache = false;
     let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
@@ -77,6 +82,11 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
         match arg.to_str() {
             Some("--execute") => execute = true,
             Some("--npx-only") => npx_only = true,
+            Some("--cache-id") => {
+                cache_id = Some(args.next().and_then(|value| value.into_string().ok())
+                    .ok_or_else(|| "--cache-id requires UTF-8 ID".to_string())?);
+            }
+            Some("--permanent-cache") => permanent_cache = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
@@ -92,12 +102,17 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
-    if npx_only && purge_proven_cache_trash {
-        return Err("--npx-only and --purge-proven-cache-trash are mutually exclusive".into());
+    if usize::from(npx_only) + usize::from(purge_proven_cache_trash) + usize::from(cache_id.is_some()) > 1 {
+        return Err("cache cleanup modes are mutually exclusive".into());
+    }
+    if permanent_cache && cache_id.is_none() {
+        return Err("--permanent-cache requires --cache-id".into());
     }
     Ok(Some(Args {
         execute,
         npx_only,
+        cache_id,
+        permanent_cache,
         purge_proven_cache_trash,
         journal_path,
     }))
@@ -128,6 +143,8 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "executed": false,
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
+                "cache_id": args.cache_id,
+                "permanent_cache": args.permanent_cache,
                 "proven_cache_trash": cache_trash,
                 "notice": "pass --execute to perform the guarded OS-Trash operation"
             })
@@ -150,7 +167,11 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         );
         return Ok(());
     }
-    let evidence = if args.npx_only {
+    let evidence = if let Some(cache_id) = args.cache_id.as_deref() {
+        serde_json::to_value(clean_catalog_cache_headless(
+            cache_id, &args.journal_path, now_ms(), args.permanent_cache,
+        )?).map_err(|error| error.to_string())?
+    } else if args.npx_only {
         serde_json::to_value(clean_inactive_npx_environments_headless(
             &args.journal_path,
             now_ms(),
@@ -228,5 +249,20 @@ mod tests {
             OsString::from("--purge-proven-cache-trash"),
         ])
         .is_err());
+    }
+
+    #[test]
+    fn named_cache_mode_is_explicit_and_exclusive() {
+        let args = parse_args([
+            OsString::from("--cache-id"), OsString::from("gradle-cache"),
+            OsString::from("--permanent-cache"),
+        ]).unwrap().unwrap();
+        assert_eq!(args.cache_id.as_deref(), Some("gradle-cache"));
+        assert!(args.permanent_cache);
+        assert!(parse_args([OsString::from("--permanent-cache")]).is_err());
+        assert!(parse_args([
+            OsString::from("--cache-id"), OsString::from("gradle-cache"),
+            OsString::from("--npx-only"),
+        ]).is_err());
     }
 }

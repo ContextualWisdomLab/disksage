@@ -113,6 +113,9 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
         ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
+        ("gradle-wrapper-cache", "Gradle 실행 파일 캐시", bases.home.join(".gradle").join("wrapper").join("dists")),
+        ("gradle-jdk-cache", "Gradle JDK 캐시", bases.home.join(".gradle").join("jdks")),
+        ("gradle-daemon-cache", "Gradle 실행 기록 캐시", bases.home.join(".gradle").join("daemon")),
         ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
             bases.home.join("Library").join("Application Support").join("Caches")),
         (

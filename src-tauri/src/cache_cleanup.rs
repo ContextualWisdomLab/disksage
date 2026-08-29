@@ -366,6 +366,27 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
+/// Reclaim one named catalog cache through the existing identity and active-use checks.
+/// Permanent deletion is limited to Gradle's regenerable cache-only roots.
+pub fn clean_catalog_cache_headless(
+    cache_id: &str,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    if permanent
+        && !["gradle-cache", "gradle-wrapper-cache", "gradle-jdk-cache", "gradle-daemon-cache"]
+            .contains(&cache_id)
+    {
+        return Err("permanent-cache-id-not-approved".into());
+    }
+    let path = rules::cache_catalog_path(&bases, cache_id)
+        .ok_or_else(|| "cache-id-not-catalogued".to_string())?;
+    let targets = rules::cache_targets(&path)?;
+    clean_cache_contents_inner(&bases, &path, &targets, journal_path, now_ms, permanent)
+}
+
 /// Permanently reclaim only inactive, unchanged npx environments; package downloads are
 /// regenerable and every directory is identity-bound, active-use checked, and journaled.
 pub fn clean_inactive_npx_environments_headless(
@@ -420,6 +441,19 @@ mod tests {
             local_data: root.join("local"),
             home: root.join("home"),
         }
+    }
+
+    #[test]
+    fn permanent_catalog_cleanup_is_gradle_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let error = clean_catalog_cache_headless(
+            "npm-cache",
+            &tmp.path().join("journal.jsonl"),
+            1,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(error, "permanent-cache-id-not-approved");
     }
 
     #[test]
