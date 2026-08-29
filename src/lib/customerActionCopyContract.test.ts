@@ -16,6 +16,7 @@ describe("customer action copy", () => {
       readUi("CloudArchive.svelte"),
       readUi("Duplicates.svelte"),
       readUi("GitWorktreeCleanup.svelte"),
+      readUi("GitCloneCleanup.svelte"),
       readUi("Organize.svelte"),
       readUi("BrewCleanup.svelte"),
       readUi("Inventory.svelte"),

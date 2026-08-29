@@ -583,6 +583,37 @@ pub(crate) fn exact_reference_contains_commit(
     Ok(ancestry.status_code == Some(0))
 }
 
+/// Verify that one locally available commit is contained in an exact provider-observed PR head.
+/// Both OIDs come from the bounded audit boundary; no local branch name can substitute for them.
+pub(crate) fn exact_oid_contains_commit(
+    repository_root: &Path,
+    authoritative_head_oid: &str,
+    candidate_oid: &str,
+    timeout_ms: u64,
+) -> Result<bool, String> {
+    for oid in [authoritative_head_oid, candidate_oid] {
+        if !is_oid(oid) {
+            return Err("git-pull-request-oid-invalid".into());
+        }
+    }
+    let ancestry = run_git(
+        repository_root,
+        &[
+            OsString::from("merge-base"),
+            OsString::from("--is-ancestor"),
+            OsString::from(candidate_oid),
+            OsString::from(authoritative_head_oid),
+        ],
+        timeout_ms,
+        "git-pull-request-head-ancestry",
+    )?;
+    match ancestry.status_code {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err("git-pull-request-head-ancestry-failed".into()),
+    }
+}
+
 pub(crate) fn is_standalone_repository_root(
     repository_root: &Path,
     timeout_ms: u64,
@@ -1485,6 +1516,17 @@ fn size_evidence(path: &Path, max_entries: u64, timeout_ms: u64) -> GitWorktreeS
                 };
             }
         };
+        #[cfg(target_os = "macos")]
+        if crate::cloud::metadata_is_dataless(&metadata) {
+            return GitWorktreeSizeEvidence {
+                method: "bounded-filesystem-st-blocks-sum".into(),
+                evidence_complete: false,
+                allocated_bytes: allocated,
+                logical_bytes: logical,
+                visited_entries,
+                error: Some("size-scan-dataless-provider-item".into()),
+            };
+        }
         allocated = allocated.saturating_add(allocated_bytes(&metadata));
         logical = logical.saturating_add(metadata.len());
         if metadata.file_type().is_symlink() || !metadata.is_dir() {

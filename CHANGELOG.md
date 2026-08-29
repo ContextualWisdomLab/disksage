@@ -247,6 +247,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Require standalone clone cleanup to prove fresh closed/merged PR commit membership, exact
+  authoritative PR-head ancestry, no open PR, a non-default branch, complete provider-local bytes,
+  and a fresh identity-bound recheck before the existing reversible Trash move.
+
 - Default personal cloud-provider OAuth consent to read-only; upload scope and API write
   authority now require an explicit user opt-in.
 - Catalog the Cargo registry source tree as an explicit, identity-bound regenerable-cache target;
