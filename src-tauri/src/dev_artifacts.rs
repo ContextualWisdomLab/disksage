@@ -15,7 +15,6 @@ const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_US
 // Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
 // 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
 // longer operational timeout instead of silently weakening the active-use gate.
-const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
 #[cfg(test)]
 thread_local! {
@@ -478,7 +477,7 @@ pub fn permanently_delete_artifacts(
 
 fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
     if permanent {
-        ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS
+        crate::safety::PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS
     } else {
         ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS
     }

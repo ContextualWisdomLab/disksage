@@ -276,7 +276,11 @@ pub(crate) fn clean_cache_contents_inner(
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                if permanent_directories {
+                    crate::safety::PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS
+                } else {
+                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS
+                },
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );

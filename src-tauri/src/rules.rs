@@ -70,6 +70,17 @@ const MAX_CACHE_TARGETS: usize = 4_096;
 const MAX_CACHE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_CACHE_MANIFEST_ENTRIES: usize = 100_000;
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_after_cache_directory_enumeration_hook(hook: impl FnOnce() + 'static) {
+    AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
 fn is_disksage_trash_staging(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -735,8 +746,46 @@ fn update_cache_manifest(
             children.push(entry.path());
         }
         children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-        for child in children {
+        let child_names = children
+            .iter()
+            .map(|child| child.file_name().map(std::ffi::OsStr::to_os_string))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "cache-target-manifest-name-unavailable".to_string())?;
+        #[cfg(test)]
+        AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
+        for child in &children {
             update_cache_manifest(&child, hasher, budget)?;
+        }
+        let mut refreshed_names = Vec::new();
+        for entry in std::fs::read_dir(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?
+        {
+            if refreshed_names.len() > child_names.len() {
+                return Err("cache-target-manifest-directory-changed-during-read".into());
+            }
+            refreshed_names.push(
+                entry
+                    .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?
+                    .file_name(),
+            );
+        }
+        refreshed_names.sort();
+        let refreshed = std::fs::symlink_metadata(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?;
+        let refreshed_object_id = crate::safety::filesystem_object_id(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?;
+        if refreshed_names != child_names
+            || !refreshed.is_dir()
+            || refreshed.file_type().is_symlink()
+            || refreshed.len() != metadata.len()
+            || modified_ms(&refreshed) != modified_ms(&metadata)
+            || refreshed_object_id != object_id
+        {
+            return Err("cache-target-manifest-directory-changed-during-read".into());
         }
     }
     Ok(())
@@ -814,11 +863,12 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
         return Err("cache-target-limit-exceeded".into());
     }
     let mut targets = Vec::with_capacity(paths.len());
-    let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, MAX_CACHE_MANIFEST_ENTRIES);
     for path in paths {
         if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
+        let mut budget =
+            CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, MAX_CACHE_MANIFEST_ENTRIES);
         match cache_target_with_budget(&path, &mut budget) {
             Ok(target) => targets.push(target),
             Err(error) if error == "cache-target-type-unsupported" => continue,
@@ -1064,19 +1114,37 @@ mod tests {
     }
 
     #[test]
-    fn cache_target_budget_is_shared_across_targets() {
+    fn cache_targets_apply_manifest_budget_to_each_independent_child() {
         let tmp = tempfile::tempdir().unwrap();
         let first = tmp.path().join("first.bin");
         let second = tmp.path().join("second.bin");
         fs::write(&first, b"abc").unwrap();
         fs::write(&second, b"def").unwrap();
-        let mut budget = CacheManifestBudget::new(5, 2);
+        let mut first_budget = CacheManifestBudget::new(3, 1);
+        let mut second_budget = CacheManifestBudget::new(3, 1);
 
-        cache_target_with_budget(&first, &mut budget).unwrap();
-        let error = cache_target_with_budget(&second, &mut budget)
-            .expect_err("a request-wide byte budget must not reset per target");
+        cache_target_with_budget(&first, &mut first_budget).unwrap();
+        cache_target_with_budget(&second, &mut second_budget).unwrap();
+    }
 
-        assert_eq!(error, "cache-target-manifest-byte-limit-exceeded");
+    #[test]
+    fn cache_manifest_rejects_child_added_after_enumeration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("reviewed.bin"), b"reviewed").unwrap();
+        let late = root.join("late.bin");
+        set_after_cache_directory_enumeration_hook(move || {
+            fs::write(late, b"late").unwrap();
+        });
+
+        let error = cache_target(&root)
+            .expect_err("a child added after enumeration must invalidate the manifest");
+
+        assert_eq!(
+            error,
+            "cache-target-manifest-directory-changed-during-read"
+        );
     }
 
     #[test]

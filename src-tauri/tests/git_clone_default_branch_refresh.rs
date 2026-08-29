@@ -8,6 +8,9 @@ use disksage_lib::git_worktree::GitWorktreeAuditOptions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn git(repository: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -30,6 +33,7 @@ fn git(repository: &Path, args: &[&str]) -> String {
 
 #[test]
 fn execution_refreshes_default_branch_evidence_timestamp_after_old_plan() {
+    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
     let repository_parent = tempfile::tempdir().expect("create repository parent");
     let repository = repository_parent.path().join("clone");
     std::fs::create_dir(&repository).expect("create repository root");

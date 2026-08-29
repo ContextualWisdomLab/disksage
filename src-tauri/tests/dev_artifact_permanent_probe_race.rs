@@ -3,9 +3,13 @@
 use disksage_lib::dev_artifacts::{find_artifacts, permanently_delete_artifacts};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Mutex;
+
+static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn permanent_artifact_cleanup_rejects_same_size_rewrite_during_active_use_probe() {
+    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
     let temp = tempfile::tempdir().expect("temporary development-artifact fixture");
     let root = temp.path().join("workspace");
     let project = root.join("app");
@@ -72,4 +76,46 @@ exit 0
         fs::read(artifact.join("original.bin")).expect("late rewrite must survive rejected cleanup"),
         b"changed!"
     );
+}
+
+#[test]
+fn permanent_artifact_cleanup_allows_bounded_probe_longer_than_two_seconds() {
+    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
+    let temp = tempfile::tempdir().expect("temporary development-artifact fixture");
+    let root = temp.path().join("workspace");
+    let project = root.join("app");
+    let artifact = project.join("node_modules");
+    fs::create_dir_all(&artifact).expect("create generated tree");
+    fs::write(project.join("package.json"), b"{}").expect("write project marker");
+    fs::write(artifact.join("generated.bin"), b"generated").expect("write generated file");
+    let candidates = find_artifacts(&root, 0, u64::MAX);
+
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("create fake executable directory");
+    let fake_lsof = fake_bin.join("lsof");
+    fs::write(&fake_lsof, "#!/bin/sh\nsleep 3\nexit 0\n").expect("write slow fake lsof");
+    fs::set_permissions(&fake_lsof, fs::Permissions::from_mode(0o755))
+        .expect("make fake lsof executable");
+
+    let old_path = std::env::var_os("PATH");
+    let joined_path = match old_path.as_ref() {
+        Some(path) => format!("{}:{}", fake_bin.display(), path.to_string_lossy()),
+        None => fake_bin.to_string_lossy().into_owned(),
+    };
+    std::env::set_var("PATH", joined_path);
+    let results = permanently_delete_artifacts(
+        &candidates,
+        &root,
+        0,
+        &temp.path().join("journal.jsonl"),
+        1,
+    );
+    match old_path {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].ok, "both bounded probes must accept a three-second scan");
+    assert!(!artifact.exists());
 }

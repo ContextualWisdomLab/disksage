@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Recursive active-use probes for irreversible generated-tree deletion must accommodate real
+/// dependency trees while remaining bounded and fail-closed.
+pub(crate) const PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -700,7 +704,7 @@ pub fn permanent_delete_dir_if_identity(
         // users; recursively probe the exact staged object before the irreversible removal.
         let active_use = crate::git_worktree::active_use_evidence(
             &staged,
-            crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+            PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
             crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
             true,
         );
