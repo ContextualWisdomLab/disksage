@@ -50,6 +50,9 @@ pub struct PhotoDuplicateAudit {
     pub schema_kind: String,
     pub generated_at_ms: u64,
     pub exact_groups: Vec<ExactPhotoGroup>,
+    pub inspected_input_count: u64,
+    pub rejected_input_counts: std::collections::BTreeMap<String, u64>,
+    pub evidence_complete: bool,
     pub perceptual_grouping_available: bool,
     pub perceptual_grouping_blocker: String,
     pub permanent_delete_available: bool,
@@ -75,9 +78,8 @@ fn admission_blocker(path: &Path, metadata: &std::fs::Metadata) -> Option<&'stat
     None
 }
 
-fn read_png_evidence(path: &Path) -> Result<(u32, u32, u8, u32, String), String> {
-    let file = std::fs::File::open(path).map_err(|_| "photo-input-open-failed".to_string())?;
-    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder
         .read_info()
@@ -173,34 +175,33 @@ fn hash_current_file(
     path: &Path,
     expected: &std::fs::Metadata,
     expected_identity: &str,
-) -> Result<String, String> {
+) -> Result<(String, Vec<u8>), String> {
     let mut file = std::fs::File::open(path).map_err(|_| "photo-input-open-failed".to_string())?;
     let opened = file
         .metadata()
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
     if opened.len() != expected.len()
+        || opened.modified().ok() != expected.modified().ok()
         || crate::safety::object_id_from_metadata(&opened).as_deref() != Some(expected_identity)
     {
         return Err("photo-input-changed".into());
     }
     let mut hasher = blake3::Hasher::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| "photo-input-read-failed".to_string())?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
+    let mut bytes = Vec::with_capacity(expected.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|_| "photo-input-read-failed".to_string())?;
+    if bytes.len() as u64 != expected.len() {
+        return Err("photo-input-changed".into());
     }
+    hasher.update(&bytes);
     let after = std::fs::symlink_metadata(path).map_err(|_| "photo-input-changed".to_string())?;
     if after.len() != expected.len()
+        || after.modified().ok() != expected.modified().ok()
         || crate::safety::filesystem_object_id(path).ok().as_deref() != Some(expected_identity)
     {
         return Err("photo-input-changed".into());
     }
-    Ok(hasher.finalize().to_hex().to_string())
+    Ok((hasher.finalize().to_hex().to_string(), bytes))
 }
 
 pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
@@ -225,10 +226,17 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     if !extension.eq_ignore_ascii_case("png") {
         return Err("photo-codec-unsupported".into());
     }
+    let (blake3, current_bytes) = hash_current_file(path, &metadata, &identity)?;
     let (width, height, bit_depth, metadata_field_count, decoded_pixel_digest) =
-        read_png_evidence(path)?;
-    let blake3 = hash_current_file(path, &metadata, &identity)?;
-    if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(identity.as_str()) {
+        read_png_evidence(&current_bytes)?;
+    let final_metadata = std::fs::symlink_metadata(path).ok();
+    if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(identity.as_str())
+        || final_metadata.as_ref().map(std::fs::Metadata::len) != Some(metadata.len())
+        || final_metadata
+            .as_ref()
+            .and_then(|value| value.modified().ok())
+            != metadata.modified().ok()
+    {
         return Err("photo-input-changed".into());
     }
     Ok(PhotoEvidence {
@@ -256,21 +264,30 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
 
 pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAudit {
     let mut by_digest = std::collections::BTreeMap::<String, Vec<PhotoEvidence>>::new();
+    let mut rejected_input_counts = std::collections::BTreeMap::<String, u64>::new();
+    let mut inspected_input_count = 0_u64;
     for path in paths {
-        if let Ok(evidence) = inspect_photo(path) {
-            by_digest
-                .entry(evidence.decoded_pixel_digest.clone())
-                .or_default()
-                .push(evidence);
+        match inspect_photo(path) {
+            Ok(evidence) => {
+                inspected_input_count += 1;
+                by_digest
+                    .entry(evidence.decoded_pixel_digest.clone())
+                    .or_default()
+                    .push(evidence);
+            }
+            Err(reason) => *rejected_input_counts.entry(reason).or_default() += 1,
         }
     }
     let exact_groups = by_digest
         .into_iter()
-        .filter(|(_, members)| members.len() > 1)
-        .map(|(content_digest, mut members)| {
+        .filter_map(|(content_digest, mut members)| {
             members.sort_by(|left, right| left.path.cmp(&right.path));
+            members.dedup_by(|left, right| left.object_id == right.object_id);
+            if members.len() < 2 {
+                return None;
+            }
             let keeper_path = unique_pareto_keeper(&members).map(|member| member.path.clone());
-            ExactPhotoGroup {
+            Some(ExactPhotoGroup {
                 content_digest,
                 grouping_basis: "decoded-pixel-rgba16-exact".into(),
                 members,
@@ -279,13 +296,16 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
                     .is_none()
                     .then(|| "photo-quality-evidence-requires-customer-selection".into()),
                 execution_available: false,
-            }
+            })
         })
         .collect();
     PhotoDuplicateAudit {
         schema_kind: "disksage.photo-duplicate-audit.v1".into(),
         generated_at_ms,
         exact_groups,
+        inspected_input_count,
+        evidence_complete: rejected_input_counts.is_empty(),
+        rejected_input_counts,
         perceptual_grouping_available: false,
         perceptual_grouping_blocker: "photo-perceptual-calibration-unavailable".into(),
         permanent_delete_available: false,
@@ -482,5 +502,27 @@ mod tests {
             execute_photo_duplicate_cleanup(&audit, "approved").unwrap_err(),
             "photo-duplicate-execution-unavailable-without-unique-evidence-backed-keeper"
         );
+    }
+
+    #[test]
+    fn rejected_inputs_are_reported_and_make_evidence_incomplete() {
+        let audit = audit_photos(&[PathBuf::from("/missing/photo.png")], 1);
+        assert_eq!(audit.inspected_input_count, 0);
+        assert!(!audit.evidence_complete);
+        assert_eq!(
+            audit
+                .rejected_input_counts
+                .get("photo-input-metadata-unavailable"),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn repeated_path_does_not_invent_a_duplicate_group() {
+        let temp = tempfile::tempdir().unwrap();
+        let photo = temp.path().join("single.png");
+        png(&photo, 8, 8, 4);
+        let audit = audit_photos(&[photo.clone(), photo], 1);
+        assert!(audit.exact_groups.is_empty());
     }
 }
