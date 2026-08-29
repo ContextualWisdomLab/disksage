@@ -758,30 +758,31 @@ where
     };
     crate::safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
     fs::rename(path, &staged).map_err(|_| "provider-cache-atomic-stage-failed")?;
-    if let Err(error) = after_stage(&staged, path) {
-        let metadata = fs::symlink_metadata(&staged)
-            .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
-        if metadata.is_file() {
-            restore_staged_file_without_replacement(&staged, path)?;
-        } else {
-            fs::rename(&staged, path)
-                .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+    let result = (|| -> Result<(), String> {
+        if let Err(error) = after_stage(&staged, path) {
+            let metadata = fs::symlink_metadata(&staged)
+                .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
+            if metadata.is_file() {
+                restore_staged_file_without_replacement(&staged, path)?;
+            } else {
+                fs::rename(&staged, path)
+                    .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
-    let result = if crate::safety::filesystem_object_id(&staged).ok().as_deref()
-        != Some(&candidate.object_id)
-    {
-        let metadata = fs::symlink_metadata(&staged)
-            .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
-        if metadata.is_file() {
-            restore_staged_file_without_replacement(&staged, path)?;
-        } else {
-            fs::rename(&staged, path)
-                .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+        if crate::safety::filesystem_object_id(&staged).ok().as_deref()
+            != Some(&candidate.object_id)
+        {
+            let metadata = fs::symlink_metadata(&staged)
+                .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
+            if metadata.is_file() {
+                restore_staged_file_without_replacement(&staged, path)?;
+            } else {
+                fs::rename(&staged, path)
+                    .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+            }
+            return Err("provider-cache-staged-identity-changed".to_string());
         }
-        Err("provider-cache-staged-identity-changed".to_string())
-    } else {
         let metadata = fs::symlink_metadata(&staged)
             .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
         if metadata.is_dir() {
@@ -814,7 +815,7 @@ where
                 },
             }
         }
-    };
+    })();
     journal.outcome = if result.is_ok() { "ok" } else { "error" }.into();
     finish_purge_result(
         result,
@@ -1300,20 +1301,32 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let seed = temp.path().join("seed.raw.zst");
         fs::write(&seed, b"approved-seed").unwrap();
-        let candidate = candidate(
-            ProviderCacheKind::PodmanMachineSeed,
-            &seed,
-            "recreation-source".into(),
-            Some(file_sha256(&seed).unwrap()),
-        )
-        .unwrap();
+        let candidate = ProviderCacheCandidate {
+            kind: ProviderCacheKind::PodmanMachineSeed,
+            path: seed.to_string_lossy().into_owned(),
+            logical_bytes: fs::metadata(&seed).unwrap().len(),
+            allocated_bytes: allocated_bytes(&fs::metadata(&seed).unwrap()),
+            object_id: crate::safety::filesystem_object_id(&seed).unwrap(),
+            content_manifest: file_sha256(&seed).unwrap(),
+            evidence_fingerprint: "a".repeat(64),
+            active_use: crate::cloud_local_eviction::ActiveUseEvidence {
+                method: "lsof-fp+ps-command".into(),
+                evidence_complete: true,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: None,
+            },
+            recreation_source: "test-fixture".into(),
+        };
         let staged = temp.path().join(format!(
             ".disksage-provider-cache-purge-9-{}",
             &candidate.evidence_fingerprint[..12]
         ));
+        let journal = temp.path().join("journal.jsonl");
         let result = permanently_purge_exact_with_after_stage(
             &candidate,
-            &temp.path().join("journal.jsonl"),
+            &journal,
             9,
             |actual_staged, original| {
                 assert_eq!(actual_staged, staged);
@@ -1328,5 +1341,16 @@ mod tests {
         );
         assert_eq!(fs::read(&seed).unwrap(), b"provider-recreated-seed");
         assert_eq!(fs::read(&staged).unwrap(), b"tampered-staged-seed");
+        let outcomes: Vec<String> = fs::read_to_string(journal)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).unwrap()["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(outcomes, ["pending", "error"]);
     }
 }
