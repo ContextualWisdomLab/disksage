@@ -102,15 +102,16 @@ fn run_bounded(
     label: &str,
 ) -> Result<BoundedOutput, String> {
     let mut command = Command::new(executable);
-    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
     let stdout = child
         .stdout
         .take()
@@ -189,9 +190,7 @@ fn run_mutation_bounded(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
 
     let Some(stdout) = child.stdout.take() else {
         terminate_mutation_process_tree(&mut child);
@@ -356,7 +355,15 @@ fn storage_repair_scope_fingerprint(machine: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"disksage.podman-machine-storage-repair-scope.v1\0");
     hash_frame(&mut digest, machine.as_bytes());
-    for token in ["podman", "--connection", machine, "system", "check", "--quick", "--repair"] {
+    for token in [
+        "podman",
+        "--connection",
+        machine,
+        "system",
+        "check",
+        "--quick",
+        "--repair",
+    ] {
         hash_frame(&mut digest, token.as_bytes());
     }
     lower_hex(&digest.finalize())
@@ -395,9 +402,8 @@ fn storage_check_evidence(
         damaged_layer_records: ids.len() as u64,
         candidate_set_sha256: fingerprint,
         evidence_complete: complete,
-        exact_approval_phrase: (complete && !ids.is_empty()).then(|| {
-            format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")
-        }),
+        exact_approval_phrase: (complete && !ids.is_empty())
+            .then(|| format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")),
         issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
     };
     Ok((plan, ids))
@@ -469,7 +475,8 @@ pub fn execute_podman_storage_repair(
         MUTATION_WAIT_STATUS_CODE => Some("podman-storage-repair-wait".into()),
         MUTATION_CAPTURE_STATUS_CODE => Some("podman-storage-repair-output-too-large".into()),
         MUTATION_UTF8_STATUS_CODE => Some("podman-storage-repair-output-not-utf8".into()),
-        _ => None,
+        0 => None,
+        _ => Some("podman-storage-repair-command-failed".into()),
     };
 
     Ok(PodmanStorageRepairExecution {
@@ -488,8 +495,7 @@ pub fn execute_podman_storage_repair(
         status_code: output.status_code,
         command_attempted: true,
         execution_issue,
-        executed: output.status_code == 0
-            || (postcheck_complete && repaired_layer_records > 0),
+        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
@@ -731,8 +737,13 @@ mod mutation_runner_tests {
         fs::set_permissions(&fake, permissions).unwrap();
 
         let started = Instant::now();
-        let output = run_bounded(&fake, &[], Duration::from_secs(1), "readonly-completed-fixture")
-            .expect("direct completion must not hang on inherited pipes");
+        let output = run_bounded(
+            &fake,
+            &[],
+            Duration::from_secs(1),
+            "readonly-completed-fixture",
+        )
+        .expect("direct completion must not hang on inherited pipes");
 
         assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
