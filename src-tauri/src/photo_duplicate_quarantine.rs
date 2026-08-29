@@ -9,6 +9,7 @@ use crate::photo_similarity_audit::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use tauri::Manager;
 
 fn exact_report(
     source_root: &Path,
@@ -231,18 +232,36 @@ pub fn plan_exact_photo_duplicate_quarantine(
     plan_exact_photo_quarantine(Path::new(&source_root), &audit, &selections)
 }
 
+/// Decode the supplied byte-duplicate candidates without mutating them.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub async fn audit_exact_photo_duplicates(
+    paths: Vec<String>,
+    generated_at_ms: u64,
+) -> Result<PhotoDuplicateAudit, String> {
+    let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || Ok(audit_photos(&paths, generated_at_ms)))
+        .await
+        .map_err(|_| "photo-exact-audit-worker-unavailable".to_string())?
+}
+
 /// Tauri boundary for the shared reversible quarantine executor.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub async fn execute_exact_photo_duplicate_quarantine(
+    app: tauri::AppHandle,
     source_root: String,
     audit: PhotoDuplicateAudit,
     plan: PhotoQuarantinePlan,
     approval_phrase: String,
     rationale: String,
-    journal_path: String,
     executed_at_ms: u64,
 ) -> Result<PhotoQuarantineReceipt, String> {
+    let journal_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "photo-exact-quarantine-journal-unavailable".to_string())?
+        .join("photo-quarantine.jsonl");
     tauri::async_runtime::spawn_blocking(move || {
         execute_exact_photo_quarantine(
             Path::new(&source_root),
@@ -250,7 +269,7 @@ pub async fn execute_exact_photo_duplicate_quarantine(
             &plan,
             &approval_phrase,
             &rationale,
-            Path::new(&journal_path),
+            &journal_path,
             executed_at_ms,
         )
     })

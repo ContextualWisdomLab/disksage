@@ -153,6 +153,73 @@ export const recentOperations = (limit = 20) =>
   invoke<JournalEntry[]>("recent_operations", { limit });
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
+
+export interface ExactPhotoEvidence {
+  path: string;
+  bytes: number;
+  width: number;
+  height: number;
+  bit_depth: number;
+  codec: string;
+  codec_lossless: boolean;
+  object_id: string;
+}
+export interface ExactPhotoGroup {
+  content_digest: string;
+  grouping_basis: string;
+  members: ExactPhotoEvidence[];
+  keeper_path: string | null;
+  keeper_blocker: string | null;
+}
+export interface PhotoDuplicateAudit {
+  schema_kind: string;
+  generated_at_ms: number;
+  audit_fingerprint: string;
+  exact_groups: ExactPhotoGroup[];
+  inspected_input_count: number;
+  rejected_input_counts: Record<string, number>;
+  evidence_complete: boolean;
+  perceptual_grouping_available: boolean;
+  perceptual_grouping_blocker: string;
+}
+export interface PhotoQuarantineSelection {
+  group_fingerprint: string;
+  survivor_relative_path: string;
+}
+export interface PhotoQuarantinePlan {
+  plan_fingerprint: string;
+  candidate_file_count: number;
+  logical_candidate_bytes: number;
+  selections: PhotoQuarantineSelection[];
+  exact_approval_phrase: string;
+  permanent_delete_allowed: boolean;
+}
+export interface PhotoQuarantineReceipt {
+  plan_fingerprint: string;
+  moved_file_count: number;
+  failed_file_count: number;
+  permanent_delete_performed: boolean;
+  items: Array<{ member_fingerprint: string; moved_to_os_trash: boolean; error: string | null }>;
+}
+export const auditExactPhotoDuplicates = (paths: string[], generatedAtMs: number) =>
+  invoke<PhotoDuplicateAudit>("audit_exact_photo_duplicates", { paths, generatedAtMs });
+export const planExactPhotoDuplicateQuarantine = (
+  sourceRoot: string,
+  audit: PhotoDuplicateAudit,
+  selections: PhotoQuarantineSelection[],
+) => invoke<PhotoQuarantinePlan>("plan_exact_photo_duplicate_quarantine", {
+  sourceRoot, audit, selections,
+});
+export const executeExactPhotoDuplicateQuarantine = (
+  sourceRoot: string,
+  audit: PhotoDuplicateAudit,
+  plan: PhotoQuarantinePlan,
+  approvalPhrase: string,
+  rationale: string,
+  executedAtMs: number,
+) => invoke<PhotoQuarantineReceipt>("execute_exact_photo_duplicate_quarantine", {
+  sourceRoot, audit, plan, approvalPhrase, rationale, executedAtMs,
+});
 export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
 export const cleanOrphanCandidates = (
   planFingerprint: string,

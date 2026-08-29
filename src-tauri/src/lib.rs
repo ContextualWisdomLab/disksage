@@ -146,6 +146,7 @@ pub fn run() {
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
+            photo_duplicate_quarantine::audit_exact_photo_duplicates,
             photo_duplicate_quarantine::plan_exact_photo_duplicate_quarantine,
             photo_duplicate_quarantine::execute_exact_photo_duplicate_quarantine,
             commands::get_ontology,

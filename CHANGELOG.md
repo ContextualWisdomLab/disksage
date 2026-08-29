@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 - Connect exact decoded-pixel duplicate groups to the existing reversible photo quarantine engine;
   forged or stale audits, ambiguous keepers without an explicit selection, and changed roots fail closed.
+  The review screen shows measured evidence and blockers, requires direct typed approval, and reports
+  reversible Trash receipts with the customer's next safe action.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
   surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
 - Revalidate every selected photo group member and block the whole quarantine when a survivor or
