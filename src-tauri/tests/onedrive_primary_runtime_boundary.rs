@@ -34,3 +34,27 @@ fn onedrive_helper_does_not_force_a_quit_when_the_primary_app_is_stopped() {
     assert!(primary_observer.contains("CloudProvider::Onedrive => \"OneDrive\""));
     assert!(!primary_observer.contains("OneDrive Sync Service"));
 }
+
+#[test]
+fn failed_shutdown_requests_are_judged_by_primary_process_evidence() {
+    let recovery_source = include_str!("../src/provider_recovery.rs");
+    let request_quit = recovery_source
+        .split_once("fn request_quit")
+        .expect("quit request helper")
+        .1
+        .split_once("fn request_graceful_term")
+        .expect("quit request helper boundary")
+        .0;
+    assert!(request_quit.contains("collect_provider_primary_runtime"));
+    assert!(!request_quit.contains("require_runtime_observation(provider, 0)"));
+
+    let graceful_term = recovery_source
+        .split_once("fn request_graceful_term")
+        .expect("graceful termination helper")
+        .1
+        .split_once("pub fn recover_provider_client")
+        .expect("graceful termination helper boundary")
+        .0;
+    assert!(graceful_term.contains("collect_provider_primary_runtime"));
+    assert!(!graceful_term.contains("require_runtime_observation(provider, 0)"));
+}
