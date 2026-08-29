@@ -239,6 +239,7 @@ fn candidate(
     })
 }
 
+#[cfg(target_os = "macos")]
 fn plist_version(path: &Path) -> Option<String> {
     plist::Value::from_file(path)
         .ok()?
@@ -247,6 +248,11 @@ fn plist_version(path: &Path) -> Option<String> {
         .as_string()
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
         .map(str::to_owned)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn plist_version(_path: &Path) -> Option<String> {
+    None
 }
 
 fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, String> {
@@ -663,6 +669,7 @@ pub fn execute(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn edge_plan_retains_installed_version_and_separates_crx_cache() {
         let temp = tempfile::tempdir().unwrap();
@@ -805,19 +812,22 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&podman, fs::Permissions::from_mode(0o700)).unwrap();
-        for (base, version) in [
-            (apps.join("Microsoft Edge.app"), "2.0"),
-            (
-                home.join("Library/Application Support/Microsoft/EdgeUpdater/apps/msedge-stable/1.0/Microsoft Edge.app"),
-                "1.0",
-            ),
-        ] {
-            fs::create_dir_all(base.join("Contents")).unwrap();
-            let mut dictionary = plist::Dictionary::new();
-            dictionary.insert("CFBundleShortVersionString".into(), version.into());
-            plist::Value::Dictionary(dictionary)
-                .to_file_xml(base.join("Contents/Info.plist"))
-                .unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            for (base, version) in [
+                (apps.join("Microsoft Edge.app"), "2.0"),
+                (
+                    home.join("Library/Application Support/Microsoft/EdgeUpdater/apps/msedge-stable/1.0/Microsoft Edge.app"),
+                    "1.0",
+                ),
+            ] {
+                fs::create_dir_all(base.join("Contents")).unwrap();
+                let mut dictionary = plist::Dictionary::new();
+                dictionary.insert("CFBundleShortVersionString".into(), version.into());
+                plist::Value::Dictionary(dictionary)
+                    .to_file_xml(base.join("Contents/Info.plist"))
+                    .unwrap();
+            }
         }
         let plan = plan_with_runtime(&home, &apps, &podman, 1);
         assert!(plan.evidence_complete, "{:?}", plan.issues);
