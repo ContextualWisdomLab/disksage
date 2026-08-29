@@ -102,6 +102,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   cannot occupy asynchronous command workers.
 - Preserve Docker context TLS credentials by executing through the explicitly pinned context while
   binding approval to the complete inspected context definition.
+- Surface an approved duplicate at a deterministic sibling recovery name when its original path is
+  concurrently occupied, and report preservation or rollback failure explicitly.
 - Detect a running but unreachable Podman/Colima guest, offer a separate exact-phrase-approved
   runtime-native stop/start recovery, and re-check reachability before enabling trim. Trim receipts
   now include bounded before/after host-volume evidence for the measured available-space change.

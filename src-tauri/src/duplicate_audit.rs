@@ -545,6 +545,31 @@ fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, 
 }
 
 #[cfg(unix)]
+fn preserve_staged_candidate(
+    original: &Path,
+    staged: &Path,
+    staging_token: u64,
+) -> Result<(), String> {
+    if std::fs::symlink_metadata(original).is_err() {
+        return std::fs::rename(staged, original)
+            .map_err(|_| "duplicate-reclaim-recovery-failed".to_string());
+    }
+    let file_name = original
+        .file_name()
+        .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?
+        .to_string_lossy();
+    let recovery = original.with_file_name(format!(
+        "{file_name}.disksage-recovery-{staging_token}"
+    ));
+    if std::fs::symlink_metadata(&recovery).is_ok() {
+        return Err("duplicate-reclaim-recovery-location-occupied".into());
+    }
+    std::fs::rename(staged, recovery)
+        .map_err(|_| "duplicate-reclaim-recovery-failed".to_string())?;
+    Err("duplicate-reclaim-recovery-preserved".into())
+}
+
+#[cfg(unix)]
 fn remove_if_storage_identity(
     path: &Path,
     expected_storage_identity: &str,
@@ -582,17 +607,16 @@ fn remove_if_storage_identity(
         .as_deref()
         == Some(expected_storage_identity);
     if !staged_matches {
-        if !path.exists() {
-            let _ = std::fs::rename(&staged, path);
-        }
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
-        return Err("duplicate-reclaim-candidate-changed-during-staging".into());
+        return recovery.and(Err("duplicate-reclaim-candidate-changed-during-staging".into()));
     }
     if let Err(error) = std::fs::remove_file(&staged) {
-        if !path.exists() {
-            let _ = std::fs::rename(&staged, path);
-        }
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
+        if let Err(recovery_error) = recovery {
+            return Err(recovery_error);
+        }
         return Err(format!("duplicate-reclaim-delete-failed:{error}"));
     }
     let _ = std::fs::remove_dir(&staging_dir);
@@ -1444,6 +1468,27 @@ mod tests {
             removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
             "duplicate-reclaim-delete-failed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_candidate_is_surfaced_when_original_name_is_occupied() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("duplicate.bin");
+        let staged = root.path().join(".hidden-stage");
+        std::fs::write(&original, b"replacement bytes").unwrap();
+        std::fs::write(&staged, b"approved bytes").unwrap();
+
+        assert_eq!(
+            preserve_staged_candidate(&original, &staged, 77).unwrap_err(),
+            "duplicate-reclaim-recovery-preserved"
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), b"replacement bytes");
+        assert_eq!(
+            std::fs::read(root.path().join("duplicate.bin.disksage-recovery-77")).unwrap(),
+            b"approved bytes"
+        );
+        assert!(!staged.exists());
     }
 
     #[test]
