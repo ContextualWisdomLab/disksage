@@ -9,6 +9,21 @@ queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-08-29 OneDrive local-space recovery observation
+
+- A metadata-only inventory completed across 277,410 entries and found 118 locally materialized
+  candidates totaling 62,060,163,072 allocated bytes. A fresh plan after provider drift retained
+  110 eligible items totaling 58,836,140,032 allocated bytes and excluded eight items; private
+  paths remain outside this document.
+- The first exact-item execution performed no eviction because the desktop client would not finish
+  its bounded quit sequence. DiskSage now keeps copy/upload admission separate from local-only
+  Files On-Demand eviction, observes the primary app separately from its resident File Provider
+  helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
+  client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
+- The remaining acceptance proof is a successful vendor `/unpin` on a freshly replanned item,
+  immutable result recording, and observed allocation reduction. Until then the measured 58.8 GB
+  is opportunity, not reclaimed capacity.
+
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
 - PR #267 observed head `4b6dc492926a48aa0f29e867316177de31c92f4d` adds an opt-in calendar cutoff
@@ -1104,12 +1119,18 @@ runner's private workspace temp root instead of weakening the shared production 
   not used as upload or eviction authority.
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
   receipt, and post-allocation verification contract for individual OneDrive files. Execution
-  additionally requires a quiet provider-wide queue, gracefully stops the verified OneDrive app,
-  uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
+  uses exact item evidence, gracefully stops the verified OneDrive app,
+  uses Microsoft's `/unpin` Files On-Demand command, and restarts the client. Exact File Provider
+  item evidence replaces the optional `/getpin` query. It does
   not require OAuth and never deletes the visible cloud item.
+- The same evidence contract now supports bounded OneDrive batches through the provider-neutral
+  `disksage-cloud-local-eviction-batch` CLI. Sync-incomplete items are excluded by index, every
+  selected item is replanned before the first mutation, and execution stops after the first failed
+  or incompletely verified item.
 - The live provider-wide probe currently shows active upload/download, indexing, and reconciliation
-  work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
-  eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
+  work. Local-only eviction is governed by exact item evidence instead, but the desktop app did not
+  complete its bounded graceful quit, so no item was evicted. A physical-space receipt from the
+  live provider remains open; the 300 GB goal is not
   claimed complete.
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
@@ -1176,9 +1197,14 @@ runner's private workspace temp root instead of weakening the shared production 
   bytes. Ten active candidates and one changed or incomplete manifest remained untouched. The
   private journal is `/private/tmp/disksage-dev-permanent-1787954077.jsonl`; concurrent provider
   and build writes mean this logical total is not presented as an APFS free-space increase.
-- The live Podman machine retains five running PostgreSQL containers and two recent stopped
-  PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
-  containers, no custom network is unused, and volume safety cannot be completed while one stopped
-  container has corrupt overlay metadata. The 100 GiB raw disk is already sparse and native
-  `fstrim --dry-run` reports 0 B, so DiskSage offers no destructive prune or unsupported host
-  compaction claim for this state.
+- A later exact-identity `/private/tmp/opencode` pass preserved all 128 registered review
+  worktrees, then removed only 146 generated Rust, Python, Node, and analysis-cache roots within
+  them. All candidates passed manifest, active-use, and current-object checks; the bounded APFS
+  observation increased by 6,487,040 KiB. Source checkouts and Git registrations were untouched.
+- The current Podman machine has one running and four stopped PostgreSQL test containers. Its
+  native orphan audit proves 74 unreferenced images (about 42.9 GB by record-size sum), but
+  `podman system df` and exact stopped-container removal fail because the store contains damaged
+  overlay layers, including a missing required lower directory. `podman system check --quick`
+  independently confirms the storage inconsistency. DiskSage therefore records no prune or
+  physical gain until an explicit native storage-repair plan preserves running-container and
+  data-volume dependencies, rechecks integrity, and regenerates the orphan fingerprint.
