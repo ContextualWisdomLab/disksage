@@ -122,6 +122,13 @@ pub struct PhotoQuarantineReceipt {
     pub items: Vec<PhotoQuarantineItemReceipt>,
 }
 
+fn quarantine_receipt_counts(items: &[PhotoQuarantineItemReceipt]) -> (usize, usize) {
+    (
+        items.iter().filter(|item| item.moved_to_os_trash).count(),
+        items.iter().filter(|item| item.error.is_some()).count(),
+    )
+}
+
 #[derive(Debug)]
 struct DecodedPhoto {
     member: PhotoSimilarityMember,
@@ -794,7 +801,7 @@ pub fn execute_photo_quarantine(
             error,
         });
     }
-    let moved_file_count = items.iter().filter(|item| item.moved_to_os_trash).count();
+    let (moved_file_count, failed_file_count) = quarantine_receipt_counts(&items);
     Ok(PhotoQuarantineReceipt {
         schema_version: PHOTO_SIMILARITY_AUDIT_VERSION,
         audit_fingerprint: fresh.audit_fingerprint,
@@ -803,7 +810,7 @@ pub fn execute_photo_quarantine(
         rationale: rationale.into(),
         candidate_file_count: items.len(),
         moved_file_count,
-        failed_file_count: items.len().saturating_sub(moved_file_count),
+        failed_file_count,
         permanent_delete_performed: false,
         items,
     })
@@ -932,5 +939,15 @@ mod tests {
             Some(&1)
         );
         assert_eq!(report.decoded_photo_count, 0);
+    }
+
+    #[test]
+    fn journal_failure_counts_as_failure_after_truthful_move() {
+        let items = [PhotoQuarantineItemReceipt {
+            member_fingerprint: "a".repeat(64),
+            moved_to_os_trash: true,
+            error: Some("photo-quarantine-terminal-journal-failed".into()),
+        }];
+        assert_eq!(quarantine_receipt_counts(&items), (1, 1));
     }
 }
