@@ -70,6 +70,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Branch deletion, Git pruning, detached clones, dirty clones, and implicit age thresholds remain
   prohibited. The same contract is available through a headless plan-first CLI with exact human
   confirmation and an external append-only journal.
+- Add bounded multi-root standalone-clone inventory and fresh default-branch ancestry authority.
+  Provider OID and local remote-tracking reference must match exactly; stale, dirty, active,
+  unpublished, and diverged clones remain fail-closed without any age heuristic.
 - Add an explicit operator-supplied cutoff for stale same-repository open pull-request worktrees
   (ADR-0015). GitHub creation time, state, branch, and exact head OID are refreshed before each
   removal; branches and commits remain untouched and no implicit age threshold is used.
