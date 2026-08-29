@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use disksage_lib::temp_reclaim::{
-    execute_candidate, plan_native_temp_reclaim, TempReclaimApproval,
+    execute_candidate, plan_native_temp_reclaim, TempReclaimApproval, MAX_APPROVAL_AGE_MS,
 };
 
 const USAGE: &str = "usage: disksage-temp-reclaim [--execute-fingerprint HEX --approved-by LOCAL_USER --approval-phrase EXACT_PHRASE --journal-path ABSOLUTE_PATH]";
@@ -66,13 +66,34 @@ fn main() {
         approved_by: actor,
         exact_phrase: phrase,
     };
-    if let Some(parent) = journal.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            eprintln!("저널 저장 위치를 준비하지 못했습니다. 쓰기 가능한 로컬 경로를 확인하세요.");
-            std::process::exit(2);
+    let execution_now_ms = now_ms();
+    let approval_can_reach_mutation = execution_now_ms >= approval.approved_at_ms
+        && execution_now_ms - approval.approved_at_ms <= MAX_APPROVAL_AGE_MS
+        && approval.candidate_fingerprint == fingerprint
+        && !approval.approved_by.trim().is_empty()
+        && !approval.approved_by.chars().any(char::is_control)
+        && plan.scan_complete
+        && plan.candidates.iter().any(|candidate| {
+            candidate.candidate_fingerprint == fingerprint
+                && candidate.eligible_for_approval
+                && candidate.exact_approval_phrase.as_deref()
+                    == Some(approval.exact_phrase.as_str())
+        });
+    if approval_can_reach_mutation {
+        if let Some(parent) = journal.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                eprintln!("저널 저장 위치를 준비하지 못했습니다. 쓰기 가능한 로컬 경로를 확인하세요.");
+                std::process::exit(2);
+            }
         }
     }
-    let result = execute_candidate(&plan, &fingerprint, &approval, &journal, now_ms());
+    let result = execute_candidate(
+        &plan,
+        &fingerprint,
+        &approval,
+        &journal,
+        execution_now_ms,
+    );
     println!(
         "{}",
         serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into())
