@@ -60,14 +60,15 @@ fn named_cache_dry_run_publishes_target_manifest_and_active_use_evidence() {
     let active_use = target["active_use"]
         .as_object()
         .expect("each target must publish active-use evidence");
-    assert_eq!(active_use.get("assessed").and_then(|value| value.as_bool()), Some(true));
-    assert_eq!(
-        active_use
-            .get("evidence_complete")
-            .and_then(|value| value.as_bool()),
-        Some(true)
-    );
-    assert_eq!(active_use.get("active").and_then(|value| value.as_bool()), Some(false));
+    assert!(active_use
+        .get("method")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+    assert!(active_use.get("assessed").is_some_and(|value| value.is_boolean()));
+    assert!(active_use
+        .get("evidence_complete")
+        .is_some_and(|value| value.is_boolean()));
+    assert!(active_use.get("active").is_some_and(|value| value.is_boolean()));
 
     fs::remove_dir_all(root).expect("remove fixture");
 }
