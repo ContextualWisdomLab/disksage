@@ -256,6 +256,15 @@ pub(crate) fn clean_cache_contents_inner(
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
     }
+    if permanent_directories
+        && expected.iter().any(|target| {
+            std::fs::symlink_metadata(&target.path)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true)
+        })
+    {
+        return Err("permanent-cache-target-type-unsupported".into());
+    }
 
     Ok(expected
         .into_iter()
@@ -279,10 +288,16 @@ pub(crate) fn clean_cache_contents_inner(
                 };
             }
             let path = Path::new(&target.path);
-            let permanent = permanent_directories
-                && std::fs::symlink_metadata(path)
-                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
-            let result = if permanent {
+            let result = if permanent_directories {
+                if !std::fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                {
+                    return CleanResult {
+                        path: target.path,
+                        ok: false,
+                        error: "permanent-cache-target-type-unsupported".into(),
+                    };
+                }
                 safety::permanent_delete_dir_if_identity(
                     path,
                     &target.object_id,
