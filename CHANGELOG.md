@@ -23,15 +23,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
   environment trees without recursively scanning them, and the
   cleanup screen names each Python cache and test environment so the next action is clear.
-- Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
-  command after stopping the sync app, then restart sync and verify allocation reduction while
-  retaining the cloud item and the existing approval and receipt contract. Provider-wide
+- Probe Apple's public File Provider identity boundary for uploaded, current, idle OneDrive files
+  without changing materialization. The real provider returned `ProviderNotFound`, so execution
+  remains blocked while retaining the existing approval and receipt contract. Provider-wide
   new-copy admission remains confined to copy/upload workflows and cannot deadlock local-space
   recovery while unrelated downloads, indexing, or historical provider errors exist. If the
-  normal quit request stalls, DiskSage uses one bounded graceful `SIGTERM` fallback and never
-  force-kills the client; the stop check distinguishes the desktop app from its resident File
-  Provider helper. The execution path uses the already-bound File Provider item evidence instead
-  of making the vendor's optional `/getpin` query a second, weaker prerequisite.
+  native completion stalls, DiskSage terminates only its private helper process group. The macOS 11
+  helper binds item and domain identity and rejects replacement paths; vendor-private `/unpin`,
+  OAuth, and cloud-object deletion are not used.
+- Select only freshly replanned, fingerprint-approved OneDrive items in Finder through public
+  AppKit, then direct the customer to choose **Free Up Space** and verify retained provider identity
+  plus reduced allocated bytes. Finder selection is recorded as non-mutating assistance and never
+  reported as reclaimed capacity; private action invocation and Accessibility automation remain
+  excluded.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,

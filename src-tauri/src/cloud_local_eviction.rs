@@ -23,6 +23,14 @@ const MAX_ACTIVE_USE_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ACTIVE_PIDS: usize = 64;
 const MAX_RATIONALE_BYTES: usize = 1_024;
 const POST_EVICTION_WAIT_MS: u64 = 5_000;
+const NATIVE_FILE_PROVIDER_TIMEOUT_MS: u64 = 30_000;
+// Cross-provider manager construction is proven read-only, but eviction remains disabled until a
+// reviewed, allocation-verifying integration receipt proves the operation on OneDrive.
+const ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN: bool = false;
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+const FILE_PROVIDER_EVICTION_HELPER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/disksage-fileprovider-evict"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -340,6 +348,12 @@ fn plan_fingerprint(
     }
     hash_optional_u64(&mut hasher, state.provider_reported_bytes);
     hash_optional_string(&mut hasher, state.item_identifier_fingerprint.as_deref());
+    if root.provider == CloudProvider::Onedrive {
+        #[cfg(all(target_os = "macos", not(coverage)))]
+        hasher.update(blake3::hash(FILE_PROVIDER_EVICTION_HELPER).as_bytes());
+        #[cfg(any(not(target_os = "macos"), coverage))]
+        hasher.update(b"native-file-provider-eviction-unavailable");
+    }
     for pid in &active_use.observed_pids {
         hasher.update(&pid.to_le_bytes());
     }
@@ -424,6 +438,9 @@ fn build_plan(
     }
     if active_use.active {
         push_unique(&mut blockers, "active-file-use-detected");
+    }
+    if root.provider == CloudProvider::Onedrive && !ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN {
+        push_unique(&mut blockers, "onedrive-use-finder-free-up-space");
     }
     let eligible_after_human_approval = blockers.is_empty();
     push_unique(&mut blockers, "human-local-eviction-approval-required");
@@ -1095,11 +1112,175 @@ fn validate_approval(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileProviderEvictionReply {
+    ok: bool,
+    code: String,
+    #[serde(rename = "identityFingerprint")]
+    identity_fingerprint: Option<String>,
+}
+
+fn native_file_provider_customer_action(code: &str) -> &'static str {
+    match code {
+        "domain-not-found" => "cloud-location-reconnect-onedrive-and-try-again",
+        "manager-unavailable" => "cloud-location-restart-onedrive-and-try-again",
+        value if value.starts_with("request-failed:") => {
+            "cloud-item-could-not-be-made-online-only-try-finder"
+        }
+        _ => "native-file-provider-eviction-failed-try-again",
+    }
+}
+
+fn native_file_provider_identity_matches(
+    reply: &FileProviderEvictionReply,
+    expected: &str,
+) -> bool {
+    reply.identity_fingerprint.as_deref() == Some(expected)
+}
+
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<Vec<String>, String> {
+fn run_file_provider_helper(
+    path: &Path,
+    expected_identity: Option<&str>,
+) -> Result<FileProviderEvictionReply, String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::process::CommandExt;
+
+    let directory = tempfile::Builder::new()
+        .prefix("disksage-fileprovider-")
+        .tempdir()
+        .map_err(|_| "native-file-provider-helper-directory-unavailable".to_string())?;
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| "native-file-provider-helper-directory-permissions-failed".to_string())?;
+    let helper = directory.path().join("evict");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o700)
+        .open(&helper)
+        .map_err(|_| "native-file-provider-helper-create-failed".to_string())?;
+    output
+        .write_all(FILE_PROVIDER_EVICTION_HELPER)
+        .and_then(|_| output.sync_all())
+        .map_err(|_| "native-file-provider-helper-write-failed".to_string())?;
+    drop(output);
+    let written = std::fs::read(&helper)
+        .map_err(|_| "native-file-provider-helper-identity-unavailable".to_string())?;
+    if blake3::hash(&written) != blake3::hash(FILE_PROVIDER_EVICTION_HELPER) {
+        return Err("native-file-provider-helper-identity-mismatch".into());
+    }
+
+    let mut command = Command::new(&helper);
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.arg(if expected_identity.is_some() {
+        "--evict"
+    } else {
+        "--resolve"
+    });
+    command.arg(path);
+    if let Some(expected_identity) = expected_identity {
+        command.arg(expected_identity);
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "native-file-provider-helper-start-failed".to_string())?;
+    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    let stderr = child.stderr.take().expect("stderr was configured as piped");
+    let stdout_reader = drain_bounded(stdout);
+    let stderr_reader = drain_bounded(stderr);
+    let pid = child.id();
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None)
+                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+                    < NATIVE_FILE_PROVIDER_TIMEOUT_MS =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                unsafe {
+                    let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err("native-file-provider-eviction-timed-out-try-again".into());
+            }
+            Err(_) => {
+                unsafe {
+                    let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err("native-file-provider-helper-wait-failed".into());
+            }
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "native-file-provider-helper-output-read-failed".to_string())??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "native-file-provider-helper-error-read-failed".to_string())??;
+    if stdout.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
+        || stderr.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
+    {
+        return Err("native-file-provider-helper-output-too-large".into());
+    }
+    let reply: FileProviderEvictionReply = serde_json::from_slice(&stdout)
+        .map_err(|_| "native-file-provider-helper-response-invalid".to_string())?;
+    if let Some(expected_identity) = expected_identity {
+        if !native_file_provider_identity_matches(&reply, expected_identity) {
+            return Err("native-file-provider-item-or-domain-identity-changed".into());
+        }
+    }
+    let expected_code = if expected_identity.is_some() {
+        "eviction-request-completed"
+    } else {
+        "identity-resolved"
+    };
+    if !status.success() || !reply.ok || reply.code != expected_code {
+        return Err(native_file_provider_customer_action(&reply.code).into());
+    }
+    Ok(reply)
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn request_file_provider_eviction(path: &Path, expected_identity: &str) -> Result<(), String> {
+    run_file_provider_helper(path, Some(expected_identity)).map(|_| ())
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn request_native_icloud_eviction(
+    root: &CloudRoot,
+    path: &Path,
+    expected_item_identity: Option<&str>,
+) -> Result<Vec<String>, String> {
     if root.provider == CloudProvider::Onedrive {
-        return crate::provider_recovery::unpin_onedrive_local_copy(path)
-            .map(|outcome| outcome.restart_blockers);
+        if !ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN {
+            return Err("onedrive-native-eviction-integration-proof-required".into());
+        }
+        let expected_identity = expected_item_identity
+            .filter(|value| valid_hex64(value))
+            .ok_or_else(|| "native-file-provider-item-identity-unconfirmed".to_string())?;
+        request_file_provider_eviction(path, expected_identity)?;
+        return Ok(Vec::new());
     }
     if root.provider != CloudProvider::Icloud {
         return Err("cloud-local-eviction-provider-unsupported".into());
@@ -1120,7 +1301,11 @@ fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<Vec<S
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn request_native_icloud_eviction(_root: &CloudRoot, _path: &Path) -> Result<Vec<String>, String> {
+fn request_native_icloud_eviction(
+    _root: &CloudRoot,
+    _path: &Path,
+    _expected_item_identity: Option<&str>,
+) -> Result<Vec<String>, String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
@@ -1238,7 +1423,14 @@ pub fn execute_icloud_local_eviction(
     {
         return Err("icloud-local-eviction-live-plan-changed".into());
     }
-    let request_blockers = request_native_icloud_eviction(root, path)?;
+    let request_blockers = request_native_icloud_eviction(
+        root,
+        path,
+        live_plan
+            .icloud_state
+            .item_identifier_fingerprint
+            .as_deref(),
+    )?;
 
     let started = Instant::now();
     let post = loop {
@@ -1382,6 +1574,73 @@ pub fn write_immutable_record<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_file_provider_errors_tell_the_customer_what_to_do_next() {
+        assert_eq!(
+            native_file_provider_customer_action("domain-not-found"),
+            "cloud-location-reconnect-onedrive-and-try-again"
+        );
+        assert_eq!(
+            native_file_provider_customer_action("request-failed:NSFileProviderErrorDomain:-1"),
+            "cloud-item-could-not-be-made-online-only-try-finder"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn replacement_item_or_domain_identity_is_rejected_before_eviction() {
+        let reply = FileProviderEvictionReply {
+            ok: true,
+            code: "eviction-request-completed".into(),
+            identity_fingerprint: Some("a".repeat(64)),
+        };
+        assert!(!native_file_provider_identity_matches(
+            &reply,
+            &"b".repeat(64)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn onedrive_native_execution_remains_blocked_without_integration_proof() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = root_for(temporary.path(), CloudProvider::Onedrive);
+        assert_eq!(
+            request_native_icloud_eviction(&root, &temporary.path().join("never-opened"), None)
+                .unwrap_err(),
+            "onedrive-native-eviction-integration-proof-required"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn compiled_helper_is_macos_11_compatible_and_rejects_invalid_process_input() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = directory.path().join("helper");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&helper)
+            .unwrap();
+        file.write_all(FILE_PROVIDER_EVICTION_HELPER).unwrap();
+        drop(file);
+        let output = Command::new(&helper).output().unwrap();
+        assert_eq!(output.status.code(), Some(64));
+        let reply: FileProviderEvictionReply = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(reply.code, "invalid-invocation");
+        let build = Command::new("xcrun")
+            .args(["vtool", "-show-build"])
+            .arg(&helper)
+            .output()
+            .unwrap();
+        assert!(build.status.success());
+        assert!(String::from_utf8_lossy(&build.stdout).contains("minos 11.0"));
+    }
 
     fn root(path: &Path) -> CloudRoot {
         root_for(path, CloudProvider::Icloud)
@@ -1540,8 +1799,14 @@ mod tests {
             20,
         );
         assert_eq!(plan.provider, CloudProvider::Onedrive);
-        assert!(plan.eligible_after_human_approval);
-        assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+        assert!(!plan.eligible_after_human_approval);
+        assert_eq!(
+            plan.blockers,
+            [
+                "onedrive-use-finder-free-up-space",
+                "human-local-eviction-approval-required"
+            ]
+        );
     }
 
     #[test]
@@ -1606,11 +1871,46 @@ mod tests {
         assert!(eligible.eligible_after_human_approval);
 
         for (state, blocker) in [
-            ({ let mut state = file_provider_state(); state.is_sync_paused = Some(true); state }, "icloud-file-provider-sync-paused-or-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.is_trashed = Some(true); state }, "icloud-file-provider-item-trashed-or-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.allows_eviction = Some(false); state }, "icloud-file-provider-eviction-capability-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.provider_reported_bytes = Some(99); state }, "icloud-file-provider-document-size-mismatch"),
-            ({ let mut state = file_provider_state(); state.item_identifier_fingerprint = None; state }, "icloud-file-provider-item-identity-unconfirmed"),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_sync_paused = Some(true);
+                    state
+                },
+                "icloud-file-provider-sync-paused-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_trashed = Some(true);
+                    state
+                },
+                "icloud-file-provider-item-trashed-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.allows_eviction = Some(false);
+                    state
+                },
+                "icloud-file-provider-eviction-capability-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.provider_reported_bytes = Some(99);
+                    state
+                },
+                "icloud-file-provider-document-size-mismatch",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.item_identifier_fingerprint = None;
+                    state
+                },
+                "icloud-file-provider-item-identity-unconfirmed",
+            ),
         ] {
             let plan = build_plan(
                 &root(temp.path()),
