@@ -115,7 +115,11 @@ fn looks_like_updater_download_cache(path: &Path) -> bool {
         }
         if entry.file_name() == "update-info.json" {
             update_info = true;
-        } else if entry.path().extension().is_some_and(|extension| extension == "zip") {
+        } else if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "zip")
+        {
             archives += 1;
         } else {
             return false;
@@ -454,24 +458,22 @@ pub(crate) fn clean_regenerable_caches_inner(
             let path = std::path::PathBuf::from(&candidate.path);
             match catalog_cache_targets(&candidate.id, &path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
-                Ok(targets) => {
-                    clean_cache_contents_inner_for_id(
-                        bases,
-                        &path,
-                        &targets,
-                        journal_path,
-                        now_ms,
-                        false,
-                        Some(&candidate.id),
-                    )
-                    .unwrap_or_else(|error| {
-                        vec![CleanResult {
-                            path: candidate.path,
-                            ok: false,
-                            error,
-                        }]
-                    })
-                }
+                Ok(targets) => clean_cache_contents_inner_for_id(
+                    bases,
+                    &path,
+                    &targets,
+                    journal_path,
+                    now_ms,
+                    false,
+                    Some(&candidate.id),
+                )
+                .unwrap_or_else(|error| {
+                    vec![CleanResult {
+                        path: candidate.path,
+                        ok: false,
+                        error,
+                    }]
+                }),
                 Err(error) => vec![CleanResult {
                     path: candidate.path,
                     ok: false,
@@ -502,8 +504,13 @@ pub fn clean_catalog_cache_headless(
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     if permanent
-        && !["gradle-cache", "gradle-wrapper-cache", "gradle-jdk-cache", "gradle-daemon-cache"]
-            .contains(&cache_id)
+        && ![
+            "gradle-cache",
+            "gradle-wrapper-cache",
+            "gradle-jdk-cache",
+            "gradle-daemon-cache",
+        ]
+        .contains(&cache_id)
     {
         return Err("permanent-cache-id-not-approved".into());
     }
@@ -546,10 +553,10 @@ pub fn clean_inactive_npx_environments_headless(
 #[tauri::command]
 pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    if !rules::is_catalog_path(&bases, Path::new(&dir)) {
-        return Err("cache-root-not-current-or-safe".into());
-    }
-    rules::cache_targets(Path::new(&dir))
+    let path = Path::new(&dir);
+    let cache_id = rules::cache_catalog_id(&bases, path)
+        .ok_or_else(|| "cache-root-not-current-or-safe".to_string())?;
+    catalog_cache_targets(cache_id, path)
 }
 
 /// Move only the reviewed cache children to the OS Trash, retaining the cache root itself.
@@ -562,13 +569,17 @@ pub fn clean_cache_contents(
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     let journal_path = crate::commands::journal_file_path(&app)?;
-    clean_cache_contents_inner(
+    let path = Path::new(&dir);
+    let cache_id = rules::cache_catalog_id(&bases, path)
+        .ok_or_else(|| "cache-root-not-current-or-safe".to_string())?;
+    clean_cache_contents_inner_for_id(
         &bases,
-        Path::new(&dir),
+        path,
         &targets,
         &journal_path,
         crate::commands::now_ms(),
         false,
+        Some(cache_id),
     )
 }
 
@@ -588,14 +599,10 @@ mod tests {
     #[test]
     fn permanent_catalog_cleanup_is_gradle_only() {
         let tmp = tempfile::tempdir().unwrap();
-        let error = clean_catalog_cache_headless(
-            "npm-cache",
-            &tmp.path().join("journal.jsonl"),
-            1,
-            true,
-        )
-        .err()
-        .expect("non-Gradle permanent cache cleanup must fail");
+        let error =
+            clean_catalog_cache_headless("npm-cache", &tmp.path().join("journal.jsonl"), 1, true)
+                .err()
+                .expect("non-Gradle permanent cache cleanup must fail");
         assert_eq!(error, "permanent-cache-id-not-approved");
     }
 
