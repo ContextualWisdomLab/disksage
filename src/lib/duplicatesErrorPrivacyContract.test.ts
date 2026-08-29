@@ -30,7 +30,7 @@ describe("Duplicates privacy-safe failure feedback", () => {
   it("clears stale duplicate and verdict evidence before replacement discovery", () => {
     const source = readSource("src/lib/Duplicates.svelte");
     const scanStart = source.indexOf("async function scan()");
-    const duplicateCall = source.indexOf("groups = await api.findDuplicateFiles(scannedRoot)", scanStart);
+    const duplicateCall = source.indexOf("const nextGroups = await api.findDuplicateFiles(root)", scanStart);
     const scanPrefix = source.slice(scanStart, duplicateCall);
 
     expect(scanStart).toBeGreaterThanOrEqual(0);
@@ -52,6 +52,19 @@ describe("Duplicates privacy-safe failure feedback", () => {
     expect(verdictBody).toContain("if (generation !== scanGeneration) return");
     expect(source).toContain("const generation = ++scanGeneration");
     expect(source).toContain("loadVerdicts(groups.flatMap((g) => g.paths), generation)");
+    expect(source).toContain("if (generation !== scanGeneration || root !== scannedRoot) return");
+    expect(source).toContain("if (generation === scanGeneration && root === scannedRoot) busy = false");
+  });
+
+  it("invalidates old-root evidence and serializes destructive confirmation", () => {
+    const source = readSource("src/lib/Duplicates.svelte");
+
+    expect(source).toContain("if (root === observedRoot) return;");
+    expect(source).toContain("++scanGeneration;");
+    expect(source).toContain("if (busy || confirming) return;");
+    expect(source).toContain("if (!okay || generation !== scanGeneration || root !== scannedRoot) return;");
+    expect(source).toContain("disabled={busy || confirming || toDelete.size === 0}");
+    expect(source).toContain("휴지통 이동 확인 창을 열지 못했습니다. 다른 확인 창을 닫은 뒤 다시 시도하세요.");
   });
 
   it("uses the accessible failure region for an invalid all-selected group", () => {
@@ -69,7 +82,7 @@ describe("Duplicates privacy-safe failure feedback", () => {
 
     expect(source).toContain("<li title={r.path}>⚠ {r.path} —");
     expect(source).toContain("복원이 필요하면 휴지통에서 되돌리세요.");
-    expect(source).toContain("api.findDuplicateFiles(scannedRoot)");
+    expect(source).toContain("api.findDuplicateFiles(root)");
     expect(source).toContain("api.cleanPaths(paths)");
   });
 });
