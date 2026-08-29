@@ -601,6 +601,7 @@ pub fn permanent_delete_dir_if_identity(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,
+    expected_modified_ms: u64,
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
@@ -631,6 +632,15 @@ pub fn permanent_delete_dir_if_identity(
             "generated directory identity changed; rescan before deletion".into(),
         ));
     }
+    let manifest_matches = |candidate_path: &Path| {
+        crate::rules::cache_target(candidate_path)
+            .ok()
+            .is_some_and(|target| {
+                target.object_id == expected_object_id
+                    && target.bytes == bytes
+                    && target.modified_ms == expected_modified_ms
+            })
+    };
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
     })?;
@@ -649,6 +659,12 @@ pub fn permanent_delete_dir_if_identity(
         return Err(error);
     }
     let result = (|| -> Result<(), SafetyError> {
+        if !manifest_matches(path) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(
+                "generated directory manifest changed; rescan before deletion".into(),
+            ));
+        }
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(format!(
@@ -695,6 +711,16 @@ pub fn permanent_delete_dir_if_identity(
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(format!("{reason}; nothing was deleted"))),
                 Err(restore_error) => Err(SafetyError::Trash(format!("{reason}; {restore_error}"))),
+            };
+        }
+        if !manifest_matches(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "staged generated directory manifest changed; nothing was deleted".into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "staged generated directory manifest changed; {restore_error}"
+                ))),
             };
         }
         remove_staged_permanently_with(&staged, &staging_dir, |path| std::fs::remove_dir_all(path))
@@ -1105,9 +1131,12 @@ mod tests {
         std::fs::create_dir(&generated).unwrap();
         std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
         let object_id = filesystem_object_id(&generated).unwrap();
+        let modified_ms =
+            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
         let journal = tmp.path().join("journal.jsonl");
 
-        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap();
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, modified_ms, &journal, 1)
+            .unwrap();
 
         assert!(!generated.exists());
         let entries = journal_recent(&journal, 2);
@@ -1122,6 +1151,33 @@ mod tests {
             .starts_with(".disksage-trash-")));
     }
 
+    #[test]
+    fn permanent_generated_directory_delete_rejects_a_stale_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("generated-cache");
+        std::fs::create_dir(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"changed").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let modified_ms =
+            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
+        let journal = tmp.path().join("journal.jsonl");
+
+        let result = permanent_delete_dir_if_identity(
+            &generated,
+            &object_id,
+            1,
+            modified_ms,
+            &journal,
+            2,
+        );
+
+        assert!(result.is_err());
+        assert!(generated.exists());
+        let entries = journal_recent(&journal, 2);
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].outcome.contains("manifest changed"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn permanent_generated_directory_delete_restores_an_open_tree() {
@@ -1130,9 +1186,18 @@ mod tests {
         std::fs::create_dir(&generated).unwrap();
         let open_file = std::fs::File::create(generated.join("in-use.bin")).unwrap();
         let object_id = filesystem_object_id(&generated).unwrap();
+        let modified_ms =
+            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
         let journal = tmp.path().join("journal.jsonl");
 
-        let result = permanent_delete_dir_if_identity(&generated, &object_id, 0, &journal, 2);
+        let result = permanent_delete_dir_if_identity(
+            &generated,
+            &object_id,
+            0,
+            modified_ms,
+            &journal,
+            2,
+        );
 
         drop(open_file);
         assert!(result.is_err());
