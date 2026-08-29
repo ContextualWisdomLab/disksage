@@ -188,6 +188,19 @@ fn canonical_bundle_for_active_use(bundle: &Path) -> Result<PathBuf, String> {
     {
         return Err("parallels-provider-or-path-boundary-rejected".into());
     }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let report = crate::cloud::discover_cloud_roots_report(&home);
+        let overlaps_root = report.roots.iter().any(|root| {
+            std::fs::canonicalize(&root.path).is_ok_and(|root| bundle.starts_with(root))
+        });
+        let overlaps_incomplete_root = report
+            .issues
+            .iter()
+            .any(|issue| bundle.starts_with(Path::new(&issue.path)));
+        if overlaps_root || overlaps_incomplete_root {
+            return Err("parallels-provider-or-path-boundary-rejected".into());
+        }
+    }
     Ok(bundle)
 }
 

@@ -127,6 +127,19 @@ fn exact_fresh_approval_executes_only_non_force_compact_boundary() {
     )
     .unwrap();
     let phrase = plan.exact_approval_phrase.clone().unwrap();
+    let mut tampered = plan.clone();
+    tampered.physical_bytes += 1;
+    assert_eq!(
+        approve(
+            &tampered,
+            &phrase,
+            1_001,
+            "human:test",
+            "VM backup verified"
+        )
+        .unwrap_err(),
+        "parallels-plan-integrity-mismatch"
+    );
     let approval = approve(&plan, &phrase, 1_001, "human:test", "VM backup verified").unwrap();
 
     let result = execute_with_runner(
