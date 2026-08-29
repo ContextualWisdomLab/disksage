@@ -12,6 +12,21 @@ struct FakeRunner {
 }
 
 struct SnapshotRunner(FakeRunner);
+struct FailingCompactRunner(FakeRunner);
+
+impl ParallelsCommandRunner for FailingCompactRunner {
+    fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String> {
+        self.0.run(executable, args, label)
+    }
+
+    fn run_compact(&self, _: &Path, _: &[&str]) -> Result<String, String> {
+        Err("vendor-compact-failed".into())
+    }
+
+    fn permits_injected_executables(&self) -> bool {
+        true
+    }
+}
 
 impl ParallelsCommandRunner for SnapshotRunner {
     fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String> {
@@ -160,6 +175,30 @@ fn exact_fresh_approval_executes_only_non_force_compact_boundary() {
         ["prl_disk_tool", "compact", "-hdd", "<approved-disk>"]
     );
     assert!(!result.command.iter().any(|argument| argument == "--force"));
+
+    let failed = execute_with_runner(
+        &FailingCompactRunner(FakeRunner {
+            home: bundle.to_string_lossy().into_owned(),
+        }),
+        &prlctl,
+        &disk_tool,
+        &plan,
+        &approval,
+        &phrase,
+        1_003,
+        inactive(),
+    )
+    .unwrap();
+    assert!(!failed.execution_succeeded);
+    assert_eq!(
+        failed.execution_error.as_deref(),
+        Some("vendor-compact-failed")
+    );
+    assert!(!failed.verification_complete);
+    assert!(failed
+        .verification_blockers
+        .iter()
+        .any(|blocker| blocker.contains("parallels-compact-command-failed")));
 }
 
 #[test]

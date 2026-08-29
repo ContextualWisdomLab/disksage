@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const COMPACT_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const TREE_ALLOCATION_BUDGET: Duration = Duration::from_secs(5);
 const MAX_ENTRIES: usize = 100_000;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
@@ -27,6 +28,11 @@ pub trait ParallelsCommandRunner {
     fn permits_injected_executables(&self) -> bool {
         false
     }
+
+    /// Runs the mutating compact operation under a mutation-specific policy.
+    fn run_compact(&self, executable: &Path, args: &[&str]) -> Result<String, String> {
+        self.run(executable, args, "parallels-compact-execute")
+    }
 }
 
 pub struct ProcessParallelsCommandRunner;
@@ -34,6 +40,15 @@ pub struct ProcessParallelsCommandRunner;
 impl ParallelsCommandRunner for ProcessParallelsCommandRunner {
     fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String> {
         crate::podman_reclaim::run_bounded_provider_text(executable, args, COMMAND_TIMEOUT, label)
+    }
+
+    fn run_compact(&self, executable: &Path, args: &[&str]) -> Result<String, String> {
+        crate::podman_reclaim::run_bounded_provider_text(
+            executable,
+            args,
+            COMPACT_TIMEOUT,
+            "parallels-compact-execute",
+        )
     }
 }
 
@@ -126,6 +141,7 @@ pub struct ParallelsDiskReclaimResult {
     pub volume_available_bytes_after: Option<u64>,
     pub observed_volume_available_gain_bytes: Option<u64>,
     pub execution_succeeded: bool,
+    pub execution_error: Option<String>,
     pub verification_complete: bool,
     pub verification_blockers: Vec<String>,
 }
@@ -575,7 +591,7 @@ pub fn plan_with_runner(
     let exact_approval_phrase =
         execution_available.then(|| format!("DiskSage Parallels compact 승인 {fp}"));
     let next_action = if !no_snapshots {
-        "스냅샷을 검토하고 필요한 상태를 별도로 백업한 뒤 다시 검사하세요."
+        "Parallels에서 필요한 상태를 백업하고 보존할 스냅샷을 확인하세요. 압축하려면 사용자가 직접 스냅샷을 정리한 뒤 다시 검사하세요. DiskSage는 스냅샷을 삭제하지 않습니다."
     } else if reclaimable == 0 {
         "확보 가능한 공간이 없습니다. VM을 그대로 유지하세요."
     } else {
@@ -820,15 +836,16 @@ pub fn execute_with_runner(
     {
         return Err("parallels-command-identity-changed".into());
     }
-    runner.run(
-        disk_tool,
-        &[
-            "compact",
-            "-hdd",
-            disk.to_str().ok_or("parallels-disk-path-not-utf8")?,
-        ],
-        "parallels-compact-execute",
-    )?;
+    let execution_error = runner
+        .run_compact(
+            disk_tool,
+            &[
+                "compact",
+                "-hdd",
+                disk.to_str().ok_or("parallels-disk-path-not-utf8")?,
+            ],
+        )
+        .err();
     let physical_bytes_after = tree_allocation(disk).ok().map(|(_, physical)| physical);
     let observed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -842,11 +859,13 @@ pub fn execute_with_runner(
     let volume_gain = volume_before
         .zip(volume_after)
         .and_then(|(before, after)| after.checked_sub(before));
-    let verification_blockers = if physical_bytes_after.is_some() {
-        Vec::new()
-    } else {
-        vec!["parallels-post-compact-allocation-unavailable".into()]
-    };
+    let mut verification_blockers = Vec::new();
+    if let Some(error) = &execution_error {
+        verification_blockers.push(format!("parallels-compact-command-failed: {error}"));
+    }
+    if physical_bytes_after.is_none() {
+        verification_blockers.push("parallels-post-compact-allocation-unavailable".into());
+    }
     let blocker_text = verification_blockers.join("\n");
     let result_id = fingerprint(
         &[
@@ -883,7 +902,8 @@ pub fn execute_with_runner(
         volume_available_bytes_before: volume_before,
         volume_available_bytes_after: volume_after,
         observed_volume_available_gain_bytes: volume_gain,
-        execution_succeeded: true,
+        execution_succeeded: execution_error.is_none(),
+        execution_error,
         verification_complete: verification_blockers.is_empty(),
         verification_blockers,
     })

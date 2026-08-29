@@ -26,9 +26,13 @@ older than five minutes. It re-observes registration, stopped state, snapshots, 
 and disk identity, and logical and physical allocation immediately before invoking the fixed vendor
 command `prl_disk_tool compact -hdd <approved-disk>`. Callers cannot add `--force` or select another
 executable. Approval and result records are create-new local JSON; the result distinguishes the disk
-allocation reduction from the host volume's observed free-space change. Any drift aborts before the
-native mutation. DiskSage never deletes snapshots, stops a VM, moves a bundle, or claims the estimate
-as recovered capacity.
+allocation reduction from the host volume's observed free-space change. Read-only probes retain a
+30-second deadline; the isolated compact process group has a separate seven-day ceiling so a large
+disk is not killed by the probe deadline. Once mutation is attempted, command failure and bounded
+post-operation observations are still returned for immutable recording, and the CLI exits nonzero
+only after emitting that receipt. Any pre-execution drift aborts before the native mutation.
+DiskSage never deletes snapshots, stops a VM, moves a bundle, or claims the estimate as recovered
+capacity.
 
 ## References
 

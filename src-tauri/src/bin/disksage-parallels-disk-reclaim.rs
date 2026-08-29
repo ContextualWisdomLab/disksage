@@ -108,7 +108,17 @@ fn main() {
         }))
     })();
     match result {
-        Ok(output) => println!("{}", serde_json::to_string_pretty(&output).unwrap()),
+        Ok(output) => {
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            if output
+                .get("result")
+                .and_then(|result| result.get("execution_succeeded"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+            {
+                std::process::exit(2);
+            }
+        }
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
