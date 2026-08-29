@@ -60,10 +60,12 @@ jobs:
         with:
           workspaces: src-tauri
           cache-targets: false
-      - name: Corepack cleanup scope regression
+      - name: macOS cache cleanup regressions
         env:
           TMPDIR: ${{ runner.temp }}
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test cache_cleanup_corepack_scope
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --test cache_cleanup_corepack_scope
+          cargo test --manifest-path src-tauri/Cargo.toml --test cache_cleanup_cli_permanent_gradle
 
   windows-home-resolution:
     runs-on: windows-latest
