@@ -67,9 +67,20 @@ The macOS release contract packages and checksums both
 the same exact-head artifact as the planner. Inventory output from a predecessor executable is
 stale evidence and cannot be reused to approve or execute a new plan.
 
+## Amendment: exact-head redacted release evidence (2026-08-29)
+
+Release lineage `9c010252fccbf92256ef1d19ffae063ea060becc` (artifact ZIP SHA-256
+`c6d2125684237adfa00c1ebef63b38179f7d40561c5f38e768526d0208968af8`) produced
+path-free, mode-0700/0600 receipt `disksage-cloud-live-20260829-9c010252`. Its complete
+iCloud inventory emitted 120 candidates totaling 20,860,424,192 allocated bytes, but the exact
+plan admitted zero and remained blocked. Its complete OneDrive traversal emitted an
+allocation-descending top 128; all 128 were eligible, totaling 5,272,006,656 allocated bytes,
+under exact fingerprint
+`ad0118c3316579e768df8de2e1942b8109c76e92381b4346b2824e146e01b80a`.
+The top-128 result is not whole-root authority, and neither read-only plan performed a mutation.
+
 ## Rejected alternatives
 
-- Calling the iCloud ubiquitous-item API for OneDrive: the ownership contract is wrong.
 - OneDrive's undocumented `/unpin` command: observed builds can print a native failure while
   exiting successfully, so process exit status cannot prove completion.
 - Cross-provider `NSFileProviderManager` eviction: the earlier identity probe failed with the
