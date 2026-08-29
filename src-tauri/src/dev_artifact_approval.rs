@@ -98,10 +98,14 @@ pub fn clean_artifacts_with_approval(
     journal_path: &Path,
     now_ms: u64,
     approval: &DevArtifactApproval,
+    confirmation_phrase: &str,
 ) -> Vec<DevArtifactCleanResult> {
     let Ok(current_fingerprint) = selection_fingerprint(root, requests) else {
         return rejection(requests, "development-artifact-selection-invalid");
     };
+    if confirmation_phrase != approval.exact_phrase {
+        return rejection(requests, "development-artifact-confirmation-required");
+    }
     if now_ms < approval.reviewed_at_ms
         || now_ms > approval.expires_at_ms
         || approval.expires_at_ms
@@ -138,6 +142,7 @@ pub fn clean_dev_artifacts_bound(
     min_age_days: u64,
     artifacts: Vec<DevArtifact>,
     approval: DevArtifactApproval,
+    confirmation_phrase: String,
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::commands::CleanResult>, String> {
     let journal_path = crate::commands::journal_file_path(&app)?;
@@ -148,6 +153,7 @@ pub fn clean_dev_artifacts_bound(
         &journal_path,
         crate::commands::now_ms(),
         &approval,
+        &confirmation_phrase,
     )
     .into_iter()
     .map(|result| crate::commands::CleanResult {
@@ -202,6 +208,7 @@ mod tests {
             &temp.path().join("journal.jsonl"),
             10 + MAX_REVIEW_AGE_MS + 1,
             &approval,
+            &approval.exact_phrase,
         );
         assert_eq!(result[0].error, "development-artifact-approval-invalid-or-stale");
     }
