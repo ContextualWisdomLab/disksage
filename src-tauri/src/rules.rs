@@ -559,6 +559,12 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
         .collect()
 }
 
+pub fn cache_catalog_path(bases: &BaseDirs, id: &str) -> Option<PathBuf> {
+    catalog(bases)
+        .into_iter()
+        .find_map(|(candidate_id, _, path)| (candidate_id == id).then_some(path))
+}
+
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
     catalog(bases).iter().any(|(id, _, path)| {
@@ -845,6 +851,18 @@ mod tests {
             .iter()
             .any(|target| target.path.ends_with("_npx/inactive")));
         assert!(targets.iter().all(|target| !target.path.ends_with("_npx")));
+    }
+
+    #[test]
+    fn windows_named_npm_cache_also_splits_npx_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join("npm-cache");
+        fs::create_dir_all(npm.join("_npx/environment")).unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("_npx/environment"));
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Headless execution entry point for the narrow, observed cache policy.
 //!
 //! Without `--execute` this command is read-only. With it, the library path moves only inactive,
-//! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
+//! identity-bound children of admitted regenerable cache roots to OS Trash. The npx-only scope is
+//! reported explicitly in both dry-run and execution receipts.
 
 use disksage_lib::cache_cleanup::{
     clean_catalog_cache_headless, clean_inactive_npx_environments_headless,
@@ -13,8 +14,9 @@ use std::path::PathBuf;
 
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--cache-id ID [--permanent-cache] | --npx-only | --purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+inactive regenerable cache children to OS Trash. --npx-only limits that reversible operation to\n\
+inactive npx environments. --purge-proven-cache-trash permanently removes only structurally\n\
+proven cache directories already in OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -141,6 +143,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
             "{}",
             serde_json::json!({
                 "executed": false,
+                "npx_only": args.npx_only,
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "cache_id": args.cache_id,
@@ -160,6 +163,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
             "{}",
             serde_json::json!({
                 "executed": true,
+                "npx_only": false,
                 "purge_proven_cache_trash": true,
                 "journal_path": args.journal_path,
                 "results": results
@@ -184,6 +188,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         "{}",
         serde_json::json!({
             "executed": true,
+            "npx_only": args.npx_only,
             "journal_path": args.journal_path,
             "results": evidence
         })

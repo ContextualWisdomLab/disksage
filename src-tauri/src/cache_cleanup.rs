@@ -387,16 +387,24 @@ pub fn clean_catalog_cache_headless(
     clean_cache_contents_inner(&bases, &path, &targets, journal_path, now_ms, permanent)
 }
 
-/// Permanently reclaim only inactive, unchanged npx environments; package downloads are
-/// regenerable and every directory is identity-bound, active-use checked, and journaled.
+/// Move only inactive, unchanged npx environments to OS Trash. Package downloads are regenerable
+/// and every directory remains identity-bound, active-use checked, and journaled. A missing npx
+/// cache is an empty successful cleanup rather than an operational failure.
 pub fn clean_inactive_npx_environments_headless(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let npx = bases.home.join(".npm").join("_npx");
+    let npx = rules::cache_catalog_path(&bases, "npm-cache")
+        .ok_or("npm-cache-catalog-unavailable")?
+        .join("_npx");
+    match std::fs::symlink_metadata(&npx) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("cache-root-metadata-unavailable".into()),
+    }
     let targets = rules::cache_targets(&npx)?;
-    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms, true)
+    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms, false)
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
