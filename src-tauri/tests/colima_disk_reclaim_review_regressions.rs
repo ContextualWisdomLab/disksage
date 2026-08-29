@@ -51,11 +51,15 @@ fn reviewed_fingerprint_survives_fresh_observation_when_authority_is_unchanged()
 }
 
 #[test]
-fn vm_type_comes_from_profile_config_when_list_json_omits_it() {
+fn missing_list_vm_type_stays_unavailable_despite_profile_config() {
     let (_temp, home, bin) = fixture();
     let plan = plan_at(&home, &bin, 100);
 
-    assert_eq!(plan.vm_type, "vz");
+    assert_eq!(plan.vm_type, "unknown");
+    assert!(plan
+        .blockers
+        .contains(&"colima-vm-type-evidence-unavailable".to_string()));
+    assert!(plan.customer_next_action.contains("VM 유형을 확인"));
 }
 
 #[test]
