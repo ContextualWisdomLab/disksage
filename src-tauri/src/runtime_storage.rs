@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
@@ -477,10 +477,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                 fingerprint
             )
         }),
-        stop_approval_phrase: (runtime == RuntimeStorageKind::PodmanMachine
-            && ready
-            && running_container_count == Some(0))
-        .then(|| format!("DiskSage podman-machine 비활성 정지 승인 {fingerprint}")),
+        // A count probe and a later stop are not one atomic runtime operation. Until Podman
+        // exposes a conditional stop boundary, automatic stop authority remains unavailable.
+        stop_approval_phrase: None,
         recovery_approval_phrase: recovery_ready.then(|| {
             format!(
                 "DiskSage {} 연결 복구 승인 {}",
@@ -507,90 +506,8 @@ pub fn execute_inactive_stop(
     {
         return Err("runtime-storage-rationale-invalid".into());
     }
-    let runtime = RuntimeStorageKind::PodmanMachine;
-    let plan = inspect_runtime(runtime, now_ms());
-    let expected = plan
-        .stop_approval_phrase
-        .as_deref()
-        .ok_or("runtime-storage-stop-not-ready")?;
-    if confirmation_phrase != expected {
-        return Err("runtime-storage-confirmation-mismatch".into());
-    }
-    let running_container_count_before = plan
-        .running_container_count
-        .ok_or("runtime-storage-container-count-unavailable")?;
-    let home =
-        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
-    let before = home
-        .as_deref()
-        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
-        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
-    let image_before = crate::podman_reclaim::inspect_raw_image_evidence(
-        &fixed_binary(runtime),
-        crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
-        COMMAND_TIMEOUT,
-    );
-    let args = ["machine", "stop", "podman-machine-default"];
-    let output = run_bounded_with_timeout(&fixed_binary(runtime), &args, RECOVERY_TIMEOUT)?;
-    let live = inspect_runtime(runtime, now_ms());
-    let after = home
-        .as_deref()
-        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
-        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
-    let image_after = crate::podman_reclaim::inspect_raw_image_evidence(
-        &fixed_binary(runtime),
-        crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
-        COMMAND_TIMEOUT,
-    );
-    let (volume_comparison, volume_evidence_error) = match (before, after) {
-        (Ok(before), Ok(after)) => crate::volume_pressure::compare_snapshots(&before, &after, None)
-            .map(|comparison| (Some(comparison), None))
-            .unwrap_or_else(|error| (None, Some(error))),
-        (Err(error), _) | (_, Err(error)) => (None, Some(error)),
-    };
-    let (image_before_bytes, image_after_bytes, image_reclaimed, image_error) =
-        match (image_before, image_after) {
-            (Ok(before), Ok(after)) if before.path == after.path => {
-                let before = before.allocated_bytes;
-                let after = after.allocated_bytes;
-                (
-                    before,
-                    after,
-                    before
-                        .zip(after)
-                        .map(|(before, after)| before.saturating_sub(after)),
-                    None,
-                )
-            }
-            (Ok(_), Ok(_)) => (
-                None,
-                None,
-                None,
-                Some("runtime-storage-image-changed".into()),
-            ),
-            (Err(error), _) | (_, Err(error)) => (None, None, None, Some(error)),
-        };
-    Ok(RuntimeStorageStopExecution {
-        schema_kind: "disksage.runtime-storage-stop-execution",
-        schema_version: SCHEMA_VERSION,
-        runtime,
-        command: plan.stop_command.unwrap_or_default(),
-        status_code: output.0,
-        stdout: output.1,
-        stderr: output.2,
-        output_truncated: output.3,
-        running_container_count_before,
-        guest_running_after: live.guest_running,
-        executed: output.0 == 0 && live.guest_running == Some(false),
-        executed_at_ms: now_ms(),
-        rationale: rationale.into(),
-        volume_comparison,
-        volume_evidence_error,
-        runtime_image_allocated_bytes_before: image_before_bytes,
-        runtime_image_allocated_bytes_after: image_after_bytes,
-        runtime_image_reclaimed_bytes: image_reclaimed,
-        runtime_image_evidence_error: image_error,
-    })
+    let _ = confirmation_phrase;
+    Err("runtime-storage-conditional-stop-unavailable".into())
 }
 
 /// Restart a runtime only when it reports running but its guest is unreachable.
@@ -656,6 +573,37 @@ pub fn inspect() -> Vec<RuntimeStoragePlan> {
     .into_iter()
     .map(|runtime| inspect_runtime(runtime, observed_at_ms))
     .collect()
+}
+
+fn compare_runtime_image_evidence(
+    before: crate::podman_reclaim::RawImageEvidence,
+    after: crate::podman_reclaim::RawImageEvidence,
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<String>) {
+    if before.path != after.path
+        || before.identity_sha256.is_none()
+        || before.identity_sha256 != after.identity_sha256
+    {
+        return (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-changed".into()),
+        );
+    }
+    let before_bytes = before.allocated_bytes;
+    let after_bytes = after.allocated_bytes;
+    match before_bytes.zip(after_bytes) {
+        Some((before, after)) if before >= after => {
+            (Some(before), Some(after), Some(before - after), None)
+        }
+        Some((before, after)) => (
+            Some(before),
+            Some(after),
+            None,
+            Some("runtime-storage-image-allocation-increased".into()),
+        ),
+        None => (before_bytes, after_bytes, None, None),
+    }
 }
 
 /// Run guest `fstrim` only after the exact, fresh plan phrase has been approved.
@@ -733,24 +681,7 @@ pub fn execute_trim(
         runtime_image_reclaimed_bytes,
         runtime_image_evidence_error,
     ) = match (image_before, image_after) {
-        (Some(Ok(before)), Some(Ok(after))) if before.path == after.path => {
-            let before = before.allocated_bytes;
-            let after = after.allocated_bytes;
-            (
-                before,
-                after,
-                before
-                    .zip(after)
-                    .map(|(before, after)| before.saturating_sub(after)),
-                None,
-            )
-        }
-        (Some(Ok(_)), Some(Ok(_))) => (
-            None,
-            None,
-            None,
-            Some("runtime-storage-image-changed".into()),
-        ),
+        (Some(Ok(before)), Some(Ok(after))) => compare_runtime_image_evidence(before, after),
         (Some(Err(error)), _) | (_, Some(Err(error))) => (None, None, None, Some(error)),
         (None, None) => (None, None, None, None),
         _ => (
@@ -868,6 +799,37 @@ mod tests {
         assert_eq!(
             execute_trim(RuntimeStorageKind::Colima, "", "operator\u{0007}note").unwrap_err(),
             "runtime-storage-rationale-invalid"
+        );
+    }
+
+    #[test]
+    fn inactive_stop_is_unavailable_without_an_atomic_runtime_boundary() {
+        assert_eq!(
+            execute_inactive_stop("any", "customer requested stop").unwrap_err(),
+            "runtime-storage-conditional-stop-unavailable"
+        );
+    }
+
+    #[test]
+    fn image_comparison_rejects_replacement_and_allocation_growth() {
+        let evidence = |identity: &str, bytes| crate::podman_reclaim::RawImageEvidence {
+            path: "/tmp/machine.raw".into(),
+            logical_bytes: 100,
+            allocated_bytes: Some(bytes),
+            identity_sha256: Some(identity.into()),
+        };
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 80), evidence("b", 40)).3,
+            Some("runtime-storage-image-changed".into())
+        );
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 40), evidence("a", 80)),
+            (
+                Some(40),
+                Some(80),
+                None,
+                Some("runtime-storage-image-allocation-increased".into())
+            )
         );
     }
 }

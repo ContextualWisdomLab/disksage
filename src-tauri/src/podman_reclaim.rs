@@ -32,6 +32,8 @@ pub struct RawImageEvidence {
     pub logical_bytes: u64,
     /// st_blocks * 512 on Unix. This is observed host allocation, not reclaim proof.
     pub allocated_bytes: Option<u64>,
+    /// Stable hash of the host file identity (device and inode on Unix).
+    pub identity_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -628,10 +630,22 @@ fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     };
     #[cfg(not(unix))]
     let allocated_bytes = None;
+    #[cfg(unix)]
+    let identity_sha256 = {
+        use std::os::unix::fs::MetadataExt;
+        let mut hasher = Sha256::new();
+        hasher.update(b"disksage-runtime-image-identity-v1\0");
+        hasher.update(metadata.dev().to_le_bytes());
+        hasher.update(metadata.ino().to_le_bytes());
+        Some(lower_hex(&hasher.finalize()))
+    };
+    #[cfg(not(unix))]
+    let identity_sha256 = None;
     Ok(RawImageEvidence {
         path: path.to_string_lossy().into_owned(),
         logical_bytes: metadata.len(),
         allocated_bytes,
+        identity_sha256,
     })
 }
 
@@ -717,11 +731,18 @@ fn command_capture(
     timeout: Duration,
     label: &str,
 ) -> Result<CommandCapture, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("{label}-spawn:{error}"))?;
     let stdout = child
@@ -740,16 +761,14 @@ fn command_capture(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-wait:{error}"));
@@ -757,6 +776,9 @@ fn command_capture(
         }
     };
 
+    // A completed CLI may leave descendants holding inherited pipes. Its private process group
+    // can be terminated without touching the long-lived Podman VM process.
+    terminate_readonly_process_tree(&mut child);
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
@@ -768,6 +790,15 @@ fn command_capture(
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
         output_truncated: false,
     })
+}
+
+fn terminate_readonly_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn command_text(
@@ -1273,6 +1304,7 @@ mod tests {
             path: "/tmp/machine.raw".into(),
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(70 * GIB),
+            identity_sha256: Some("a".repeat(64)),
         };
         let result = assess(
             None,
@@ -1479,6 +1511,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "slow-probe-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_probe_closes_inherited_descendant_pipes() {
+        let started = Instant::now();
+        let output = command_text(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 10 & printf complete"],
+            Duration::from_secs(2),
+            "descendant-pipe-probe",
+        )
+        .unwrap();
+        assert_eq!(output, "complete");
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

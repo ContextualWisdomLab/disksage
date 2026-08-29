@@ -889,7 +889,7 @@ where
             return Err("onedrive-finder-assistance-item-identity-changed".into());
         }
         total_after = total_after.saturating_add(current.allocated_bytes);
-        if item_plan_sync_is_complete(&current)
+        if item_plan_is_verified_online_only(&current)
             && current.allocated_bytes < item.allocated_bytes_before
         {
             verified_count = verified_count.saturating_add(1);
@@ -920,15 +920,15 @@ where
     Ok(result)
 }
 
-fn item_plan_sync_is_complete(plan: &IcloudLocalEvictionPlan) -> bool {
+fn item_plan_is_verified_online_only(plan: &IcloudLocalEvictionPlan) -> bool {
     plan.icloud_state.is_ubiquitous
         && plan.icloud_state.is_uploaded
         && !plan.icloud_state.is_uploading
         && !plan.icloud_state.upload_error_present
         && !plan.icloud_state.is_downloading
         && !plan.icloud_state.download_error_present
-        && plan.icloud_state.downloading_status_current
-        && !plan.icloud_state.downloading_status_not_downloaded
+        && !plan.icloud_state.downloading_status_current
+        && plan.icloud_state.downloading_status_not_downloaded
         && !plan.icloud_state.has_unresolved_conflicts
         && !plan.icloud_state.is_excluded_from_sync
         && plan.icloud_state.is_sync_paused == Some(false)
@@ -950,7 +950,7 @@ pub fn verify_onedrive_finder_assistance(
         verified_at_ms,
         plan_icloud_local_eviction,
     )?;
-    write_immutable_record(
+    write_or_verify_immutable_record(
         record_dir,
         &format!("{}.finder-verification.json", result.verification_id),
         &result,
@@ -1475,6 +1475,8 @@ mod tests {
 
         let mut online_only = item;
         online_only.allocated_bytes = 0;
+        online_only.icloud_state.downloading_status_current = false;
+        online_only.icloud_state.downloading_status_not_downloaded = true;
         let verification =
             verify_onedrive_finder_assistance_with(&onedrive_root, &receipt, 23, |_, _, _| {
                 Ok(online_only.clone())
