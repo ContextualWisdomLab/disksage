@@ -812,6 +812,17 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&podman, fs::Permissions::from_mode(0o700)).unwrap();
+        let seed_cache = home.join(".local/share/containers/podman/machine/applehv/cache");
+        fs::create_dir_all(&seed_cache).unwrap();
+        let seed_bytes = b"recreatable-podman-machine-seed";
+        let seed_source = temp.path().join("seed.raw.zst");
+        fs::write(&seed_source, seed_bytes).unwrap();
+        let seed_digest = file_sha256(&seed_source).unwrap();
+        fs::write(
+            seed_cache.join(format!("{seed_digest}.raw.zst")),
+            seed_bytes,
+        )
+        .unwrap();
         #[cfg(target_os = "macos")]
         {
             for (base, version) in [
