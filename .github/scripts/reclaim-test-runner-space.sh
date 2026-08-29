@@ -26,13 +26,7 @@ is_allowed_root() {
   return 1
 }
 
-allocated_bytes() {
-  local root="$1"
-  timeout 30s du --summarize --block-size=1 -- "$root" | awk '{print $1}'
-}
-
 roots=()
-before_allocated_bytes=0
 existing_roots=0
 for requested_root in "$@"; do
   if [[ "$requested_root" != /* ]]; then
@@ -56,18 +50,12 @@ for requested_root in "$@"; do
       echo "reclaim root is not a directory: $canonical_root" >&2
       exit 65
     fi
-    root_bytes="$(allocated_bytes "$canonical_root")"
-    if ! [[ "$root_bytes" =~ ^[0-9]+$ ]]; then
-      echo "could not measure reclaim root allocation: $canonical_root" >&2
-      exit 66
-    fi
-    before_allocated_bytes=$((before_allocated_bytes + root_bytes))
     existing_roots=$((existing_roots + 1))
   fi
 done
 
-if [[ "$existing_roots" -eq 0 || "$before_allocated_bytes" -le 0 ]]; then
-  echo "runner reclaim has no positive allocated-byte evidence" >&2
+if [[ "$existing_roots" -eq 0 ]]; then
+  echo "runner reclaim has no existing allowlisted root" >&2
   exit 67
 fi
 
@@ -91,34 +79,19 @@ for root in "${roots[@]}"; do
   fi
 done
 
-after_allocated_bytes=0
-for root in "${roots[@]}"; do
-  if [[ -e "$root" ]]; then
-    root_bytes="$(allocated_bytes "$root")"
-    after_allocated_bytes=$((after_allocated_bytes + root_bytes))
-  fi
-done
-
-if [[ "$after_allocated_bytes" -gt "$before_allocated_bytes" ]]; then
-  echo "runner reclaim allocation increased unexpectedly" >&2
-  exit 70
-fi
-reclaimed_bytes=$((before_allocated_bytes - after_allocated_bytes))
-if [[ "$reclaimed_bytes" -le 0 ]]; then
-  echo "runner reclaim did not prove positive removed allocation" >&2
-  exit 71
-fi
-
 available_after="$(df --output=avail -B1 / | tail -1 | tr -d ' ')"
 if ! [[ "$available_after" =~ ^[0-9]+$ ]]; then
   echo "could not measure runner availability after reclaim" >&2
   exit 68
 fi
+if [[ "$available_after" -le "$available_before" ]]; then
+  echo "runner reclaim did not prove positive free-space recovery" >&2
+  exit 71
+fi
+reclaimed_bytes=$((available_after - available_before))
 
 {
   echo "runner_available_bytes_before=$available_before"
   echo "runner_available_bytes_after=$available_after"
-  echo "runner_allocated_bytes_before=$before_allocated_bytes"
-  echo "runner_allocated_bytes_after=$after_allocated_bytes"
   echo "runner_reclaimed_bytes=$reclaimed_bytes"
 } >> "$summary_file"
