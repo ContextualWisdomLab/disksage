@@ -10,7 +10,7 @@ const EXECUTION_UNSUPPORTED: &str = "photo-audit-execution-unsupported-on-platfo
 
 #[cfg(not(windows))]
 const USAGE: &str = "Usage: disksage-photo-similarity-audit --root ABSOLUTE_PATH [--max-entries N] [--private-output PATH]\n\
-       disksage-photo-similarity-audit --execute --root ABSOLUTE_PATH --private-report PATH \\\n+         --select GROUP_FINGERPRINT=RELATIVE_PATH [...] --approval EXACT_PHRASE \\
+       disksage-photo-similarity-audit --execute --root ABSOLUTE_PATH --private-report PATH \\\n          --select GROUP_FINGERPRINT=RELATIVE_PATH [...] --approval EXACT_PHRASE \\
          --rationale TEXT --journal-path PATH\n\
 Groups non-identical photo candidates using exact DCT perceptual-hash and aspect-ratio evidence.\n\
 Managed Photos libraries are never entered. Execution requires one selected survivor per group and\n\
@@ -317,6 +317,13 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, EXECUTION_UNSUPPORTED);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn help_documents_selection_without_patch_residue() {
+        assert!(USAGE.contains("--select GROUP_FINGERPRINT=RELATIVE_PATH"));
+        assert!(!USAGE.lines().any(|line| line.starts_with('+')));
     }
 
     #[cfg(windows)]
