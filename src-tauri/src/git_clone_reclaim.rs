@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub const GIT_CLONE_RECLAIM_SCHEMA_KIND: &str = "disksage.git-clone-reclaim-plan";
@@ -19,6 +21,7 @@ pub const GIT_CLONE_RECLAIM_VERSION: u32 = 2;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1_000;
 const CHECKOUT_LEASE_FILENAME: &str = "disksage-checkout-lease.json";
+const CHECKOUT_LEASE_LOCK_DIRECTORY: &str = "disksage-checkout-lease-locks";
 const MAX_CHECKOUT_LEASE_BYTES: u64 = 16 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,17 +298,68 @@ fn checkout_lease_path(common_dir: &Path) -> PathBuf {
 }
 
 fn lock_checkout_lease(common_dir: &Path) -> Result<File, String> {
-    let config_path = common_dir.join("config");
-    let metadata = std::fs::symlink_metadata(&config_path)
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.git-checkout-lease-lock\0v1\0");
+    hash_field(&mut hasher, &common_dir.to_string_lossy());
+    let lock_root = std::env::temp_dir().join(CHECKOUT_LEASE_LOCK_DIRECTORY);
+    create_private_lock_directory(&lock_root)?;
+    let lock_path = lock_root.join(format!("{}.lock", hasher.finalize().to_hex()));
+    let file = open_private_lock_file(&lock_path)?;
+    let metadata = std::fs::symlink_metadata(&lock_path)
         .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("git-checkout-lease-lock-unavailable".into());
     }
-    let file =
-        File::open(config_path).map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
     file.try_lock()
         .map_err(|_| "git-checkout-lease-operation-active".to_string())?;
     Ok(file)
+}
+
+#[cfg(unix)]
+fn create_private_lock_directory(lock_root: &Path) -> Result<(), String> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(lock_root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err("git-checkout-lease-lock-unavailable".into()),
+    }
+    let metadata = std::fs::symlink_metadata(lock_root)
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err("git-checkout-lease-lock-unavailable".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_private_lock_directory(lock_root: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(lock_root)
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())
+}
+
+#[cfg(unix)]
+fn open_private_lock_file(lock_path: &Path) -> Result<File, String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .open(lock_path)
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())
+}
+
+#[cfg(not(unix))]
+fn open_private_lock_file(lock_path: &Path) -> Result<File, String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lock_path)
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())
 }
 
 #[cfg(unix)]
@@ -476,6 +530,25 @@ pub fn release_git_checkout_lease(
     lease_fingerprint: &str,
     observed_at_ms: u64,
 ) -> Result<(), String> {
+    release_git_checkout_lease_with_sync(
+        repository_root,
+        retention_references,
+        lease_fingerprint,
+        observed_at_ms,
+        sync_checkout_lease_directory,
+    )
+}
+
+fn release_git_checkout_lease_with_sync<F>(
+    repository_root: &Path,
+    retention_references: &[String],
+    lease_fingerprint: &str,
+    observed_at_ms: u64,
+    sync_directory: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     let (common_dir, repository_object_id, _head) =
         checkout_binding(repository_root, retention_references, observed_at_ms)?;
     let _lease_guard = lock_checkout_lease(&common_dir)?;
@@ -485,9 +558,23 @@ pub fn release_git_checkout_lease(
     if lease.lease_fingerprint != lease_fingerprint {
         return Err("git-checkout-lease-fingerprint-mismatch".into());
     }
-    std::fs::remove_file(checkout_lease_path(&common_dir))
+    let lease_path = checkout_lease_path(&common_dir);
+    let encoded =
+        std::fs::read(&lease_path).map_err(|_| "git-checkout-lease-read-failed".to_string())?;
+    std::fs::remove_file(&lease_path)
         .map_err(|_| "git-checkout-lease-release-failed".to_string())?;
-    sync_checkout_lease_directory(&common_dir)
+    if sync_directory(&common_dir).is_ok() {
+        return Ok(());
+    }
+    let restore_result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lease_path)
+        .and_then(|mut file| file.write_all(&encoded).and_then(|_| file.sync_all()));
+    if restore_result.is_err() || sync_checkout_lease_directory(&common_dir).is_err() {
+        return Err("git-checkout-lease-release-restore-failed".into());
+    }
+    Err("git-checkout-lease-release-failed".into())
 }
 
 fn plan_fingerprint(
@@ -1213,6 +1300,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn owner_lease_vetoes_idle_stale_open_clone_until_exact_release() {
+        if let Some(common_dir) = std::env::var_os("DISKSAGE_LEASE_LOCK_CHILD_COMMON_DIR") {
+            assert_eq!(
+                lock_checkout_lease(Path::new(&common_dir)).unwrap_err(),
+                "git-checkout-lease-operation-active"
+            );
+            return;
+        }
         let repository = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-b", "main"]);
         git(
@@ -1257,19 +1351,47 @@ mod tests {
             .blockers
             .contains(&"git-checkout-lease-active".into()));
 
+        assert_eq!(
+            release_git_checkout_lease_with_sync(
+                repository.path(),
+                &references,
+                &lease.lease_fingerprint,
+                12,
+                |_| Err("injected-directory-sync-failure".into()),
+            )
+            .unwrap_err(),
+            "git-checkout-lease-release-failed"
+        );
+        assert_eq!(
+            read_checkout_lease(&repository.path().join(".git"))
+                .unwrap()
+                .unwrap()
+                .lease_fingerprint,
+            lease.lease_fingerprint,
+            "an unsuccessful release must leave the exact lease active"
+        );
         release_git_checkout_lease(repository.path(), &references, &lease.lease_fingerprint, 12)
             .expect("only the exact owner-created lease is released");
         let cleanup_guard = lock_checkout_lease(&repository.path().join(".git")).unwrap();
-        assert_eq!(
-            acquire_git_checkout_lease(
-                repository.path(),
-                &references,
-                "agent/session-2",
-                13,
-                None,
+        git(
+            repository.path(),
+            &["config", "disksage.test-lock-inode", "replaced"],
+        );
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git_clone_reclaim::tests::owner_lease_vetoes_idle_stale_open_clone_until_exact_release",
+                "--nocapture",
+            ])
+            .env(
+                "DISKSAGE_LEASE_LOCK_CHILD_COMMON_DIR",
+                repository.path().join(".git"),
             )
-            .unwrap_err(),
-            "git-checkout-lease-operation-active"
+            .status()
+            .unwrap();
+        assert!(
+            child.success(),
+            "a second process must observe the stable lock"
         );
         drop(cleanup_guard);
         let released = plan_git_clone_reclaim_with_authority(
