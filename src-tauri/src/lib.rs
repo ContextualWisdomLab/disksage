@@ -56,6 +56,8 @@ mod llm;
 mod macos_temp_guard_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod gradle_cache_catalog_tests;
+#[cfg(all(test, unix))]
+mod cache_manifest_symlink_tests;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
