@@ -138,4 +138,19 @@ textarea {
       expect(customerCopy).not.toContain(internalTerm);
     }
   });
+
+  it("announces the current state together with its next safe action", () => {
+    const providerStatus = read("src/lib/ux/ProviderStatusCard.svelte");
+    const story = read("src/lib/ux/ProviderStatusCard.stories.ts");
+    const tokens = read("src/lib/ui/design-tokens.css");
+
+    expect(providerStatus).toMatch(
+      /role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+    );
+    expect(providerStatus).toContain('<span class="ds-visually-hidden">. {details}</span>');
+    expect(tokens).toMatch(/\.ds-visually-hidden\s*\{[\s\S]*?clip-path:\s*inset\(50%\)/);
+    expect(story).toContain(
+      '"Finder 복사를 취소하고 잠시 후 상태를 다시 확인하세요.",',
+    );
+  });
 });

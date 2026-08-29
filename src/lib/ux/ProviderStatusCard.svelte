@@ -52,7 +52,10 @@
 >
   <div class="status-heading">
     <svelte:element this={headingLevel} id={`${statusId}-title`}>{provider} 복사 준비 상태</svelte:element>
-    <span class="state" role="status" aria-live="polite">{stateLabel[state]}</span>
+    <span class="state" role="status" aria-live="polite" aria-atomic="true">
+      {stateLabel[state]}
+      <span class="ds-visually-hidden">. {details}</span>
+    </span>
   </div>
   <p id={`${statusId}-details`}>{details}</p>
   {#if observedAt || blockedFor}

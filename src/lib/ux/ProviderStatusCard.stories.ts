@@ -55,6 +55,9 @@ export const MaterializationStalled: Story = {
     expect(canvasElement.ownerDocument.documentElement.scrollWidth).toBeLessThanOrEqual(375);
     expect(canvasElement.getBoundingClientRect().right).toBeLessThanOrEqual(375);
     await expect(canvas.getByRole("status")).toHaveTextContent("파일 준비 지연");
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "Finder 복사를 취소하고 잠시 후 상태를 다시 확인하세요.",
+    );
     await userEvent.click(canvas.getByRole("button", { name: "Finder 복사 취소" }));
     await expect(args.onCancel).toHaveBeenCalledOnce();
   },
