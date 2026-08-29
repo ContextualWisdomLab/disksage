@@ -284,13 +284,16 @@ fn require_one_windows_authority(paths: &[PathBuf]) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn require_one_unix_authority(paths: &[PathBuf]) -> Result<(), String> {
+fn admit_one_unix_authority(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, u64), String> {
     use std::os::unix::fs::MetadataExt;
 
     let mut device = None;
+    let mut admitted = Vec::with_capacity(paths.len());
+    let mut unavailable_count = 0_u64;
     for path in paths {
         let Ok(metadata) = std::fs::symlink_metadata(path) else {
-            // The audit records this input as rejected and returns incomplete evidence.
+            // Do not pass an input that appeared after preflight into the decoder.
+            unavailable_count = unavailable_count.saturating_add(1);
             continue;
         };
         let current = metadata.dev();
@@ -298,8 +301,9 @@ fn require_one_unix_authority(paths: &[PathBuf]) -> Result<(), String> {
             return Err("photo-exact-audit-select-one-filesystem".into());
         }
         device.get_or_insert(current);
+        admitted.push(path.clone());
     }
-    Ok(())
+    Ok((admitted, unavailable_count))
 }
 
 /// Re-audit every participant and delegate Trash, journal, and receipt handling to the shared engine.
@@ -358,8 +362,17 @@ pub async fn audit_exact_photo_duplicates(
         #[cfg(windows)]
         require_one_windows_authority(&paths)?;
         #[cfg(unix)]
-        require_one_unix_authority(&paths)?;
-        Ok(audit_photos(&paths, generated_at_ms))
+        let (paths, unavailable_count) = admit_one_unix_authority(&paths)?;
+        let mut audit = audit_photos(&paths, generated_at_ms);
+        #[cfg(unix)]
+        if unavailable_count > 0 {
+            *audit
+                .rejected_input_counts
+                .entry("photo-input-metadata-unavailable".into())
+                .or_default() += unavailable_count;
+            audit.evidence_complete = false;
+        }
+        Ok(audit)
     })
     .await
     .map_err(|_| "photo-exact-audit-worker-unavailable".to_string())?
@@ -537,7 +550,7 @@ mod tests {
         let photo = root.path().join("photo.png");
         std::fs::write(&photo, b"fixture").unwrap();
         assert_eq!(
-            require_one_unix_authority(&[photo, PathBuf::from("/dev/null")]),
+            admit_one_unix_authority(&[photo, PathBuf::from("/dev/null")]).map(|_| ()),
             Err("photo-exact-audit-select-one-filesystem".into())
         );
     }
@@ -549,6 +562,8 @@ mod tests {
         let photo = root.path().join("photo.png");
         let missing = root.path().join("missing.png");
         std::fs::write(&photo, b"fixture").unwrap();
-        assert_eq!(require_one_unix_authority(&[photo, missing]), Ok(()));
+        let (admitted, unavailable_count) = admit_one_unix_authority(&[photo, missing]).unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(unavailable_count, 1);
     }
 }
