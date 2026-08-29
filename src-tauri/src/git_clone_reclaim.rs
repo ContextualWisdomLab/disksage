@@ -988,7 +988,13 @@ pub fn plan_git_clone_reclaim_with_default_branch(
         options,
         generated_at_ms,
     )?;
-    if pr_plan.closed_pull_request_head || pr_plan.stale_open_pull_request_head {
+    if pr_plan.closed_pull_request_head
+        || pr_plan.stale_open_pull_request_head
+        || pr_plan
+            .blockers
+            .iter()
+            .any(|blocker| blocker != "git-clone-pr-head-authority-missing")
+    {
         return Ok(pr_plan);
     }
     let (reference, oid) = git_worktree::github_default_branch_reference_oid(
