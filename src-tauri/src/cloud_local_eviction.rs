@@ -1151,6 +1151,16 @@ fn validate_approval(
     Ok(())
 }
 
+fn validate_native_item_identity(expected: &str, observed: &str) -> Result<(), String> {
+    if !valid_hex64(expected) || !valid_hex64(observed) {
+        return Err("native-file-provider-item-identity-unconfirmed".into());
+    }
+    if expected != observed {
+        return Err("native-file-provider-item-identity-changed".into());
+    }
+    Ok(())
+}
+
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn request_native_icloud_eviction(
     root: &CloudRoot,
@@ -1158,9 +1168,17 @@ fn request_native_icloud_eviction(
     expected_item_identity: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if root.provider == CloudProvider::Onedrive {
-        let _expected_identity = expected_item_identity
-            .filter(|value| valid_hex64(value))
+        let expected_identity = expected_item_identity
             .ok_or_else(|| "native-file-provider-item-identity-unconfirmed".to_string())?;
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "native-file-provider-item-identity-unavailable".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("native-file-provider-item-identity-unavailable".into());
+        }
+        let status = crate::provider_sync::file_providerctl_status(path)?;
+        let observed =
+            crate::provider_sync::parse_file_providerctl_item_status(&status, metadata.len())?;
+        validate_native_item_identity(expected_identity, &observed.item_identifier_fingerprint)?;
     }
     if !matches!(
         root.provider,
@@ -1543,6 +1561,20 @@ mod tests {
             provider_reported_bytes: Some(100),
             item_identifier_fingerprint: Some("a".repeat(64)),
         }
+    }
+
+    #[test]
+    fn native_item_identity_requires_the_exact_planned_version() {
+        let expected = "a".repeat(64);
+        assert!(validate_native_item_identity(&expected, &expected).is_ok());
+        assert_eq!(
+            validate_native_item_identity(&expected, &"b".repeat(64)).unwrap_err(),
+            "native-file-provider-item-identity-changed"
+        );
+        assert_eq!(
+            validate_native_item_identity("invalid", &expected).unwrap_err(),
+            "native-file-provider-item-identity-unconfirmed"
+        );
     }
 
     #[test]

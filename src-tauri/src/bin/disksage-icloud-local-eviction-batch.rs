@@ -24,6 +24,7 @@ struct Args {
     cloud_root: PathBuf,
     manifest: PathBuf,
     execute: bool,
+    finder_assistance: bool,
     approved_batch_fingerprint: Option<String>,
     confirm_batch_fingerprint: Option<String>,
     approved_by: Option<String>,
@@ -34,7 +35,7 @@ struct Args {
 fn usage() -> String {
     format!(
         "usage: {} --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON \
-         [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 \
+         [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 \
          --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         env!("CARGO_BIN_NAME")
     )
@@ -61,6 +62,7 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut manifest = None;
     let mut execute = false;
+    let mut finder_assistance = false;
     let mut approved_batch_fingerprint = None;
     let mut confirm_batch_fingerprint = None;
     let mut approved_by = None;
@@ -90,6 +92,12 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                     return Err("--execute는 한 번만 지정할 수 있음".into());
                 }
                 execute = true;
+            }
+            Some("--finder-assistance") => {
+                if finder_assistance {
+                    return Err("--finder-assistance는 한 번만 지정할 수 있음".into());
+                }
+                finder_assistance = true;
             }
             Some("--approved-batch-fingerprint") => {
                 if approved_batch_fingerprint.is_some() {
@@ -157,6 +165,9 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     if !execute && execution_fields.iter().any(|present| *present) {
         return Err("실행 전용 인자는 --execute와 함께 사용해야 함".into());
     }
+    if finder_assistance && !execute {
+        return Err("--finder-assistance는 --execute와 함께 사용해야 함".into());
+    }
     if record_dir
         .as_ref()
         .is_some_and(|directory| !directory.is_absolute())
@@ -167,6 +178,7 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
         cloud_root,
         manifest,
         execute,
+        finder_assistance,
         approved_batch_fingerprint,
         confirm_batch_fingerprint,
         approved_by,
@@ -500,7 +512,10 @@ fn run() -> Result<(), String> {
         approved_by,
         rationale,
     )?;
-    if root.provider == CloudProvider::Onedrive {
+    if args.finder_assistance {
+        if root.provider != CloudProvider::Onedrive {
+            return Err("finder-assistance-requires-onedrive".into());
+        }
         let receipt = prepare_onedrive_finder_assistance(
             &root,
             &plan,
@@ -592,6 +607,19 @@ mod tests {
             TEST_RECORD_DIR.into(),
         ]);
         assert!(parse_args(&complete).unwrap().execute);
+        let mut fallback = complete;
+        fallback.push("--finder-assistance".into());
+        let parsed = parse_args(&fallback).unwrap();
+        assert!(parsed.execute);
+        assert!(parsed.finder_assistance);
+
+        let mut plan_only_fallback = partial;
+        plan_only_fallback.retain(|value| value != "--execute");
+        plan_only_fallback.push("--finder-assistance".into());
+        assert_eq!(
+            parse_args(&plan_only_fallback).unwrap_err(),
+            "--finder-assistance는 --execute와 함께 사용해야 함"
+        );
     }
 
     #[test]

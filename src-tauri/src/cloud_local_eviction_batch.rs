@@ -348,22 +348,18 @@ fn bounded_error_code(error: &str) -> String {
 }
 
 fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
-    let expected_blockers = if plan.provider == CloudProvider::Onedrive {
-        [
-            "onedrive-use-finder-free-up-space",
-            "human-local-eviction-approval-required",
-        ]
-        .as_slice()
-    } else {
-        ["human-local-eviction-approval-required"].as_slice()
-    };
+    let expected_blockers = ["human-local-eviction-approval-required"];
     plan.version == crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION
         && matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
         && valid_hex64(&plan.plan_fingerprint)
         && plan.logical_bytes > 0
         && plan.allocated_bytes > 0
-        && (plan.eligible_after_human_approval || plan.provider == CloudProvider::Onedrive)
-        && plan.blockers.iter().map(String::as_str).eq(expected_blockers.iter().copied())
+        && plan.eligible_after_human_approval
+        && plan
+            .blockers
+            .iter()
+            .map(String::as_str)
+            .eq(expected_blockers)
         && plan.active_use.evidence_complete
         && !plan.active_use.active
         && !plan.active_use.results_truncated
@@ -1051,9 +1047,6 @@ pub fn execute_icloud_local_eviction_batch(
     record_dir: &Path,
     requested_at_ms: u64,
 ) -> Result<IcloudLocalEvictionBatchResult, String> {
-    if root.provider == CloudProvider::Onedrive {
-        return Err("onedrive-use-finder-free-up-space".into());
-    }
     let mut recorder = ImmutableBatchRecordWriter;
     execute_icloud_local_eviction_batch_with(
         root,
@@ -1367,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn onedrive_batch_is_approved_only_for_finder_assistance() {
+    fn onedrive_batch_is_approved_for_native_foundation_execution() {
         let mut onedrive_root = root();
         onedrive_root.id = "onedrive:test".into();
         onedrive_root.provider = CloudProvider::Onedrive;
@@ -1375,11 +1368,6 @@ mod tests {
         let plan = plan_batch_with(&onedrive_root, &[path(0)], 20, |_, _, _| {
             let mut plan = safe_plan(0);
             plan.provider = CloudProvider::Onedrive;
-            plan.eligible_after_human_approval = false;
-            plan.blockers = vec![
-                "onedrive-use-finder-free-up-space".into(),
-                "human-local-eviction-approval-required".into(),
-            ];
             Ok(plan)
         })
         .unwrap();
@@ -1398,11 +1386,6 @@ mod tests {
         onedrive_root.label = "OneDrive test".into();
         let mut item = safe_plan(0);
         item.provider = CloudProvider::Onedrive;
-        item.eligible_after_human_approval = false;
-        item.blockers = vec![
-            "onedrive-use-finder-free-up-space".into(),
-            "human-local-eviction-approval-required".into(),
-        ];
         let plan =
             plan_batch_with(&onedrive_root, &[path(0)], 20, |_, _, _| Ok(item.clone())).unwrap();
         let approval = approve_icloud_local_eviction_batch(
@@ -1432,7 +1415,10 @@ mod tests {
         let pending_path = std::fs::read_dir(records.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
-            .find(|path| path.to_string_lossy().ends_with(".finder-assistance-pending.json"))
+            .find(|path| {
+                path.to_string_lossy()
+                    .ends_with(".finder-assistance-pending.json")
+            })
             .unwrap();
         let pending: OnedriveFinderAssistanceReceipt =
             serde_json::from_slice(&std::fs::read(pending_path).unwrap()).unwrap();
@@ -1746,6 +1732,56 @@ mod tests {
             verification_blockers: Vec::new(),
             notices: Vec::new(),
         }
+    }
+
+    #[test]
+    fn onedrive_batch_uses_the_native_per_item_executor() {
+        let mut onedrive = root();
+        onedrive.id = "onedrive:test".into();
+        onedrive.provider = CloudProvider::Onedrive;
+        onedrive.label = "OneDrive test".into();
+        let plan = plan_batch_with(&onedrive, &[path(0)], 20, |_, _, _| {
+            let mut item = safe_plan(0);
+            item.provider = CloudProvider::Onedrive;
+            Ok(item)
+        })
+        .unwrap();
+        let approval = approve_icloud_local_eviction_batch(
+            &plan,
+            &onedrive,
+            &plan.batch_fingerprint,
+            21,
+            "human:operator",
+            "Exact OneDrive batch reviewed",
+        )
+        .unwrap();
+        let calls = Cell::new(0usize);
+        let mut recorder = TestBatchRecorder::default();
+        let result = execute_icloud_local_eviction_batch_with(
+            &onedrive,
+            &plan,
+            &approval,
+            &plan.batch_fingerprint,
+            Path::new("/records"),
+            30,
+            |_, _, _| {
+                let mut item = safe_plan(0);
+                item.provider = CloudProvider::Onedrive;
+                Ok(item)
+            },
+            |root, live_plan, individual, _, requested_at_ms| {
+                assert_eq!(root.provider, CloudProvider::Onedrive);
+                calls.set(calls.get() + 1);
+                Ok(successful_result(live_plan, individual, requested_at_ms))
+            },
+            &mut recorder,
+            || 100,
+        )
+        .unwrap();
+
+        assert_eq!(calls.get(), 1);
+        assert!(result.execution_complete);
+        assert!(result.verification_complete);
     }
 
     #[test]
