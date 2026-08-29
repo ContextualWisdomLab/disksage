@@ -148,6 +148,28 @@ mod tests {
     }
 
     #[test]
+    fn directories_pruned_from_scan_are_hidden_and_not_navigable() {
+        let root = tempfile::tempdir().unwrap();
+        let visible = root.path().join("visible");
+        let pruned = root.path().join("provider-managed");
+        std::fs::create_dir(&visible).unwrap();
+        std::fs::create_dir(&pruned).unwrap();
+        std::fs::write(visible.join("kept.bin"), b"kept").unwrap();
+        std::fs::write(pruned.join("cloud.bin"), b"cloud").unwrap();
+        let mut result = scan(root.path());
+        result.dir_sizes.remove(&pruned);
+        result.dir_sizes.remove(&pruned.join("cloud.bin"));
+
+        let root_view = node_view(&result, root.path()).unwrap();
+        assert!(root_view.entries.iter().any(|entry| entry.name == "visible"));
+        assert!(root_view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "provider-managed"));
+        assert!(node_view(&result, &pruned).is_err());
+    }
+
+    #[test]
     fn lexical_parent_component_is_rejected() {
         let root = tempfile::tempdir().unwrap();
         let result = scan(root.path());
