@@ -5,6 +5,8 @@ use disksage_lib::photo_similarity_audit::{
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+const MAX_PHOTO_PRIVATE_REPORT_BYTES: usize = 64 * 1024 * 1024;
+
 const USAGE: &str = "Usage: disksage-photo-similarity-audit --root ABSOLUTE_PATH [--max-entries N] [--private-output PATH]\n\
        disksage-photo-similarity-audit --execute --root ABSOLUTE_PATH --private-report PATH \\\n+         --select GROUP_FINGERPRINT=RELATIVE_PATH [...] --approval EXACT_PHRASE \\
          --rationale TEXT --journal-path PATH\n\
@@ -138,7 +140,9 @@ fn now_ms() -> u64 {
 fn read_private_report(path: &PathBuf) -> Result<PhotoSimilarityAuditReport, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "photo-audit-private-report-unavailable".to_string())?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 64 * 1024 * 1024
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PHOTO_PRIVATE_REPORT_BYTES as u64
     {
         return Err("photo-audit-private-report-unsafe".into());
     }
@@ -165,24 +169,29 @@ fn write_private_report(
     if std::fs::symlink_metadata(path).is_ok() {
         return Err("photo-audit-private-output-exists".into());
     }
-    disksage_lib::private_evidence::write_private_json_create_new(source_root, path, report)
-        .map(|_| ())
-        .map_err(|error| match error.as_str() {
-            "private-evidence-parent-unavailable" => {
-                "photo-audit-private-output-parent-unavailable".to_string()
-            }
-            "private-evidence-parent-unsafe" | "private-evidence-parent-writable-by-others" => {
-                "photo-audit-private-output-parent-unsafe".to_string()
-            }
-            "private-evidence-inside-source-root" | "private-evidence-name-invalid" => {
-                "photo-audit-private-output-unsafe".to_string()
-            }
-            "private-evidence-too-large" => "photo-audit-private-output-too-large".to_string(),
-            "private-evidence-secure-mode-unsupported" => {
-                "photo-audit-private-output-secure-mode-unsupported".to_string()
-            }
-            _ => "photo-audit-private-output-write-failed".to_string(),
-        })
+    disksage_lib::private_evidence::write_private_json_create_new_with_limit(
+        source_root,
+        path,
+        report,
+        MAX_PHOTO_PRIVATE_REPORT_BYTES,
+    )
+    .map(|_| ())
+    .map_err(|error| match error.as_str() {
+        "private-evidence-parent-unavailable" => {
+            "photo-audit-private-output-parent-unavailable".to_string()
+        }
+        "private-evidence-parent-unsafe" | "private-evidence-parent-writable-by-others" => {
+            "photo-audit-private-output-parent-unsafe".to_string()
+        }
+        "private-evidence-inside-source-root" | "private-evidence-name-invalid" => {
+            "photo-audit-private-output-unsafe".to_string()
+        }
+        "private-evidence-too-large" => "photo-audit-private-output-too-large".to_string(),
+        "private-evidence-secure-mode-unsupported" => {
+            "photo-audit-private-output-secure-mode-unsupported".to_string()
+        }
+        _ => "photo-audit-private-output-write-failed".to_string(),
+    })
 }
 
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Value, String> {
