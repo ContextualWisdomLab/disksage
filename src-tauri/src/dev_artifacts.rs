@@ -265,6 +265,19 @@ fn staged_manifest_matches_request(path: &Path, request: &DevArtifact) -> bool {
         && manifest.fingerprint == request.fingerprint
 }
 
+fn validate_staged_artifact(path: &Path, request: &DevArtifact) -> Result<(), String> {
+    let active_use = crate::git_worktree::active_use_evidence(path, 2_000, 64, true);
+    if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
+        return Err(
+            "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요"
+                .into(),
+        );
+    }
+    staged_manifest_matches_request(path, request)
+        .then_some(())
+        .ok_or_else(|| "개발 빌드 파일이 변경되었습니다. 다시 확인하세요".into())
+}
+
 /// 마커 인접 아티팩트 디렉토리를 찾아 로컬 할당량이 큰 순서로 반환.
 ///
 /// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
@@ -444,13 +457,7 @@ pub fn clean_artifacts(
                 request.allocated_bytes,
                 journal_path,
                 now_ms,
-                |staged| {
-                    staged_manifest_matches_request(staged, request)
-                        .then_some(())
-                        .ok_or_else(|| {
-                            "개발 빌드 파일이 변경되었습니다. 다시 확인하세요".to_string()
-                        })
-                },
+                |staged| validate_staged_artifact(staged, request),
             ) {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
@@ -651,5 +658,39 @@ mod tests {
             found.is_empty(),
             "nested File Provider roots must be pruned before candidate planning"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_validation_restores_artifact_with_retained_writer() {
+        use std::fs::OpenOptions;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
+        let request = find_artifacts(tmp.path(), 0, u64::MAX).remove(0);
+        let _writer = OpenOptions::new()
+            .write(true)
+            .open(artifact.join("payload.bin"))
+            .unwrap();
+
+        let result = crate::safety::trash_delete_if_identity_and_validate(
+            &artifact,
+            &request.object_id,
+            request.allocated_bytes,
+            &tmp.path().join("journal.jsonl"),
+            1,
+            |staged| validate_staged_artifact(staged, &request),
+        );
+
+        assert!(
+            result.is_err(),
+            "a retained writer must prevent Trash handoff"
+        );
+        assert!(
+            artifact.exists(),
+            "failed validation must restore the artifact"
+        );
+        assert!(artifact.join("payload.bin").exists());
     }
 }
