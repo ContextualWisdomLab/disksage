@@ -284,4 +284,17 @@ mod tests {
         assert!(!args.execute);
         assert!(parse_selection(OsString::from("bad")).is_err());
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_execution_is_not_advertised_or_accepted() {
+        assert!(!USAGE.contains("--execute"));
+        let error = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--root"),
+            OsString::from(r"C:\photos"),
+        ])
+        .unwrap_err();
+        assert_eq!(error, "photo-audit-execution-unsupported-on-platform");
+    }
 }
