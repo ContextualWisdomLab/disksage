@@ -297,4 +297,11 @@ mod tests {
             "onedrive-pressure-cache-scan-bounded"
         );
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn queued_paths_consume_the_remaining_entry_budget() {
+        assert_eq!(remaining_entry_budget(5, 2, 3), 0);
+        assert_eq!(remaining_entry_budget(10, 2, 3), 5);
+    }
 }
