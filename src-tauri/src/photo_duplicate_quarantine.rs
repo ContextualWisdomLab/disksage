@@ -85,10 +85,21 @@ fn selection_for_group(
             .to_string_lossy()
             .into_owned()
     } else {
-        supplied
+        let selected = supplied
             .get(group.content_digest.as_str())
             .map(|selection| selection.survivor_relative_path.clone())
-            .ok_or_else(|| "photo-exact-quarantine-customer-selection-required".to_string())?
+            .ok_or_else(|| "photo-exact-quarantine-customer-selection-required".to_string())?;
+        let selected_path = Path::new(&selected);
+        if selected_path.is_absolute() {
+            std::fs::canonicalize(selected_path)
+                .map_err(|_| "photo-exact-quarantine-member-unavailable".to_string())?
+                .strip_prefix(root)
+                .map_err(|_| "photo-exact-quarantine-member-outside-root".to_string())?
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            selected
+        }
     };
     if !group.members.iter().any(|member| {
         std::fs::canonicalize(&member.path)
@@ -194,6 +205,30 @@ fn audit_paths(audit: &PhotoDuplicateAudit) -> Vec<PathBuf> {
         .collect()
 }
 
+fn audit_authority_root(audit: &PhotoDuplicateAudit) -> Result<PathBuf, String> {
+    let paths = audit_paths(audit)
+        .into_iter()
+        .map(|path| {
+            std::fs::canonicalize(path)
+                .map_err(|_| "photo-exact-quarantine-member-unavailable".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = paths
+        .first()
+        .and_then(|path| path.parent())
+        .ok_or_else(|| "photo-exact-quarantine-root-unavailable".to_string())?;
+    let mut common = first.to_path_buf();
+    while !paths.iter().all(|path| path.starts_with(&common)) {
+        if !common.pop() {
+            return Err("photo-exact-quarantine-common-root-unavailable".into());
+        }
+    }
+    if common.as_os_str().is_empty() {
+        return Err("photo-exact-quarantine-common-root-unavailable".into());
+    }
+    Ok(common)
+}
+
 /// Re-audit every participant and delegate Trash, journal, and receipt handling to the shared engine.
 #[cfg(not(coverage))]
 pub fn execute_exact_photo_quarantine(
@@ -228,11 +263,11 @@ pub fn execute_exact_photo_quarantine(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn plan_exact_photo_duplicate_quarantine(
-    source_root: String,
     audit: PhotoDuplicateAudit,
     selections: Vec<PhotoQuarantineSelection>,
 ) -> Result<PhotoQuarantinePlan, String> {
-    plan_exact_photo_quarantine(Path::new(&source_root), &audit, &selections)
+    let source_root = audit_authority_root(&audit)?;
+    plan_exact_photo_quarantine(&source_root, &audit, &selections)
 }
 
 /// Decode the supplied byte-duplicate candidates without mutating them.
@@ -256,7 +291,6 @@ pub async fn audit_exact_photo_duplicates(
 #[tauri::command]
 pub async fn execute_exact_photo_duplicate_quarantine(
     app: tauri::AppHandle,
-    source_root: String,
     audit: PhotoDuplicateAudit,
     plan: PhotoQuarantinePlan,
     approval_phrase: String,
@@ -268,9 +302,10 @@ pub async fn execute_exact_photo_duplicate_quarantine(
         .app_data_dir()
         .map_err(|_| "photo-exact-quarantine-journal-unavailable".to_string())?
         .join("photo-quarantine.jsonl");
+    let source_root = audit_authority_root(&audit)?;
     tauri::async_runtime::spawn_blocking(move || {
         execute_exact_photo_quarantine(
-            Path::new(&source_root),
+            &source_root,
             &audit,
             &plan,
             &approval_phrase,
@@ -329,6 +364,31 @@ mod tests {
         let plan = plan_exact_photo_quarantine(root.path(), &audit, &[selection]).unwrap();
         assert_eq!(plan.selections[0].survivor_relative_path, "first.png");
         assert!(plan.exact_approval_phrase.contains(&plan.plan_fingerprint));
+    }
+
+    #[test]
+    fn direct_picks_outside_a_scanned_root_derive_one_exact_authority_root() {
+        let root = tempfile::tempdir().unwrap();
+        let first_dir = root.path().join("camera-a");
+        let second_dir = root.path().join("camera-b");
+        std::fs::create_dir_all(&first_dir).unwrap();
+        std::fs::create_dir_all(&second_dir).unwrap();
+        let first = first_dir.join("first.png");
+        let second = second_dir.join("second.png");
+        png(&first, 42, "one");
+        png(&second, 42, "two");
+        let audit = audit_photos(&[first.clone(), second], 7);
+        assert_eq!(audit_authority_root(&audit).unwrap(), root.path());
+        let group = &audit.exact_groups[0];
+        let selection = PhotoQuarantineSelection {
+            group_fingerprint: group.content_digest.clone(),
+            survivor_relative_path: first.to_string_lossy().into_owned(),
+        };
+        let plan = plan_exact_photo_duplicate_quarantine(audit, vec![selection]).unwrap();
+        assert_eq!(
+            plan.selections[0].survivor_relative_path,
+            "camera-a/first.png"
+        );
     }
 
     #[test]

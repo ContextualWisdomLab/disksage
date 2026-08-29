@@ -204,21 +204,19 @@ export interface PhotoQuarantineReceipt {
 export const auditExactPhotoDuplicates = (paths: string[]) =>
   invoke<PhotoDuplicateAudit>("audit_exact_photo_duplicates", { paths });
 export const planExactPhotoDuplicateQuarantine = (
-  sourceRoot: string,
   audit: PhotoDuplicateAudit,
   selections: PhotoQuarantineSelection[],
 ) => invoke<PhotoQuarantinePlan>("plan_exact_photo_duplicate_quarantine", {
-  sourceRoot, audit, selections,
+  audit, selections,
 });
 export const executeExactPhotoDuplicateQuarantine = (
-  sourceRoot: string,
   audit: PhotoDuplicateAudit,
   plan: PhotoQuarantinePlan,
   approvalPhrase: string,
   rationale: string,
   executedAtMs: number,
 ) => invoke<PhotoQuarantineReceipt>("execute_exact_photo_duplicate_quarantine", {
-  sourceRoot, audit, plan, approvalPhrase, rationale, executedAtMs,
+  audit, plan, approvalPhrase, rationale, executedAtMs,
 });
 export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
 export const cleanOrphanCandidates = (

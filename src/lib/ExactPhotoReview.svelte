@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+  import { duplicateCandidateFingerprint, duplicateCandidatePaths, quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
   import { open } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot, duplicateGroups }: { scannedRoot: string; duplicateGroups: api.DupeGroup[] } = $props();
@@ -15,11 +15,16 @@
   let status = $state("");
   let error = $state("");
   let selectedPaths: string[] = $state([]);
-  let initialized = false;
+  let reviewedCandidateFingerprint = "";
   $effect(() => {
-    if (!initialized) {
-      selectedPaths = duplicateGroups.flatMap((group) => group.paths);
-      initialized = true;
+    const fingerprint = duplicateCandidateFingerprint(duplicateGroups);
+    if (fingerprint !== reviewedCandidateFingerprint) {
+      reviewedCandidateFingerprint = fingerprint;
+      selectedPaths = duplicateCandidatePaths(duplicateGroups);
+      audit = null; plan = null; receipt = null; keepers = {}; approval = ""; rationale = ""; error = "";
+      status = selectedPaths.length
+        ? "새 검사 결과를 불러왔습니다. 사진 화질을 다시 검토하세요."
+        : "";
     }
   });
 
@@ -37,7 +42,7 @@
     try {
       audit = await api.auditExactPhotoDuplicates(selectedPaths);
       keepers = Object.fromEntries(audit.exact_groups.flatMap((group) =>
-        group.keeper_path ? [[group.content_digest, relative(group.keeper_path)]] : [],
+        group.keeper_path ? [[group.content_digest, group.keeper_path]] : [],
       ));
       status = audit.exact_groups.length
         ? `${audit.exact_groups.length}개 그룹을 확인했습니다. 남길 사진을 확인하세요.`
@@ -61,7 +66,7 @@
     try {
       const selections = selectionsForGroups(audit.exact_groups, keepers);
       if (!selections) return;
-      plan = await api.planExactPhotoDuplicateQuarantine(scannedRoot, audit, selections);
+      plan = await api.planExactPhotoDuplicateQuarantine(audit, selections);
       approval = "";
       status = `${plan.candidate_file_count}개 사진을 휴지통으로 보낼 준비가 됐습니다. 승인 문구를 직접 입력하세요.`;
     } catch {
@@ -74,7 +79,7 @@
     busy = true; error = "";
     try {
       receipt = await api.executeExactPhotoDuplicateQuarantine(
-        scannedRoot, audit, plan, approval, rationale.trim(), Date.now(),
+        audit, plan, approval, rationale.trim(), Date.now(),
       );
       status = `${receipt.moved_file_count}개 사진을 휴지통으로 옮겼습니다. 복원하려면 휴지통에서 되돌리세요.`;
     } catch {
@@ -101,8 +106,8 @@
       <p class="evidence">논리 크기 {fmtBytes(group.members.reduce((sum, member) => sum + member.bytes, 0))} · 실제 회수량은 휴지통 이동 후 측정됩니다.</p>
       {#if group.keeper_blocker}<p class="blocker">화질 근거가 동률입니다. 남길 사진을 직접 선택하세요.</p>{/if}
       {#each group.members as member (member.object_id)}
-        <label class:selected={keepers[group.content_digest] === relative(member.path)}>
-          <input type="radio" name={group.content_digest} value={relative(member.path)} checked={keepers[group.content_digest] === relative(member.path)} onchange={() => { keepers = { ...keepers, [group.content_digest]: relative(member.path) }; plan = null; }} />
+        <label class:selected={keepers[group.content_digest] === member.path}>
+          <input type="radio" name={group.content_digest} value={member.path} checked={keepers[group.content_digest] === member.path} onchange={() => { keepers = { ...keepers, [group.content_digest]: member.path }; plan = null; }} />
           <span><strong>{relative(member.path)}</strong><small>{member.width}×{member.height} · {member.bit_depth}bit · {member.codec} · {fmtBytes(member.bytes)}</small></span>
         </label>
       {/each}

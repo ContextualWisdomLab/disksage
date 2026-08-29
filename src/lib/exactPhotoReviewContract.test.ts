@@ -21,6 +21,14 @@ describe("exact photo review safety and accessibility contract", () => {
     expect(source).toContain("auditExactPhotoDuplicates(selectedPaths)");
   });
 
+  it("resets stale review evidence after a new scan and does not bind direct picks to the scan root", () => {
+    expect(source).toContain("fingerprint !== reviewedCandidateFingerprint");
+    expect(source).toContain("selectedPaths = duplicateCandidatePaths(duplicateGroups)");
+    expect(source).toContain("audit = null; plan = null; receipt = null");
+    expect(source).toContain("planExactPhotoDuplicateQuarantine(audit, selections)");
+    expect(source).not.toContain("planExactPhotoDuplicateQuarantine(scannedRoot");
+  });
+
   it("announces results and preserves keyboard-visible 44px controls", () => {
     expect(source).toContain('role="status" aria-live="polite"');
     expect(source).toContain('role="alert"');

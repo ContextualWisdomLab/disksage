@@ -1,5 +1,11 @@
 import type { ExactPhotoGroup, PhotoQuarantinePlan, PhotoQuarantineSelection } from "./api";
 
+export const duplicateCandidatePaths = (groups: { paths: string[] }[]): string[] =>
+  groups.flatMap((group) => group.paths);
+
+export const duplicateCandidateFingerprint = (groups: { paths: string[] }[]): string =>
+  JSON.stringify(duplicateCandidatePaths(groups));
+
 export const selectionsForGroups = (
   groups: ExactPhotoGroup[],
   keepers: Record<string, string>,
