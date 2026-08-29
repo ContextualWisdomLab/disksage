@@ -159,6 +159,17 @@ fn valid_relative_path(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+#[cfg(unix)]
+fn metadata_has_external_alias(metadata: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn metadata_has_external_alias(_metadata: &Metadata) -> bool {
+    false
+}
+
 fn managed_photo_library(path: &Path) -> bool {
     path.components().any(|component| {
         let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
@@ -314,6 +325,9 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
         .map_err(|_| "photo-audit-opened-file-stat-failed".to_string())?;
     if !metadata_unchanged(metadata, &opened_metadata) {
         return Err("photo-audit-source-changed-before-read".into());
+    }
+    if metadata_has_external_alias(&opened_metadata) {
+        return Err("photo-audit-hardlink-alias-excluded".into());
     }
     if crate::cloud::metadata_is_dataless(&opened_metadata) {
         return Err("photo-audit-dataless-excluded".into());
@@ -757,6 +771,49 @@ where
         .collect()
 }
 
+fn quarantine_participant_paths<'a>(
+    canonical_root: &Path,
+    groups: impl Iterator<Item = &'a PhotoSimilarityGroup>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut paths = Vec::new();
+    let mut object_ids = BTreeSet::new();
+    for member in groups.flat_map(|group| group.members.iter()) {
+        let path = canonical_root.join(&member.relative_path);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| "photo-quarantine-participant-unavailable".to_string())?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != member.quality.encoded_bytes
+            || system_time_ms(metadata.modified()) != member.filesystem_modified_ms
+            || crate::cloud::metadata_is_dataless(&metadata)
+            || metadata_has_external_alias(&metadata)
+            || crate::safety::object_id_from_metadata(&metadata).as_deref()
+                != Some(member.filesystem_object_id.as_str())
+        {
+            return Err("photo-quarantine-participant-changed".into());
+        }
+        if !object_ids.insert(member.filesystem_object_id.as_str()) {
+            return Err("photo-quarantine-participant-alias-detected".into());
+        }
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
+fn require_inactive_quarantine_group<F>(
+    participant_paths: &[std::path::PathBuf],
+    active_use_probe: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&[std::path::PathBuf]) -> Result<BTreeSet<std::path::PathBuf>, String>,
+{
+    if active_use_probe(participant_paths)?.is_empty() {
+        Ok(())
+    } else {
+        Err("photo-quarantine-group-member-active".into())
+    }
+}
+
 /// Re-audit exact bytes and identities, then move only non-survivors to OS Trash with receipts.
 #[cfg(not(coverage))]
 pub fn execute_photo_quarantine(
@@ -796,6 +853,14 @@ pub fn execute_photo_quarantine(
         })
         .collect::<BTreeMap<_, _>>();
     let canonical_root = Path::new(&fresh.source_root);
+    let participant_paths = quarantine_participant_paths(canonical_root, fresh.groups.iter())?;
+    require_inactive_quarantine_group(&participant_paths, |paths| {
+        crate::duplicate_audit::active_duplicate_candidates(paths)
+    })?;
+    let post_probe_paths = quarantine_participant_paths(canonical_root, fresh.groups.iter())?;
+    if post_probe_paths != participant_paths {
+        return Err("photo-quarantine-participant-changed".into());
+    }
     let candidates = fresh
         .groups
         .iter()
@@ -807,11 +872,7 @@ pub fn execute_photo_quarantine(
                 .filter(move |member| &member.relative_path != survivor)
         })
         .collect::<Vec<_>>();
-    let candidate_paths = candidates
-        .iter()
-        .map(|member| canonical_root.join(&member.relative_path))
-        .collect::<Vec<_>>();
-    let active = crate::duplicate_audit::active_duplicate_candidates(&candidate_paths)?;
+    let active = BTreeSet::new();
     let items =
         quarantine_candidates_fail_fast(canonical_root, &candidates, &active, |path, member| {
             match crate::safety::trash_delete_if_identity_with_outcome(
@@ -886,6 +947,45 @@ mod tests {
             )
             .unwrap();
         std::fs::write(path, bytes).unwrap();
+    }
+
+    fn participant_member(root: &Path, name: &str) -> PhotoSimilarityMember {
+        let path = root.join(name);
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        PhotoSimilarityMember {
+            member_fingerprint: blake3::hash(name.as_bytes()).to_hex().to_string(),
+            relative_path: name.into(),
+            content_blake3: blake3::hash(&std::fs::read(&path).unwrap())
+                .to_hex()
+                .to_string(),
+            perceptual_hash: "0".repeat(16),
+            aspect_ratio: "1:1".into(),
+            quality: PhotoQualityEvidence {
+                width_pixels: 1,
+                height_pixels: 1,
+                pixel_count: 1,
+                bits_per_sample: 8,
+                encoded_format: "png".into(),
+                lossless_encoding: Some(true),
+                encoded_bytes: metadata.len(),
+            },
+            filesystem_modified_ms: system_time_ms(metadata.modified()),
+            filesystem_object_id: crate::safety::object_id_from_metadata(&metadata).unwrap(),
+        }
+    }
+
+    fn participant_group(members: Vec<PhotoSimilarityMember>) -> PhotoSimilarityGroup {
+        PhotoSimilarityGroup {
+            group_fingerprint: "group".into(),
+            perceptual_hash: "0".repeat(16),
+            aspect_ratio: "1:1".into(),
+            max_pairwise_hamming_distance: 0,
+            members,
+            pareto_dominant_survivor: None,
+            survivor_rationale: "human selection required".into(),
+            requires_human_survivor_selection: true,
+            automatic_delete_allowed: false,
+        }
     }
 
     #[test]
@@ -1068,5 +1168,67 @@ mod tests {
         assert!(receipts[1..]
             .iter()
             .all(|item| item.error.as_deref() == Some("photo-quarantine-skipped-after-failure")));
+    }
+
+    #[test]
+    fn quarantine_preflight_includes_survivor_and_candidate_identities() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("survivor.png"), b"survivor").unwrap();
+        std::fs::write(root.path().join("candidate.png"), b"candidate").unwrap();
+        let group = participant_group(vec![
+            participant_member(root.path(), "survivor.png"),
+            participant_member(root.path(), "candidate.png"),
+        ]);
+
+        let paths = quarantine_participant_paths(root.path(), std::iter::once(&group)).unwrap();
+
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&root.path().join("survivor.png")));
+        assert!(paths.contains(&root.path().join("candidate.png")));
+    }
+
+    #[test]
+    fn active_survivor_blocks_the_entire_group_before_trash() {
+        let survivor = std::path::PathBuf::from("/fixture/survivor.png");
+        let candidate = std::path::PathBuf::from("/fixture/candidate.png");
+        let participants = vec![survivor.clone(), candidate];
+        let error = require_inactive_quarantine_group(&participants, |observed| {
+            assert_eq!(observed, participants);
+            Ok(BTreeSet::from([survivor]))
+        })
+        .unwrap_err();
+
+        assert_eq!(error, "photo-quarantine-group-member-active");
+    }
+
+    #[test]
+    fn quarantine_preflight_rejects_replaced_survivor() {
+        let root = tempfile::tempdir().unwrap();
+        let survivor = root.path().join("survivor.png");
+        std::fs::write(&survivor, b"reviewed survivor").unwrap();
+        let group = participant_group(vec![participant_member(root.path(), "survivor.png")]);
+        let replacement = root.path().join("replacement.png");
+        std::fs::write(&replacement, b"replacement with different identity").unwrap();
+        std::fs::rename(&replacement, &survivor).unwrap();
+
+        assert_eq!(
+            quarantine_participant_paths(root.path(), std::iter::once(&group)).unwrap_err(),
+            "photo-quarantine-participant-changed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_preflight_rejects_hardlink_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let survivor = root.path().join("survivor.png");
+        std::fs::write(&survivor, b"reviewed survivor").unwrap();
+        let group = participant_group(vec![participant_member(root.path(), "survivor.png")]);
+        std::fs::hard_link(&survivor, root.path().join("external-alias.png")).unwrap();
+
+        assert_eq!(
+            quarantine_participant_paths(root.path(), std::iter::once(&group)).unwrap_err(),
+            "photo-quarantine-participant-changed"
+        );
     }
 }

@@ -242,6 +242,7 @@
   }
 
   let failedResults = $derived(results.filter((r) => !r.ok));
+  let warningResults = $derived(results.filter((r) => r.ok && r.warning));
 </script>
 
 <section>
@@ -318,6 +319,13 @@
       <ul class="errors">
         {#each failedResults as r (r.path)}
           <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.</li>
+        {/each}
+      </ul>
+    {/if}
+    {#if warningResults.length > 0}
+      <ul class="warnings" role="status">
+        {#each warningResults as r (r.path)}
+          <li title={r.path}>이동은 완료됐지만 기록을 확인하지 못했습니다. 휴지통에서 항목을 확인한 뒤 다시 스캔하세요.</li>
         {/each}
       </ul>
     {/if}
@@ -415,7 +423,8 @@
   .disabled { color: #aaa; }
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
-  .errors { font-size: 0.85rem; }
+  .errors, .warnings { font-size: 0.85rem; }
+  .warnings { color: #7a5a00; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
