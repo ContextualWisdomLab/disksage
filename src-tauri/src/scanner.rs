@@ -20,6 +20,126 @@ pub struct ScanResult {
 }
 
 pub const TOP_FILES_CAP: usize = 1000;
+const CLOUD_SCAN_GUIDANCE: &str = "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
+const FILE_PROVIDER_STORAGE_COMPONENT: &str = "File Provider Storage";
+
+fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Library").join("CloudStorage"),
+        home.join("Library").join("Mobile Documents"),
+        home.join("Library")
+            .join("Application Support")
+            .join("FileProvider"),
+    ]
+}
+
+fn matches_private_file_provider_layout(path: &Path, library: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(library) else {
+        return false;
+    };
+    let components = relative.components().collect::<Vec<_>>();
+
+    if components.len() >= 2
+        && components[0].as_os_str() == std::ffi::OsStr::new("Application Support")
+        && components[1].as_os_str() == std::ffi::OsStr::new("FileProvider")
+    {
+        return true;
+    }
+
+    if components.len() >= 4
+        && components[0].as_os_str() == std::ffi::OsStr::new("Containers")
+        && components[2].as_os_str() == std::ffi::OsStr::new("Data")
+        && components[3..].iter().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+        })
+    {
+        return true;
+    }
+
+    components.len() >= 3
+        && components[0].as_os_str() == std::ffi::OsStr::new("Group Containers")
+        && components[2..].iter().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+        })
+}
+
+fn live_macos_user_library(path: &Path) -> Option<PathBuf> {
+    let users_root = Path::new("/Users");
+    let relative = path.strip_prefix(users_root).ok()?;
+    let mut components = relative.components();
+    let account = components.next()?;
+    if account.as_os_str().is_empty() {
+        return None;
+    }
+    let library = components.next()?;
+    if library.as_os_str() != std::ffi::OsStr::new("Library") {
+        return None;
+    }
+    Some(users_root.join(account.as_os_str()).join("Library"))
+}
+
+fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> bool {
+    if roots
+        .iter()
+        .filter(|root| root.file_name() == Some(std::ffi::OsStr::new("CloudStorage")))
+        .filter_map(|root| root.parent())
+        .any(|library| matches_private_file_provider_layout(path, library))
+    {
+        return true;
+    }
+
+    live_macos_user_library(path)
+        .is_some_and(|library| matches_private_file_provider_layout(path, &library))
+}
+
+fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path == root || path.starts_with(root))
+        || is_private_macos_file_provider_storage(path, roots)
+}
+
+#[cfg(target_os = "macos")]
+fn provider_managed_roots() -> Vec<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| macos_provider_managed_roots_for_home(&home))
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn provider_managed_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(target_os = "macos")]
+fn is_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    is_macos_provider_managed_path(path, roots)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_provider_managed_path(_path: &Path, _roots: &[PathBuf]) -> bool {
+    false
+}
+
+fn scan_root_access_issue_with_roots(
+    root: &Path,
+    roots: &[PathBuf],
+) -> Option<&'static str> {
+    let traversal_root = read_only_traversal_root(root);
+    is_macos_provider_managed_path(&traversal_root, roots).then_some(CLOUD_SCAN_GUIDANCE)
+}
+
+pub(crate) fn scan_root_access_issue(root: &Path) -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        return scan_root_access_issue_with_roots(root, &provider_managed_roots());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = root;
+        None
+    }
+}
 
 pub fn scan_dir(
     root: &Path,
@@ -30,12 +150,7 @@ pub fn scan_dir(
 }
 
 pub(crate) fn read_only_traversal_root(root: &Path) -> PathBuf {
-    match std::fs::symlink_metadata(root) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
-        }
-        _ => root.to_path_buf(),
-    }
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
 pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
@@ -59,11 +174,25 @@ pub fn scan_dir_with_interval(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    let provider_roots = provider_managed_roots();
+
+    if is_provider_managed_path(&traversal_root, &provider_roots) {
+        stats.skipped = 1;
+        return ScanResult {
+            root: root.to_path_buf(),
+            dir_sizes,
+            top_files: Vec::new(),
+            stats,
+            cancelled,
+        };
+    }
 
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(keep_entry);
+        .filter_entry(|entry| {
+            keep_entry(entry) && !is_provider_managed_path(entry.path(), &provider_roots)
+        });
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -198,6 +327,129 @@ mod tests {
         write(&tmp.path().join("f.bin"), 1);
         let res = scan_dir_with_interval(tmp.path(), &AtomicBool::new(false), 0, noop);
         assert_eq!(res.stats.files, 1);
+    }
+
+    #[test]
+    fn provider_managed_path_matching_is_component_aware() {
+        let root = PathBuf::from("/home/customer/Library/CloudStorage");
+        assert!(is_macos_provider_managed_path(
+            &root.join("provider/item.bin"),
+            std::slice::from_ref(&root),
+        ));
+        assert!(!is_macos_provider_managed_path(
+            Path::new("/home/customer/Library/CloudStorage-backup"),
+            std::slice::from_ref(&root),
+        ));
+    }
+
+    #[test]
+    fn macos_provider_policy_covers_private_fileprovider_forms() {
+        let home = PathBuf::from("/Users/customer");
+        let roots = macos_provider_managed_roots_for_home(&home);
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Application Support/FileProvider/com.example.provider/data"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage Backup/item"),
+            &roots,
+        ));
+    }
+
+    #[test]
+    fn macos_file_provider_storage_marker_is_scoped_to_container_layouts() {
+        let home = PathBuf::from("/Users/customer");
+        let roots = macos_provider_managed_roots_for_home(&home);
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Group Containers/group.example/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &home.join("Documents/File Provider Storage/customer-local/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            Path::new("/Volumes/Data/File Provider Storage/customer-local/item"),
+            &roots,
+        ));
+    }
+
+    #[test]
+    fn macos_private_provider_layout_is_not_bound_to_current_home() {
+        let current_home = PathBuf::from("/Users/current");
+        let roots = macos_provider_managed_roots_for_home(&current_home);
+        let other_home = PathBuf::from("/Users/other");
+
+        assert!(is_macos_provider_managed_path(
+            &other_home.join("Library/Containers/com.vendor/Data/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &other_home.join("Library/Group Containers/group.vendor/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &other_home.join("Library/Application Support/FileProvider/com.vendor/data"),
+            &roots,
+        ));
+    }
+
+    #[test]
+    fn macos_cross_account_fallback_rejects_nested_and_mounted_home_copies() {
+        let current_home = PathBuf::from("/Users/current");
+        let roots = macos_provider_managed_roots_for_home(&current_home);
+        let private_suffix = "Library/Containers/com.vendor/Data/File Provider Storage/account/item";
+
+        assert!(!is_macos_provider_managed_path(
+            &current_home.join("project/Users/demo").join(private_suffix),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &PathBuf::from("/Volumes/Backup/Users/demo").join(private_suffix),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &PathBuf::from("/Volumes/Data/Users/demo").join(private_suffix),
+            &roots,
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_root_alias_is_resolved_before_access_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let managed = home.join("Library/CloudStorage/account");
+        fs::create_dir_all(&managed).unwrap();
+        let selected = tmp.path().join("selected-cloud-root");
+        std::os::unix::fs::symlink(&managed, &selected).unwrap();
+        let roots = macos_provider_managed_roots_for_home(&home);
+
+        assert!(scan_root_access_issue_with_roots(&selected, &roots).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_root_below_ancestor_alias_is_resolved_before_access_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let managed = home.join("Library/CloudStorage/account");
+        let managed_child = managed.join("nested");
+        fs::create_dir_all(&managed_child).unwrap();
+        let alias = tmp.path().join("cloud-alias");
+        std::os::unix::fs::symlink(&managed, &alias).unwrap();
+        let selected = alias.join("nested");
+        let roots = macos_provider_managed_roots_for_home(&home);
+
+        assert!(scan_root_access_issue_with_roots(&selected, &roots).is_some());
     }
 
     #[test]

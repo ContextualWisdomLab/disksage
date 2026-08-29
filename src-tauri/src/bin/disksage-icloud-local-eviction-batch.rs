@@ -6,7 +6,8 @@
 use disksage_lib::cloud::{self, CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction_batch::{
     approve_icloud_local_eviction_batch, execute_icloud_local_eviction_batch,
-    plan_icloud_local_eviction_batch, IcloudLocalEvictionBatchPlan, IcloudLocalEvictionBatchResult,
+    plan_icloud_local_eviction_batch, prepare_onedrive_finder_assistance,
+    IcloudLocalEvictionBatchPlan, IcloudLocalEvictionBatchResult, OnedriveFinderAssistanceReceipt,
     MAX_BATCH_ITEMS,
 };
 use serde::Deserialize;
@@ -72,7 +73,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--manifest") => {
                 if manifest.is_some() {
@@ -90,8 +95,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if approved_batch_fingerprint.is_some() {
                     return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                approved_batch_fingerprint =
-                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
+                approved_batch_fingerprint = Some(text_value(
+                    args,
+                    &mut index,
+                    "--approved-batch-fingerprint",
+                )?)
             }
             Some("--confirm-batch-fingerprint") => {
                 if confirm_batch_fingerprint.is_some() {
@@ -116,7 +124,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
             Some(_) => return Err("알 수 없는 인자".into()),
@@ -386,6 +398,34 @@ struct ExecuteOutput {
     result: RedactedBatchResult,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct FinderAssistanceOutput {
+    action: &'static str,
+    mutation_executed: bool,
+    individual_paths_redacted: bool,
+    batch_approval_id: String,
+    receipt_id: String,
+    selected_count: u32,
+    total_allocated_bytes_before: u64,
+    customer_next_action: String,
+}
+
+fn redact_finder_assistance(
+    approval_id: String,
+    receipt: OnedriveFinderAssistanceReceipt,
+) -> FinderAssistanceOutput {
+    FinderAssistanceOutput {
+        action: "select-onedrive-items-for-free-up-space",
+        mutation_executed: false,
+        individual_paths_redacted: true,
+        batch_approval_id: approval_id,
+        receipt_id: receipt.receipt_id,
+        selected_count: receipt.selected_count,
+        total_allocated_bytes_before: receipt.total_allocated_bytes_before,
+        customer_next_action: receipt.customer_next_action,
+    }
+}
+
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
@@ -447,6 +487,17 @@ fn run() -> Result<(), String> {
         approved_by,
         rationale,
     )?;
+    if root.provider == CloudProvider::Onedrive {
+        let receipt = prepare_onedrive_finder_assistance(
+            &root,
+            &plan,
+            &approval,
+            confirmation,
+            record_dir,
+            cloud::system_now_ms(),
+        )?;
+        return print_json(&redact_finder_assistance(approval.approval_id, receipt));
+    }
     let result = execute_icloud_local_eviction_batch(
         &root,
         &plan,

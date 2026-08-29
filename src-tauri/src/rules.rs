@@ -61,6 +61,9 @@ pub struct CacheTarget {
     pub bytes: u64,
     pub modified_ms: u64,
     pub object_id: String,
+    /// Deterministic recursive metadata-and-content manifest for the reviewed tree.
+    #[serde(default)]
+    pub manifest_fingerprint: String,
 }
 
 const MAX_CACHE_TARGETS: usize = 4_096;
@@ -594,6 +597,76 @@ pub(crate) fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(name.as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in name.encode_wide() {
+            hasher.update(&unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    hasher.update(name.to_string_lossy().as_bytes());
+}
+
+fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "cache-target-manifest-metadata-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+        return Err("cache-target-type-unsupported".into());
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| "cache-target-manifest-name-unavailable".to_string())?;
+    update_manifest_name(hasher, name);
+    hasher.update(&[u8::from(metadata.is_dir())]);
+    hasher.update(&metadata.len().to_le_bytes());
+    hasher.update(&modified_ms(&metadata).to_le_bytes());
+    let object_id = crate::safety::filesystem_object_id(path)
+        .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+    hasher.update(object_id.as_bytes());
+    if metadata.is_file() {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)
+            .map_err(|_| "cache-target-manifest-file-unavailable".to_string())?;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|_| "cache-target-manifest-file-read-failed".to_string())?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+    } else if metadata.is_dir() {
+        let mut children = std::fs::read_dir(path)
+            .map_err(|_| "cache-target-manifest-directory-unavailable".to_string())?
+            .map(|entry| {
+                entry
+                    .map(|value| value.path())
+                    .map_err(|_| "cache-target-manifest-entry-unavailable".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        for child in children {
+            update_cache_manifest(&child, hasher)?;
+        }
+    }
+    Ok(())
+}
+
+fn cache_manifest_fingerprint(path: &Path) -> Result<String, String> {
+    let mut hasher = blake3::Hasher::new();
+    update_cache_manifest(path, &mut hasher)?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 /// Snapshot one exact cache child with the complete mutation manifest used by catalog review.
 pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
     let metadata = std::fs::symlink_metadata(path)
@@ -610,11 +683,13 @@ pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
     };
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+    let manifest_fingerprint = cache_manifest_fingerprint(path)?;
     Ok(CacheTarget {
         path: path.to_string_lossy().into_owned(),
         bytes,
         modified_ms: modified_ms(&metadata),
         object_id,
+        manifest_fingerprint,
     })
 }
 

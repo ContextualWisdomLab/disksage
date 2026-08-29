@@ -108,3 +108,31 @@ fn option_assignment_recursive_descendant_is_detected_without_sibling_prefix_fal
         "--option=/target-old must not be accepted as a target boundary: {sibling_evidence:?}"
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn long_process_command_still_detects_late_cache_argument() {
+    let temp = tempfile::tempdir().expect("temporary long-command active-use fixture");
+    let marker = temp.path().join("late-cache-environment");
+    fs::create_dir(&marker).expect("create cache environment fixture");
+    let filler = "x".repeat(8 * 1024);
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("sleep 20 & wait")
+        .arg(&filler)
+        .arg(marker.to_str().expect("utf-8 fixture path"))
+        .spawn()
+        .expect("spawn process with target path beyond normal ps command width");
+
+    let evidence = active_use_evidence(&marker, 5_000, 64, false);
+    let child_pid = child.id();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(evidence.evidence_complete, "{evidence:?}");
+    assert!(evidence.active, "{evidence:?}");
+    assert!(
+        evidence.observed_pids.contains(&child_pid),
+        "macOS process command evidence must not truncate a late target path: {evidence:?}"
+    );
+}
