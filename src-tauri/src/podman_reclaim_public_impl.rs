@@ -24,6 +24,10 @@ const MAX_EXACT_DELETE_IDS: usize = 256;
 const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
 const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
 const PODMAN_STORAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
+const MUTATION_TIMEOUT_STATUS_CODE: i32 = -124;
+const MUTATION_WAIT_STATUS_CODE: i32 = -125;
+const MUTATION_CAPTURE_STATUS_CODE: i32 = -126;
+const MUTATION_UTF8_STATUS_CODE: i32 = -127;
 
 #[derive(Debug, Deserialize)]
 struct MachineInspectRecord {
@@ -103,16 +107,14 @@ fn run_bounded(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| format!("{label}-spawn"))?;
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("{label}-stdout-pipe-unavailable"));
-    };
-    let Some(stderr) = child.stderr.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("{label}-stderr-pipe-unavailable"));
-    };
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{label}-stdout-pipe-unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("{label}-stderr-pipe-unavailable"))?;
     let stdout_reader = thread::spawn(move || drain_bounded(stdout));
     let stderr_reader = thread::spawn(move || drain_bounded(stderr));
     let started = Instant::now();
@@ -148,6 +150,119 @@ fn run_bounded(
         status_code: status.code().unwrap_or(-1),
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
+    })
+}
+
+/// Execute a mutating command without losing the fact that it was spawned.
+///
+/// Spawn failure is still an error because no mutation could have started. Once the child exists,
+/// every timeout/wait/capture/UTF-8 failure is converted into a stable negative status sentinel so
+/// the caller can run a fresh postcheck and emit a receipt instead of erasing a possibly completed
+/// mutation from the audit trail.
+fn run_mutation_bounded(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+    label: &str,
+) -> Result<BoundedOutput, String> {
+    let mut child = Command::new(executable)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| format!("{label}-spawn"))?;
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(BoundedOutput {
+            status_code: MUTATION_CAPTURE_STATUS_CODE,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(BoundedOutput {
+            status_code: MUTATION_CAPTURE_STATUS_CODE,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+    };
+
+    let stdout_reader = thread::spawn(move || drain_bounded(stdout));
+    let stderr_reader = thread::spawn(move || drain_bounded(stderr));
+    let started = Instant::now();
+    let status_code = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.code().unwrap_or(-1),
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Ok(BoundedOutput {
+                    status_code: MUTATION_TIMEOUT_STATUS_CODE,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Ok(BoundedOutput {
+                    status_code: MUTATION_WAIT_STATUS_CODE,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                });
+            }
+        }
+    };
+
+    let stdout = match stdout_reader.join() {
+        Ok(Ok(value)) => value,
+        Ok(Err(_)) | Err(_) => {
+            let _ = stderr_reader.join();
+            return Ok(BoundedOutput {
+                status_code: MUTATION_CAPTURE_STATUS_CODE,
+                stdout: String::new(),
+                stderr: String::new(),
+            });
+        }
+    };
+    let stderr = match stderr_reader.join() {
+        Ok(Ok(value)) => value,
+        Ok(Err(_)) | Err(_) => {
+            return Ok(BoundedOutput {
+                status_code: MUTATION_CAPTURE_STATUS_CODE,
+                stdout: String::new(),
+                stderr: String::new(),
+            });
+        }
+    };
+    let Ok(stdout) = String::from_utf8(stdout) else {
+        return Ok(BoundedOutput {
+            status_code: MUTATION_UTF8_STATUS_CODE,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+    };
+    let Ok(stderr) = String::from_utf8(stderr) else {
+        return Ok(BoundedOutput {
+            status_code: MUTATION_UTF8_STATUS_CODE,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+    };
+
+    Ok(BoundedOutput {
+        status_code,
+        stdout,
+        stderr,
     })
 }
 
@@ -270,7 +385,7 @@ pub fn plan_podman_storage_repair(
 }
 
 /// Execute one explicitly machine-scoped native Podman storage repair and retain an auditable
-/// receipt even when the fresh postcheck cannot be parsed after the mutation occurred.
+/// receipt even when the mutation command or fresh postcheck cannot be fully observed.
 pub fn execute_podman_storage_repair(
     podman_bin: &Path,
     machine: &str,
@@ -290,7 +405,7 @@ pub fn execute_podman_storage_repair(
         return Err("podman-storage-repair-confirmation-mismatch".into());
     }
 
-    let (output, execution_issue) = match run_bounded(
+    let output = run_mutation_bounded(
         podman_bin,
         &[
             "--connection",
@@ -302,18 +417,7 @@ pub fn execute_podman_storage_repair(
         ],
         PODMAN_STORAGE_CHECK_TIMEOUT,
         "podman-storage-repair",
-    ) {
-        Ok(output) => (output, None),
-        Err(error) if error == "podman-storage-repair-spawn" => return Err(error),
-        Err(error) => (
-            BoundedOutput {
-                status_code: -1,
-                stdout: String::new(),
-                stderr: String::new(),
-            },
-            Some(error),
-        ),
-    };
+    )?;
 
     let (postcheck_complete, repaired_layer_records, remaining_damaged_layer_records) =
         match storage_check_evidence(podman_bin, machine) {
@@ -328,6 +432,14 @@ pub fn execute_podman_storage_repair(
             }
             Err(_) => (false, 0, 0),
         };
+
+    let execution_issue = match output.status_code {
+        MUTATION_TIMEOUT_STATUS_CODE => Some("podman-storage-repair-timeout".into()),
+        MUTATION_WAIT_STATUS_CODE => Some("podman-storage-repair-wait".into()),
+        MUTATION_CAPTURE_STATUS_CODE => Some("podman-storage-repair-output-too-large".into()),
+        MUTATION_UTF8_STATUS_CODE => Some("podman-storage-repair-output-not-utf8".into()),
+        _ => None,
+    };
 
     Ok(PodmanStorageRepairExecution {
         schema_version: 1,
@@ -345,7 +457,8 @@ pub fn execute_podman_storage_repair(
         status_code: output.status_code,
         command_attempted: true,
         execution_issue,
-        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
+        executed: output.status_code == 0
+            || (postcheck_complete && repaired_layer_records > 0),
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
@@ -547,4 +660,40 @@ pub fn prune_dangling_images(
         observed_available_gain_bytes,
         rationale: rationale.to_string(),
     })
+}
+
+#[cfg(all(test, unix))]
+mod mutation_runner_tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn timed_out_spawned_mutation_returns_failure_output_instead_of_erasing_execution() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("mutation");
+        fs::write(
+            &fake,
+            r#"#!/bin/sh
+root="$(dirname "$0")"
+touch "$root/mutation-ran"
+sleep 2
+"#,
+        )
+        .expect("write mutation fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let output = run_mutation_bounded(
+            &fake,
+            &[],
+            Duration::from_millis(50),
+            "mutation-timeout-fixture",
+        )
+        .expect("spawned timeout must remain representable as output evidence");
+
+        assert_eq!(output.status_code, MUTATION_TIMEOUT_STATUS_CODE);
+        assert!(temp.path().join("mutation-ran").exists());
+    }
 }

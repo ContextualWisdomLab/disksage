@@ -298,7 +298,7 @@ fn a_post_spawn_capture_failure_still_returns_an_auditable_receipt() {
 
     assert!(temp.path().join("repair-ran").exists());
     assert!(receipt.command_attempted);
-    assert_eq!(receipt.status_code, -1);
+    assert_eq!(receipt.status_code, -126);
     assert_eq!(
         receipt.execution_issue.as_deref(),
         Some("podman-storage-repair-output-too-large")
