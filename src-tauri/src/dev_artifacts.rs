@@ -86,26 +86,27 @@ fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
     metadata.len()
 }
 
-fn provider_managed_ancestry(root: &Path) -> bool {
-    let component_blocked = root.components().any(|component| {
+fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    crate::cloud::discover_cloud_roots(&home)
+        .into_iter()
+        .map(|cloud_root| std::fs::canonicalize(cloud_root.path).ok())
+        .collect()
+}
+
+fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
+    let component_blocked = path.components().any(|component| {
         matches!(component, std::path::Component::Normal(value) if value == "CloudStorage" || value == "Mobile Documents")
     });
     if component_blocked {
         return true;
     }
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return false;
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return true;
     };
-    let Ok(canonical_root) = std::fs::canonicalize(root) else {
-        return false;
-    };
-    crate::cloud::discover_cloud_roots(&home)
-        .into_iter()
-        .any(|cloud_root| {
-            std::fs::canonicalize(cloud_root.path)
-                .map(|cloud_path| canonical_root.starts_with(cloud_path))
-                .unwrap_or(false)
-        })
+    provider_roots
+        .iter()
+        .any(|cloud_path| canonical_path.starts_with(cloud_path))
 }
 
 fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
@@ -262,13 +263,16 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    let Some(provider_roots) = discovered_provider_roots() else {
+        return Vec::new();
+    };
     let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
         return Vec::new();
     };
     if !root.is_absolute()
         || root_metadata.file_type().is_symlink()
         || !root_metadata.is_dir()
-        || provider_managed_ancestry(root)
+        || provider_managed_ancestry(root, &provider_roots)
     {
         return Vec::new();
     }
@@ -278,7 +282,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .into_iter()
         .filter_entry(|entry| {
             // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            entry.depth() == 0 || scanner::keep_entry(entry)
+            entry.depth() == 0
+                || (scanner::keep_entry(entry)
+                    && !provider_managed_ancestry(entry.path(), &provider_roots))
         });
 
     for entry in walker {
@@ -601,5 +607,26 @@ mod tests {
 
         assert!(!result[0].ok);
         assert!(artifact.exists());
+    }
+
+    #[test]
+    fn broad_selected_root_prunes_nested_file_provider_build_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("Library/CloudStorage/provider/repository");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            b"[package]\nname='fixture'\nversion='0.1.0'",
+        )
+        .unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(project.join("target/output.bin"), b"generated").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "nested File Provider roots must be pruned before candidate planning"
+        );
     }
 }
