@@ -139,7 +139,6 @@ pub fn run() {
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
             commands::execute_podman_dangling_image_prune,
-            commands::summarize_reclaim_progress,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,

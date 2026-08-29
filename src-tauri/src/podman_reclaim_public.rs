@@ -352,6 +352,7 @@ pub fn prune_dangling_images(
         before_available_bytes,
         after_available_bytes,
         observed_available_gain_bytes,
+        reclaim_progress: None,
         rationale: rationale.to_string(),
     })
 }
