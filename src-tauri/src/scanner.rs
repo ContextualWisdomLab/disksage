@@ -63,6 +63,21 @@ fn matches_private_file_provider_layout(path: &Path, library: &Path) -> bool {
         })
 }
 
+fn live_macos_user_library(path: &Path) -> Option<PathBuf> {
+    let users_root = Path::new("/Users");
+    let relative = path.strip_prefix(users_root).ok()?;
+    let mut components = relative.components();
+    let account = components.next()?;
+    if account.as_os_str().is_empty() {
+        return None;
+    }
+    let library = components.next()?;
+    if library.as_os_str() != std::ffi::OsStr::new("Library") {
+        return None;
+    }
+    Some(users_root.join(account.as_os_str()).join("Library"))
+}
+
 fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> bool {
     if roots
         .iter()
@@ -73,27 +88,8 @@ fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> boo
         return true;
     }
 
-    let components = path.components().collect::<Vec<_>>();
-    components.windows(3).any(|window| {
-        window[0].as_os_str() == std::ffi::OsStr::new("Users")
-            && !window[1].as_os_str().is_empty()
-            && window[2].as_os_str() == std::ffi::OsStr::new("Library")
-            && path
-                .components()
-                .take_while(|component| component != &window[2])
-                .count()
-                <= components.len()
-            && {
-                let mut library = PathBuf::new();
-                for component in components.iter() {
-                    library.push(component.as_os_str());
-                    if component == &window[2] {
-                        break;
-                    }
-                }
-                matches_private_file_provider_layout(path, &library)
-            }
-    })
+    live_macos_user_library(path)
+        .is_some_and(|library| matches_private_file_provider_layout(path, &library))
 }
 
 fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
