@@ -157,6 +157,34 @@ fn read_private_report(path: &PathBuf) -> Result<PhotoSimilarityAuditReport, Str
     Ok(report)
 }
 
+fn write_private_report(
+    source_root: &PathBuf,
+    path: &PathBuf,
+    report: &PhotoSimilarityAuditReport,
+) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Err("photo-audit-private-output-exists".into());
+    }
+    disksage_lib::private_evidence::write_private_json_create_new(source_root, path, report)
+        .map(|_| ())
+        .map_err(|error| match error.as_str() {
+            "private-evidence-parent-unavailable" => {
+                "photo-audit-private-output-parent-unavailable".to_string()
+            }
+            "private-evidence-parent-unsafe" | "private-evidence-parent-writable-by-others" => {
+                "photo-audit-private-output-parent-unsafe".to_string()
+            }
+            "private-evidence-inside-source-root" | "private-evidence-name-invalid" => {
+                "photo-audit-private-output-unsafe".to_string()
+            }
+            "private-evidence-too-large" => "photo-audit-private-output-too-large".to_string(),
+            "private-evidence-secure-mode-unsupported" => {
+                "photo-audit-private-output-secure-mode-unsupported".to_string()
+            }
+            _ => "photo-audit-private-output-write-failed".to_string(),
+        })
+}
+
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Value, String> {
     let args = parse_args(arguments)?;
     if args.execute {
@@ -194,33 +222,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Valu
     }
     let report = collect_photo_similarity_audit(&args.root, now_ms(), args.max_entries)?;
     if let Some(path) = args.private_output {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "photo-audit-private-output-unsafe".to_string())?;
-        if std::fs::symlink_metadata(&path).is_ok() {
-            return Err("photo-audit-private-output-exists".into());
-        }
-        let parent_metadata = std::fs::symlink_metadata(parent)
-            .map_err(|_| "photo-audit-private-output-parent-unavailable".to_string())?;
-        if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
-            return Err("photo-audit-private-output-parent-unsafe".into());
-        }
-        let bytes = serde_json::to_vec_pretty(&report)
-            .map_err(|_| "photo-audit-private-output-serialize-failed".to_string())?;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut output = options
-            .open(path)
-            .map_err(|_| "photo-audit-private-output-write-failed".to_string())?;
-        use std::io::Write;
-        output
-            .write_all(&bytes)
-            .map_err(|_| "photo-audit-private-output-write-failed".to_string())?;
+        write_private_report(&args.root, &path, &report)?;
     }
     Ok(serde_json::json!({
         "schema_version": report.schema_version,
