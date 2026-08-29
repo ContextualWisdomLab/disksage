@@ -63,6 +63,39 @@ fn is_windows_icloud_drive_root(path: &Path, home_root: &Path) -> bool {
     path == home_root.join("iCloud Drive")
 }
 
+fn is_within_managed_provider_scope(path: &Path, home_root: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return [
+            home_root.join("Library").join("CloudStorage"),
+            home_root.join("Library").join("Mobile Documents"),
+            home_root.join("Google Drive"),
+        ]
+        .iter()
+        .any(|provider_root| path.starts_with(provider_root));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Ok(relative) = path.strip_prefix(home_root) else {
+            return false;
+        };
+        let Some(first) = relative
+            .components()
+            .next()
+            .map(|component| component.as_os_str())
+        else {
+            return false;
+        };
+        let Some(name) = first.to_str() else {
+            return false;
+        };
+        name == "OneDrive"
+            || name.starts_with("OneDrive - ")
+            || name == "Google Drive"
+            || (cfg!(windows) && name == "iCloud Drive")
+    }
+}
+
 fn is_managed_provider_root_with_home(
     path: &Path,
     traversal_root: &Path,
@@ -195,6 +228,23 @@ fn scan_dir_with_interval_inner(
     let normalized_provider_home = provider_home.map(|home| {
         std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf())
     });
+    if normalized_provider_home
+        .as_deref()
+        .is_some_and(|home| is_within_managed_provider_scope(&provider_identity_root, home))
+    {
+        let stats = ScanStats {
+            skipped: 1,
+            ..ScanStats::default()
+        };
+        on_progress(&stats);
+        return ScanResult {
+            root: root.to_path_buf(),
+            dir_sizes,
+            top_files: Vec::new(),
+            stats,
+            cancelled: false,
+        };
+    }
     let provider_roots_skipped = Cell::new(0_u64);
     let mut reported_provider_roots_skipped = 0_u64;
 
@@ -487,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn explicitly_selected_provider_root_remains_scannable() {
+    fn explicitly_selected_provider_root_is_not_traversed() {
         let tmp = tempfile::tempdir().unwrap();
         let provider_root = if cfg!(target_os = "macos") {
             tmp.path().join("Library").join("CloudStorage")
@@ -499,9 +549,29 @@ mod tests {
 
         let result = scan_with_home(&provider_root, tmp.path());
 
-        assert_eq!(result.stats.files, 1);
-        assert_eq!(result.stats.bytes, 11);
-        assert_eq!(result.stats.skipped, 0);
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(result.dir_sizes.is_empty());
+        assert!(result.top_files.is_empty());
+    }
+
+    #[test]
+    fn explicitly_selected_provider_descendant_is_not_traversed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library/CloudStorage/ProviderAccount")
+        } else {
+            tmp.path().join("OneDrive/Folder")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 11);
+
+        let result = scan_with_home(&provider_root, tmp.path());
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
     }
 
     #[cfg(unix)]
