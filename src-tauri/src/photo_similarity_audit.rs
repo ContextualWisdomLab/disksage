@@ -726,6 +726,37 @@ fn quarantine_plan_matches_report(
     plan_photo_quarantine(report, &plan.selections).as_ref() == Ok(plan)
 }
 
+fn quarantine_candidates_fail_fast<F>(
+    canonical_root: &Path,
+    candidates: &[&PhotoSimilarityMember],
+    active: &std::collections::BTreeSet<std::path::PathBuf>,
+    mut trash: F,
+) -> Vec<PhotoQuarantineItemReceipt>
+where
+    F: FnMut(&Path, &PhotoSimilarityMember) -> (bool, Option<String>),
+{
+    let mut halted = false;
+    candidates
+        .iter()
+        .map(|member| {
+            let path = canonical_root.join(&member.relative_path);
+            let (moved_to_os_trash, error) = if halted {
+                (false, Some("photo-quarantine-skipped-after-failure".into()))
+            } else if active.contains(&path) {
+                (false, Some("photo-quarantine-candidate-active".into()))
+            } else {
+                trash(&path, member)
+            };
+            halted |= error.is_some();
+            PhotoQuarantineItemReceipt {
+                member_fingerprint: member.member_fingerprint.clone(),
+                moved_to_os_trash,
+                error,
+            }
+        })
+        .collect()
+}
+
 /// Re-audit exact bytes and identities, then move only non-survivors to OS Trash with receipts.
 #[cfg(not(coverage))]
 pub fn execute_photo_quarantine(
@@ -781,14 +812,10 @@ pub fn execute_photo_quarantine(
         .map(|member| canonical_root.join(&member.relative_path))
         .collect::<Vec<_>>();
     let active = crate::duplicate_audit::active_duplicate_candidates(&candidate_paths)?;
-    let mut items = Vec::with_capacity(candidates.len());
-    for member in candidates {
-        let path = canonical_root.join(&member.relative_path);
-        let (moved_to_os_trash, error) = if active.contains(&path) {
-            (false, Some("photo-quarantine-candidate-active".into()))
-        } else {
+    let items =
+        quarantine_candidates_fail_fast(canonical_root, &candidates, &active, |path, member| {
             match crate::safety::trash_delete_if_identity_with_outcome(
-                &path,
+                path,
                 &member.filesystem_object_id,
                 member.quality.encoded_bytes,
                 journal_path,
@@ -802,13 +829,7 @@ pub fn execute_photo_quarantine(
                 ),
                 Err(_) => (false, Some("photo-quarantine-trash-failed".into())),
             }
-        };
-        items.push(PhotoQuarantineItemReceipt {
-            member_fingerprint: member.member_fingerprint.clone(),
-            moved_to_os_trash,
-            error,
         });
-    }
     let (moved_file_count, failed_file_count) = quarantine_receipt_counts(&items);
     Ok(PhotoQuarantineReceipt {
         schema_version: PHOTO_SIMILARITY_AUDIT_VERSION,
@@ -1000,5 +1021,47 @@ mod tests {
             error: Some("photo-quarantine-terminal-journal-failed".into()),
         }];
         assert_eq!(quarantine_receipt_counts(&items), (1, 1));
+    }
+
+    #[test]
+    fn quarantine_stops_invoking_trash_after_first_failure() {
+        let member = |name: &str| PhotoSimilarityMember {
+            member_fingerprint: blake3::hash(name.as_bytes()).to_hex().to_string(),
+            relative_path: name.into(),
+            content_blake3: "a".repeat(64),
+            perceptual_hash: "0".repeat(16),
+            aspect_ratio: "1:1".into(),
+            quality: PhotoQualityEvidence {
+                width_pixels: 1,
+                height_pixels: 1,
+                pixel_count: 1,
+                bits_per_sample: 8,
+                encoded_format: "png".into(),
+                lossless_encoding: Some(true),
+                encoded_bytes: 1,
+            },
+            filesystem_modified_ms: 1,
+            filesystem_object_id: format!("object-{name}"),
+        };
+        let candidates = [member("one.png"), member("two.png"), member("three.png")];
+        let candidate_refs = candidates.iter().collect::<Vec<_>>();
+        let mut calls = 0;
+        let receipts = quarantine_candidates_fail_fast(
+            Path::new("/photos"),
+            &candidate_refs,
+            &BTreeSet::new(),
+            |_, _| {
+                calls += 1;
+                (false, Some("photo-quarantine-trash-failed".into()))
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(
+            receipts[0].error.as_deref(),
+            Some("photo-quarantine-trash-failed")
+        );
+        assert!(receipts[1..]
+            .iter()
+            .all(|item| item.error.as_deref() == Some("photo-quarantine-skipped-after-failure")));
     }
 }
