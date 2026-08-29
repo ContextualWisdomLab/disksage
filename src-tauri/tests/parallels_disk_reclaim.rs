@@ -1,6 +1,6 @@
 use disksage_lib::git_worktree::GitWorktreeActiveUseEvidence;
 use disksage_lib::parallels_disk_reclaim::{
-    plan_with_runner, validate_cli_argument_tokens, ParallelsCommandRunner,
+    enforce_cli_platform, plan_with_runner, validate_cli_argument_tokens, ParallelsCommandRunner,
 };
 use std::path::Path;
 
@@ -180,6 +180,13 @@ fn cli_argument_contract_rejects_unknown_tokens() {
     let error = validate_cli_argument_tokens(&args).unwrap_err();
 
     assert_eq!(error, "지원하지 않는 인자가 있습니다: --bundel");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn parallels_cli_rejects_unsupported_host_platforms() {
+    let error = enforce_cli_platform().unwrap_err();
+    assert_eq!(error, "Parallels 디스크 회수 계획은 macOS에서만 지원합니다.");
 }
 
 #[cfg(unix)]
