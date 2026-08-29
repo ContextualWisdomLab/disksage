@@ -26,7 +26,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 13] = [
     "macos-app-support-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 14] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "_cacache",
     "v11",
     "Default",
@@ -36,6 +36,8 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 14] = [
     "sdists-v9",
     "builds-v0",
     "db",
+];
+const OBSERVED_UPDATER_CACHE_NAMES: [&str; 5] = [
     "hyosungitxmessenger-updater",
     "shure.motiv-updater",
     "cursor-updater",
@@ -166,12 +168,8 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         {
             "trivy-database-cache"
         }
-        "hyosungitxmessenger-updater"
-        | "shure.motiv-updater"
-        | "cursor-updater"
-        | "reason-plus-companion-app-updater"
-        | "@mendeley-internaldesktop-reference-manager-updater"
-            if looks_like_updater_download_cache(path) =>
+        name if OBSERVED_UPDATER_CACHE_NAMES.contains(&name)
+            && looks_like_updater_download_cache(path) =>
         {
             "electron-updater-download-cache"
         }
@@ -214,7 +212,9 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str())
+            && !OBSERVED_UPDATER_CACHE_NAMES.contains(&name.as_str())
+        {
             continue;
         }
         let path = entry.path();
@@ -292,6 +292,23 @@ fn active_use_blocker(
     } else {
         None
     }
+}
+
+fn automatic_cache_targets(
+    cache_id: &str,
+    path: &Path,
+) -> Result<Vec<rules::CacheTarget>, String> {
+    let mut targets = rules::cache_targets(path)?;
+    if cache_id == "macos-app-support-cache" {
+        targets.retain(|target| {
+            let path = Path::new(&target.path);
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| OBSERVED_UPDATER_CACHE_NAMES.contains(&name))
+                && looks_like_updater_download_cache(path)
+        });
+    }
+    Ok(targets)
 }
 
 pub(crate) fn clean_cache_contents_inner(
@@ -383,7 +400,7 @@ pub(crate) fn clean_regenerable_caches_inner(
         })
         .flat_map(|candidate| {
             let path = std::path::PathBuf::from(&candidate.path);
-            match rules::cache_targets(&path) {
+            match automatic_cache_targets(&candidate.id, &path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
                     clean_cache_contents_inner(
@@ -658,6 +675,22 @@ mod tests {
 
         fs::write(updater.join("pending/user-file.txt"), b"keep").unwrap();
         assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn automatic_app_support_cleanup_selects_only_observed_updater_archives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let updater = tmp.path().join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let unrelated = tmp.path().join("unrelated-cache");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
+
+        let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("cursor-updater"));
     }
 
     #[cfg(unix)]
