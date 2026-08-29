@@ -10,6 +10,7 @@ fn clean_paths_inner(paths: &[String]) -> Vec<CleanResult> {
             path: path.clone(),
             ok: false,
             error: IDENTITY_BOUND_RECYCLE_UNAVAILABLE.into(),
+            warning: String::new(),
         })
         .collect()
 }
