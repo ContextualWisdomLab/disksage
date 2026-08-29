@@ -2,14 +2,20 @@ use disksage_lib::git_worktree::GitWorktreeActiveUseEvidence;
 use disksage_lib::parallels_disk_reclaim::{plan_with_runner, ParallelsCommandRunner};
 use std::path::Path;
 
-struct FakeRunner;
+struct FakeRunner {
+    home: String,
+}
 
 impl ParallelsCommandRunner for FakeRunner {
     fn run(&self, _: &Path, args: &[&str], _: &str) -> Result<String, String> {
         match args.first().copied() {
-            Some("list") => {
-                Ok(r#"[{"ID":"vm-123","Name":"Work Windows","Status":"stopped"}]"#.into())
-            }
+            Some("list") => Ok(serde_json::json!([{
+                "ID": "vm-123",
+                "Name": "Work Windows",
+                "Status": "stopped",
+                "Home": self.home,
+            }])
+            .to_string()),
             Some("compact") => Ok(
                 "Block size: 8\nTotal blocks: 30000\nAllocated blocks: 15000\nUsed blocks: 2712\n"
                     .into(),
@@ -43,9 +49,12 @@ fn stopped_vm_fake_cli_reports_exact_48_mib_without_authorizing_execution() {
     let disk = bundle.join("Work Windows-0.hdd");
     std::fs::create_dir_all(&disk).unwrap();
     std::fs::write(disk.join("DiskDescriptor.xml"), b"descriptor").unwrap();
+    let runner = FakeRunner {
+        home: bundle.to_string_lossy().into_owned(),
+    };
 
     let plan = plan_with_runner(
-        &FakeRunner,
+        &runner,
         &prlctl,
         &disk_tool,
         "vm-123",
@@ -65,6 +74,39 @@ fn stopped_vm_fake_cli_reports_exact_48_mib_without_authorizing_execution() {
     assert!(plan.next_action.contains("VM을 그대로 유지"));
 }
 
+#[test]
+fn stopped_vm_id_cannot_authorize_a_different_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let prlctl = root.join("prlctl");
+    let disk_tool = root.join("prl_disk_tool");
+    std::fs::write(&prlctl, b"fake").unwrap();
+    std::fs::write(&disk_tool, b"fake").unwrap();
+    let requested_bundle = root.join("Requested.pvm");
+    let requested_disk = requested_bundle.join("Requested-0.hdd");
+    std::fs::create_dir_all(&requested_disk).unwrap();
+    std::fs::write(requested_disk.join("DiskDescriptor.xml"), b"descriptor").unwrap();
+    let registered_bundle = root.join("Registered.pvm");
+    std::fs::create_dir_all(&registered_bundle).unwrap();
+    let runner = FakeRunner {
+        home: registered_bundle.to_string_lossy().into_owned(),
+    };
+
+    let error = plan_with_runner(
+        &runner,
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &requested_bundle,
+        &requested_disk,
+        123,
+        inactive(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "parallels-vm-bundle-mismatch");
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_bundle_is_rejected_before_provider_commands() {
@@ -78,8 +120,11 @@ fn symlinked_bundle_is_rejected_before_provider_commands() {
     std::fs::create_dir_all(real.join("disk.hdd")).unwrap();
     let linked = temp.path().join("Linked.pvm");
     symlink(&real, &linked).unwrap();
+    let runner = FakeRunner {
+        home: real.to_string_lossy().into_owned(),
+    };
     let error = plan_with_runner(
-        &FakeRunner,
+        &runner,
         &prlctl,
         &disk_tool,
         "vm-123",
