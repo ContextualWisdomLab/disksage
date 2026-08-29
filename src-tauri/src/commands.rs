@@ -1286,6 +1286,14 @@ pub fn inspect_cloud_provider_global_sync(
     provider_global_sync::inspect_new_copy_admission(selected.provider)
 }
 
+#[tauri::command]
+pub fn summarize_reclaim_progress(
+    comparison: crate::volume_pressure::LocalVolumeComparison,
+    receipts: Vec<crate::volume_pressure::ActionReclaimReceipt>,
+) -> Result<crate::volume_pressure::ReclaimProgressSummary, String> {
+    crate::volume_pressure::summarize_reclaim_progress(&comparison, &receipts)
+}
+
 #[cfg(not(coverage))]
 struct CloudPlanningOutput {
     selected: cloud::CloudRoot,

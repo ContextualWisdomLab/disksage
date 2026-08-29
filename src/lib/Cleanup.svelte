@@ -311,10 +311,11 @@
       {#if podmanPruneExecution}
         <p class="notice">
           실행 결과: {podmanPruneExecution.executed ? "성공" : `실패(${podmanPruneExecution.status_code})`} ·
-          호스트 가용 공간 증가 관측 {podmanPruneExecution.observed_available_gain_bytes === null
+          전체 디스크 가용 공간 변화(다른 작업의 영향 포함) {podmanPruneExecution.observed_available_gain_bytes === null
             ? "미확인"
             : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
         </p>
+        <p class="notice">이 작업에 귀속되는 정리량은 완료 영수증 집계에서 별도로 확인하세요.</p>
       {/if}
       {#if podmanPlan.system_df}
         <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>

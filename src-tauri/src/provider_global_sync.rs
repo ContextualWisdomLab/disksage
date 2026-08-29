@@ -163,7 +163,7 @@ fn inconclusive_probe_receipt(observed_at_ms: u64, reason: &str) -> ProviderProb
 
 fn probe_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
     let Some(receipt) = report.probe_receipt.as_ref() else {
-        return true;
+        return report.evidence_complete && report.state != ProviderGlobalSyncState::Unavailable;
     };
     !report.evidence_complete
         && report.state == ProviderGlobalSyncState::Unavailable
@@ -527,6 +527,27 @@ fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
     validate_report_evidence(report).is_ok()
 }
 
+pub(crate) fn report_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
+    match &report.probe_receipt {
+        None => report.evidence_complete && report.state != ProviderGlobalSyncState::Unavailable,
+        Some(receipt) => {
+            !report.evidence_complete
+                && report.state == ProviderGlobalSyncState::Unavailable
+                && !report.blockers.is_empty()
+                && receipt.schema_kind == "disksage.provider-probe-receipt"
+                && receipt.schema_version == 1
+                && receipt.observed_at_ms > 0
+                && receipt.outcome == ProviderProbeOutcome::Inconclusive
+                && receipt.keep_local
+                && receipt.next_action == ProviderProbeNextAction::KeepLocalAndRescan
+                && !receipt.audit_reason_codes.is_empty()
+                && receipt.audit_reason_codes.iter().all(|reason| {
+                    is_stable_provider_blocker(reason) && report.blockers.contains(reason)
+                })
+        }
+    }
+}
+
 fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
     report.upload_progress_present
         || report.download_progress_present
@@ -546,6 +567,7 @@ fn report_is_authoritative_clear(report: &ProviderGlobalSyncReport) -> bool {
 
 pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(), String> {
     if !report_identity_is_valid(report)
+        || !report_receipt_is_consistent(report)
         || (report.state == ProviderGlobalSyncState::Clear
             && report_has_pending_aggregate_evidence(report))
     {

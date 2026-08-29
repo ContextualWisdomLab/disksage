@@ -780,7 +780,7 @@ fn validate_provider_global_sync_input(
     if report.schema_version != provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
         || report.provider != provider
         || report.evidence_kind != "fileproviderctl-global-dump"
-        || !report.evidence_complete
+        || provider_global_sync::validate_report_evidence(report).is_err()
         || report
             .blockers
             .iter()
@@ -1636,6 +1636,22 @@ mod tests {
             .candidate_blocker_counts
             .keys()
             .any(|key| key.starts_with("provider-global-sync-")));
+
+        let mut contradictory = clear_sync.clone();
+        contradictory.probe_receipt = Some(provider_global_sync::ProviderProbeReceipt {
+            schema_kind: "disksage.provider-probe-receipt".into(),
+            schema_version: 1,
+            observed_at_ms: 42,
+            outcome: provider_global_sync::ProviderProbeOutcome::Inconclusive,
+            keep_local: true,
+            next_action: provider_global_sync::ProviderProbeNextAction::KeepLocalAndRescan,
+            audit_reason_codes: vec!["provider-global-sync-probe-timeout".into()],
+        });
+        assert_eq!(
+            validate_provider_global_sync_input(CloudProvider::Onedrive, Some(&contradictory))
+                .unwrap_err(),
+            "naruon-copy-readiness-provider-global-sync-invalid"
+        );
 
         let mut wrong_provider = clear_sync;
         wrong_provider.provider = CloudProvider::GoogleDrive;

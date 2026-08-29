@@ -824,6 +824,44 @@ export interface LocalVolumeSnapshot {
   evidence_fingerprint: string;
 }
 
+export interface ByteChange {
+  direction: "increased" | "decreased" | "unchanged";
+  bytes: number;
+}
+
+export interface LocalVolumeComparison {
+  schema_version: number;
+  before: LocalVolumeSnapshot;
+  after: LocalVolumeSnapshot;
+  observed_elapsed_ms: number;
+  total_bytes_stable: boolean;
+  available_change: ByteChange;
+  free_change: ByteChange;
+  logical_removed_bytes: number | null;
+  physical_reclaim_bytes: number | null;
+  physical_reclaim_attribution: "unproven";
+  reason_codes: string[];
+  evidence_fingerprint: string;
+}
+
+export interface ActionReclaimReceipt {
+  receipt_id: string;
+  completed: boolean;
+  attributable_allocated_bytes: number;
+}
+
+export interface ReclaimProgressSummary {
+  global_available_change: ByteChange;
+  action_attributable_bytes: number;
+  completed_receipt_count: number;
+  limitations: string[];
+}
+
+export const summarizeReclaimProgress = (
+  comparison: LocalVolumeComparison,
+  receipts: ActionReclaimReceipt[],
+) => invoke<ReclaimProgressSummary>("summarize_reclaim_progress", { comparison, receipts });
+
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
   evidence_complete: boolean;
