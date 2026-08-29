@@ -1,6 +1,9 @@
 //! Read-only, path-free OneDrive provider-cache pressure diagnostic.
 
 #[cfg(not(coverage))]
+const MAX_PREVIOUS_OBSERVATION_BYTES: u64 = 64 * 1024;
+
+#[cfg(not(coverage))]
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OneDrivePressureOutput {
@@ -21,6 +24,9 @@ enum PreviousObservationFile {
 fn decode_previous_observation(
     bytes: &[u8],
 ) -> Result<disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureObservation, String> {
+    if bytes.len() as u64 > MAX_PREVIOUS_OBSERVATION_BYTES {
+        return Err("previous-observation-too-large".into());
+    }
     match serde_json::from_slice(bytes).map_err(|_| "previous-observation-invalid".to_string())? {
         PreviousObservationFile::Envelope(value) => Ok(value.observation),
         PreviousObservationFile::Bare(value) => Ok(value),
@@ -32,6 +38,7 @@ fn run() -> Result<(), String> {
     use disksage_lib::onedrive_internal_pressure::{
         assess, collect, OneDriveInternalPressureObservation,
     };
+    use std::io::Read as _;
     use std::path::PathBuf;
 
     let mut previous = None;
@@ -72,8 +79,12 @@ fn run() -> Result<(), String> {
             if !path.is_absolute() {
                 return Err("--previous must be absolute".into());
             }
-            let bytes =
-                std::fs::read(path).map_err(|_| "previous-observation-unreadable".to_string())?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .map_err(|_| "previous-observation-unreadable".to_string())?
+                .take(MAX_PREVIOUS_OBSERVATION_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "previous-observation-unreadable".to_string())?;
             decode_previous_observation(&bytes)
         })
         .transpose()?;
