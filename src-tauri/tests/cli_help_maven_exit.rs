@@ -69,7 +69,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "mixed invalid invocation must remain visible"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -96,7 +99,10 @@ fn assert_audit_duplicate_bound_is_rejected(binary: &str) {
         "duplicate-option failure must not emit a successful Maven audit document"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "duplicate-option failure must remain visible"
+    );
 }
 
 /// Produce the exact candidate-set fingerprint for an empty repository through the real audit CLI.
@@ -148,7 +154,10 @@ fn assert_prune_duplicate_bound_is_rejected(audit_binary: &str, prune_binary: &s
         "duplicate-option failure must not emit a successful Maven prune document"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "duplicate-option failure must remain visible"
+    );
 }
 
 #[cfg(unix)]
@@ -173,7 +182,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
@@ -184,7 +196,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
 #[test]
 fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-audit");
-    let expected_usage = "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]";
+    let expected_usage = "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]\n다음 단계: 후보와 후보 집합 지문을 검토하세요. 이 명령은 캐시를 제거하지 않습니다.";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);
@@ -199,7 +211,7 @@ fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
 fn maven_cache_prune_help_is_successful_and_invalid_arguments_are_bounded() {
     let audit_binary = env!("CARGO_BIN_EXE_disksage-maven-cache-audit");
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-prune");
-    let expected_usage = "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]";
+    let expected_usage = "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]\n다음 단계: 먼저 --apply 없이 결과와 지문을 확인한 뒤, 일치하는 계획에만 --apply를 사용하세요.";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);

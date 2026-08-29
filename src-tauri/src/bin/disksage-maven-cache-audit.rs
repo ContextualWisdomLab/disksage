@@ -7,9 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use disksage_lib::maven_cache::{
     audit_maven_repository, MavenCacheAuditOptions, MavenCacheAuditReport,
 };
-use disksage_lib::private_evidence::{
-    write_private_json_create_new, PrivateEvidenceReceipt,
-};
+use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 const MAX_MAVEN_CACHE_ENTRIES: u64 = 2_000_000;
 const MAX_MAVEN_CACHE_OUTPUT_ITEMS: usize = 10_000;
@@ -24,7 +22,8 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]"
+    "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]\n\
+다음 단계: 후보와 후보 집합 지문을 검토하세요. 이 명령은 캐시를 제거하지 않습니다."
 }
 
 fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {

@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use disksage_lib::maven_cache::{prune_maven_repository, MavenCachePruneReport};
-use disksage_lib::private_evidence::{
-    write_private_json_create_new, PrivateEvidenceReceipt,
-};
+use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 const DEFAULT_MAX_ENTRIES: u64 = 2_000_000;
 
@@ -21,7 +19,8 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]"
+    "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]\n\
+다음 단계: 먼저 --apply 없이 결과와 지문을 확인한 뒤, 일치하는 계획에만 --apply를 사용하세요."
 }
 
 fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
