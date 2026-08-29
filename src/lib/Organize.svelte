@@ -160,8 +160,9 @@
         계보 계약 복사
       </button>
     </div>
-    {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
   {/if}
+
+  <p class="muted export-status live-region" role="status" aria-live="polite" aria-atomic="true">{exportStatus}</p>
 
   <p class="result-status live-region" role="status" aria-live="polite" aria-atomic="true">
     {#if resultAction === "undo" && results.length === 0}
