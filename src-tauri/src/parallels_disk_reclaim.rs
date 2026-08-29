@@ -20,6 +20,18 @@ impl ParallelsCommandRunner for ProcessParallelsCommandRunner {
     }
 }
 
+/// Fails closed when the opt-in Parallels CLI is built or invoked on an unsupported host.
+pub fn enforce_cli_platform() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Parallels 디스크 회수 계획은 macOS에서만 지원합니다.".into())
+    }
+}
+
 /// Rejects unknown positional/flag tokens before the Parallels planner CLI reads values.
 ///
 /// Duplicate or missing recognized flags are still diagnosed by the CLI's value extractor; this
