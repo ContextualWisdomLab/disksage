@@ -265,7 +265,7 @@ fn staged_manifest_matches_request(path: &Path, request: &DevArtifact) -> bool {
         && manifest.fingerprint == request.fingerprint
 }
 
-/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
+/// 마커 인접 아티팩트 디렉토리를 찾아 로컬 할당량이 큰 순서로 반환.
 ///
 /// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
 /// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
@@ -362,7 +362,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         })
         .collect();
 
-    found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    found.sort_by(|a, b| {
+        b.allocated_bytes
+            .cmp(&a.allocated_bytes)
+            .then_with(|| b.bytes.cmp(&a.bytes))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     found
 }
 
