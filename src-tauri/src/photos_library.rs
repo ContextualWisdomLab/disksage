@@ -371,7 +371,7 @@ pub async fn execute_photos_duplicate_deletion(
     let mut receipt = PhotosDeletionReceipt {
         schema_version: SCHEMA_VERSION,
         receipt_id: String::new(),
-        plan_fingerprint: plan.plan_fingerprint,
+        plan_fingerprint: plan.plan_fingerprint.clone(),
         executed_at_ms,
         rationale: rationale.trim().to_string(),
         deleted_count: plan.delete_identifiers.len(),
