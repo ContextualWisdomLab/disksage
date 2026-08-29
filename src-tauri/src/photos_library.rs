@@ -392,17 +392,19 @@ pub async fn execute_photos_duplicate_deletion(
         .create_new(true)
         .open(&path)
         .map_err(|_| "photos-receipt-create-failed")?;
+    let bytes =
+        serde_json::to_vec_pretty(&receipt).map_err(|_| "photos-receipt-serialization-failed")?;
     let native_plan = plan.clone();
-    let native_result = tauri::async_runtime::spawn_blocking(move || native::delete(&native_plan))
-        .await
-        .map_err(|_| "photos-operation-interrupted".to_string())?;
+    let native_result =
+        match tauri::async_runtime::spawn_blocking(move || native::delete(&native_plan)).await {
+            Ok(result) => result,
+            Err(_) => Err("photos-operation-interrupted".to_string()),
+        };
     if let Err(error) = native_result {
         drop(file);
         let _ = std::fs::remove_file(path);
         return Err(error);
     }
-    let bytes =
-        serde_json::to_vec_pretty(&receipt).map_err(|_| "photos-receipt-serialization-failed")?;
     file.write_all(&bytes)
         .map_err(|_| "photos-receipt-write-failed")?;
     file.sync_all().map_err(|_| "photos-receipt-sync-failed")?;
