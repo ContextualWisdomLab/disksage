@@ -625,10 +625,17 @@ fn clean_artifacts_with_disposition(
                     journal_path,
                     now_ms,
                 ) {
-                    Ok(()) => DevArtifactCleanResult {
+                    Ok(outcome) if outcome.deleted => DevArtifactCleanResult {
                         path: request.path.clone(),
                         ok: true,
                         error: String::new(),
+                        warning: crate::safety::permanent_delete_outcome_warning(&outcome)
+                            .unwrap_or_default(),
+                    },
+                    Ok(_) => DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "permanent deletion did not complete; rescan before cleanup".into(),
                         warning: String::new(),
                     },
                     Err(error) => DevArtifactCleanResult {
