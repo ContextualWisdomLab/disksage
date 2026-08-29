@@ -10,7 +10,7 @@ mod legacy_public;
 pub use legacy_public::{
     inspect_raw_image_evidence, plan_podman_storage_repair, probe_podman_reclaim,
     prune_dangling_images, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
-    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
+    PodmanHostCompactionPlan, PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
     PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStoreEvidence,
     PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
     RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,

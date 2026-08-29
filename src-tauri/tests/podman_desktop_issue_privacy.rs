@@ -5,7 +5,8 @@
 
 use disksage_lib::podman_desktop::redact_podman_reclaim_plan;
 use disksage_lib::podman_reclaim::{
-    PodmanReclaimAssessment, PodmanReclaimPlan, PODMAN_RECLAIM_SCHEMA_KIND,
+    PodmanHostCompactionPlan, PodmanReclaimAssessment, PodmanReclaimPlan,
+    PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
 /// Builds the smallest public plan needed to exercise issue-code projection.
@@ -23,6 +24,20 @@ fn plan_with_issue(issue: &str) -> PodmanReclaimPlan {
         system_df: None,
         unused_images: None,
         dangling_prune_approval_phrase: None,
+        host_compaction: PodmanHostCompactionPlan {
+            supported: false,
+            machine_identity_sha256: None,
+            backing_file_identity_sha256: None,
+            backing_file_freshness_sha256: None,
+            active_container_count: None,
+            stop_command: None,
+            compaction_command: None,
+            exact_approval_phrase: None,
+            rollback_policy: "require-runtime-native-rollback-before-execution",
+            restart_policy: "restore-observed-running-state-after-success-or-rollback",
+            blockers: vec!["active-container-count-must-be-zero".to_string()],
+            execution_performed: false,
+        },
         assessment: PodmanReclaimAssessment {
             physically_reclaimable_bytes: None,
             podman_reported_reclaimable_bytes: None,
