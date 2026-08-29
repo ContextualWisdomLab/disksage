@@ -88,6 +88,7 @@ fn merged_pull_request_query_is_scoped_to_registered_branch() {
 
 #[test]
 fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
+    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
     let temp = tempfile::tempdir().expect("temporary fixture parent");
     let repository = temp.path().join("repository");
     let linked = temp.path().join("linked");
@@ -105,13 +106,44 @@ fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
         .status()
         .expect("create linked worktree");
 
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir(&bin_dir).expect("create fake bin directory");
+    let gh_invocation_marker = temp.path().join("gh-invoked");
+    let gh_path = bin_dir.join("gh");
+    fs::write(
+        &gh_path,
+        format!(
+            "#!/bin/sh\nset -eu\nprintf 'invoked' > '{}'\nexit 99\n",
+            gh_invocation_marker.display()
+        ),
+    )
+    .expect("write fail-if-invoked fake gh executable");
+    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
+
+    let original_path = std::env::var_os("PATH");
+    let mut paths = vec![bin_dir];
+    if let Some(existing) = original_path.as_ref() {
+        paths.extend(std::env::split_paths(existing));
+    }
+    std::env::set_var("PATH", std::env::join_paths(paths).expect("join PATH"));
+
     let options = GitWorktreeAuditOptions {
         max_worktrees: 1,
         ..GitWorktreeAuditOptions::default()
     };
-    assert_eq!(
-        github_closed_pull_request_heads_with_options(&repository, options).unwrap_err(),
-        "git-worktree-list-exceeds-limit"
+    let result = github_closed_pull_request_heads_with_options(&repository, options);
+
+    match original_path {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+
+    assert_eq!(result.unwrap_err(), "git-worktree-list-exceeds-limit");
+    assert!(
+        !gh_invocation_marker.exists(),
+        "worktree cardinality must fail closed before any forge/network query"
     );
 }
 
