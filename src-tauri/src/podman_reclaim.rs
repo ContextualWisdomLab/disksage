@@ -169,8 +169,8 @@ pub struct PodmanStorageRepairExecution {
     pub command: Vec<String>,
     pub status_code: i32,
     pub executed: bool,
-    pub repaired_layer_records: u64,
-    pub remaining_damaged_layer_records: u64,
+    pub repaired_layer_records: Option<u64>,
+    pub remaining_damaged_layer_records: Option<u64>,
     pub postcheck_complete: bool,
     pub executed_at_ms: u64,
     pub rationale: String,
@@ -202,6 +202,19 @@ fn storage_check_fingerprint(ids: &[String]) -> String {
         digest.update([0]);
     }
     lower_hex(&digest.finalize())
+}
+
+fn verified_repair_counts(
+    before: u64,
+    postcheck: &PodmanStorageCheckPlan,
+) -> (Option<u64>, Option<u64>) {
+    if !postcheck.evidence_complete {
+        return (None, None);
+    }
+    (
+        Some(before.saturating_sub(postcheck.damaged_layer_records)),
+        Some(postcheck.damaged_layer_records),
+    )
 }
 
 pub fn plan_podman_storage_repair(
@@ -242,7 +255,12 @@ pub fn execute_podman_storage_repair(
     rationale: &str,
     executed_at_ms: u64,
 ) -> Result<PodmanStorageRepairExecution, String> {
-    if executed_at_ms == 0 || rationale.trim().is_empty() || rationale != rationale.trim() {
+    if executed_at_ms == 0
+        || rationale.trim().is_empty()
+        || rationale != rationale.trim()
+        || rationale.chars().count() > 1_000
+        || rationale.chars().any(char::is_control)
+    {
         return Err("podman-storage-repair-request-invalid".into());
     }
     let plan = plan_podman_storage_repair(podman_bin, machine)?;
@@ -266,9 +284,8 @@ pub fn execute_podman_storage_repair(
         "podman-storage-repair",
     )?;
     let postcheck = plan_podman_storage_repair(podman_bin, machine)?;
-    let repaired_layer_records = plan
-        .damaged_layer_records
-        .saturating_sub(postcheck.damaged_layer_records);
+    let (repaired_layer_records, remaining_damaged_layer_records) =
+        verified_repair_counts(plan.damaged_layer_records, &postcheck);
     Ok(PodmanStorageRepairExecution {
         schema_version: 1,
         machine: machine.to_string(),
@@ -281,9 +298,9 @@ pub fn execute_podman_storage_repair(
             "--repair".into(),
         ],
         status_code: output.status_code,
-        executed: output.status_code == 0 || repaired_layer_records > 0,
+        executed: output.status_code == 0 || repaired_layer_records.is_some_and(|count| count > 0),
         repaired_layer_records,
-        remaining_damaged_layer_records: postcheck.damaged_layer_records,
+        remaining_damaged_layer_records,
         postcheck_complete: postcheck.evidence_complete,
         executed_at_ms,
         rationale: rationale.to_string(),
@@ -1160,6 +1177,20 @@ mod tests {
             damaged_layer_ids("Damaged layer not-a-layer:").unwrap_err(),
             "podman-storage-check-invalid-layer-id"
         );
+    }
+
+    #[test]
+    fn incomplete_postcheck_never_claims_repaired_layers() {
+        let incomplete = PodmanStorageCheckPlan {
+            schema_version: 1,
+            machine: "podman-machine-default".into(),
+            damaged_layer_records: 0,
+            candidate_set_sha256: "0".repeat(64),
+            evidence_complete: false,
+            exact_approval_phrase: None,
+            issue: Some("podman-storage-check-evidence-incomplete".into()),
+        };
+        assert_eq!(verified_repair_counts(129, &incomplete), (None, None));
     }
 
     const INSPECT: &str = r#"[{"ConfigDir":{"Path":"/tmp/podman"},"Name":"podman-machine-default","State":"running","Resources":{"DiskSize":100}}]"#;
