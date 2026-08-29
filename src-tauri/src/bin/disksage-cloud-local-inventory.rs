@@ -530,7 +530,14 @@ fn run_watchdog(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "cloud-local-inventory-invalid-utf8-argument".to_string())
+        })
+        .collect::<Result<_, _>>()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
