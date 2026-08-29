@@ -42,6 +42,7 @@ pub struct ProviderCacheCandidate {
     pub logical_bytes: u64,
     pub allocated_bytes: Option<u64>,
     pub object_id: String,
+    pub content_manifest: String,
     pub evidence_fingerprint: String,
     pub active_use: crate::cloud_local_eviction::ActiveUseEvidence,
     pub recreation_source: String,
@@ -246,6 +247,7 @@ fn candidate(
         logical_bytes,
         allocated_bytes,
         object_id,
+        content_manifest: manifest,
         evidence_fingerprint: hex(&hasher.finalize()),
         active_use,
         recreation_source,
@@ -604,9 +606,18 @@ fn permanently_purge_exact(
         let metadata = fs::symlink_metadata(&staged)
             .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
         if metadata.is_dir() {
-            fs::rename(&staged, path)
-                .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
-            Err("provider-cache-permanent-directory-purge-disabled".to_string())
+            let staged_manifest = tree_manifest(&staged).map(|(_, _, manifest)| manifest);
+            if staged_manifest.as_ref().ok().map(String::as_str)
+                != Some(candidate.content_manifest.as_str())
+            {
+                fs::rename(&staged, path)
+                    .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+                Err("provider-cache-staged-manifest-changed".to_string())
+            } else {
+                fs::remove_dir_all(&staged).map_err(|_| {
+                    "provider-cache-permanent-directory-delete-partial-failure-staged".to_string()
+                })
+            }
         } else {
             fs::remove_file(&staged).map_err(|_| {
                 if fs::rename(&staged, path).is_err() {
@@ -941,7 +952,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn permanent_directory_purge_is_disabled_before_recursive_delete() {
+    fn permanent_directory_purge_rechecks_manifest_before_recursive_delete() {
         let temp = tempfile::tempdir().unwrap();
         let cache = temp.path().join("cache");
         fs::create_dir(&cache).unwrap();
@@ -955,11 +966,8 @@ mod tests {
         )
         .unwrap();
         let journal = temp.path().join("journal.jsonl");
-        let error = permanently_purge_exact(&candidate, &journal, 1).unwrap_err();
-        assert_eq!(error, "provider-cache-permanent-directory-purge-disabled");
-        assert!(cache.is_dir());
-        assert_eq!(fs::read(cache.join("first")).unwrap(), b"first");
-        assert_eq!(fs::read(cache.join("second")).unwrap(), b"second");
+        assert_eq!(permanently_purge_exact(&candidate, &journal, 1), Ok(None));
+        assert!(!cache.exists());
         assert!(!temp
             .path()
             .join(format!(
@@ -967,6 +975,29 @@ mod tests {
                 &candidate.evidence_fingerprint[..12]
             ))
             .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_directory_purge_restores_cache_when_manifest_changed() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("first"), b"first").unwrap();
+        let candidate = candidate(
+            ProviderCacheKind::EdgeCrxCache,
+            &cache,
+            "recreation-source".into(),
+            None,
+        )
+        .unwrap();
+        fs::write(cache.join("changed"), b"changed").unwrap();
+        assert_eq!(
+            permanently_purge_exact(&candidate, &temp.path().join("journal.jsonl"), 1),
+            Err("provider-cache-staged-manifest-changed".into())
+        );
+        assert!(cache.join("first").is_file());
+        assert!(cache.join("changed").is_file());
     }
 
     #[test]

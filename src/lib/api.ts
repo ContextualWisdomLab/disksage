@@ -211,6 +211,7 @@ export interface ProviderCacheCandidate {
   logical_bytes: number;
   allocated_bytes: number | null;
   object_id: string;
+  content_manifest: string;
   evidence_fingerprint: string;
   active_use: { evidence_complete: boolean; active: boolean; results_truncated: boolean; error: string | null };
   recreation_source: string;
