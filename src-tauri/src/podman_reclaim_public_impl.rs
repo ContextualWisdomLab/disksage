@@ -101,10 +101,14 @@ fn run_bounded(
     timeout: Duration,
     label: &str,
 ) -> Result<BoundedOutput, String> {
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut command = Command::new(executable);
+    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| format!("{label}-spawn"))?;
     let stdout = child
@@ -122,16 +126,14 @@ fn run_bounded(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(format!("{label}-wait"));
@@ -151,6 +153,15 @@ fn run_bounded(
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
     })
+}
+
+fn terminate_readonly_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Execute a mutating command without losing the fact that it was spawned.
