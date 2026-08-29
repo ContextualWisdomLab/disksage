@@ -215,6 +215,18 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
     } else {
         Default::default()
     };
+    let mut pull_request_commits =
+        if args.include_closed_pull_requests || args.stale_open_pull_request_cutoff_ms.is_some() {
+            disksage_lib::git_worktree::github_pull_request_commit_membership(
+                &args.repository_root,
+                args.options,
+            )?
+        } else {
+            Default::default()
+        };
+    if !args.include_closed_pull_requests {
+        pull_request_commits.completed.clear();
+    }
     let stale_open_heads = if let Some(cutoff_ms) = args.stale_open_pull_request_cutoff_ms {
         disksage_lib::git_worktree::github_stale_open_pull_request_heads(
             &args.repository_root,
@@ -224,11 +236,12 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
     } else {
         Default::default()
     };
-    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_heads(
+    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
         &args.retention_references,
         &closed_heads,
         &stale_open_heads,
+        &pull_request_commits,
         args.stale_open_pull_request_cutoff_ms,
         args.options,
         observed_at_ms,

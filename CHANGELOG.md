@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
+  squash-merged and detached intermediate commits can be classified without ancestry or branch
+  guesses; any exact membership in an open PR takes precedence and preserves the worktree.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.

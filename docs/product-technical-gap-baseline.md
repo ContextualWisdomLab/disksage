@@ -1155,6 +1155,16 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 merged-worktree and isolated-project-cache execution
 
+### Exact PR commit membership boundary
+
+- The worktree authority now verifies each registered HEAD against the exact same-repository
+  GitHub pull-request commit list. This closes the squash/rebase ancestry gap and safely recognizes
+  detached intermediate commits without inferring identity from a directory or branch name.
+- A SHA may occur in more than one PR. Verified membership in any open PR is therefore a mandatory
+  preserve veto, even if another PR containing the same SHA is already closed or merged. Search
+  caps, pagination/output bounds, repository mismatch, authentication failure, and timeout remain
+  evidence gaps rather than cleanup authority.
+
 - A live Naruon audit exposed a second squash-merge boundary: PR #1370's clean, inactive worktree
   has the exact merged pull-request head, but that head is not an ancestor of the retained branch.
   DiskSage now obtains closed-unmerged heads separately and scopes merged queries to branches in

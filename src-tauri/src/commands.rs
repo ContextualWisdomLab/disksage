@@ -1012,11 +1012,25 @@ pub async fn plan_stale_git_worktrees(
         } else {
             Default::default()
         };
-        git_worktree::audit_git_worktrees_with_pull_request_heads(
+        let mut pull_request_commits = if include_closed_pull_requests
+            || stale_open_pull_request_cutoff_ms.is_some()
+        {
+            git_worktree::github_pull_request_commit_membership(
+                Path::new(&repository_root),
+                git_worktree::GitWorktreeAuditOptions::default(),
+            )?
+        } else {
+            Default::default()
+        };
+        if !include_closed_pull_requests {
+            pull_request_commits.completed.clear();
+        }
+        git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
             &stale_open_heads,
+            &pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             git_worktree::GitWorktreeAuditOptions::default(),
             cloud::system_now_ms(),
@@ -1075,11 +1089,25 @@ pub async fn remove_stale_git_worktrees(
         } else {
             Default::default()
         };
-        let report = git_worktree::audit_git_worktrees_with_pull_request_heads(
+        let mut pull_request_commits = if include_closed_pull_requests
+            || stale_open_pull_request_cutoff_ms.is_some()
+        {
+            git_worktree::github_pull_request_commit_membership(
+                Path::new(&repository_root),
+                options,
+            )?
+        } else {
+            Default::default()
+        };
+        if !include_closed_pull_requests {
+            pull_request_commits.completed.clear();
+        }
+        let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
             &stale_open_heads,
+            &pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),
