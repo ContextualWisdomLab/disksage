@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 helper="$repo_root/.github/scripts/reclaim-test-runner-space.sh"
-work_dir="$(mktemp -d)"
+work_dir="$(realpath -m -- "$(mktemp -d)")"
 trap 'rm -rf -- "$work_dir"' EXIT
 
 fixture_root="$work_dir/fixture"
@@ -12,9 +12,29 @@ dd if=/dev/zero of="$fixture_root/sdk-root/payload.bin" bs=4096 count=16 status=
 summary_file="$work_dir/summary.md"
 
 if GITHUB_ACTIONS=false RUNNER_ENVIRONMENT=github-hosted \
+   DISKSAGE_RECLAIM_TEST_MODE=true \
    DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   RUNNER_TEMP="$work_dir" \
    bash "$helper" "$fixture_root/sdk-root"; then
   echo "expected reclaim outside GitHub Actions to fail closed" >&2
+  exit 1
+fi
+
+if GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+   DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   RUNNER_TEMP="$work_dir" \
+   bash "$helper" "$fixture_root/sdk-root"; then
+  echo "expected an unauthorised test reclaim root to fail closed" >&2
+  exit 1
+fi
+
+outside_runner_temp="$(dirname "$work_dir")/disksage-reclaim-outside-$$"
+if GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+   DISKSAGE_RECLAIM_TEST_MODE=true \
+   DISKSAGE_RECLAIM_TEST_ROOT="$outside_runner_temp" \
+   RUNNER_TEMP="$work_dir" \
+   bash "$helper" "$outside_runner_temp/sdk-root"; then
+  echo "expected a test reclaim root outside runner temp to fail closed" >&2
   exit 1
 fi
 
@@ -50,10 +70,12 @@ EOF
 chmod +x "$fake_bin/df"
 
 DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+DISKSAGE_RECLAIM_TEST_MODE=true \
 DISKSAGE_TEST_RECLAIM_ROOT="$fixture_root/sdk-root" \
 DISKSAGE_TEST_RECLAIM_MOUNT="/virtual-fixture-volume" \
 GITHUB_ACTIONS=true \
 RUNNER_ENVIRONMENT=github-hosted \
+RUNNER_TEMP="$work_dir" \
 GITHUB_STEP_SUMMARY="$summary_file" \
 PATH="$fake_bin:$PATH" \
   bash "$helper" "$fixture_root/sdk-root"
@@ -72,8 +94,10 @@ fi
 
 missing_summary="$work_dir/missing-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   DISKSAGE_RECLAIM_TEST_MODE=true \
    GITHUB_ACTIONS=true \
    RUNNER_ENVIRONMENT=github-hosted \
+   RUNNER_TEMP="$work_dir" \
    GITHUB_STEP_SUMMARY="$missing_summary" \
    bash "$helper" "$fixture_root/missing-root"; then
   echo "expected an absent reclaim root to fail closed" >&2
@@ -84,8 +108,10 @@ mkdir -p "$fixture_root/real-root"
 ln -s "$fixture_root/real-root" "$fixture_root/link-root"
 symlink_summary="$work_dir/symlink-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
+   DISKSAGE_RECLAIM_TEST_MODE=true \
    GITHUB_ACTIONS=true \
    RUNNER_ENVIRONMENT=github-hosted \
+   RUNNER_TEMP="$work_dir" \
    GITHUB_STEP_SUMMARY="$symlink_summary" \
    bash "$helper" "$fixture_root/link-root"; then
   echo "expected a symlink reclaim root to fail closed" >&2

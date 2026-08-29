@@ -14,7 +14,16 @@ fi
 summary_file="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 test_root="${DISKSAGE_RECLAIM_TEST_ROOT:-}"
 if [[ -n "$test_root" ]]; then
+  if [[ "${DISKSAGE_RECLAIM_TEST_MODE:-}" != "true" || -z "${RUNNER_TEMP:-}" ]]; then
+    echo "test reclaim root requires explicit runner-temp test authority" >&2
+    exit 65
+  fi
   test_root="$(realpath -m -- "$test_root")"
+  runner_temp="$(realpath -m -- "$RUNNER_TEMP")"
+  if [[ "$test_root" != "$runner_temp"/* ]]; then
+    echo "test reclaim root must be below the GitHub runner temp directory" >&2
+    exit 65
+  fi
 fi
 
 is_allowed_root() {
