@@ -31,6 +31,11 @@ could corrupt running workloads and data-bearing volumes.
 6. The standalone `disksage-runtime-storage` CLI calls the same Rust planner and executor as the
    desktop app. It does not add a second mutation implementation: inspection is the default, and
    execution requires the current exact phrase plus a rationale.
+7. The Podman reclaim plan binds the exact machine and backing-file identity, active-container
+   count, rollback policy, and restart policy before considering host compaction. Podman 5.8 has no
+   runtime-native compact or shrink command, so the current plan is read-only, publishes no stop or
+   compaction command, and issues no approval phrase. A future executor requires zero active
+   containers plus a runtime-native operation with rollback; raw-image tools remain prohibited.
 
 ## Consequences
 
@@ -51,6 +56,8 @@ could corrupt running workloads and data-bearing volumes.
 
 - Rust tests verify fixed command construction and fail-closed unavailable-runtime plans.
 - CLI tests verify that runtime selection is exact and execution authority is all-or-nothing.
+- Podman plan tests keep host compaction blocked without a native operation, even when no container
+  is active, and bind backing-file identity without relying on a pathname alone.
 - Recovery and trim use distinct approvals; reachability is included in the plan fingerprint so a
   stale recovery or trim plan cannot authorize execution after guest state changes.
 - The existing container-orphan and Podman planners remain the authority for exact image,

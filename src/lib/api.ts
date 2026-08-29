@@ -187,6 +187,19 @@ export interface PodmanReclaimPlan {
     candidate_set_sha256: string;
   } | null;
   dangling_prune_approval_phrase: string | null;
+  host_compaction: {
+    supported: boolean;
+    machine_identity_sha256: string | null;
+    backing_file_identity_sha256: string | null;
+    active_container_count: number | null;
+    stop_command: string[] | null;
+    compaction_command: string[] | null;
+    exact_approval_phrase: string | null;
+    rollback_policy: string;
+    restart_policy: string;
+    blockers: string[];
+    execution_performed: boolean;
+  };
   assessment: {
     physically_reclaimable_bytes: number | null;
     podman_reported_reclaimable_bytes: number | null;

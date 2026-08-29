@@ -10,6 +10,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Expose the existing identity-bound Podman/Colima guest-trim plan and execution receipt through a
   headless CLI so storage recovery does not require the desktop UI.
+- Add a read-only Podman host-compaction safety plan that records backing-file identity, active
+  containers, rollback/restart policy, and the absence of a runtime-native compact command.
 - Reclaim only OpenCode tool-output sidecars absent from the native SQLite
   `part.data.state.metadata.outputPath` reference set. Plans bind database/WAL and file identities,
   require idle active-use evidence and an exact attributed approval, then re-plan before moving
