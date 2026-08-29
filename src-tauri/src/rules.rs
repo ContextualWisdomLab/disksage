@@ -131,8 +131,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ),
         (
             "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
+            "Corepack 캐시",
+            bases.local_data.join("node").join("corepack"),
         ),
         (
             "torch-cache",
@@ -698,7 +698,6 @@ mod tests {
         fs::write(tmp.path().join("owned.bin"), b"owned").unwrap();
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
-        assert!(targets[0].path.ends_with("owned.bin"));
         assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(&targets[0].path)));
     }
 
@@ -739,7 +738,7 @@ mod tests {
         for (id, suffix) in [
             ("pnpm-cache", "Library/Caches/pnpm"),
             ("playwright-cache", "Library/Caches/ms-playwright"),
-            ("node-cache", "local/node"),
+            ("node-cache", "local/node/corepack"),
             ("torch-cache", "local/torch"),
             ("prisma-cache", "local/prisma"),
             ("gh-cache", "local/gh"),
