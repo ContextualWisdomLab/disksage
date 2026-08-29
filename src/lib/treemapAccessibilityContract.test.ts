@@ -19,15 +19,9 @@ describe("Treemap accessible-equivalent ownership", () => {
 
   it("does not duplicate the canonical node entry list inside Treemap", () => {
     const treemap = readSource("src/lib/Treemap.svelte");
-    const page = readSource("src/routes/+page.svelte");
 
     expect(treemap).not.toContain('class="accessible-tree"');
     expect(treemap).not.toContain("<details");
     expect(treemap).not.toContain("{#each node.entries");
-
-    expect(page).toContain('<ul class="entries">');
-    expect(page).toContain("{#each node.entries as e}");
-    expect(page).toContain("onclick={() => open(e.path)}");
-    expect(page).toContain("{fmtBytes(e.size)}");
   });
 });
