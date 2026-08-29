@@ -73,6 +73,10 @@ pub struct RuntimeStorageExecution {
     pub rationale: String,
     pub volume_comparison: Option<crate::volume_pressure::LocalVolumeComparison>,
     pub volume_evidence_error: Option<String>,
+    pub runtime_image_allocated_bytes_before: Option<u64>,
+    pub runtime_image_allocated_bytes_after: Option<u64>,
+    pub runtime_image_reclaimed_bytes: Option<u64>,
+    pub runtime_image_evidence_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -524,11 +528,25 @@ pub fn execute_trim(
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
         .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
+    let image_before = (runtime == RuntimeStorageKind::PodmanMachine).then(|| {
+        crate::podman_reclaim::inspect_raw_image_evidence(
+            &fixed_binary(runtime),
+            crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
+            COMMAND_TIMEOUT,
+        )
+    });
     let output = run_bounded_with_timeout(&fixed_binary(runtime), args, RECOVERY_TIMEOUT)?;
     let after = home
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
         .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
+    let image_after = (runtime == RuntimeStorageKind::PodmanMachine).then(|| {
+        crate::podman_reclaim::inspect_raw_image_evidence(
+            &fixed_binary(runtime),
+            crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
+            COMMAND_TIMEOUT,
+        )
+    });
     let (volume_comparison, volume_evidence_error) = match (before, after) {
         (Ok(before), Ok(after)) => {
             match crate::volume_pressure::compare_snapshots(&before, &after, None) {
@@ -537,6 +555,39 @@ pub fn execute_trim(
             }
         }
         (Err(error), _) | (_, Err(error)) => (None, Some(error)),
+    };
+    let (
+        runtime_image_allocated_bytes_before,
+        runtime_image_allocated_bytes_after,
+        runtime_image_reclaimed_bytes,
+        runtime_image_evidence_error,
+    ) = match (image_before, image_after) {
+        (Some(Ok(before)), Some(Ok(after))) if before.path == after.path => {
+            let before = before.allocated_bytes;
+            let after = after.allocated_bytes;
+            (
+                before,
+                after,
+                before
+                    .zip(after)
+                    .map(|(before, after)| before.saturating_sub(after)),
+                None,
+            )
+        }
+        (Some(Ok(_)), Some(Ok(_))) => (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-changed".into()),
+        ),
+        (Some(Err(error)), _) | (_, Some(Err(error))) => (None, None, None, Some(error)),
+        (None, None) => (None, None, None, None),
+        _ => (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-evidence-incomplete".into()),
+        ),
     };
     Ok(RuntimeStorageExecution {
         schema_kind: "disksage.runtime-storage-execution",
@@ -552,6 +603,10 @@ pub fn execute_trim(
         rationale: rationale.into(),
         volume_comparison,
         volume_evidence_error,
+        runtime_image_allocated_bytes_before,
+        runtime_image_allocated_bytes_after,
+        runtime_image_reclaimed_bytes,
+        runtime_image_evidence_error,
     })
 }
 

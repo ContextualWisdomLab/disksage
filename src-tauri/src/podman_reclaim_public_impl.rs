@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 mod implementation;
 
 pub use implementation::{
-    probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
-    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
-    PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStorageRepairExecution,
-    PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
-    PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
-    PODMAN_RECLAIM_SCHEMA_KIND,
+    inspect_raw_image_evidence, probe_podman_reclaim, GuestFilesystemEvidence,
+    PodmanDanglingImagePruneExecution, PodmanMachineEvidence, PodmanReclaimAssessment,
+    PodmanReclaimPlan, PodmanRecommendedAction, PodmanRecommendedActionKind,
+    PodmanStorageCheckPlan, PodmanStorageRepairExecution, PodmanStoreEvidence,
+    PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
+    RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
@@ -104,6 +104,7 @@ fn run_bounded(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -183,6 +184,7 @@ fn run_mutation_bounded(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]

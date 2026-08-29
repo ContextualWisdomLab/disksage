@@ -265,6 +265,10 @@ export interface RuntimeStorageExecution {
   rationale: string;
   volume_comparison: LocalVolumeComparison | null;
   volume_evidence_error: string | null;
+  runtime_image_allocated_bytes_before: number | null;
+  runtime_image_allocated_bytes_after: number | null;
+  runtime_image_reclaimed_bytes: number | null;
+  runtime_image_evidence_error: string | null;
 }
 
 export interface RuntimeStorageRecoveryExecution {
