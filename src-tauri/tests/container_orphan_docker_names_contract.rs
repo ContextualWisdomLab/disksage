@@ -15,9 +15,16 @@ set -eu
 case "${{1:-}}" in
   info) exit 0 ;;
   container)
-    [ "${{2:-}}" = "ps" ] || exit 91
-    case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
-    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"{names}"}}'
+    case "${{2:-}}" in
+      ps)
+        case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
+        printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"{names}"}}'
+        ;;
+      inspect)
+        printf '%s\n' '{{"Id":"{FULL_ID}","Created":"2026-01-01T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}'
+        ;;
+      *) exit 91 ;;
+    esac
     ;;
   images|volume|network) exit 0 ;;
   *) exit 93 ;;
@@ -48,7 +55,7 @@ esac
     let evidence = container.evidence.as_ref().expect("container evidence");
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
-    assert!(container.approval_phrase.is_some());
+    assert!(container.approval_phrase.is_none());
 }
 
 #[test]
