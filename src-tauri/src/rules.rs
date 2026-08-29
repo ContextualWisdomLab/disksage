@@ -118,6 +118,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("gradle-daemon-cache", "Gradle 실행 기록 캐시", bases.home.join(".gradle").join("daemon")),
         ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
             bases.home.join("Library").join("Application Support").join("Caches")),
+        ("apple-mediaanalysis-cache", "Apple 미디어 분석 재생성 캐시",
+            bases.home.join("Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches")),
         (
             "pnpm-cache",
             "pnpm 캐시",
@@ -740,6 +742,13 @@ mod tests {
             .find(|candidate| candidate.id == "macos-app-support-cache")
             .expect("macOS application-support cache must be catalogued");
         assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+        let mediaanalysis = cands
+            .iter()
+            .find(|candidate| candidate.id == "apple-mediaanalysis-cache")
+            .expect("Apple media-analysis cache must be catalogued");
+        assert!(mediaanalysis.path.ends_with(
+            "Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches"
+        ));
     }
 
     #[cfg(target_os = "macos")]

@@ -10,7 +10,7 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 12] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 13] = [
     "npm-cache",
     "pip-cache",
     "pnpm-cache",
@@ -23,9 +23,10 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 12] = [
     "superset-http-cache",
     "superset-code-cache",
     "playwright-cache",
+    "macos-app-support-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 14] = [
     "_cacache",
     "v11",
     "Default",
@@ -35,6 +36,11 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "sdists-v9",
     "builds-v0",
     "db",
+    "hyosungitxmessenger-updater",
+    "shure.motiv-updater",
+    "cursor-updater",
+    "reason-plus-companion-app-updater",
+    "@mendeley-internaldesktop-reference-manager-updater",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
 
@@ -118,6 +124,15 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
             && direct_child_is_file(path, "metadata.json") =>
         {
             "trivy-database-cache"
+        }
+        "hyosungitxmessenger-updater"
+        | "shure.motiv-updater"
+        | "cursor-updater"
+        | "reason-plus-companion-app-updater"
+        | "@mendeley-internaldesktop-reference-manager-updater"
+            if direct_child_is_dir(path, "pending") =>
+        {
+            "electron-updater-download-cache"
         }
         _ => return None,
     };
@@ -575,6 +590,26 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn updater_trash_requires_an_observed_name_and_pending_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        fs::create_dir(&trash).unwrap();
+        let updater = trash.join("cursor-updater");
+        fs::create_dir(&updater).unwrap();
+        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
+
+        fs::create_dir(updater.join("pending")).unwrap();
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "electron-updater-download-cache");
+
+        let unobserved = trash.join("unknown-updater");
+        fs::create_dir(&unobserved).unwrap();
+        fs::create_dir(unobserved.join("pending")).unwrap();
+        assert_eq!(proven_cache_trash_candidates(tmp.path()).len(), 1);
     }
 
     #[cfg(unix)]
