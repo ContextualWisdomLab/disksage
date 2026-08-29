@@ -16,8 +16,10 @@ checks pass and a human approves the exact plan fingerprint. iCloud continues
 to use Foundation's ubiquitous-item eviction. OneDrive uses Microsoft's signed Files On-Demand
 command: DiskSage asks the verified desktop app to quit and, if the bounded wait expires, may issue
 one graceful `SIGTERM` request; it never uses `SIGKILL`. The stop check observes the primary app,
-not its resident File Provider helper. Once the app is stopped it checks the exact path with `/getpin`,
-requests `/unpin`, and restarts the app. A provider-wide new-copy admission check is intentionally
+not its resident File Provider helper. Once the app is stopped it requests `/unpin` and restarts
+the app. DiskSage does not depend on the optional `/getpin` query because the existing File Provider
+item evidence already binds the exact identity, current state, and eviction capability. A
+provider-wide new-copy admission check is intentionally
 not reused here: it governs adding new cloud copies, while Microsoft's documented `/unpin` flow
 requires the sync app to be stopped and exists to release an already uploaded local copy. Exact
 item evidence still fails closed. The result must retain the path and show a reduced

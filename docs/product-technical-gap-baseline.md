@@ -1120,7 +1120,8 @@ runner's private workspace temp root instead of weakening the shared production 
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
   receipt, and post-allocation verification contract for individual OneDrive files. Execution
   uses exact item evidence, gracefully stops the verified OneDrive app,
-  uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
+  uses Microsoft's `/unpin` Files On-Demand command, and restarts the client. Exact File Provider
+  item evidence replaces the optional `/getpin` query. It does
   not require OAuth and never deletes the visible cloud item.
 - The same evidence contract now supports bounded OneDrive batches through the provider-neutral
   `disksage-cloud-local-eviction-batch` CLI. Sync-incomplete items are excluded by index, every

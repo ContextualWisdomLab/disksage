@@ -31,6 +31,8 @@ fn onedrive_unpin_has_a_bounded_graceful_term_fallback() {
     assert!(function.contains("request_graceful_term(\"OneDrive\")"));
     assert!(function.contains("provider-recovery-quit-timeout"));
     assert!(function.contains("require_primary_runtime_observation"));
+    assert!(!function.contains("\"/getpin\""));
+    assert!(function.contains("\"/unpin\""));
 
     let graceful_term = source
         .split_once("fn request_graceful_term")

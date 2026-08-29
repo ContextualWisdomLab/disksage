@@ -325,7 +325,6 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
             }
             std::thread::sleep(Duration::from_millis(250));
         }
-        run_bounded_output(&executable, &["/getpin", path])?;
         run_bounded_output(&executable, &["/unpin", path])
     })();
     let restart = launch_provider(&app).and_then(|_| {
