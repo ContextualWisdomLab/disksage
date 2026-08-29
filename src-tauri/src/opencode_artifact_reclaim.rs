@@ -251,13 +251,14 @@ fn sqlite_is_trusted() -> Result<(), String> {
     Ok(())
 }
 
-fn drain_bounded(mut stream: impl Read) -> (Vec<u8>, bool) {
+fn drain_bounded(mut stream: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
     let mut output = Vec::new();
     let mut buffer = [0u8; 16_384];
     let mut truncated = false;
     loop {
         match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(error) => return Err(error),
             Ok(count) => {
                 if output.len().saturating_add(count) > MAX_QUERY_BYTES {
                     truncated = true;
@@ -267,7 +268,7 @@ fn drain_bounded(mut stream: impl Read) -> (Vec<u8>, bool) {
             }
         }
     }
-    (output, truncated)
+    Ok((output, truncated))
 }
 
 fn referenced_paths(database: &Path) -> Result<BTreeSet<PathBuf>, String> {
@@ -308,9 +309,11 @@ fn referenced_paths(database: &Path) -> Result<BTreeSet<PathBuf>, String> {
     };
     let (output, output_truncated) = output_reader
         .join()
+        .map_err(|_| "opencode-reference-query-reader-failed".to_string())?
         .map_err(|_| "opencode-reference-query-reader-failed".to_string())?;
     let (error, error_truncated) = error_reader
         .join()
+        .map_err(|_| "opencode-reference-query-reader-failed".to_string())?
         .map_err(|_| "opencode-reference-query-reader-failed".to_string())?;
     if !status.success() || output_truncated || error_truncated || !error.is_empty() {
         return Err("opencode-reference-query-incomplete".into());
@@ -829,6 +832,27 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    #[test]
+    fn reference_query_drain_preserves_stream_read_failure() {
+        struct FailingReader {
+            emitted: bool,
+        }
+
+        impl Read for FailingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.emitted {
+                    return Err(std::io::Error::other("fixture-read-failure"));
+                }
+                self.emitted = true;
+                let partial = VALID_JSON_MARKER.as_bytes();
+                buffer[..partial.len()].copy_from_slice(partial);
+                Ok(partial.len())
+            }
+        }
+
+        assert!(drain_bounded(FailingReader { emitted: false }).is_err());
     }
 
     #[test]

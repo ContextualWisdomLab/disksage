@@ -36,6 +36,8 @@ const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
 /// Bounded per-command wall clock; matches the existing Podman prune bound.
 const ORPHAN_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
+const CONTAINER_STORAGE_INSPECT_FORMAT: &str =
+    r#"{"Id":{{json .Id}},"MountCount":{{len .Mounts}}}"#;
 
 /// Maximum number of network-inspect probes per audit; keeps the read-only pass bounded.
 pub const MAX_NETWORK_CANDIDATES: usize = 64;
@@ -410,11 +412,19 @@ fn storage_free_container_ids(
         if slot.is_some() {
             return Err("container-storage-lineage-duplicate-identity".to_string());
         }
-        let mounts = record
-            .get("Mounts")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?;
-        *slot = Some(!mounts.is_empty());
+        let mounted = match record.get("MountCount") {
+            Some(Value::Number(count)) => count
+                .as_u64()
+                .map(|count| count != 0)
+                .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?,
+            Some(_) => return Err("container-storage-lineage-mounts-unavailable".into()),
+            None => record
+                .get("Mounts")
+                .and_then(Value::as_array)
+                .map(|mounts| !mounts.is_empty())
+                .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?,
+        };
+        *slot = Some(mounted);
     }
     let mut storage_free = Vec::new();
     for (id, mounted) in inspected {
@@ -442,7 +452,12 @@ fn container_inspect_batches<'a>(
     let fixed = prefix
         .iter()
         .map(String::as_str)
-        .chain(["container", "inspect"])
+        .chain([
+            "container",
+            "inspect",
+            "--format",
+            CONTAINER_STORAGE_INSPECT_FORMAT,
+        ])
         .fold(1usize, |units, argument| {
             units
                 .saturating_add(conservative_windows_argument_code_units(argument))
@@ -480,7 +495,12 @@ fn inspect_storage_free_container_ids(
     let mut storage_free = Vec::new();
     for batch in container_inspect_batches(prefix, stopped_ids)? {
         let mut inspect_args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
-        inspect_args.extend(["container", "inspect"]);
+        inspect_args.extend([
+            "container",
+            "inspect",
+            "--format",
+            CONTAINER_STORAGE_INSPECT_FORMAT,
+        ]);
         inspect_args.extend(batch.iter().copied());
         let inspect_output = command_text(
             &target.binary_path,
@@ -1615,6 +1635,20 @@ mod tests {
         .is_empty());
         assert_eq!(
             storage_free_container_ids(
+                &format!(r#"{{"Id":"{DOCKER_ID_A}","MountCount":0}}"#),
+                &expected,
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(storage_free_container_ids(
+            &format!(r#"{{"Id":"{DOCKER_ID_A}","MountCount":12}}"#),
+            &expected,
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(
+            storage_free_container_ids(
                 &format!(r#"[{{"Id":"{DOCKER_ID_A}"}}]"#),
                 &expected,
             )
@@ -1668,7 +1702,12 @@ mod tests {
             let encoded_units = prefix
                 .iter()
                 .map(String::as_str)
-                .chain(["container", "inspect"])
+                .chain([
+                    "container",
+                    "inspect",
+                    "--format",
+                    CONTAINER_STORAGE_INSPECT_FORMAT,
+                ])
                 .chain(batch)
                 .fold(1usize, |units, argument| {
                     units
