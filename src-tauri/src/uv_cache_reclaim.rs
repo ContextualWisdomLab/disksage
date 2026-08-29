@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const SCHEMA_VERSION: u32 = 1;
+pub const RECEIPT_SCHEMA_VERSION: u32 = 2;
 const COMMAND_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const EXECUTE_ARGUMENTS: [&str; 8] = [
@@ -70,8 +71,9 @@ pub struct UvCacheReclaimReceipt {
     pub execution_error: Option<String>,
     pub output_truncated: bool,
     pub filesystem_available_before_bytes: u64,
-    pub filesystem_available_after_bytes: u64,
-    pub filesystem_available_delta_bytes: u64,
+    pub filesystem_available_after_bytes: Option<u64>,
+    pub filesystem_available_delta_bytes: Option<u64>,
+    pub capacity_postcheck_error: Option<String>,
     pub executed_at_ms: u64,
     pub result_record_path: String,
 }
@@ -387,7 +389,10 @@ pub fn execute_uv_cache_reclaim(
     let mut args = EXECUTE_ARGUMENTS.to_vec();
     args.push(&cache_path_argument);
     let execution = run_uv(&current_path, &args);
-    let after = filesystem_available_bytes(cache_path)?;
+    let (after, capacity_postcheck_error) = match filesystem_available_bytes(cache_path) {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    };
     let (status_code, stdout, stderr, output_truncated, execution_error) = match execution {
         Ok(output) => (
             output.status_code,
@@ -400,7 +405,7 @@ pub fn execute_uv_cache_reclaim(
     };
     let result_name = format!("{}.result.json", plan.plan_fingerprint);
     let mut receipt = UvCacheReclaimReceipt {
-        schema_version: SCHEMA_VERSION,
+        schema_version: RECEIPT_SCHEMA_VERSION,
         plan,
         approval,
         command: std::iter::once(current_path.to_string_lossy().into_owned())
@@ -413,7 +418,8 @@ pub fn execute_uv_cache_reclaim(
         output_truncated,
         filesystem_available_before_bytes: before,
         filesystem_available_after_bytes: after,
-        filesystem_available_delta_bytes: after.saturating_sub(before),
+        filesystem_available_delta_bytes: after.and_then(|value| value.checked_sub(before)),
+        capacity_postcheck_error,
         executed_at_ms,
         result_record_path: record_dir.join(&result_name).to_string_lossy().into_owned(),
     };
