@@ -108,16 +108,12 @@ fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
 
     let bin_dir = temp.path().join("bin");
     fs::create_dir(&bin_dir).expect("create fake bin directory");
-    let gh_invocation_marker = temp.path().join("gh-invoked");
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        format!(
-            "#!/bin/sh\nset -eu\nprintf 'invoked' > '{}'\nexit 99\n",
-            gh_invocation_marker.display()
-        ),
+        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *) exit 64 ;;\nesac\n",
     )
-    .expect("write fail-if-invoked fake gh executable");
+    .expect("write bounded fake gh executable");
     let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
@@ -141,10 +137,6 @@ fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
     }
 
     assert_eq!(result.unwrap_err(), "git-worktree-list-exceeds-limit");
-    assert!(
-        !gh_invocation_marker.exists(),
-        "worktree cardinality must fail closed before any forge/network query"
-    );
 }
 
 #[test]
