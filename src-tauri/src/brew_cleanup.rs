@@ -567,13 +567,7 @@ pub fn write_audit_record(
     let (directory, filename, path, encoded) = prepare_audit_record(app_data_dir, record)?;
     #[cfg(unix)]
     {
-        return write_audit_record_unix_with_hook(
-            &directory,
-            &filename,
-            &path,
-            &encoded,
-            || {},
-        );
+        return write_audit_record_unix_with_hook(&directory, &filename, &path, &encoded, || {});
     }
     #[cfg(not(unix))]
     {
@@ -626,18 +620,14 @@ where
         return Err("brew-cleanup-audit-directory-identity-drift".into());
     }
 
-    let record_name = CString::new(filename)
-        .map_err(|_| "brew-cleanup-audit-filename-invalid".to_string())?;
+    let record_name =
+        CString::new(filename).map_err(|_| "brew-cleanup-audit-filename-invalid".to_string())?;
     before_create();
     let record_fd = unsafe {
         libc::openat(
             directory_file.as_raw_fd(),
             record_name.as_ptr(),
-            libc::O_WRONLY
-                | libc::O_CREAT
-                | libc::O_EXCL
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             0o400,
         )
     };

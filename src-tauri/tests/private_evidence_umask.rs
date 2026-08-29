@@ -39,11 +39,8 @@ fn restrictive_umask_still_publishes_mode_0600() {
     // cannot observe the temporary mask. Removing owner-write makes a raw openat(..., 0o600)
     // create mode 0400 and reproduces the production file-mode boundary.
     let previous_umask = unsafe { libc::umask(0o200) };
-    let publication = write_private_json_create_new(
-        source.path(),
-        &path,
-        &serde_json::json!({"private": true}),
-    );
+    let publication =
+        write_private_json_create_new(source.path(), &path, &serde_json::json!({"private": true}));
     unsafe {
         libc::umask(previous_umask);
     }

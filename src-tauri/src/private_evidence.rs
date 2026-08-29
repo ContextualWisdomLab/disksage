@@ -96,9 +96,7 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
         ObjectBoundPublicationError::RecordIdentityDrift => {
             "private-evidence-record-identity-drift"
         }
-        ObjectBoundPublicationError::InvalidationFailed => {
-            "private-evidence-invalidation-failed"
-        }
+        ObjectBoundPublicationError::InvalidationFailed => "private-evidence-invalidation-failed",
     }
     .to_string()
 }
@@ -211,8 +209,8 @@ where
         .filter(|name| !name.is_empty())
         .ok_or(ObjectBoundPublicationError::NameInvalid)?;
     let final_path = canonical_parent.join(file_name);
-    let file_name_c = CString::new(file_name.as_bytes())
-        .map_err(|_| ObjectBoundPublicationError::NameInvalid)?;
+    let file_name_c =
+        CString::new(file_name.as_bytes()).map_err(|_| ObjectBoundPublicationError::NameInvalid)?;
 
     before_create();
     revalidate_private_parent(
@@ -226,11 +224,7 @@ where
         libc::openat(
             directory.as_raw_fd(),
             file_name_c.as_ptr(),
-            libc::O_WRONLY
-                | libc::O_CREAT
-                | libc::O_EXCL
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             unix_mode as libc::c_uint,
         )
     };
@@ -441,11 +435,8 @@ mod tests {
             move || {
                 std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
                 std::fs::create_dir(&parent_for_hook).unwrap();
-                std::fs::set_permissions(
-                    &parent_for_hook,
-                    std::fs::Permissions::from_mode(0o700),
-                )
-                .unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
             },
             || {},
             || {},
@@ -474,11 +465,8 @@ mod tests {
             &serde_json::json!({"private": true}),
             || {},
             move || {
-                std::fs::set_permissions(
-                    &parent_for_hook,
-                    std::fs::Permissions::from_mode(0o770),
-                )
-                .unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o770))
+                    .unwrap();
             },
             || {},
         )
@@ -506,11 +494,8 @@ mod tests {
             || {},
             || {},
             move || {
-                std::fs::set_permissions(
-                    &parent_for_hook,
-                    std::fs::Permissions::from_mode(0o770),
-                )
-                .unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o770))
+                    .unwrap();
             },
         )
         .unwrap_err();
@@ -545,11 +530,8 @@ mod tests {
             move || {
                 std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
                 std::fs::create_dir(&parent_for_hook).unwrap();
-                std::fs::set_permissions(
-                    &parent_for_hook,
-                    std::fs::Permissions::from_mode(0o700),
-                )
-                .unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
             },
             || {},
         )
@@ -585,11 +567,8 @@ mod tests {
             move || {
                 std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
                 std::fs::create_dir(&parent_for_hook).unwrap();
-                std::fs::set_permissions(
-                    &parent_for_hook,
-                    std::fs::Permissions::from_mode(0o700),
-                )
-                .unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
             },
         )
         .unwrap_err();
