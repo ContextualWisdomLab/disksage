@@ -36,6 +36,7 @@ pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dupes;
 pub mod duplicate_audit;
+pub mod photo_similarity_audit;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
