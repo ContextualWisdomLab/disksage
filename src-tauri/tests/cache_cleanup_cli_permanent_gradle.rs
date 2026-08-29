@@ -47,6 +47,45 @@ fn permanent_gradle_execution_removes_only_the_fresh_catalogued_tree_and_journal
 }
 
 #[test]
+fn permanent_gradle_execution_rejects_mixed_file_and_directory_disposition() {
+    let temp = tempfile::tempdir().expect("temporary mixed-disposition fixture");
+    let home = temp.path().join("home");
+    let journal = temp.path().join("evidence").join("journal.jsonl");
+    let cache_root = home.join(".gradle/caches");
+    let directory_target = cache_root.join("modules");
+    let direct_file = cache_root.join("gc.properties");
+    std::fs::create_dir_all(&directory_target).expect("create Gradle directory target");
+    std::fs::write(directory_target.join("generated.bin"), b"regenerable")
+        .expect("write Gradle directory payload");
+    std::fs::write(&direct_file, b"regenerable metadata").expect("write direct Gradle file");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .env("HOME", &home)
+        .env_remove("GRADLE_USER_HOME")
+        .env("XDG_DATA_HOME", temp.path().join("xdg-data"))
+        .args([
+            "--execute",
+            "--cache-id",
+            "gradle-cache",
+            "--permanent-cache",
+            "--journal-path",
+        ])
+        .arg(&journal)
+        .output()
+        .expect("run mixed-disposition cleanup");
+
+    assert!(!output.status.success(), "mixed irreversible/reversible disposition must fail closed");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "disksage-cache-cleanup: permanent-cache-target-type-unsupported"
+    );
+    assert!(directory_target.exists(), "directory target must remain untouched");
+    assert!(direct_file.exists(), "direct file target must remain untouched");
+    assert!(!journal.exists(), "no mutation journal may exist after preflight rejection");
+    assert!(output.stdout.is_empty(), "failed mixed-mode execution must not emit success JSON");
+}
+
+#[test]
 fn reversible_named_gradle_preview_remains_available() {
     let temp = tempfile::tempdir().expect("temporary cache preview fixture");
     let home = temp.path().join("home");
