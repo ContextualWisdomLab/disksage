@@ -978,6 +978,21 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
+fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
+    if path.is_empty() || command.len() < path.len() {
+        return false;
+    }
+    (0..=command.len() - path.len()).any(|start| {
+        let end = start + path.len();
+        command[start..end] == *path
+            && (start == 0 || command[start - 1].is_ascii_whitespace())
+            && (end == command.len()
+                || command[end].is_ascii_whitespace()
+                || (recursive && command[end] == b'/'))
+    })
+}
+
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -1106,7 +1121,10 @@ pub fn active_use_evidence(
     };
     let path_bytes = path.as_os_str().as_encoded_bytes();
     for line in ps.stdout.split(|byte| *byte == b'\n') {
-        let line = line.strip_prefix(b" ").unwrap_or(line);
+        let line = &line[line
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(line.len())..];
         let split = line.iter().position(|byte| byte.is_ascii_whitespace());
         let Some(split) = split else { continue };
         let Ok(pid) = std::str::from_utf8(&line[..split])
@@ -1116,12 +1134,7 @@ pub fn active_use_evidence(
         else {
             continue;
         };
-        if pid != ps.child_pid
-            && !path_bytes.is_empty()
-            && line[split..]
-                .windows(path_bytes.len())
-                .any(|window| window == path_bytes)
-        {
+        if pid != ps.child_pid && command_contains_path(&line[split..], path_bytes, recursive) {
             pids.insert(pid);
         }
     }
@@ -2739,6 +2752,12 @@ mod tests {
         assert!(evidence.evidence_complete, "{evidence:?}");
         assert!(evidence.active, "{evidence:?}");
         assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+        assert!(!command_contains_path(b"tool /cache/env-old", b"/cache/env", true));
+        assert!(command_contains_path(
+            b"tool /cache/env with spaces/child",
+            b"/cache/env with spaces",
+            true,
+        ));
     }
 
     #[test]

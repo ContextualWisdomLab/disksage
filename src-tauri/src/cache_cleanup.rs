@@ -366,17 +366,6 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
-fn npx_cache_root(bases: &rules::BaseDirs) -> PathBuf {
-    #[cfg(windows)]
-    {
-        bases.local_data.join("npm-cache").join("_npx")
-    }
-    #[cfg(not(windows))]
-    {
-        bases.home.join(".npm").join("_npx")
-    }
-}
-
 /// Move only inactive, unchanged npx environments to OS Trash. Package downloads are regenerable
 /// and every directory remains identity-bound, active-use checked, and journaled. A missing npx
 /// cache is an empty successful cleanup rather than an operational failure.
@@ -385,7 +374,9 @@ pub fn clean_inactive_npx_environments_headless(
     now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let npx = npx_cache_root(&bases);
+    let npx = rules::cache_catalog_path(&bases, "npm-cache")
+        .ok_or("npm-cache-catalog-unavailable")?
+        .join("_npx");
     match std::fs::symlink_metadata(&npx) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
