@@ -223,9 +223,19 @@ pub fn plan_with_runner(
     let metadata = std::fs::symlink_metadata(&disk)
         .map_err(|_| "colima-backing-disk-unavailable".to_string())?;
     let stopped = instance.status.eq_ignore_ascii_case("stopped");
+    let observed_vm_type = instance.vm_type.trim().to_ascii_lowercase();
+    let vm_type_known = matches!(observed_vm_type.as_str(), "qemu" | "vz" | "krunkit");
+    let vm_type = if vm_type_known {
+        observed_vm_type
+    } else {
+        "unknown".into()
+    };
     let mut blockers = Vec::new();
     if !stopped {
         blockers.push("colima-profile-must-already-be-stopped".into());
+    }
+    if !vm_type_known {
+        blockers.push("colima-vm-type-evidence-unavailable".into());
     }
     // The current official Colima CLI documents only guest fstrim, which requires a running VM.
     // It has no stopped-VM native compact command, so execution remains truthfully unavailable.
@@ -235,7 +245,7 @@ pub fn plan_with_runner(
         profile: profile.into(),
         runtime_state: instance.status,
         runtime: instance.runtime,
-        vm_type: instance.vm_type,
+        vm_type,
         configured_disk_bytes: instance.disk,
         backing_disk_logical_bytes: metadata.len(),
         backing_disk_allocated_bytes: allocated_bytes(&metadata),
@@ -245,7 +255,9 @@ pub fn plan_with_runner(
         native_stopped_compaction_supported: false,
         execution_available: false,
         blockers,
-        customer_next_action: if stopped {
+        customer_next_action: if !vm_type_known {
+            "Colima 프로필 설정에서 지원되는 VM 유형을 확인한 뒤 다시 검사하세요.".into()
+        } else if stopped {
             "현재 Colima는 중지되어 있습니다. 지원되는 native 압축 기능이 추가될 때까지 디스크 파일을 직접 변경하지 마세요.".into()
         } else {
             "실행 중인 작업을 확인한 뒤 Colima를 직접 중지하고 다시 검사하세요.".into()
@@ -343,7 +355,7 @@ mod tests {
         let bin = temp.path().join("colima");
         std::fs::write(
             &bin,
-            "#!/bin/sh\n[ \"$1 $2 $3 $4\" = \"list --json --profile work\" ] || exit 64\nprintf '%s\\n' '{\"name\":\"colima-work\",\"status\":\"Stopped\",\"runtime\":\"docker\",\"vmType\":\"qemu\",\"disk\":107374182400}'\n",
+            "#!/bin/sh\n[ \"$1 $2 $3 $4\" = \"list --json --profile work\" ] || exit 64\nprintf '%s\\n' '{\"name\":\"colima-work\",\"status\":\"Stopped\",\"runtime\":\"docker\",\"disk\":107374182400}'\n",
         )
         .unwrap();
         let mut permissions = std::fs::metadata(&bin).unwrap().permissions();
@@ -351,9 +363,13 @@ mod tests {
         std::fs::set_permissions(&bin, permissions).unwrap();
 
         let reviewed = plan_with_runner(&NativeColimaRunner, &bin, &home, "work", 100).unwrap();
-        assert_eq!(reviewed.vm_type, "qemu");
+        assert_eq!(reviewed.vm_type, "unknown");
         assert_eq!(reviewed.runtime_state, "Stopped");
         assert!(!reviewed.execution_available);
+        assert!(reviewed
+            .blockers
+            .contains(&"colima-vm-type-evidence-unavailable".into()));
+        assert!(reviewed.customer_next_action.contains("VM 유형을 확인"));
 
         // A later CLI invocation re-observes the provider. The evidence fingerprint remains
         // reviewable when the bound profile, runtime, allocation, and disk identity are unchanged.
