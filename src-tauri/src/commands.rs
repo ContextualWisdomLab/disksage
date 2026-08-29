@@ -3,9 +3,11 @@ use std::sync::atomic::AtomicBool;
 #[cfg(not(coverage))]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+#[cfg(not(coverage))]
+use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(not(coverage))]
 use crate::scanner;
@@ -14,13 +16,23 @@ use crate::scanner::ScanResult;
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::organize;
 use crate::safety;
+use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
-    brew_cleanup, cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
-    dev_artifacts, dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
+    brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
+    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
+    organization_lineage,
+    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
-    provider_sync, rules,
+    provider_recovery, provider_sync, rules, orphan,
 };
+
+#[cfg(not(coverage))]
+#[path = "home_resolution.rs"]
+mod home_resolution;
+
+#[path = "copy_headroom.rs"]
+mod copy_headroom;
 
 #[derive(Default)]
 pub struct AppState {
@@ -29,8 +41,15 @@ pub struct AppState {
     pub scanning: Arc<AtomicBool>,
     /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
     pub cloud_review: Arc<Mutex<()>>,
+    /// One serialized native copy cancellation token. It is reset at each command boundary.
+    pub cloud_copy_cancel: Arc<AtomicBool>,
+    /// Candidate fingerprint for the one native copy that may be cancelled.
+    pub cloud_copy_operation: Arc<Mutex<Option<String>>>,
     /// The latest model judgment is process-local and consumed by one execution attempt.
     pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
+    /// Latest binary/polytomous judge calibration. It is process-local and never grants authority
+    /// without the separate human confirmation phrase.
+    pub judge_calibration: Arc<Mutex<Option<crate::judge_calibration::JudgeCalibrationResult>>>,
     // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
     #[cfg(all(not(coverage), feature = "llm-engine"))]
     pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
@@ -149,51 +168,19 @@ pub fn clean_dev_artifacts_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    let current = dev_artifacts::find_artifacts(root, min_age_days, now_ms);
-    requests
-        .iter()
-        .map(|request| {
-            let matches = current.iter().find(|candidate| {
-                candidate.path == request.path
-                    && candidate.kind == request.kind
-                    && candidate.project == request.project
-                    && candidate.bytes == request.bytes
-                    && candidate.files == request.files
-                    && candidate.skipped == request.skipped
-                    && candidate.scan_complete
-                    && request.scan_complete
-                    && request.skipped == 0
-                    && candidate.fingerprint == request.fingerprint
-                    && !request.object_id.is_empty()
-                    && candidate.object_id == request.object_id
-                    && candidate.age_days >= request.age_days
-            });
-            if matches.is_none() {
-                return CleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: "개발 아티팩트가 변경되었거나 메타데이터 스캔이 불완전합니다. 정리 전에 다시 스캔하세요".into(),
-                };
-            }
-
-            match safety::trash_delete_if_identity(
-                Path::new(&request.path),
-                &request.object_id,
-                request.bytes,
-                journal_path,
-                now_ms,
-            ) {
-                Ok(()) => CleanResult {
-                    path: request.path.clone(),
-                    ok: true,
-                    error: String::new(),
-                },
-                Err(error) => CleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: error.to_string(),
-                },
-            }
+    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
+        .into_iter()
+        .map(|result| CleanResult {
+            path: result.path,
+            ok: result.ok,
+            error: if result
+                .error
+                .starts_with("development artifact changed or its bounded manifest is incomplete")
+            {
+                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
+            } else {
+                result.error
+            },
         })
         .collect()
 }
@@ -214,7 +201,10 @@ pub fn execute_moves_inner(
     plans
         .iter()
         .map(|p| {
-            match safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms) {
+            match organize::validate_move_source(p).and_then(|_| {
+                safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms)
+                    .map_err(|error| error.to_string())
+            }) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
                     ok: true,
@@ -297,10 +287,6 @@ fn user_rules_json(app: &AppHandle) -> String {
 #[cfg(not(coverage))]
 fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     use tauri::Manager;
-    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스.
-    // 오버라이드 파일이 없으면(read 실패) 조용히 번들로 폴백하지만, 파일이 있어도
-    // parse가 실패하면(malformed) 상위 load_ontology_from이 에러를 낸다 — 의도적:
-    // 사용자가 편집한 잘못된 온톨로지를 조용히 무시하지 않고 알린다.
     if let Ok(dir) = app.path().app_config_dir() {
         let user_ttl = dir.join("ontology.ttl");
         if let Ok(s) = std::fs::read_to_string(&user_ttl) {
@@ -350,7 +336,6 @@ fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
-/// 현재 설정 조회. 파일 없으면 기본값(offline). 손상 파일은 parse_settings가 기본값으로 흡수.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
@@ -361,7 +346,6 @@ pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String>
     }
 }
 
-/// online_mode 설정 후 영속. 반환은 저장된 설정.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn set_settings(
@@ -374,7 +358,6 @@ pub fn set_settings(
     Ok(s)
 }
 
-// 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
@@ -386,7 +369,6 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
     let slot = state.result.clone();
     let scanning = state.scanning.clone();
     std::thread::spawn(move || {
-        // 패닉으로 스레드가 죽어도 scanning 플래그는 반드시 해제
         struct ScanningReset(Arc<AtomicBool>);
         impl Drop for ScanningReset {
             fn drop(&mut self) {
@@ -398,8 +380,8 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
             let _ = app.emit("scan://progress", s.clone());
         });
         let stats = res.stats.clone();
-        *slot.lock().unwrap() = Some(res); // done 이벤트 전에 저장 (레이스 방지)
-        drop(_reset); // emit 전에 scanning 플래그 해제 (원래 순서 복원, 패닉 안전성은 Drop이 유지)
+        *slot.lock().unwrap() = Some(res);
+        drop(_reset);
         let _ = app.emit("scan://done", stats);
     });
     Ok(())
@@ -413,8 +395,24 @@ pub fn cancel_scan(state: State<AppState>) {
 
 #[cfg(not(coverage))]
 #[tauri::command]
+pub fn cancel_cloud_copy(
+    metadata_fingerprint: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let active = state
+        .cloud_copy_operation
+        .lock()
+        .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+    if active.as_deref() != Some(metadata_fingerprint.as_str()) {
+        return Err("cloud-copy-not-active".into());
+    }
+    state.cloud_copy_cancel.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
 pub fn get_node(path: String, state: State<AppState>) -> Result<NodeView, String> {
-    // ponytail: lock held across read_dir I/O; snapshot dir_sizes and read outside the lock if this stalls on huge/network dirs
     let guard = state.result.lock().unwrap();
     let res = guard.as_ref().ok_or("no scan result")?;
     node_view(res, &PathBuf::from(path))
@@ -442,7 +440,7 @@ pub fn top_files(limit: usize, state: State<AppState>) -> Result<Vec<EntryView>,
 }
 
 #[cfg(not(coverage))]
-fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -450,7 +448,7 @@ fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(coverage))]
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -469,15 +467,57 @@ fn valid_brew_rationale(value: &str) -> bool {
         && !trimmed.chars().any(char::is_control)
 }
 
-/// Build a read-only Homebrew cleanup plan. The command is macOS-only and fixed in Rust.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
     brew_cleanup::plan(now_ms())
 }
 
-/// Ask the verified local model whether the fixed cleanup is appropriate.
-/// A non-safe judgment is returned to the UI but is never stored as execution authority.
+fn podman_binary() -> PathBuf {
+    [
+        "/opt/homebrew/bin/podman",
+        "/usr/local/bin/podman",
+        "/usr/bin/podman",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| {
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+    })
+    .unwrap_or_else(|| PathBuf::from("podman"))
+}
+
+/// Read-only Podman VM/store evidence. The command never prunes, removes, trims, or stops.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_podman_reclaim() -> podman_reclaim::PodmanReclaimPlan {
+    podman_reclaim::probe_podman_reclaim(
+        &podman_binary(),
+        podman_reclaim::DEFAULT_PODMAN_MACHINE,
+        podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+    )
+}
+
+/// Freshly revalidates and removes only untagged, unreferenced Podman images.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_podman_dangling_image_prune(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<podman_reclaim::PodmanDanglingImagePruneExecution, String> {
+    if !valid_brew_rationale(&rationale) {
+        return Err("podman-prune-rationale-invalid".into());
+    }
+    podman_reclaim::prune_dangling_images(
+        &podman_binary(),
+        podman_reclaim::DEFAULT_PODMAN_MACHINE,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
+    )
+}
+
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -507,6 +547,14 @@ pub fn judge_brew_cleanup(
             .as_ref()
             .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
         let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        let mut judgment = judgment;
+        judgment.calibration = state
+            .judge_calibration
+            .lock()
+            .map_err(|_| "brew-cleanup-calibration-lock-poisoned".to_string())?
+            .as_ref()
+            .filter(|calibration| calibration.judgment_id == judgment.judgment_id)
+            .cloned();
         drop(guard);
         *state
             .brew_cleanup_judgment
@@ -523,7 +571,29 @@ pub fn judge_brew_cleanup(
     }
 }
 
-/// Re-plan immediately before running Homebrew, then consume the matching safe judgment once.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn validate_judge_calibration(
+    evidence: crate::judge_calibration::JudgeCalibrationEvidence,
+    state: State<AppState>,
+) -> Result<crate::judge_calibration::JudgeCalibrationResult, String> {
+    let result = crate::judge_calibration::validate(&evidence)?;
+    *state
+        .judge_calibration
+        .lock()
+        .map_err(|_| "judge-calibration-lock-poisoned".to_string())? = Some(result.clone());
+    if let Some(judgment) = state
+        .brew_cleanup_judgment
+        .lock()
+        .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())?
+        .as_mut()
+        .filter(|judgment| judgment.judgment_id == result.judgment_id)
+    {
+        judgment.calibration = Some(result.clone());
+    }
+    Ok(result)
+}
+
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn execute_brew_cleanup(
@@ -560,13 +630,14 @@ pub fn execute_brew_cleanup(
         || judgment.plan_fingerprint != plan_fingerprint
         || judgment.exact_approval_phrase != plan.exact_approval_phrase
         || judgment.verdict != crate::llm::Verdict::Safe
+        || !judgment.has_successful_calibration()
         || now_ms().saturating_sub(judgment.judged_at_ms) > brew_cleanup::MAX_JUDGMENT_AGE_MS
     {
         return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
     }
 
     let executed_at_ms = now_ms();
-    let mut execution = match brew_cleanup::execute(&plan, &judgment_id, executed_at_ms) {
+    let mut execution = match brew_cleanup::execute(&plan, &judgment, executed_at_ms) {
         Ok(execution) => execution,
         Err(error) => {
             *stored = None;
@@ -614,6 +685,29 @@ pub fn execute_brew_cleanup(
 pub fn list_cache_candidates() -> Result<Vec<rules::CacheCandidate>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
     Ok(rules::cache_candidates(&bases))
+}
+
+#[cfg(not(coverage))]
+fn clean_regenerable_caches_inner(
+    bases: &rules::BaseDirs,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    crate::cache_cleanup::clean_regenerable_caches_inner(bases, journal_path, now_ms)
+}
+
+/// Move only observed, regenerable macOS cache children to Trash without an extra approval step.
+/// Identity and active-use checks remain mandatory for every child, and the cache roots remain.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_regenerable_caches(app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
+    let journal_path = journal_file_path(&app)?;
+    Ok(clean_regenerable_caches_inner(
+        &bases,
+        &journal_path,
+        now_ms(),
+    ))
 }
 
 #[cfg(not(coverage))]
@@ -667,7 +761,6 @@ pub fn recent_operations(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn expand_clean_targets(dir: String) -> Vec<String> {
-    // 카탈로그 경로로만 스코프 — 임의 디렉토리 열람 IPC가 되지 않도록
     let Some(bases) = rules::BaseDirs::from_env() else {
         return Vec::new();
     };
@@ -688,37 +781,41 @@ pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, Strin
     Ok(dupes::find_duplicates(files, 4096))
 }
 
-/// home 해석: app.path().home_dir() 우선, 실패 시 HOME/USERPROFILE 환경변수 폴백.
+/// Resolve a real absolute home directory or fail closed. Relative environment values are never
+/// accepted as path authority because they would make `~/...` destinations depend on the process
+/// working directory.
 #[cfg(not(coverage))]
-fn resolve_home(app: &AppHandle) -> PathBuf {
+fn resolve_home(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
-    app.path()
-        .home_dir()
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
-        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let app_home = app.path().home_dir().ok();
+    let home_env = std::env::var_os("HOME").map(PathBuf::from);
+    let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    #[cfg(windows)]
+    let drive_home = home_resolution::windows_home_drive_path();
+    #[cfg(not(windows))]
+    let drive_home: Option<PathBuf> = None;
+
+    home_resolution::select_absolute_home([app_home, home_env, user_profile, drive_home])
 }
 
-/// Candidate local roots exposed by iCloud Drive, OneDrive, and Google Drive, including their
-/// discovery-time readability evidence.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
-    cloud::discover_cloud_roots(&resolve_home(&app))
+pub fn list_cloud_roots(app: AppHandle) -> Result<Vec<cloud::CloudRoot>, String> {
+    let home = resolve_home(&app)?;
+    Ok(cloud::discover_cloud_roots(&home))
 }
 
-/// Return selectable roots together with bounded provider/account discovery failures. This does
-/// not create a probe file, hydrate a placeholder, or contact a provider API.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn inspect_cloud_roots(app: AppHandle) -> cloud::CloudRootDiscoveryReport {
-    cloud::discover_cloud_roots_report(&resolve_home(&app))
+pub fn inspect_cloud_roots(app: AppHandle) -> Result<cloud::CloudRootDiscoveryReport, String> {
+    let home = resolve_home(&app)?;
+    Ok(cloud::discover_cloud_roots_report(&home))
 }
 
 #[cfg(not(coverage))]
 fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::CloudRoot, String> {
-    let matches: Vec<_> = cloud::discover_cloud_roots(&resolve_home(app))
+    let home = resolve_home(app)?;
+    let matches: Vec<_> = cloud::discover_cloud_roots(&home)
         .into_iter()
         .filter(|candidate| {
             cloud::cloud_root_path_matches(Path::new(&candidate.path), Path::new(cloud_root))
@@ -731,8 +828,6 @@ fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::Cloud
     }
 }
 
-/// Build a read-only, exact-file iCloud local-cache eviction plan for display in the app.
-/// File content is not opened and no local or cloud mutation occurs.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_icloud_local_copy_eviction(
@@ -765,8 +860,6 @@ pub struct IcloudLocalCopyEvictionOutput {
     pub result_record_error: Option<String>,
 }
 
-/// Rebuild and approve the exact plan, request removal of only the local iCloud copy, then retain
-/// immutable approval/result records. The cloud object is never deleted by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn evict_icloud_local_copy(
@@ -849,7 +942,6 @@ pub async fn evict_icloud_local_copy(
     .map_err(|_| "icloud-local-eviction-task-failed".to_string())?
 }
 
-/// Build a read-only, reference-bound audit of all worktrees in one Git common directory.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_stale_git_worktrees(
@@ -880,8 +972,6 @@ pub struct StaleGitWorktreeRemovalOutput {
     pub result_record_error: Option<String>,
 }
 
-/// Rebuild the exact audit, bind an attributed human approval, and remove only worktrees that
-/// remain clean, merged, idle, and fingerprint-identical. Branch deletion and prune are excluded.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn remove_stale_git_worktrees(
@@ -956,6 +1046,54 @@ pub async fn remove_stale_git_worktrees(
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
 }
 
+/// Build a bounded, path-free ontology plan for uninstalled macOS application data.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_orphan_cleanup(app: AppHandle) -> Result<orphan::OrphanPlan, String> {
+    let home = resolve_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || orphan::plan(&home, now_ms()))
+        .await
+        .map_err(|_| "orphan-plan-task-failed".to_string())?
+}
+
+/// Re-plan immediately before moving only fully scanned, unused cache candidates to OS Trash.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn clean_orphan_candidates(
+    plan_fingerprint: String,
+    requests: Vec<orphan::OrphanCleanupRequest>,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<orphan::OrphanCleanupResult, String> {
+    if !valid_brew_fingerprint(&plan_fingerprint) {
+        return Err("orphan-plan-fingerprint-invalid".into());
+    }
+    let home = resolve_home(&app)?;
+    let plan = tauri::async_runtime::spawn_blocking({
+        let home = home.clone();
+        move || orphan::plan(&home, now_ms())
+    })
+    .await
+    .map_err(|_| "orphan-clean-plan-task-failed".to_string())??;
+    if plan.plan_fingerprint != plan_fingerprint {
+        return Err("orphan-plan-stale".into());
+    }
+    let journal = journal_file_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        orphan::move_to_trash(
+            &plan,
+            &requests,
+            &confirmation_phrase,
+            &rationale,
+            &journal,
+            now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "orphan-clean-task-failed".to_string())?
+}
+
 #[cfg(not(coverage))]
 fn oauth_connections_path(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
@@ -974,8 +1112,6 @@ fn cloud_review_directory(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "app-data-directory-unavailable".to_string())
 }
 
-/// Return non-secret OAuth connection descriptors. Refresh tokens remain in the OS credential
-/// store and this command never reads or returns them.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cloud_provider_connections(
@@ -984,7 +1120,6 @@ pub fn list_cloud_provider_connections(
     provider_oauth::load_connections(&oauth_connections_path(&app)?)
 }
 
-/// Return only the latest non-secret approve/hold decision for each candidate fingerprint.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cloud_review_decisions(
@@ -993,14 +1128,12 @@ pub fn list_cloud_review_decisions(
     cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)
 }
 
-/// Start a native browser authorization-code flow with PKCE and a random loopback port. The
-/// provider refresh token is committed to the OS credential store only after state validation and
-/// a successful token exchange. Client IDs are public desktop-app identifiers, not secrets.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn connect_cloud_provider(
     cloud_root: String,
     client_id: String,
+    write_access: bool,
     app: AppHandle,
 ) -> Result<provider_oauth::OAuthConnection, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
@@ -1008,7 +1141,11 @@ pub async fn connect_cloud_provider(
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("icloud-oauth-not-supported".into());
     }
-    let pending = provider_oauth::prepare_authorization(selected.provider, &client_id)?;
+    let pending = provider_oauth::prepare_authorization_with_write_access(
+        selected.provider,
+        &client_id,
+        write_access,
+    )?;
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_url(pending.authorization_url(), None::<&str>)
@@ -1022,8 +1159,6 @@ pub async fn connect_cloud_provider(
     .map_err(|_| "provider-oauth-task-failed".to_string())?
 }
 
-/// Remove the selected root's refresh token from the OS credential store and its non-secret local
-/// connection descriptor. This does not alter any cloud file.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn disconnect_cloud_provider(cloud_root: String, app: AppHandle) -> Result<(), String> {
@@ -1039,11 +1174,6 @@ pub async fn disconnect_cloud_provider(cloud_root: String, app: AppHandle) -> Re
     .map_err(|_| "provider-oauth-task-failed".to_string())?
 }
 
-/// Revalidate a saved provider connection after launch without exposing access or refresh tokens.
-///
-/// This is deliberately opt-in because it reads the OS credential store and contacts the fixed
-/// provider capacity endpoint. Failures are returned as redacted, stable capacity evidence rather
-/// than raw OAuth or transport details.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn verify_cloud_provider_capacity(
@@ -1099,8 +1229,6 @@ pub async fn verify_cloud_provider_capacity(
     Ok(snapshot)
 }
 
-/// Inspect the selected provider's local runtime prerequisite without returning process names,
-/// local paths, account identifiers, or any remote-capacity/synchronization claim.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_cloud_provider_client_runtime(
@@ -1108,23 +1236,54 @@ pub fn inspect_cloud_provider_client_runtime(
     app: AppHandle,
 ) -> Result<provider_client_runtime::ProviderClientRuntimeSnapshot, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    // Runtime observation must remain available while a File Provider root is temporarily
+    // disconnected; this command reads the fixed provider client state, not the destination.
     Ok(provider_client_runtime::collect_provider_client_runtime(
         selected.provider,
         cloud::system_now_ms(),
     ))
 }
 
-/// Inspect the local, path-free iCloud upload-queue prerequisite for adding a new copy.
-///
-/// This reads only an immutable CloudDocs database snapshot. It does not contact iCloud, verify
-/// remote capacity, attest per-item upload, or authorize source eviction.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn recover_cloud_provider_client(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_recovery::ProviderRecoveryOutput, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    // Recovery targets only the verified, fixed desktop client. A disconnected root is the
+    // condition recovery is meant to repair, so destination readability is not a precondition.
+    provider_recovery::recover_provider_client(selected.provider, cloud::system_now_ms())
+}
+
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_icloud_new_copy_admission(
     app: AppHandle,
 ) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
-    icloud_sync_health::inspect_new_copy_admission(&resolve_home(&app), cloud::system_now_ms())
+    let home = resolve_home(&app)?;
+    let mut report = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())?;
+    if !persist_icloud_health_evidence(&app, &report) {
+        report
+            .notices
+            .push("icloud-sync-health-evidence-persistence-failed".into());
+    }
+    Ok(report)
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_cloud_provider_global_sync(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    // The read-only provider dump is the evidence needed to explain an unreadable/disconnected
+    // root; requiring directory access first would hide the very blocker we need to report.
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("provider-global-sync-icloud-specialized".into());
+    }
+    provider_global_sync::inspect_new_copy_admission(selected.provider)
 }
 
 #[cfg(not(coverage))]
@@ -1133,6 +1292,71 @@ struct CloudPlanningOutput {
     report: cloud::CloudPlanReport,
     icloud_health: Option<icloud_sync_health::IcloudSyncHealthReport>,
     provider_global_sync: Option<provider_global_sync::ProviderGlobalSyncReport>,
+}
+
+#[cfg(not(coverage))]
+fn persist_icloud_health_evidence(
+    app: &AppHandle,
+    report: &icloud_sync_health::IcloudSyncHealthReport,
+) -> bool {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .and_then(|app_data_dir| {
+            icloud_sync_health::write_icloud_sync_health_evidence(&app_data_dir, report).ok()
+        })
+        .is_some()
+}
+
+#[cfg(not(coverage))]
+fn attach_pre_copy_evidence_cohort(
+    report: &mut cloud::CloudPlanReport,
+    runtime: &provider_client_runtime::ProviderClientRuntimeSnapshot,
+    health: Option<&icloud_sync_health::IcloudSyncHealthReport>,
+) {
+    let local = report
+        .local_volume
+        .as_ref()
+        .map(|snapshot| cloud::PreCopyEvidenceObservation {
+            stream: "volume-pressure-evidence".into(),
+            observed_at_ms: snapshot.observed_at_ms,
+            evidence_complete: crate::volume_pressure::validate_snapshot(snapshot).is_ok(),
+            fingerprint: snapshot.evidence_fingerprint.clone(),
+        })
+        .unwrap_or_else(|| cloud::PreCopyEvidenceObservation {
+            stream: "volume-pressure-evidence".into(),
+            observed_at_ms: 0,
+            evidence_complete: false,
+            fingerprint: "0".repeat(64),
+        });
+    let runtime = cloud::PreCopyEvidenceObservation {
+        stream: "provider-client-runtime-evidence".into(),
+        observed_at_ms: runtime.observed_at_ms,
+        evidence_complete: runtime.process_observation_complete,
+        fingerprint: runtime.snapshot_fingerprint_sha256.clone(),
+    };
+    let health = health
+        .and_then(|value| icloud_sync_health::health_evidence_snapshot_from_report(value).ok())
+        .map(|snapshot| cloud::PreCopyEvidenceObservation {
+            stream: "icloud-sync-health-evidence".into(),
+            observed_at_ms: snapshot.observed_at_ms,
+            evidence_complete: snapshot.evidence_complete,
+            fingerprint: snapshot.evidence_fingerprint_sha256,
+        })
+        .unwrap_or_else(|| cloud::PreCopyEvidenceObservation {
+            stream: "icloud-sync-health-evidence".into(),
+            observed_at_ms: 0,
+            evidence_complete: false,
+            fingerprint: "0".repeat(64),
+        });
+    let cohort = cloud::compare_pre_copy_evidence(vec![local, runtime, health]);
+    if cohort.complete {
+        report.notices.push("pre-copy-evidence-cohort-complete".into());
+    } else {
+        report.notices.push("pre-copy-evidence-cohort-blocked".into());
+        report.notices.extend(cohort.blockers.iter().cloned());
+    }
+    report.pre_copy_evidence = Some(cohort);
 }
 
 #[cfg(not(coverage))]
@@ -1146,7 +1370,8 @@ fn cloud_plan_for_inputs(
 ) -> Result<CloudPlanningOutput, String> {
     let root_path = PathBuf::from(root);
     cloud::validate_source_root_readable(&root_path)?;
-    let discovered = cloud::discover_cloud_roots(&resolve_home(app));
+    let home = resolve_home(app)?;
+    let discovered = cloud::discover_cloud_roots(&home);
     let selected = discovered
         .iter()
         .find(|candidate| candidate.path == cloud_root)
@@ -1160,7 +1385,12 @@ fn cloud_plan_for_inputs(
     if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
-    let files = cloud::collect_archive_files(&root_path, &excluded);
+    let collection = cloud::collect_archive_files_bounded(
+        &root_path,
+        &excluded,
+        cloud::ARCHIVE_SCAN_MAX_ENTRIES,
+        cloud::ARCHIVE_SCAN_MAX_DURATION,
+    );
     let observed_at_ms = cloud::system_now_ms();
     let capacity_snapshot = match authenticated_capacity_snapshot(&selected, app, observed_at_ms) {
         Ok(snapshot) => snapshot,
@@ -1172,10 +1402,9 @@ fn cloud_plan_for_inputs(
     };
     let selected =
         provider_capacity::root_with_verified_capacity_scope(&selected, &capacity_snapshot)?;
-    let mut report = cloud::plan_cloud_archive(
-        &files,
+    let snapshot = cloud::prepare_cloud_archive_source_from_collection(
+        &collection,
         &root_path,
-        &selected,
         observed_at_ms,
         cloud::CloudPlanOptions {
             min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
@@ -1183,19 +1412,63 @@ fn cloud_plan_for_inputs(
             limit: limit.clamp(1, 1_000),
         },
     );
+    let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
+    if let Some(local_volume) = report.local_volume.as_ref() {
+        let evidence_persisted = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())
+            .and_then(|app_data_dir| {
+                crate::volume_pressure::write_snapshot_evidence(&app_data_dir, local_volume)
+                    .map(|_| ())
+            })
+            .is_ok();
+        if !evidence_persisted {
+            report
+                .notices
+                .push("local-volume-evidence-persistence-failed".into());
+        }
+    }
     attach_capacity_assessment(&mut report, capacity_snapshot)?;
     let runtime = provider_client_runtime::collect_provider_client_runtime(
         selected.provider,
         cloud::system_now_ms(),
     );
+    let runtime_evidence_persisted = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|app_data_dir| {
+            provider_client_runtime::write_runtime_snapshot_evidence(&app_data_dir, &runtime).ok()
+        })
+        .is_some();
+    if !runtime_evidence_persisted {
+        report
+            .notices
+            .push("provider-client-runtime-evidence-persistence-failed".into());
+    }
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+    let native_client_mode = report.capacity.as_ref().is_some_and(|assessment| {
+        provider_capacity::native_personal_client_copy_capacity_exception(
+            selected.provider,
+            selected.account_scope,
+            runtime.copy_prerequisite_met,
+            &assessment.snapshot,
+        )
+    });
+    if native_client_mode {
+        report.notices.push("native-client-copy-capacity-unverified".into());
+    }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(
-            &resolve_home(app),
-            cloud::system_now_ms(),
-        )
-        .ok();
+        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        if let Some(health) = health.as_ref() {
+            if !persist_icloud_health_evidence(app, health) {
+                report
+                    .notices
+                    .push("icloud-sync-health-evidence-persistence-failed".into());
+            }
+        }
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
         (health, None)
     } else {
@@ -1206,6 +1479,9 @@ fn cloud_plan_for_inputs(
         );
         (None, global_sync)
     };
+    if selected.provider == cloud::CloudProvider::Icloud {
+        attach_pre_copy_evidence_cohort(&mut report, &runtime, icloud_health.as_ref());
+    }
     Ok(CloudPlanningOutput {
         selected,
         report,
@@ -1284,6 +1560,7 @@ fn attach_capacity_assessment(
 fn require_capacity_for_copy(
     candidate: &cloud::CloudCandidate,
     snapshot: &provider_capacity::CloudCapacitySnapshot,
+    allow_native_personal_client_exception: bool,
 ) -> Result<(), String> {
     let assessment = provider_capacity::assess_capacity(
         snapshot.clone(),
@@ -1291,7 +1568,15 @@ fn require_capacity_for_copy(
         candidate.bytes,
         provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
     );
-    if assessment.can_fit == Some(true) {
+    if assessment.can_fit == Some(true)
+        || (allow_native_personal_client_exception
+            && provider_capacity::native_personal_client_copy_capacity_exception(
+                candidate.provider,
+                candidate.destination_account_scope,
+                true,
+                snapshot,
+            ))
+    {
         Ok(())
     } else {
         Err(if assessment.blockers.is_empty() {
@@ -1302,9 +1587,15 @@ fn require_capacity_for_copy(
     }
 }
 
-/// Read-only cloud offload plan. The selected destination must be one of the roots discovered
-/// on this machine; this command never creates a folder or moves a file. Candidate approval text
-/// is generated by Rust and returned as presentation evidence, never reconstructed by the UI.
+#[cfg(not(coverage))]
+fn require_local_copy_headroom(candidate: &cloud::CloudCandidate) -> Result<(), String> {
+    copy_headroom::require_destination_copy_headroom(
+        Path::new(&candidate.dst),
+        candidate.bytes,
+        cloud::system_now_ms(),
+    )
+}
+
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_cloud_archive(
@@ -1324,8 +1615,6 @@ pub async fn plan_cloud_archive(
     .map_err(|_| "cloud-plan-task-failed".to_string())?
 }
 
-/// Rebuild the plan and append an immutable approve/hold decision for the exact evidence shown by
-/// the UI. A stale UI cannot approve a changed metadata snapshot.
 #[cfg(not(coverage))]
 fn local_human_reviewer() -> String {
     let raw = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" })
@@ -1406,8 +1695,47 @@ pub async fn review_cloud_candidate(
 #[derive(serde::Serialize)]
 pub struct CloudCopyOutput {
     pub action: &'static str,
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
+    pub goal_status: Option<String>,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
+    pub projection_warnings: Vec<String>,
+    pub provider_object_id: Option<String>,
+}
+
+#[cfg(not(coverage))]
+fn require_native_copy_not_cancelled(cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if cancel.is_some_and(|token| token.load(Ordering::SeqCst)) {
+        return Err("cloud-copy-cancelled".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn require_native_copy_not_cancelled_with_failure(
+    cancel: Option<&AtomicBool>,
+    candidate: &cloud::CloudCandidate,
+    action: cloud_transfer::CloudCopyApprovalAction,
+    failure_dir: &Path,
+) -> Result<(), String> {
+    let error = match require_native_copy_not_cancelled(cancel) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let journal_error = cloud_transfer::record_copy_failure(
+        candidate,
+        action,
+        &error,
+        cloud::system_now_ms(),
+        failure_dir,
+    )
+    .err();
+    Err(match journal_error {
+        Some(journal_error) => format!("{error};{journal_error}"),
+        None => error,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -1422,13 +1750,18 @@ fn create_cloud_candidate_receipt(
     approval_rationale: &str,
     app: &AppHandle,
     adopt_existing: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<CloudCopyOutput, String> {
+    use tauri::Manager;
     if metadata_fingerprint.len() != 64
         || !metadata_fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("metadata-fingerprint-invalid".into());
+    }
+    if !adopt_existing {
+        require_native_copy_not_cancelled(cancel)?;
     }
     let planning =
         cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
@@ -1448,23 +1781,26 @@ fn create_cloud_candidate_receipt(
         [] => return Err("fresh-plan-candidate-not-found".into()),
         _ => return Err("fresh-plan-candidate-ambiguous".into()),
     };
-    use tauri::Manager;
-    let receipt_dir = app
+    let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|_| "app-data-directory-unavailable".to_string())?
-        .join("cloud-receipts");
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
+    let failure_dir = app_data_dir.join("cloud-copy-failures");
+    let action = if adopt_existing {
+        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
+    } else {
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly
+    };
+    if !adopt_existing {
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
+    }
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
             .into_iter()
             .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
     } else {
         None
-    };
-    let action = if adopt_existing {
-        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
-    } else {
-        cloud_transfer::CloudCopyApprovalAction::CopyOnly
     };
     let action_at_ms = cloud::system_now_ms();
     let copy_approval = cloud_transfer::create_cloud_copy_approval(
@@ -1477,11 +1813,18 @@ fn create_cloud_candidate_receipt(
         exact_confirmation_phrase,
     )?;
     if !adopt_existing {
-        provider_client_runtime::require_provider_client_runtime(
+        // Native File Provider copies can materialize placeholders and stage more than the source
+        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
+        // only verifies an existing destination and does not create a local staging file.
+        require_local_copy_headroom(candidate)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
+        let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),
         )?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         if selected.provider == cloud::CloudProvider::Icloud {
+            cloud::require_pre_copy_evidence_cohort(report.pre_copy_evidence.as_ref())?;
             let health = icloud_health
                 .as_ref()
                 .ok_or_else(|| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
@@ -1492,45 +1835,392 @@ fn create_cloud_candidate_receipt(
                 .ok_or_else(|| "provider-global-sync-evidence-unavailable".to_string())?;
             provider_global_sync::require_new_copy_admission(global_sync)?;
         }
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let snapshot = report
             .capacity
             .as_ref()
             .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-        require_capacity_for_copy(candidate, &snapshot.snapshot)?;
+        let native_client_mode =
+            provider_capacity::native_personal_client_copy_capacity_exception(
+                selected.provider,
+                selected.account_scope,
+                runtime.copy_prerequisite_met,
+                &snapshot.snapshot,
+            );
+        require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
-    let (receipt, receipt_path) = if adopt_existing {
+    let copy_result = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+        )
     } else {
-        cloud_transfer::prepare_cloud_copy_with_approval(
+        let cancel = cancel.ok_or_else(|| "native-copy-cancellation-unavailable".to_string())?;
+        cloud_transfer::prepare_cloud_copy_with_approval_cancelable(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+            cancel,
+        )
     };
+    let (receipt, receipt_path) = match copy_result {
+        Ok(result) => result,
+        Err(error) => {
+            let journal_error = cloud_transfer::record_copy_failure(
+                candidate,
+                action,
+                &error,
+                cloud::system_now_ms(),
+                &failure_dir,
+            )
+            .err();
+            return Err(match journal_error {
+                Some(journal_error) => format!("{error};{journal_error}"),
+                None => error,
+            });
+        }
+    };
+    let mut projection_warnings = Vec::new();
+    let (adr_path, goal_path) = match app.path().app_data_dir() {
+        Ok(app_data_dir) => {
+            let projection_updated_at_ms = cloud::system_now_ms();
+            let adr = cloud_adr::initial_adr_snapshot(&receipt, projection_updated_at_ms);
+            let goal = cloud_adr::initial_goal_snapshot(&receipt, projection_updated_at_ms);
+            let (adr_path, goal_path, warnings) = cloud_adr::write_projection_pair(
+                &app_data_dir.join("cloud-adr"),
+                &adr,
+                &app_data_dir.join("cloud-goals"),
+                &goal,
+            );
+            projection_warnings.extend(warnings);
+            (
+                adr_path.map(|path| path.to_string_lossy().into_owned()),
+                goal_path.map(|path| path.to_string_lossy().into_owned()),
+            )
+        }
+        Err(_) => {
+            projection_warnings.push("app-data-directory-unavailable".to_string());
+            (None, None)
+        }
+    };
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
         } else {
             "copy-only"
         },
+        goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
+        goal_status,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
+        adr_path,
+        goal_path,
+        projection_warnings,
+        provider_object_id: None,
     })
 }
 
-/// Rebuild the plan from current metadata, then copy one uniquely matching safe candidate.
-/// The source is retained and no local-eviction API is exposed by this command.
+#[cfg(not(coverage))]
+fn create_cloud_candidate_provider_api_receipt(
+    root: &str,
+    cloud_root: &str,
+    metadata_fingerprint: &str,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    exact_confirmation_phrase: &str,
+    approval_rationale: &str,
+    app: &AppHandle,
+) -> Result<CloudCopyOutput, String> {
+    use tauri::Manager;
+    if metadata_fingerprint.len() != 64
+        || !metadata_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("metadata-fingerprint-invalid".into());
+    }
+    let planning =
+        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let CloudPlanningOutput {
+        selected,
+        report,
+        ..
+    } = planning;
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("provider-api-icloud-unsupported".into());
+    }
+    let candidate = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
+        .ok_or_else(|| "fresh-plan-candidate-not-found".to_string())?;
+    if report
+        .candidates
+        .iter()
+        .filter(|entry| entry.metadata_fingerprint == metadata_fingerprint)
+        .count()
+        != 1
+    {
+        return Err("fresh-plan-candidate-ambiguous".into());
+    }
+    let connection_path = oauth_connections_path(app)?;
+    let connection = provider_oauth::connection_for_root(
+        &provider_oauth::load_connections(&connection_path)?,
+        &selected,
+    )?;
+    if !provider_oauth::scope_allows_write(&connection) {
+        return Err("provider-oauth-write-scope-required".into());
+    }
+    let capacity = report
+        .capacity
+        .as_ref()
+        .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+    require_capacity_for_copy(candidate, &capacity.snapshot, false)?;
+    let review_decision = if candidate.requires_review {
+        cloud_review::load_latest_decisions(&cloud_review_directory(app)?)?
+            .into_iter()
+            .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
+    } else {
+        None
+    };
+    let copy_approval = cloud_transfer::create_cloud_copy_approval(
+        candidate,
+        &selected,
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+        cloud::system_now_ms(),
+        &local_human_reviewer(),
+        approval_rationale.trim(),
+        exact_confirmation_phrase,
+    )?;
+    let copied_at_ms = cloud::system_now_ms();
+    let (receipt, source_hashes) = cloud_transfer::prepare_provider_api_source_receipt(
+        candidate,
+        &selected,
+        review_decision.as_ref(),
+        &copy_approval,
+        copied_at_ms,
+    )?;
+    let access_token = provider_oauth::refreshed_access_token(&connection_path, &selected)?;
+    let upload = provider_api_write::upload_file(
+        selected.provider,
+        Path::new(&selected.path),
+        Path::new(&candidate.dst),
+        Path::new(&candidate.src),
+        candidate.bytes,
+        access_token.as_str(),
+    )?;
+    if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    {
+        let cleanup = provider_api_write::delete_uploaded_object(
+            selected.provider,
+            &upload.object_id,
+            access_token.as_str(),
+        );
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => format!(
+                "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+            ),
+        });
+    }
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
+    let receipt_path = match cloud_transfer::write_provider_api_receipt(&receipt, &receipt_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            let cleanup = provider_api_write::delete_uploaded_object(
+                selected.provider,
+                &upload.object_id,
+                access_token.as_str(),
+            );
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => format!(
+                    "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+                ),
+            });
+        }
+    };
+    let mut projection_warnings = Vec::new();
+    let (mut adr_path, mut goal_path) = match app.path().app_data_dir() {
+        Ok(app_data_dir) => {
+            let updated_at_ms = cloud::system_now_ms();
+            let adr = cloud_adr::initial_adr_snapshot(&receipt, updated_at_ms);
+            let goal = cloud_adr::initial_goal_snapshot(&receipt, updated_at_ms);
+            let (adr_path, goal_path, warnings) = cloud_adr::write_projection_pair(
+                &app_data_dir.join("cloud-adr"),
+                &adr,
+                &app_data_dir.join("cloud-goals"),
+                &goal,
+            );
+            projection_warnings.extend(warnings);
+            (
+                adr_path.map(|path| path.to_string_lossy().into_owned()),
+                goal_path.map(|path| path.to_string_lossy().into_owned()),
+            )
+        }
+        Err(_) => {
+            projection_warnings.push("app-data-directory-unavailable".to_string());
+            (None, None)
+        }
+    };
+    let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
+    let home = resolve_home(app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
+    let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
+        .then(|| upload.object_id.clone());
+    match collect_cloud_attestation_for_receipt(
+        &receipt,
+        attestation_object_id,
+        &app_data_dir.join("cloud-provider-evidence"),
+        &app_data_dir.join("cloud-adr"),
+        &app_data_dir.join("cloud-goals"),
+        &connection_path,
+        &cloud_roots,
+        true,
+    ) {
+        Ok(attestation) => {
+            goal_state = attestation.goal_state;
+            adr_path = attestation.adr_path;
+            goal_path = attestation.goal_path;
+            projection_warnings.extend(attestation.projection_warnings);
+        }
+        Err(error) => {
+            let provider_blocker = stable_reconciliation_error(&error);
+            let projection_outcome =
+                cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                    &receipt,
+                    &app_data_dir.join("cloud-adr"),
+                    &app_data_dir.join("cloud-goals"),
+                    cloud::system_now_ms(),
+                    &provider_blocker,
+                );
+            if let Some(path) = projection_outcome.adr_path {
+                adr_path = Some(path.to_string_lossy().into_owned());
+            }
+            if let Some(path) = projection_outcome.goal_path {
+                goal_path = Some(path.to_string_lossy().into_owned());
+            }
+            projection_warnings.extend(projection_outcome.warnings);
+            projection_warnings.push(format!(
+                "provider-attestation-incomplete:{provider_blocker}"
+            ));
+        }
+    }
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
+    Ok(CloudCopyOutput {
+        action: "copy-only",
+        goal_state,
+        goal_status,
+        receipt,
+        receipt_path: receipt_path.to_string_lossy().into_owned(),
+        adr_path,
+        goal_path,
+        projection_warnings,
+        provider_object_id: Some(upload.object_id),
+    })
+}
+
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn copy_cloud_candidate(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    exact_confirmation_phrase: String,
+    approval_rationale: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CloudCopyOutput, String> {
+    let cloud_review = Arc::clone(&state.cloud_review);
+    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
+    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
+    tauri::async_runtime::spawn_blocking(move || {
+        struct NativeCopyReset {
+            cancel: Arc<AtomicBool>,
+            operation: Arc<Mutex<Option<String>>>,
+            fingerprint: String,
+        }
+
+        impl Drop for NativeCopyReset {
+            fn drop(&mut self) {
+                self.cancel.store(false, Ordering::SeqCst);
+                if let Ok(mut active) = self.operation.lock() {
+                    if active.as_deref() == Some(self.fingerprint.as_str()) {
+                        *active = None;
+                    }
+                }
+            }
+        }
+
+        {
+            let mut active = cloud_copy_operation
+                .lock()
+                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            if active.is_some() {
+                return Err("cloud-copy-already-active".to_string());
+            }
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            *active = Some(metadata_fingerprint.clone());
+        }
+        let _reset = NativeCopyReset {
+            cancel: Arc::clone(&cloud_copy_cancel),
+            operation: Arc::clone(&cloud_copy_operation),
+            fingerprint: metadata_fingerprint.clone(),
+        };
+        // Register before taking the shared review lock so a queued copy can be cancelled.
+        // The token remains set if cancellation races with lock acquisition.
+        let result = (|| {
+            let _guard = cloud_review
+                .lock()
+                .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+            create_cloud_candidate_receipt(
+                &root,
+                &cloud_root,
+                &metadata_fingerprint,
+                min_size_mib,
+                min_age_days,
+                limit,
+                &exact_confirmation_phrase,
+                &approval_rationale,
+                &app,
+                false,
+                Some(&cloud_copy_cancel),
+            )
+        })();
+        result
+    })
+    .await
+    .map_err(|_| "cloud-copy-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn copy_cloud_candidate_via_provider_api(
     root: String,
     cloud_root: String,
     metadata_fingerprint: String,
@@ -1547,7 +2237,7 @@ pub async fn copy_cloud_candidate(
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        create_cloud_candidate_receipt(
+        create_cloud_candidate_provider_api_receipt(
             &root,
             &cloud_root,
             &metadata_fingerprint,
@@ -1557,15 +2247,12 @@ pub async fn copy_cloud_candidate(
             &exact_confirmation_phrase,
             &approval_rationale,
             &app,
-            false,
         )
     })
     .await
-    .map_err(|_| "cloud-copy-task-failed".to_string())?
+    .map_err(|_| "cloud-provider-api-copy-task-failed".to_string())?
 }
 
-/// Rebuild the plan and adopt an already-existing destination only after full content-digest
-/// equality is proven. Both source and destination remain in place.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn adopt_existing_cloud_candidate(
@@ -1596,6 +2283,7 @@ pub async fn adopt_existing_cloud_candidate(
             &approval_rationale,
             &app,
             true,
+            None,
         )
     })
     .await
@@ -1605,12 +2293,255 @@ pub async fn adopt_existing_cloud_candidate(
 #[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudAttestationOutput {
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
+    pub goal_status: Option<String>,
     pub evidence: cloud_transfer::ProviderSyncEvidence,
     pub assessment: provider_sync::ProviderSyncTimelinessAssessment,
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
+    pub projection_warnings: Vec<String>,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+pub struct CloudReceiptReconciliationEntry {
+    pub receipt_id: Option<String>,
+    pub provider: Option<cloud::CloudProvider>,
+    pub goal_status: Option<String>,
+    pub goal_state: Option<cloud_transfer::CloudOffloadGoalState>,
+    pub provider_sync_state: Option<cloud_transfer::ProviderSyncState>,
+    pub eviction_permit: bool,
+    pub blockers: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+pub struct CloudReceiptReconciliationOutput {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub receipts_seen: u64,
+    pub attested_count: u64,
+    pub pending_count: u64,
+    pub eviction_ready_count: u64,
+    pub error_count: u64,
+    pub provider_evidence_written: u64,
+    pub unprocessed_count: u64,
+    pub incomplete_reconciliation: bool,
+    pub entries: Vec<CloudReceiptReconciliationEntry>,
+    pub cloud_write_executed: bool,
+    pub source_eviction_authorized: bool,
+}
+
+#[cfg(not(coverage))]
+const MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES: usize = 10_000;
+#[cfg(not(coverage))]
+const MAX_CLOUD_RECEIPTS_PER_RECONCILIATION: usize = 256;
+#[cfg(not(coverage))]
+const CLOUD_RECONCILIATION_MAX_DURATION: Duration = Duration::from_secs(30);
+
+#[cfg(not(coverage))]
+fn stable_reconciliation_error(error: &str) -> String {
+    let token = error.split(',').next().unwrap_or_default();
+    if !token.is_empty()
+        && token.len() <= 128
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        token.to_string()
+    } else {
+        "provider-attestation-failed".into()
+    }
+}
+
+#[cfg(not(coverage))]
+fn reconcile_cloud_receipts_inner(
+    receipt_dir: &Path,
+    evidence_dir: &Path,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    connection_path: &Path,
+    cloud_roots: &[cloud::CloudRoot],
+) -> Result<CloudReceiptReconciliationOutput, String> {
+    let reconciliation_started = Instant::now();
+    let receipt_metadata = match std::fs::symlink_metadata(receipt_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CloudReceiptReconciliationOutput {
+                schema_version: 1,
+                observed_at_ms: cloud::system_now_ms(),
+                receipts_seen: 0,
+                attested_count: 0,
+                pending_count: 0,
+                eviction_ready_count: 0,
+                error_count: 0,
+                provider_evidence_written: 0,
+                unprocessed_count: 0,
+                incomplete_reconciliation: false,
+                entries: Vec::new(),
+                cloud_write_executed: false,
+                source_eviction_authorized: false,
+            });
+        }
+        Err(_) => return Err("cloud-receipt-directory-unavailable".into()),
+    };
+    if receipt_metadata.file_type().is_symlink() || !receipt_metadata.is_dir() {
+        return Err("cloud-receipt-directory-unsafe".into());
+    }
+    let mut paths = std::fs::read_dir(receipt_dir)
+        .map_err(|_| "cloud-receipt-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.len() > MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES {
+        return Err("cloud-receipt-directory-entry-limit-exceeded".into());
+    }
+    let receipt_paths = paths
+        .into_iter()
+        .filter(|path| {
+            let Ok(metadata) = std::fs::symlink_metadata(path) else {
+                return false;
+            };
+            metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && path.extension().and_then(|value| value.to_str()) == Some("json")
+        })
+        .collect::<Vec<_>>();
+    let mut output = CloudReceiptReconciliationOutput {
+        schema_version: 1,
+        observed_at_ms: cloud::system_now_ms(),
+        receipts_seen: 0,
+        attested_count: 0,
+        pending_count: 0,
+        eviction_ready_count: 0,
+        error_count: 0,
+        provider_evidence_written: 0,
+        unprocessed_count: 0,
+        incomplete_reconciliation: false,
+        entries: Vec::new(),
+        cloud_write_executed: false,
+        source_eviction_authorized: false,
+    };
+    for (index, path) in receipt_paths.iter().enumerate() {
+        if index >= MAX_CLOUD_RECEIPTS_PER_RECONCILIATION
+            || reconciliation_started.elapsed() >= CLOUD_RECONCILIATION_MAX_DURATION
+        {
+            output.unprocessed_count = receipt_paths.len().saturating_sub(index) as u64;
+            output.incomplete_reconciliation = output.unprocessed_count > 0;
+            break;
+        }
+        output.receipts_seen = output.receipts_seen.saturating_add(1);
+        let receipt = match cloud_transfer::read_immutable_receipt(path) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                output.error_count = output.error_count.saturating_add(1);
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: None,
+                    provider: None,
+                    goal_status: None,
+                    goal_state: None,
+                    provider_sync_state: None,
+                    eviction_permit: false,
+                    blockers: Vec::new(),
+                    error: Some(stable_reconciliation_error(&error)),
+                });
+                continue;
+            }
+        };
+        match collect_cloud_attestation_for_receipt(
+            &receipt,
+            None,
+            evidence_dir,
+            adr_dir,
+            goal_dir,
+            connection_path,
+            cloud_roots,
+            false,
+        ) {
+            Ok(attestation) => {
+                output.attested_count = output.attested_count.saturating_add(1);
+                output.provider_evidence_written =
+                    output.provider_evidence_written.saturating_add(1);
+                if attestation.goal_state
+                    == cloud_transfer::CloudOffloadGoalState::PendingProviderSync
+                {
+                    output.pending_count = output.pending_count.saturating_add(1);
+                }
+                if attestation.permit.is_some() {
+                    output.eviction_ready_count = output.eviction_ready_count.saturating_add(1);
+                }
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: Some(receipt.receipt_id.clone()),
+                    provider: Some(receipt.provider),
+                    goal_status: cloud_adr::read_goal_status(goal_dir, &receipt.receipt_id)
+                        .ok()
+                        .flatten(),
+                    goal_state: Some(attestation.goal_state),
+                    provider_sync_state: Some(attestation.evidence.sync_state),
+                    eviction_permit: attestation.permit.is_some(),
+                    blockers: attestation.blockers,
+                    error: None,
+                });
+            }
+            Err(error) => {
+                output.error_count = output.error_count.saturating_add(1);
+                let attestation_error = stable_reconciliation_error(&error);
+                let projection_warnings =
+                    cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                        &receipt,
+                        adr_dir,
+                        goal_dir,
+                        output.observed_at_ms,
+                        &attestation_error,
+                    )
+                    .warnings;
+                let mut blockers = vec!["provider-attestation-incomplete".into()];
+                if let Some(blocker) =
+                    cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
+                {
+                    blockers.push(blocker.into());
+                }
+                if !projection_warnings.is_empty() {
+                    blockers.push("dynamic-projection-update-incomplete".into());
+                }
+                let projection =
+                    cloud_adr::read_projection_state(&receipt.receipt_id, adr_dir, goal_dir);
+                let (goal_state, provider_sync_state) = match projection {
+                    Ok(Some(state)) => {
+                        blockers.push("projection-state-not-revalidated".into());
+                        (Some(state.goal_state), Some(state.provider_sync_state))
+                    }
+                    Ok(None) => (None, None),
+                    Err(_) => {
+                        blockers.push("dynamic-projection-state-unavailable".into());
+                        (None, None)
+                    }
+                };
+                if goal_state == Some(cloud_transfer::CloudOffloadGoalState::PendingProviderSync) {
+                    output.pending_count = output.pending_count.saturating_add(1);
+                }
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: Some(receipt.receipt_id.clone()),
+                    provider: Some(receipt.provider),
+                    goal_status: cloud_adr::read_goal_status(goal_dir, &receipt.receipt_id)
+                        .ok()
+                        .flatten(),
+                    goal_state,
+                    provider_sync_state,
+                    eviction_permit: false,
+                    blockers,
+                    error: Some(attestation_error),
+                });
+            }
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(not(coverage))]
@@ -1618,8 +2549,11 @@ fn collect_cloud_attestation_for_receipt(
     receipt: &cloud_transfer::CloudCopyReceipt,
     object_id: Option<String>,
     evidence_dir: &Path,
+    adr_dir: &Path,
+    goal_dir: &Path,
     connection_path: &Path,
     cloud_roots: &[cloud::CloudRoot],
+    force_provider_api: bool,
 ) -> Result<CloudAttestationOutput, String> {
     let confirmed_at_ms = cloud::system_now_ms();
     let evidence = match receipt.provider {
@@ -1643,10 +2577,27 @@ fn collect_cloud_attestation_for_receipt(
                 .max_by_key(|root| Path::new(&root.path).components().count())
                 .cloned()
                 .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
-            let object_id = object_id.filter(|value| !value.trim().is_empty());
+            let object_id = object_id
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    if receipt.provider == cloud::CloudProvider::GoogleDrive {
+                        provider_evidence::latest_api_object_id(
+                            evidence_dir,
+                            &receipt.receipt_id,
+                            receipt.provider,
+                        )
+                    } else {
+                        None
+                    }
+                });
             let fallback_requested =
                 receipt.provider == cloud::CloudProvider::Onedrive || object_id.is_some();
-            match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
+            let native_evidence = if force_provider_api {
+                Err("provider-api-forced".to_string())
+            } else {
+                provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms)
+            };
+            match native_evidence {
                 Ok(evidence) if evidence.sync_complete || !fallback_requested => evidence,
                 Err(error) if !fallback_requested => return Err(error),
                 Ok(_) | Err(_) => {
@@ -1695,23 +2646,67 @@ fn collect_cloud_attestation_for_receipt(
     let assessment = provider_sync::assess_provider_sync_timeliness(receipt, &evidence)?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
-    let (permit, blockers) = match cloud_transfer::approve_local_eviction(receipt, &evidence_record)
-    {
-        Ok(permit) => (Some(permit), Vec::new()),
-        Err(blockers) => (None, blockers),
-    };
+    let source_blocker = cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    let (mut permit, mut blockers) =
+        match cloud_transfer::approve_local_eviction(receipt, &evidence_record) {
+            Ok(permit) => (Some(permit), Vec::new()),
+            Err(blockers) => (None, blockers),
+        };
+    if let Some(blocker) = source_blocker {
+        permit = None;
+        if !blockers.iter().any(|existing| existing == blocker) {
+            blockers.push(blocker.into());
+        }
+    }
+    let goal_state =
+        cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
+    let mut adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
+    let mut goal = cloud_adr::goal_snapshot_from_evidence(
+        receipt,
+        &evidence_record,
+        goal_state,
+        confirmed_at_ms,
+    );
+    if let Some(blocker) = source_blocker {
+        goal.status = "blocked".into();
+        goal.completion_gates.insert("source-present".into(), false);
+        adr.decision = format!("{}-source-state-unverified", adr.decision);
+        adr.consequences
+            .push(format!("source-state-blocked:{blocker}"));
+    }
+    let provider_blocker = blockers
+        .iter()
+        .find(|existing| Some(existing.as_str()) != source_blocker)
+        .map(String::as_str);
+    let projection = cloud_adr::write_projection_pair_with_state_blockers_outcome(
+        adr_dir,
+        &adr,
+        goal_dir,
+        &goal,
+        source_blocker,
+        provider_blocker,
+    );
     Ok(CloudAttestationOutput {
+        goal_state,
+        goal_status: cloud_adr::read_goal_status(goal_dir, &receipt.receipt_id)
+            .ok()
+            .flatten(),
         evidence,
         assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
+        adr_path: projection
+            .adr_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        goal_path: projection
+            .goal_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        projection_warnings: projection.warnings,
         permit,
         blockers,
     })
 }
 
-/// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
-/// credential-store token, used once in memory, and never accepted from or returned to the UI.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn attest_cloud_copy(
@@ -1731,38 +2726,87 @@ pub async fn attest_cloud_copy(
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
     let connection_path = oauth_connections_path(&app)?;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     tauri::async_runtime::spawn_blocking(move || {
         let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
         if receipt.receipt_id != receipt_id {
             return Err("receipt-id-mismatch".into());
         }
-        collect_cloud_attestation_for_receipt(
+        let result = collect_cloud_attestation_for_receipt(
             &receipt,
             object_id,
             &evidence_dir,
+            &adr_dir,
+            &goal_dir,
             &connection_path,
             &cloud_roots,
-        )
+            false,
+        );
+        if let Err(error) = &result {
+            let provider_blocker = stable_reconciliation_error(error);
+            let _ = cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                &receipt,
+                &adr_dir,
+                &goal_dir,
+                cloud::system_now_ms(),
+                &provider_blocker,
+            );
+        }
+        result
     })
     .await
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn reconcile_cloud_receipts(
+    app: AppHandle,
+) -> Result<CloudReceiptReconciliationOutput, String> {
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
+    let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
+    let connection_path = oauth_connections_path(&app)?;
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
+    tauri::async_runtime::spawn_blocking(move || {
+        reconcile_cloud_receipts_inner(
+            &receipt_dir,
+            &evidence_dir,
+            &adr_dir,
+            &goal_dir,
+            &connection_path,
+            &cloud_roots,
+        )
+    })
+    .await
+    .map_err(|_| "cloud-reconciliation-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudSourceEvictionOutput {
     pub action: &'static str,
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub attestation: CloudAttestationOutput,
     pub approval: cloud_eviction::CloudSourceEvictionApproval,
     pub approval_path: String,
     pub eviction: cloud_eviction::CloudEvictionResult,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
+    pub projection_warnings: Vec<String>,
 }
 
-/// Recollect provider evidence and active-use evidence, bind an attributed human approval to the
-/// exact immutable receipt, then move only that verified source to the operating-system Trash.
-/// The cloud destination is never deleted and the Trash is never emptied by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn trash_verified_cloud_source(
@@ -1786,24 +2830,43 @@ pub async fn trash_verified_cloud_source(
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
     let approval_dir = app_data_dir.join("cloud-source-eviction-approvals");
     let eviction_dir = app_data_dir.join("cloud-source-evictions");
     let journal_path = journal_file_path(&app)?;
     let connection_path = oauth_connections_path(&app)?;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
         if receipt.receipt_id != receipt_id {
             return Err("receipt-id-mismatch".into());
         }
-        let attestation = collect_cloud_attestation_for_receipt(
+        let attestation = match collect_cloud_attestation_for_receipt(
             &receipt,
             object_id,
             &evidence_dir,
+            &adr_dir,
+            &goal_dir,
             &connection_path,
             &cloud_roots,
-        )?;
+            false,
+        ) {
+            Ok(attestation) => attestation,
+            Err(error) => {
+                let provider_blocker = stable_reconciliation_error(&error);
+                let _ = cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                    &receipt,
+                    &adr_dir,
+                    &goal_dir,
+                    cloud::system_now_ms(),
+                    &provider_blocker,
+                );
+                return Err(error);
+            }
+        };
         let permit = attestation.permit.as_ref().ok_or_else(|| {
             if attestation.blockers.is_empty() {
                 "source-eviction-permit-unavailable".to_string()
@@ -1835,12 +2898,30 @@ pub async fn trash_verified_cloud_source(
             &journal_path,
             cloud::system_now_ms(),
         )?;
+        let updated_at_ms = cloud::system_now_ms();
+        let adr = cloud_adr::snapshot_from_evidence(
+            &attestation.evidence_record,
+            cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+            updated_at_ms,
+        );
+        let goal = cloud_adr::goal_snapshot_from_evidence(
+            &receipt,
+            &attestation.evidence_record,
+            cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+            updated_at_ms,
+        );
+        let (adr_path, goal_path, projection_warnings) =
+            cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
         Ok(CloudSourceEvictionOutput {
             action: "attest-approve-and-trash-verified-cloud-source",
+            goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             attestation,
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
             eviction,
+            adr_path: adr_path.map(|path| path.to_string_lossy().into_owned()),
+            goal_path: goal_path.map(|path| path.to_string_lossy().into_owned()),
+            projection_warnings,
         })
     })
     .await
@@ -1856,12 +2937,9 @@ pub fn plan_organize(
     state: State<AppState>,
 ) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
-    let rules = crate::userrules::parse_rules(&user_rules_json(&app))?; // malformed → Err surfaced
-    let files = dupes::collect_files(Path::new(&root));
-    let home = resolve_home(&app);
-    // classify_prompt는 name/parent만 쓰므로 picker는 size 불필요(0으로 구성).
-    // ponytail: LLM picker는 파일마다 추론 1회 — 대규모 스캔 프리뷰에선 느릴 수 있음.
-    //           지금은 모델 있으면 전부 LLM 분류; 필요 시 후속에서 미분류 항목만으로 제한.
+    let rules = crate::userrules::parse_rules(&user_rules_json(&app))?;
+    let files = dupes::collect_files_bounded(Path::new(&root), 10_000, Duration::from_secs(10))?;
+    let home = resolve_home(&app)?;
     #[cfg(feature = "llm-engine")]
     {
         use tauri::Manager;
@@ -1874,39 +2952,56 @@ pub fn plan_organize(
                 }
             }
             if let Some(engine) = guard.as_ref() {
+                let lineage_probe_count = std::cell::Cell::new(0usize);
                 let pick = |p: &Path, cands: &[&str]| {
-                    let meta = file_meta_at(p, 0, 0);
+                    let mut meta = file_meta_at(p, 0, 0);
+                    if lineage_probe_count.get() < organize::MAX_LINEAGE_PROBES {
+                        lineage_probe_count.set(lineage_probe_count.get() + 1);
+                        if let Some(lineage) = organize::lineage_metadata_for_path(p) {
+                            meta.production_time_ms = lineage.production_time_ms;
+                            meta.production_time_source = lineage.production_time_source;
+                            meta.production_time_confidence = lineage.production_time_confidence;
+                        }
+                    }
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with(
+                return Ok(organize::plan_moves_with_metadata(
                     &files,
                     &onto,
                     &home,
                     now_ms(),
                     &rules,
                     &pick,
+                    &organize::lineage_metadata_for_path,
                 ));
             }
         }
     }
-    Ok(organize::plan_moves_with(
+    Ok(organize::plan_moves_with_metadata(
         &files,
         &onto,
         &home,
         now_ms(),
         &rules,
         &|_, _| None,
+        &organize::lineage_metadata_for_path,
     ))
 }
 
-/// 활성 사용자 규칙 조회(UI 표시용). 손상 파일은 Err.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn export_organization_lineage(
+    plans: Vec<organize::MovePlan>,
+) -> Result<organization_lineage::OrganizationLineageBatch, String> {
+    organization_lineage::export_move_plans(&plans, now_ms())
+}
+
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String> {
     crate::userrules::parse_rules(&user_rules_json(&app))
 }
 
-/// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn execute_moves(
@@ -1917,7 +3012,6 @@ pub fn execute_moves(
     Ok(execute_moves_inner(&plans, &jp, now_ms()))
 }
 
-/// 최근 저널에서 op=="move"·outcome=="ok" 항목을 찾아 역이동(dst→src)한다.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>, String> {
@@ -1931,14 +3025,12 @@ pub struct ModelStatus {
     pub name: String,
 }
 
-/// 모델 파일 경로: <app_data>/models/<DEFAULT.name>.gguf
 pub fn model_file_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir
         .join("models")
         .join(format!("{}.gguf", crate::llm::DEFAULT.name))
 }
 
-/// 모델 존재 여부 + 이름. 없으면 앱은 규칙 기반으로 동작(배지 미판정).
 pub fn model_status_for(model_path: &Path) -> ModelStatus {
     ModelStatus {
         present: model_path.exists(),
@@ -1946,7 +3038,6 @@ pub fn model_status_for(model_path: &Path) -> ModelStatus {
     }
 }
 
-/// 경로 + (이미 읽은) size·age로 FileMeta 구성. name/parent는 경로에서, 없으면 빈 문자열(패닉 없음).
 pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::FileMeta {
     let name = path
         .file_name()
@@ -1963,10 +3054,12 @@ pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::File
         size,
         mtime_days,
         parent,
+        production_time_ms: None,
+        production_time_source: None,
+        production_time_confidence: None,
     }
 }
 
-/// 항목마다 캐시(path|size|mtime_ms) 확인 후 미스면 추론. 판정만 캐시(이유는 미스 시에만).
 pub fn verdicts_with(
     engine: &dyn crate::llm::InferenceEngine,
     cache: &mut crate::llm::VerdictCache,
@@ -1990,10 +3083,6 @@ pub fn verdicts_with(
     out
 }
 
-// --- M5: 모델 상태/다운로드, 캐시된 파일 판정, 미분류 뭉치 요약 IPC ---
-// 순수 로직(model_file_path/model_status_for/file_meta_at/verdicts_with)은 위(게이트 측정 대상)에 있음.
-// 아래는 io/엔진 수명주기를 다루는 얇은 래퍼 — coverage에서 제외.
-
 #[cfg(not(coverage))]
 fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
     paths
@@ -2007,7 +3096,7 @@ fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
+            let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000;
             Some((file_meta_at(path, md.len(), age_days), mtime_ms))
         })
         .collect()
@@ -2033,7 +3122,6 @@ pub fn download_model(app: AppHandle) -> Result<(), String> {
     crate::llm::download_to(&crate::llm::DEFAULT, &path)
 }
 
-/// 캐시된 파일 판정 — 엔진 있으면 실제 추론(세션 캐시 활용), 없으면(feature off/모델 없음/엔진 초기화 실패) 전부 Unrated로 완만히 저하.
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2072,7 +3160,6 @@ pub fn file_verdicts(
         .collect())
 }
 
-/// 미분류 뭉치 한 줄 요약 — 엔진 없으면 None(스펙 §6 graceful degradation).
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2106,8 +3193,6 @@ pub fn summarize_unknown_bucket(
     Ok(None)
 }
 
-/// 미분류 확장자 자문 추론. samples = InventoryReport.unknown_samples(경로). online_mode일 때만 웹 조회.
-/// LLM은 feature+모델 있을 때만; 웹은 online_mode일 때만(feature 무관). 둘 다 없으면 source="none".
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2117,8 +3202,6 @@ pub fn reason_unknown_extensions(
     state: State<AppState>,
 ) -> Result<Vec<crate::reasoning::ExtInsight>, String> {
     let exts = crate::reasoning::distinct_extensions(&samples);
-
-    // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
     let settings = get_settings(app.clone())?;
     let ddg = crate::web::DdgLookup;
     let web_fn = |ext: &str| -> Option<String> {
@@ -2130,13 +3213,11 @@ pub fn reason_unknown_extensions(
         None
     };
 
-    // 오프라인 LLM(feature+모델+엔진 있으면 실제; 그 블록에서 반환). 없으면 아래 fallback로 낙하.
     #[cfg(feature = "llm-engine")]
     {
         use tauri::Manager;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if model_status_for(&model_file_path(&dir)).present {
-            // 온톨로지 로드는 LLM 경로에서만 필요 — 여기로 이동해 기본/웹전용 빌드가 malformed ontology.ttl로 실패하지 않게 함
             let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
             let candidates: Vec<String> = onto
                 .classes
@@ -2144,7 +3225,6 @@ pub fn reason_unknown_extensions(
                 .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string())
                 .collect();
             let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-
             let mut guard = state.engine.lock().unwrap();
             if guard.is_none() {
                 if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
@@ -2153,13 +3233,11 @@ pub fn reason_unknown_extensions(
             }
             if let Some(engine) = guard.as_ref() {
                 let reason = |ext: &str| crate::llm::reason_extension(engine, ext, &cand_refs);
-                // ponytail: engine lock held across the opt-in web lookups in build_insights (≤5s×N). Fine for the few distinct unknown exts; if a concurrent verdict call ever contends, split into a locked LLM pass + an unlocked web pass.
                 return Ok(crate::reasoning::build_insights(&exts, &reason, web));
             }
         }
     }
 
-    // fallback: LLM 없음(feature off/모델 없음/init 실패) — reason은 항상 None, 웹은 위 settings대로 적용
     let reason = |_: &str| -> Option<crate::llm::ExtReasoning> { None };
     Ok(crate::reasoning::build_insights(&exts, &reason, web))
 }
@@ -2171,7 +3249,6 @@ mod tests {
     use std::fs;
     use std::sync::atomic::AtomicBool;
 
-    // --- M5 LLM 커맨드 순수 헬퍼 ---
     use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
     struct CountingFake {
@@ -2190,6 +3267,75 @@ mod tests {
         let p = model_file_path(std::path::Path::new("/data"));
         assert!(p.ends_with(format!("{}.gguf", crate::llm::DEFAULT.name)));
         assert!(p.to_string_lossy().contains("models"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_error_output_is_stable_and_path_free() {
+        assert_eq!(
+            stable_reconciliation_error("provider-oauth-refresh-failed,secret/path"),
+            "provider-oauth-refresh-failed"
+        );
+        assert_eq!(
+            stable_reconciliation_error("No such file or directory (os error 2)"),
+            "provider-attestation-failed"
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_without_receipts_is_read_only() {
+        let temporary = tempfile::tempdir().unwrap();
+        let output = reconcile_cloud_receipts_inner(
+            &temporary.path().join("missing-receipts"),
+            &temporary.path().join("evidence"),
+            &temporary.path().join("adr"),
+            &temporary.path().join("goals"),
+            &temporary.path().join("oauth.json"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(output.receipts_seen, 0);
+        assert_eq!(output.attested_count, 0);
+        assert!(!output.cloud_write_executed);
+        assert!(!output.source_eviction_authorized);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_reports_receipts_left_after_entry_budget() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipts = temporary.path().join("receipts");
+        std::fs::create_dir(&receipts).unwrap();
+        for index in 0..=MAX_CLOUD_RECEIPTS_PER_RECONCILIATION {
+            std::fs::write(receipts.join(format!("{index:04}.json")), b"{}").unwrap();
+        }
+        let output = reconcile_cloud_receipts_inner(
+            &receipts,
+            &temporary.path().join("evidence"),
+            &temporary.path().join("adr"),
+            &temporary.path().join("goals"),
+            &temporary.path().join("oauth.json"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(output.receipts_seen, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(output.unprocessed_count, 1);
+        assert!(output.incomplete_reconciliation);
+        assert_eq!(output.error_count, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn missing_source_blocks_eviction_permit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("missing.bin");
+        assert_eq!(
+            cloud_transfer::source_eviction_blocker(&missing),
+            Some("source-not-present")
+        );
+        std::fs::write(&missing, b"source").unwrap();
+        assert_eq!(cloud_transfer::source_eviction_blocker(&missing), None);
     }
 
     #[test]
@@ -2220,7 +3366,6 @@ mod tests {
         assert_eq!(m.parent, "downloads");
         assert_eq!(m.size, 42);
         assert_eq!(m.mtime_days, 7);
-        // 파일명/부모 없는 경로 → 빈 문자열(패닉 없음)
         let root = file_meta_at(std::path::Path::new("/"), 0, 0);
         assert_eq!(root.name, "");
         assert_eq!(root.parent, "");
@@ -2234,15 +3379,11 @@ mod tests {
         };
         let mut cache = VerdictCache::new();
         let meta = file_meta_at(std::path::Path::new("/x/a.bin"), 100, 1);
-        let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)]; // 같은 path|size|mtime → 두 번째는 캐시 히트
+        let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)];
         let out = verdicts_with(&engine, &mut cache, &items);
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|fv| fv.verdict == Verdict::Safe));
-        assert_eq!(
-            engine.calls.get(),
-            1,
-            "두 번째 항목은 캐시 히트라 추론 1회만"
-        );
+        assert_eq!(engine.calls.get(), 1);
     }
 
     #[test]
@@ -2257,10 +3398,9 @@ mod tests {
         let out = verdicts_with(&engine, &mut cache, &[a, b]);
         assert_eq!(out.len(), 2);
         assert_eq!(engine.calls.get(), 2);
-        let _ = out; // FileVerdict used
+        let _ = out;
     }
 
-    // 간격 1로 스캔 — 진행 콜백(클로저)도 매 엔트리마다 실행돼 커버리지에 0으로 남지 않는다
     fn scan(root: &Path) -> ScanResult {
         scan_dir_with_interval(root, &AtomicBool::new(false), 1, |_| {})
     }
@@ -2289,10 +3429,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         fs::create_dir(root.join("sub")).unwrap();
         fs::write(root.join("sub").join("inner.bin"), vec![0u8; 500]).unwrap();
         fs::write(root.join("small.txt"), vec![0u8; 10]).unwrap();
-
         let res = scan(root);
         let view = node_view(&res, root).unwrap();
-
         assert_eq!(view.size, 510);
         assert_eq!(view.entries.len(), 2);
         assert_eq!(view.entries[0].name, "sub");
@@ -2313,14 +3451,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_rejects_parent_dir_components() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        // lexical starts_with는 통과하지만 OS 해석은 루트 밖(실존 디렉토리)인 경로 — 가드 없으면 Ok
         let sneaky = tmp.path().join("..");
         assert!(node_view(&res, &sneaky).is_err());
     }
 
     #[test]
     fn node_view_rejects_sibling_path_outside_root() {
-        // '..' 없이 루트 밖인 경로 — 두 번째 가드(starts_with)를 직접 태운다
         let tmp = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
@@ -2395,8 +3531,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let ok_dir = tmp.path().join("disksage-clean-fixture-dir");
         fs::create_dir(&ok_dir).unwrap();
         fs::write(ok_dir.join("inner.bin"), vec![0u8; 32]).unwrap();
-        // 단일 파일 대상 — bytes 분기의 metadata().map(|m| m.len()) 성공 경로를 태운다
-        // (missing은 metadata 실패만 태우고 성공은 태우지 않는다)
         let ok_file = tmp.path().join("disksage-clean-fixture-file.bin");
         fs::write(&ok_file, vec![0u8; 16]).unwrap();
         let missing = tmp.path().join("ghost");
@@ -2422,17 +3556,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .iter()
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-dir"))
             .unwrap();
-        assert_eq!(ok_entry.bytes, 32, "디렉토리는 재귀 크기로 저널링");
+        assert_eq!(ok_entry.bytes, 32);
         let ok_file_entry = recent
             .iter()
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-file"))
             .unwrap();
-        assert_eq!(
-            ok_file_entry.bytes, 16,
-            "단일 파일은 metadata 크기로 저널링"
-        );
+        assert_eq!(ok_file_entry.bytes, 16);
 
-        // 테스트 픽스처 휴지통 정리 (win/linux)
         #[cfg(any(windows, target_os = "linux"))]
         {
             let items: Vec<_> = trash::os_limited::list()
@@ -2448,6 +3578,44 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         }
     }
 
+    #[cfg(all(not(coverage), target_os = "macos"))]
+    #[test]
+    fn automatic_cache_cleanup_uses_only_observed_macos_cache_ids() {
+        assert_eq!(
+            crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
+            [
+                "npm-cache",
+                "pnpm-cache",
+                "adobe-cache",
+                "edge-cache",
+                "uv-cache",
+                "trivy-cache",
+            ]
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = crate::rules::BaseDirs {
+            temp: tmp.path().join("tmp"),
+            local_data: tmp.path().join("local"),
+            home: tmp.path().join("home"),
+        };
+        for id in crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS {
+            let path = match id {
+                "npm-cache" => bases.home.join(".npm"),
+                "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
+                "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
+                "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                "uv-cache" => bases.local_data.join("uv"),
+                "trivy-cache" => bases.home.join("Library/Caches/trivy"),
+                _ => unreachable!(),
+            };
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
+        }
+        let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
+        assert_eq!(results.len(), 6);
+        assert!(results.iter().all(|result| result.ok));
+    }
+
     #[test]
     fn dev_artifact_cleanup_rejects_a_stale_metadata_fingerprint() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2456,15 +3624,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         fs::create_dir_all(&artifact).unwrap();
         fs::write(project.join("package.json"), b"{}").unwrap();
         fs::write(artifact.join("payload.bin"), b"old").unwrap();
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
         let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
         assert_eq!(observed.len(), 1);
-
-        // The path still exists, but its metadata manifest no longer matches the selection.
         fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
         let results = clean_dev_artifacts_inner(
             &observed,
@@ -2473,7 +3638,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             &tmp.path().join("journal.jsonl"),
             now,
         );
-
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("다시 스캔"));
@@ -2487,17 +3651,18 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let src_ok = tmp.path().join("a.bin");
         std::fs::write(&src_ok, vec![1u8; 16]).unwrap();
         let dst_ok = tmp.path().join("sub").join("a.bin");
-        // 하나는 성공(같은 볼륨 rename), 하나는 실패(존재하지 않는 src)
         let plans = vec![
             organize::MovePlan {
                 src: src_ok.to_string_lossy().into(),
                 dst: dst_ok.to_string_lossy().into(),
                 class_id: "x".into(),
+                ..Default::default()
             },
             organize::MovePlan {
                 src: tmp.path().join("ghost").to_string_lossy().into(),
                 dst: tmp.path().join("g2").to_string_lossy().into(),
                 class_id: "x".into(),
+                ..Default::default()
             },
         ];
         let results = execute_moves_inner(&plans, &jp, 1);
@@ -2515,20 +3680,19 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let a = tmp.path().join("a.bin");
         std::fs::write(&a, vec![2u8; 8]).unwrap();
         let a_moved = tmp.path().join("dest").join("a.bin");
-        // 먼저 이동 실행(저널에 move/ok 기록)
         let plans = vec![organize::MovePlan {
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 5);
         assert!(!a.exists());
         assert!(a_moved.exists());
-        // 되돌리기 → 원위치 복원
         let undone = undo_last_moves_inner(10, &jp, 6);
         assert_eq!(undone.len(), 1);
         assert!(undone[0].ok);
-        assert!(a.exists(), "되돌리기로 원위치 복원");
+        assert!(a.exists());
         assert!(!a_moved.exists());
     }
 
@@ -2536,7 +3700,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn undo_last_moves_inner_respects_limit_after_filtering() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
-        // 두 번 이동 → 저널에 move/ok 2건(+pending 2건). limit=1이면 최신 1건만 되돌림.
         for name in ["x.bin", "y.bin"] {
             let s = tmp.path().join(name);
             std::fs::write(&s, b"z").unwrap();
@@ -2546,17 +3709,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                     src: s.to_string_lossy().into(),
                     dst: d.to_string_lossy().into(),
                     class_id: "x".into(),
+                    ..Default::default()
                 }],
                 &jp,
                 1,
             );
         }
         let undone = undo_last_moves_inner(1, &jp, 9);
-        assert_eq!(
-            undone.len(),
-            1,
-            "filter-before-take: pending 라인이 실제 성공을 밀어내지 않음"
-        );
+        assert_eq!(undone.len(), 1);
     }
 
     #[test]
@@ -2570,17 +3730,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 1);
         assert!(a_moved.exists());
-        // 원래 자리에 새 파일이 다시 생겨 되돌리기 목적지가 막힘 → move_file이 실패해야 함
         std::fs::write(&a, b"blocker").unwrap();
         let undone = undo_last_moves_inner(1, &jp, 2);
         assert_eq!(undone.len(), 1);
-        assert!(
-            !undone[0].ok,
-            "목적지 재점유 시 되돌리기 실패를 보고해야 함"
-        );
-        assert!(a_moved.exists(), "실패 시 원본은 이동된 위치에 그대로 남음");
+        assert!(!undone[0].ok);
+        assert!(a_moved.exists());
     }
 }

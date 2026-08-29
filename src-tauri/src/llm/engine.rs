@@ -105,7 +105,7 @@ mod tests {
     fn real_engine_returns_a_rated_verdict() {
         let path = std::env::var("DISKSAGE_MODEL").expect("set DISKSAGE_MODEL to a .gguf path");
         let engine = LlamaEngine::new(std::path::Path::new(&path)).unwrap();
-        let meta = FileMeta { path: "/tmp/x.log".into(), name: "x.log".into(), size: 10, mtime_days: 1, parent: "tmp".into() };
+        let meta = FileMeta { path: "/tmp/x.log".into(), name: "x.log".into(), size: 10, mtime_days: 1, parent: "tmp".into(), production_time_ms: None, production_time_source: None, production_time_confidence: None };
         let fv = verdict_for(&engine, &meta);
         assert_ne!(fv.verdict, Verdict::Unrated); // 실제 모델이면 safe/caution/keep 중 하나
     }

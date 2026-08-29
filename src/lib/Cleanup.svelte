@@ -5,6 +5,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
+  import OrphanCleanup from "./OrphanCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -14,6 +15,15 @@
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
+  let cacheRetryMessage = $state("");
+  let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
+  let podmanBusy = $state(false);
+  let podmanError = $state("");
+  let podmanPruneBusy = $state(false);
+  let podmanPruneError = $state("");
+  let podmanPrunePhrase = $state("");
+  let podmanPruneRationale = $state("");
+  let podmanPruneExecution: api.PodmanDanglingImagePruneExecution | null = $state(null);
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -34,6 +44,100 @@
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
       loadError = String(e);
+    }
+  }
+
+  async function inspectPodman() {
+    if (podmanBusy) return;
+    podmanBusy = true;
+    podmanError = "";
+    try {
+      podmanPlan = await api.inspectPodmanReclaim();
+    } catch (e) {
+      podmanError = String(e);
+      podmanPlan = null;
+    } finally {
+      podmanBusy = false;
+    }
+  }
+
+  function podmanPruneReady(): boolean {
+    const phrase = podmanPlan?.dangling_prune_approval_phrase;
+    return phrase !== null
+      && phrase !== undefined
+      && podmanPrunePhrase.trim() === phrase
+      && podmanPruneRationale.trim().length > 0
+      && !podmanPruneBusy;
+  }
+
+  async function prunePodmanDanglingImages() {
+    if (!podmanPlan || !podmanPruneReady()) return;
+    const okay = await confirm(
+      "참조 컨테이너가 없고 tag가 없는 Podman 이미지만 삭제합니다. volume·컨테이너·tagged image·VM은 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 읽어 지문을 검증합니다.",
+      { title: "DiskSage Podman 정리", kind: "warning" },
+    );
+    if (!okay) return;
+    podmanPruneBusy = true;
+    podmanPruneError = "";
+    try {
+      podmanPruneExecution = await api.executePodmanDanglingImagePrune(
+        podmanPrunePhrase.trim(),
+        podmanPruneRationale.trim(),
+      );
+      podmanPrunePhrase = "";
+      podmanPruneRationale = "";
+      podmanPlan = await api.inspectPodmanReclaim();
+    } catch (e) {
+      podmanPruneError = String(e);
+    } finally {
+      podmanPruneBusy = false;
+    }
+  }
+
+  async function cleanCache(candidate: api.CacheCandidate) {
+    if (busy || !candidate.exists || candidate.bytes === 0) return;
+    busy = true;
+    loadError = "";
+    cacheRetryMessage = "";
+    try {
+      const targets = await api.listCacheTargets(candidate.path);
+      if (targets.length === 0) {
+        loadError = `${candidate.label}에 정리할 직계 항목이 없습니다.`;
+        return;
+      }
+      const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
+      const okay = await confirm(
+        `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
+          "캐시 루트는 보존하며, 각 항목은 객체 지문·크기·수정시각·active-use를 다시 검증합니다. 사용 중이거나 증명이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
+        { title: "DiskSage", kind: "warning" },
+      );
+      if (!okay) return;
+      results = await api.cleanCacheContents(candidate.path, targets);
+      await load();
+    } catch (e) {
+      const error = String(e);
+      if (error.includes("cache-cleanup-targets-stale")) {
+        await load();
+        cacheRetryMessage = "캐시 내용이 바뀌어 최신 목록을 불러왔습니다. 다시 휴지통으로를 눌러 검토하세요.";
+      } else {
+        loadError = error;
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function cleanRegenerableCaches() {
+    if (busy) return;
+    busy = true;
+    loadError = "";
+    try {
+      results = await api.cleanRegenerableCaches();
+      await load();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -92,16 +196,25 @@
 
   <h3>캐시</h3>
   <p class="notice" role="status">
-    캐시 항목은 현재 읽기 전용입니다. 검증된 파일시스템 객체와 휴지통 이동을 하나의 원자적 권한 경계로 묶기 전까지 DiskSage는 캐시 삭제를 실행하지 않습니다.
+    알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
   </p>
+  <button onclick={cleanRegenerableCaches} disabled={busy}>
+    {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
+  </button>
+  <p class="notice" role="status">
+    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
+  </p>
+  {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
     {#each caches as c (c.id)}
       <li>
-        <label class="disabled">
-          <input type="checkbox" disabled />
-          {c.label}
+        <div>
+          <span class:disabled={!c.exists}>{c.label}</span>
           <span class="size">{c.exists ? fmtBytes(c.bytes) : "없음"}</span>
-        </label>
+          {#if c.exists}
+            <button onclick={() => cleanCache(c)} disabled={busy || c.bytes === 0}>휴지통으로</button>
+          {/if}
+        </div>
         <span class="path" title={c.path}>{c.path}</span>
       </li>
     {/each}
@@ -158,7 +271,66 @@
 
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
+
+  <h3>Podman VM 저장소</h3>
+  <p class="notice">
+    게스트·이미지·volume 증거만 읽습니다. prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.
+    실제 물리 회수량은 전후 호스트 관측 없이는 확정하지 않습니다.
+  </p>
+  <button onclick={inspectPodman} disabled={podmanBusy}>
+    {podmanBusy ? "확인 중…" : "Podman 상태 확인"}
+  </button>
+  {#if podmanError}<p class="error" role="alert">{podmanError}</p>{/if}
+  {#if podmanPlan}
+    <div class="podman-evidence" aria-live="polite">
+      <p>
+        {podmanPlan.evidence_complete ? "증거 완전" : "증거 불완전"} ·
+        게스트 여유 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
+        보고 reclaimable {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
+          ? "미확인"
+          : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}
+      </p>
+      {#if podmanPlan.unused_images}
+        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · exact record 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
+      {/if}
+      {#if podmanPlan.dangling_prune_approval_phrase}
+        <div class="podman-prune">
+          <p>dangling 이미지(무tag·참조 컨테이너 0)만 실행 대상으로 확인되었습니다.</p>
+          <label>정확한 승인 문구
+            <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
+          </label>
+          <label>정리 사유
+            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 재생성 가능한 미사용 dangling 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
+          </label>
+          <button onclick={prunePodmanDanglingImages} disabled={!podmanPruneReady()}>
+            {podmanPruneBusy ? "재검증 후 dangling 이미지 정리 중…" : "dangling 이미지 정리"}
+          </button>
+          {#if podmanPruneError}<p class="error" role="alert">{podmanPruneError}</p>{/if}
+        </div>
+      {/if}
+      {#if podmanPruneExecution}
+        <p class="notice">
+          실행 결과: {podmanPruneExecution.executed ? "성공" : `실패(${podmanPruneExecution.status_code})`} ·
+          호스트 가용 공간 증가 관측 {podmanPruneExecution.observed_available_gain_bytes === null
+            ? "미확인"
+            : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
+        </p>
+      {/if}
+      {#if podmanPlan.system_df}
+        <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
+      {/if}
+      {#if podmanPlan.assessment.recommended_actions.length > 0}
+        <ul class="errors">
+          {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
+            <li>{action.kind}: {action.rationale}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 </section>
+
+<OrphanCleanup />
 
 <style>
   section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
@@ -171,6 +343,10 @@
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
+  .podman-prune { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
+  .podman-prune label { display: grid; gap: 0.25rem; }
+  .podman-prune input, .podman-prune textarea { width: 100%; box-sizing: border-box; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
     font-size: 0.75rem; color: #fff;

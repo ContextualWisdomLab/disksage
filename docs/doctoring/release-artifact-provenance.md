@@ -28,9 +28,10 @@ The release contract requires all of the following:
 - the attestation job depends on the complete build matrix;
 - Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once in their expected bundle paths;
 - all six platform-specific operational CLIs and all six corresponding `.sha256` files are each present exactly once;
-- the preserved release tree contains exactly 17 regular files and no symlink, device, socket, FIFO, or other non-regular entry, so unreviewed debug output, logs, dumps, or unrelated executables cannot become attested release subjects;
+- the preserved release tree contains exactly 18 regular files (the five desktop bundles, six operational CLIs, six adjacent checksums, and one source-bound SPDX SBOM) and no symlink, device, socket, FIFO, or other non-regular entry, so unreviewed debug output, logs, dumps, or unrelated executables cannot become attested release subjects;
 - every checksum file contains exactly one SHA-256 record naming its adjacent expected CLI basename, so alternate, absolute, traversing, or decoy filenames are rejected before digest verification;
 - each checksum is verified before provenance generation;
+- the attestation job checks out the exact tag source, validates the locked Cargo and npm dependency manifests, generates a deterministic SPDX 2.3 SBOM, and rejects a namespace that is not bound to `github.sha`;
 - `actions/download-artifact` is immutably pinned to commit `37930b1c2abaa49bbe596cd826c3c89aef350131`, the upstream `v7.0.0` tag commit;
 - `actions/attest` is immutably pinned to commit `59d89421af93a897026c735860bf21b6eb4f7b26`, the upstream `v4.1.0` tag commit;
 - every published file is a subject of the generated attestation; and
@@ -58,7 +59,7 @@ Retain the artifact, the downloaded bundle, the release tag, the source commit S
 
 ## Failure and stale-evidence behavior
 
-The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Artifact namespaces remain separate during download, so the same required filename contributed by two platform archives remains two filesystem entries and is rejected rather than silently overwritten. It validates checksum-record semantics and digests first so an invalid or redirected record receives the specific actionable diagnostic, then rejects any eighteenth regular file and every non-regular filesystem entry before attestation or publication. This exact-set rule prevents a build step from silently adding an unreviewed diagnostic archive, crash dump, log, secret-bearing output, or unrelated executable to the release. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
+The pipeline fails closed when an expected platform bundle, operational CLI, checksum file, or source-bound SBOM is absent or duplicated. Artifact namespaces remain separate during download, so the same required filename contributed by two platform archives remains two filesystem entries and is rejected rather than silently overwritten. It validates checksum-record semantics and digests first so an invalid or redirected record receives the specific actionable diagnostic, then rejects any nineteenth regular file and every non-regular filesystem entry before attestation or publication. This exact-set rule prevents a build step from silently adding an unreviewed diagnostic archive, crash dump, log, secret-bearing output, or unrelated executable to the release. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch or malformed/private-path SBOM stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
 
 Concurrency cancellation applies only to a first workflow attempt. A newer first attempt may cancel stale work for the same ref, but an explicit rerun has `github.run_attempt > 1` and therefore cannot cancel itself. A rerun remains non-authoritative until every required exact-head job in that attempt completes successfully.
 
@@ -66,7 +67,7 @@ Attestations bind artifact digests, not mutable filenames. Rebuilding the same v
 
 ## Privacy and security boundaries
 
-The attestation describes build provenance and artifact digests. It must not include API keys, user data, local disk inventory, file paths from an operator workstation, model prompts, cleanup plans, or dynamic command output containing private host information. GitHub Secrets remain unavailable to pull-request-controlled release tests unless a separately reviewed workflow explicitly requires them. The exact 17-file allowlist is also a privacy boundary: unexpected diagnostics and transient build outputs are rejected rather than made durable through an attestation or GitHub Release.
+The attestation describes build provenance, artifact digests, and the source-bound dependency inventory. It must not include API keys, user data, local disk inventory, file paths from an operator workstation, model prompts, cleanup plans, or dynamic command output containing private host information. GitHub Secrets remain unavailable to pull-request-controlled release tests unless a separately reviewed workflow explicitly requires them. The exact 18-file allowlist is also a privacy boundary: unexpected diagnostics and transient build outputs are rejected rather than made durable through an attestation or GitHub Release. The SPDX SBOM namespace binds the package inventory to the exact source revision and the workflow validates it before attestation.
 
 All third-party actions in the release path use immutable 40-character commit SHAs. The attestation job receives no `contents: write` permission, and the publication job receives neither `id-token: write` nor `attestations: write`. This separation limits the impact of a compromised publication or attestation step.
 
@@ -96,6 +97,8 @@ in-toto Project. (n.d.). *in-toto attestation framework specification (Version 1
 Supply-chain Levels for Software Artifacts. (n.d.). *SLSA specification (Version 1.2)*. The Linux Foundation. Retrieved August 6, 2026, from https://slsa.dev/spec/v1.2/
 
 Supply-chain Levels for Software Artifacts. (n.d.). *Build: Verifying artifacts (Version 1.2)*. The Linux Foundation. Retrieved August 6, 2026, from https://slsa.dev/spec/v1.2/verifying-artifacts
+
+SPDX Workgroup. (2022). *SPDX specification (Version 2.3)*. Linux Foundation. https://spdx.github.io/spdx-spec/v2.3/
 
 ## Reference verification note
 

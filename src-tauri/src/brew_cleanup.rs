@@ -39,7 +39,7 @@ impl BrewCleanupPlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrewCleanupJudgment {
     pub schema_version: u32,
@@ -51,6 +51,18 @@ pub struct BrewCleanupJudgment {
     pub model_name: String,
     pub judged_at_ms: u64,
     pub exact_approval_phrase: String,
+    /// A present, successful fast-mlsirm calibration is required before execution;
+    /// failed or absent calibration never unlocks the fixed command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<crate::judge_calibration::JudgeCalibrationResult>,
+}
+
+impl BrewCleanupJudgment {
+    pub fn has_successful_calibration(&self) -> bool {
+        self.calibration.as_ref().is_some_and(|calibration| {
+            calibration.passed && calibration.judgment_id == self.judgment_id
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,10 +176,21 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
 
 #[cfg(target_os = "macos")]
 fn run_command(mut command: std::process::Command) -> Result<CommandOutput, String> {
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     use std::thread;
     use std::time::{Duration, Instant};
 
+    // Keep the verified brew wrapper and any descendants in one private group so a timeout cannot
+    // leave a maintenance child holding the output pipes or continuing after the gate fails.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .stdout(Stdio::piped())
@@ -184,12 +207,17 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
         .ok_or_else(|| "brew-cleanup-stderr-unavailable".to_string())?;
     let stdout_reader = thread::spawn(move || read_bounded(&mut stdout));
     let stderr_reader = thread::spawn(move || read_bounded(&mut stderr));
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
 
     let deadline = Instant::now() + Duration::from_millis(COMMAND_TIMEOUT_MS);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 drop(stdout_reader);
@@ -198,6 +226,7 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 drop(stdout_reader);
@@ -385,17 +414,28 @@ pub fn judge(
         model_name: crate::llm::DEFAULT.name.into(),
         judged_at_ms,
         exact_approval_phrase: plan.exact_approval_phrase.clone(),
+        calibration: None,
     }
 }
 
 pub fn execute(
     plan: &BrewCleanupPlan,
-    judgment_id: &str,
+    judgment: &BrewCleanupJudgment,
     executed_at_ms: u64,
 ) -> Result<BrewCleanupExecution, String> {
+    if judgment.plan != *plan
+        || judgment.plan_fingerprint != plan.plan_fingerprint
+        || judgment.exact_approval_phrase != plan.exact_approval_phrase
+        || judgment.verdict != crate::llm::Verdict::Safe
+        || !judgment.has_successful_calibration()
+        || executed_at_ms.saturating_sub(judgment.judged_at_ms) > MAX_JUDGMENT_AGE_MS
+    {
+        return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
+    }
+
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (plan, judgment_id, executed_at_ms);
+        let _ = (plan, judgment, executed_at_ms);
         return Err("brew-cleanup-unsupported-platform".into());
     }
 
@@ -413,7 +453,7 @@ pub fn execute(
         Ok(BrewCleanupExecution {
             schema_version: SCHEMA_VERSION,
             plan_fingerprint: plan.plan_fingerprint.clone(),
-            judgment_id: judgment_id.to_string(),
+            judgment_id: judgment.judgment_id.clone(),
             command: std::iter::once(EXECUTABLE.to_string())
                 .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
                 .collect(),
@@ -528,13 +568,7 @@ pub fn write_audit_record(
     let (directory, filename, path, encoded) = prepare_audit_record(app_data_dir, record)?;
     #[cfg(unix)]
     {
-        return write_audit_record_unix_with_hook(
-            &directory,
-            &filename,
-            &path,
-            &encoded,
-            || {},
-        );
+        return write_audit_record_unix_with_hook(&directory, &filename, &path, &encoded, || {});
     }
     #[cfg(not(unix))]
     {
@@ -587,18 +621,14 @@ where
         return Err("brew-cleanup-audit-directory-identity-drift".into());
     }
 
-    let record_name = CString::new(filename)
-        .map_err(|_| "brew-cleanup-audit-filename-invalid".to_string())?;
+    let record_name =
+        CString::new(filename).map_err(|_| "brew-cleanup-audit-filename-invalid".to_string())?;
     before_create();
     let record_fd = unsafe {
         libc::openat(
             directory_file.as_raw_fd(),
             record_name.as_ptr(),
-            libc::O_WRONLY
-                | libc::O_CREAT
-                | libc::O_EXCL
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             0o400,
         )
     };
@@ -725,6 +755,50 @@ mod tests {
         );
         assert_eq!(judgment.verdict, crate::llm::Verdict::Safe);
         assert_eq!(judgment.plan_fingerprint, "a".repeat(64));
+    }
+
+    #[test]
+    fn calibration_is_required_for_execution() {
+        let mut judgment = judge(
+            &Fake(Ok(r#"{"verdict":"safe","reason":"fixed"}"#.into())),
+            &plan(),
+            20,
+        );
+        assert!(!judgment.has_successful_calibration());
+        judgment.calibration = Some(
+            crate::judge_calibration::validate(
+                &crate::judge_calibration::JudgeCalibrationEvidence {
+                    schema_version: crate::judge_calibration::SCHEMA_VERSION,
+                    judgment_id: judgment.judgment_id.clone(),
+                    categories: 2,
+                    model_labels: vec![0, 1, 0, 1],
+                    human_labels: vec![0, 1, 0, 1],
+                    human_baseline_a: None,
+                    human_baseline_b: None,
+                    subgroup: None,
+                },
+            )
+            .unwrap(),
+        );
+        assert!(judgment.has_successful_calibration());
+        judgment.calibration.as_mut().unwrap().judgment_id = "b".repeat(64);
+        assert!(!judgment.has_successful_calibration());
+        judgment.calibration.as_mut().unwrap().judgment_id = judgment.judgment_id.clone();
+        judgment.calibration.as_mut().unwrap().passed = false;
+        assert!(!judgment.has_successful_calibration());
+    }
+
+    #[test]
+    fn execute_rejects_uncalibrated_judgment_before_platform_dispatch() {
+        let judgment = judge(
+            &Fake(Ok(r#"{"verdict":"safe","reason":"fixed"}"#.into())),
+            &plan(),
+            20,
+        );
+        assert_eq!(
+            execute(&plan(), &judgment, 21).unwrap_err(),
+            "brew-cleanup-llm-judgment-stale-or-not-safe"
+        );
     }
 
     #[test]

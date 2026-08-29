@@ -176,21 +176,15 @@ fn directory_replacement_after_authorization_cannot_redirect_publication() {
     let audit_directory = app_data.path().join("brew-cleanup-records");
     let moved_directory = app_data.path().join("authorized-audit-directory-moved");
 
-    let error = write_audit_record_with_before_create_hook(
-        app_data.path(),
-        &valid_record(),
-        || {
+    let error =
+        write_audit_record_with_before_create_hook(app_data.path(), &valid_record(), || {
             std::fs::rename(&audit_directory, &moved_directory)
                 .expect("move the already-authorized directory");
             std::fs::create_dir(&audit_directory).expect("install replacement directory");
-            std::fs::set_permissions(
-                &audit_directory,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .expect("keep the replacement privately writable so identity is the only defect");
-        },
-    )
-    .expect_err("directory identity drift must fail closed");
+            std::fs::set_permissions(&audit_directory, std::fs::Permissions::from_mode(0o700))
+                .expect("keep the replacement privately writable so identity is the only defect");
+        })
+        .expect_err("directory identity drift must fail closed");
 
     assert_eq!(error, "brew-cleanup-audit-directory-identity-drift");
     assert_eq!(

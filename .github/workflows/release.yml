@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - ".github/scripts/verify-release-artifacts.sh"
       - "src-tauri/**"
       - "src/**"
       - "package.json"
@@ -43,7 +44,7 @@ jobs:
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
-          - os: windows-latest
+          - os: windows-2022
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
@@ -67,6 +68,7 @@ jobs:
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-macos-arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,6 +85,25 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install cmake
 
+      - name: Enable Windows Script Host for WiX MSI
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $engines = @(
+            (Join-Path $env:windir 'System32\vbscript.dll'),
+            (Join-Path $env:windir 'SysWOW64\vbscript.dll')
+          ) | Where-Object { Test-Path $_ }
+          if ($engines.Count -eq 0) {
+            throw 'VBScript engine is unavailable on this runner.'
+          }
+          foreach ($engine in $engines) {
+            $regsvr32 = Join-Path (Split-Path $engine) 'regsvr32.exe'
+            $registration = Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $engine) -Wait -PassThru
+            if ($registration.ExitCode -ne 0) {
+              throw "VBScript engine registration failed: $engine ($($registration.ExitCode))"
+            }
+          }
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
@@ -91,9 +112,34 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+          cache-targets: false
 
       - name: Tauri build (with embedded LLM)
         run: npm run tauri -- build --features llm-engine
+
+      - name: Diagnose WiX MSI linker failure
+        if: failure() && matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $light = Join-Path $env:LOCALAPPDATA 'tauri\WixTools314\light.exe'
+          $wix_dir = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\target\release\wix\x64'
+          if (!(Test-Path -LiteralPath $light) -or !(Test-Path -LiteralPath $wix_dir)) {
+            Write-Host 'WiX diagnostic inputs are unavailable.'
+            exit 0
+          }
+          $wixobjs = @(Get-ChildItem -LiteralPath $wix_dir -Filter '*.wixobj' -File)
+          $locale = Join-Path $wix_dir 'locale.wxl'
+          $output = Join-Path $env:RUNNER_TEMP 'disksage-wix-diagnostic.msi'
+          $arguments = @(
+            '-ext', 'WixUIExtension',
+            '-ext', 'WixUtilExtension',
+            '-o', $output,
+            '-cultures:en-us',
+            '-loc', $locale
+          ) + @($wixobjs.FullName) + @('-v')
+          & $light @arguments
+          Write-Host "WiX diagnostic exit code: $LASTEXITCODE"
+          exit 0
 
       - name: Build operational CLIs
         run: >-
@@ -109,12 +155,22 @@ jobs:
             local asset_path="$2"
             local usage_marker="$3"
             cp "$source_path" "$asset_path"
-            local help_output
-            help_output="$("$asset_path" --help 2>&1 || true)"
-            grep -F "$usage_marker" <<<"$help_output"
-            local asset_dir asset_name
+            local asset_dir asset_name help_stdout help_stderr
             asset_dir="$(dirname "$asset_path")"
             asset_name="$(basename "$asset_path")"
+            help_stdout="$RUNNER_TEMP/${asset_name}.help.stdout"
+            help_stderr="$RUNNER_TEMP/${asset_name}.help.stderr"
+            if ! "$asset_path" --help >"$help_stdout" 2>"$help_stderr"; then
+              printf '%s --help must exit successfully.\n' "$asset_name" >&2
+              cat "$help_stderr" >&2
+              return 1
+            fi
+            if [[ -s "$help_stderr" ]]; then
+              printf '%s --help wrote to stderr on the successful path.\n' "$asset_name" >&2
+              cat "$help_stderr" >&2
+              return 1
+            fi
+            grep -F "$usage_marker" "$help_stdout"
             if command -v sha256sum >/dev/null 2>&1; then
               (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
             else
@@ -157,6 +213,27 @@ jobs:
           path: ${{ matrix.bundles }}
           if-no-files-found: error
 
+  download-artifact-pr-compat:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Download exact release artifact set with v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-disksage-*-${{ github.run_attempt }}
+          path: release-artifacts
+          merge-multiple: false
+      - name: Verify downloaded release artifact contract
+        shell: bash
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+
   attest-release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
@@ -166,28 +243,53 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
       - name: Download exact release artifact set
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-disksage-*-${{ github.run_attempt }}
           path: release-artifacts
           merge-multiple: false
+
+      - name: Generate and validate source-bound SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          cargo metadata --locked --format-version=1 --manifest-path src-tauri/Cargo.toml >"$RUNNER_TEMP/disksage-cargo-metadata.json"
+          mkdir -p release-artifacts/sbom
+          node scripts/ci/generate-release-sbom.mjs \
+            --cargo-metadata "$RUNNER_TEMP/disksage-cargo-metadata.json" \
+            --npm-lock package-lock.json \
+            --source-revision "$GITHUB_SHA" \
+            --created "$(git show -s --format=%cI "$GITHUB_SHA")" \
+            --output release-artifacts/sbom/disksage.spdx.json
+          node scripts/ci/generate-release-sbom.mjs \
+            --validate release-artifacts/sbom/disksage.spdx.json
 
       - name: Verify release artifact checksums
         shell: bash
         run: |
           set -euo pipefail
           require_exactly_one_path() {
-            local path_pattern="$1" label="$2" count=0 matched_path=""
-            while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
+            local path_pattern="$1" label="$2" count=0
+            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
             if [[ $count -ne 1 ]]; then
               printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
               exit 1
             fi
           }
           require_exactly_one_file() {
-            local file_name="$1" count=0 matched_path=""
-            while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
+            local file_name="$1" count=0
+            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
             if [[ $count -ne 1 ]]; then
               printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
               exit 1
@@ -243,23 +345,32 @@ jobs:
               exit 1
             fi
           done
+          require_exactly_one_file disksage.spdx.json
+          node "$GITHUB_WORKSPACE/scripts/ci/generate-release-sbom.mjs" --validate "$(find release-artifacts -type f -name 'disksage.spdx.json' -print -quit)"
           unexpected_entry="$(find release-artifacts -mindepth 1 ! -type d ! -type f -print -quit)"
           if [[ -n "$unexpected_entry" ]]; then
             printf 'Unexpected release artifact entries: non-regular path %s is not publishable.\n' "$unexpected_entry" >&2
             exit 1
           fi
           regular_file_count=0
-          matched_path=""
-          while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 17 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+          while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
+          if [[ $regular_file_count -ne 18 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 
       - name: Generate GitHub build provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: release-artifacts/**/*
+
+      - name: Upload attested release SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-sbom-${{ github.run_attempt }}
+          path: release-artifacts/sbom/disksage.spdx.json
+          if-no-files-found: error
+          retention-days: 7
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -269,11 +380,17 @@ jobs:
       contents: write
     steps:
       - name: Download attested release artifact set
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-disksage-*-${{ github.run_attempt }}
           path: release-artifacts
           merge-multiple: false
+
+      - name: Download attested release SBOM
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-sbom-${{ github.run_attempt }}
+          path: release-artifacts/sbom
       - name: Publish attested artifacts to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -328,6 +445,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: gpu
+          cache-targets: false
       - name: Setup MSVC dev environment (Windows)
         if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -343,7 +461,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "== target/release top =="; ls -la src-tauri/target/release/ 2>/dev/null | head -40 || true
+          echo "== target/release top =="; find src-tauri/target/release/ -maxdepth 1 -mindepth 1 -print 2>/dev/null | head -40 || true
           echo "== ggml/llama/cuda/vulkan libs under target =="; find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\|cudart\|vulkan\).*\.\(dll\|so\|dylib\)' 2>/dev/null | head -60 || true
           echo "== out/backends dirs =="; find src-tauri/target -type d -name backends 2>/dev/null | head || true
           echo "== CUDA runtime dll/so =="; find "${CUDA_PATH:-/usr/local/cuda}" -iname 'cudart*' 2>/dev/null | head || true
@@ -354,7 +472,12 @@ jobs:
           set +e +o pipefail
           mkdir -p gpu-run
           find src-tauri/target/release -maxdepth 1 -type f \( -name 'disksage' -o -name 'disksage.exe' -o -name 'DiskSage' -o -name 'DiskSage.exe' \) -exec cp {} gpu-run/ \; 2>/dev/null || true
-          tb=$(ls -t src-tauri/target/release/deps/disksage_lib-* 2>/dev/null | grep -viE '\.(d|pdb)$' | head -1)
+          tb=""
+          for candidate in src-tauri/target/release/deps/disksage_lib-*; do
+            [ -f "$candidate" ] || continue
+            [[ "$candidate" =~ \.(d|pdb)$ ]] && continue
+            if [ -z "$tb" ] || [ "$candidate" -nt "$tb" ]; then tb="$candidate"; fi
+          done
           [ -n "$tb" ] && cp "$tb" "gpu-run/engine_smoketest${{ matrix.os == 'windows-2022' && '.exe' || '' }}" 2>/dev/null || true
           find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\).*\(\.dll\|\.so\|\.so\..*\)' -exec cp {} gpu-run/ \; 2>/dev/null || true
           for pat in 'cudart64_*.dll' 'cublas64_*.dll' 'cublasLt64_*.dll'; do

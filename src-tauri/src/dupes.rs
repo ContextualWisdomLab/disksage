@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::io::Read;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -117,25 +118,77 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
     out
 }
 
-/// jwalk로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외.
+/// walkdir로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외.
 /// 콤비네이터 형태: 순회/메타데이터 오류는 조용히 건너뜀(수집기는 skipped를 집계하지 않음).
 pub fn collect_files(root: &Path) -> Vec<FileEntry> {
-    jwalk::WalkDir::new(root)
+    let traversal_root = crate::scanner::read_only_traversal_root(root);
+    walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_d, _p, _s, children| {
-            children.retain(|r| r.as_ref().map(crate::scanner::keep_entry).unwrap_or(true));
-        })
         .into_iter()
+        .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok().map(|md| FileEntry { path: e.path(), size: md.len(), mtime_ms: mtime_millis(&md) }))
+        .filter_map(|e| {
+            e.metadata().ok().map(|md| FileEntry {
+                path: crate::scanner::logical_scan_path(e.path(), &traversal_root, root),
+                size: md.len(),
+                mtime_ms: mtime_millis(&md),
+            })
+        })
         .collect()
+}
+
+/// Collect files for an organizing plan without allowing an unbounded walk. A partial
+/// organization plan is unsafe, so either the complete bounded walk succeeds or the caller gets
+/// a stable blocker.
+pub fn collect_files_bounded(
+    root: &Path,
+    max_entries: usize,
+    max_duration: Duration,
+) -> Result<Vec<FileEntry>, String> {
+    let metadata = std::fs::symlink_metadata(root)
+        .map_err(|_| "organize-root-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("organize-root-not-directory".into());
+    }
+    if max_entries == 0 || max_duration.is_zero() {
+        return Err("organize-scan-bound-invalid".into());
+    }
+    let started = Instant::now();
+    let mut seen = 0usize;
+    let walker = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(crate::scanner::keep_entry);
+    let mut files = Vec::new();
+    for entry in walker {
+        if started.elapsed() >= max_duration {
+            return Err("organize-scan-timeout".into());
+        }
+        if seen >= max_entries {
+            return Err("organize-scan-entry-limit".into());
+        }
+        seen += 1;
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Some(metadata) = entry.metadata().ok() else {
+            continue;
+        };
+        files.push(FileEntry {
+            path: entry.path().to_path_buf(),
+            size: metadata.len(),
+            mtime_ms: mtime_millis(&metadata),
+        });
+    }
+    Ok(files)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use std::path::PathBuf;
     use std::io::Write;
 
@@ -326,6 +379,22 @@ mod tests {
         assert!(files.iter().any(|f| f.mtime_ms > 0), "mtime_ms filled for a real file");
     }
 
+    #[test]
+    fn bounded_collection_rejects_partial_walks() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            std::fs::write(d.path().join(format!("{i}.txt")), b"x").unwrap();
+        }
+        assert_eq!(
+            collect_files_bounded(d.path(), 2, Duration::from_secs(1)).unwrap_err(),
+            "organize-scan-entry-limit"
+        );
+        assert_eq!(
+            collect_files_bounded(d.path(), 10, Duration::ZERO).unwrap_err(),
+            "organize-scan-bound-invalid"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn collect_files_excludes_dirs_and_symlinks() {
@@ -344,6 +413,27 @@ mod tests {
         assert!(names.contains(&"real.bin".to_string()));
         assert!(names.contains(&"nested.bin".to_string()));
         assert!(!names.contains(&"link.bin".to_string()), "심링크 제외");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_accepts_symlinked_root_without_following_nested_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        write_file(&real, "inside.bin", b"inside");
+        write_file(&outside, "outside.bin", b"outside");
+        std::os::unix::fs::symlink(&outside, real.join("nested-link")).unwrap();
+        let selected = tmp.path().join("selected-root");
+        std::os::unix::fs::symlink(&real, &selected).unwrap();
+
+        let files = collect_files(&selected);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, selected.join("inside.bin"));
+        assert_eq!(files[0].size, 6);
     }
 
 }
