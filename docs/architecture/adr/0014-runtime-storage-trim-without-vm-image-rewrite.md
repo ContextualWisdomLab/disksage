@@ -2,7 +2,7 @@
 
 **Status**: Accepted  
 **Date**: 2026-08-28  
-**Scope**: `src-tauri/src/runtime_storage.rs`, Tauri commands, Cleanup screen
+**Scope**: `src-tauri/src/runtime_storage.rs`, Tauri commands, headless CLI, Cleanup screen
 
 ## Context
 
@@ -28,6 +28,9 @@ could corrupt running workloads and data-bearing volumes.
 5. Trim captures host-volume observations immediately before and after execution. The UI reports
    only the measured available-space change and does not infer that all of the change came from
    trim.
+6. The standalone `disksage-runtime-storage` CLI calls the same Rust planner and executor as the
+   desktop app. It does not add a second mutation implementation: inspection is the default, and
+   execution requires the current exact phrase plus a rationale.
 
 ## Consequences
 
@@ -47,6 +50,7 @@ could corrupt running workloads and data-bearing volumes.
 ## Evidence
 
 - Rust tests verify fixed command construction and fail-closed unavailable-runtime plans.
+- CLI tests verify that runtime selection is exact and execution authority is all-or-nothing.
 - Recovery and trim use distinct approvals; reachability is included in the plan fingerprint so a
   stale recovery or trim plan cannot authorize execution after guest state changes.
 - The existing container-orphan and Podman planners remain the authority for exact image,
