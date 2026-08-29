@@ -15,6 +15,8 @@ pub struct DevArtifact {
     pub kind: String,
     pub project: String,
     pub bytes: u64,
+    /// Filesystem blocks currently allocated for regular files in this generated root.
+    pub allocated_bytes: u64,
     pub files: u64,
     pub skipped: u64,
     pub scan_complete: bool,
@@ -39,8 +41,6 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
-    ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -50,7 +50,9 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
-    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
+    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else {
+        return 0;
+    };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
 }
@@ -58,12 +60,77 @@ fn age_days(path: &Path, now_ms: u64) -> u64 {
 #[derive(Default)]
 struct ArtifactManifest {
     bytes: u64,
+    allocated_bytes: u64,
     files: u64,
     skipped: u64,
     scan_complete: bool,
     records: Vec<String>,
     fingerprint: String,
     object_id: String,
+}
+
+#[cfg(unix)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(windows)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_size()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    metadata.len()
+}
+
+fn provider_managed_ancestry(root: &Path) -> bool {
+    let component_blocked = root.components().any(|component| {
+        matches!(component, std::path::Component::Normal(value) if value == "CloudStorage" || value == "Mobile Documents")
+    });
+    if component_blocked {
+        return true;
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    crate::cloud::discover_cloud_roots(&home)
+        .into_iter()
+        .any(|cloud_root| {
+            std::fs::canonicalize(cloud_root.path)
+                .map(|cloud_path| canonical_root.starts_with(cloud_path))
+                .unwrap_or(false)
+        })
+}
+
+fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
+    match kind {
+        "target" => path.join("Cargo.toml").is_file() && path.join("Cargo.lock").is_file(),
+        "node_modules" => {
+            path.join("package.json").is_file()
+                && [
+                    "package-lock.json",
+                    "pnpm-lock.yaml",
+                    "yarn.lock",
+                    "bun.lock",
+                    "bun.lockb",
+                ]
+                .iter()
+                .any(|name| path.join(name).is_file())
+        }
+        ".venv" | "venv" => {
+            path.join("pyproject.toml").is_file()
+                && ["uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"]
+                    .iter()
+                    .any(|name| path.join(name).is_file())
+        }
+        _ => false,
+    }
 }
 
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
@@ -141,15 +208,23 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 "<unknown>".into()
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
+            let allocated = allocated_bytes(&metadata);
+            manifest.allocated_bytes = manifest.allocated_bytes.saturating_add(allocated);
             manifest.files = manifest.files.saturating_add(1);
-            manifest
-                .records
-                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
+            manifest.records.push(format!(
+                "F\0{relative}\0{identity}\0{}\0{allocated}\0{modified}",
+                metadata.len()
+            ));
+            if crate::cloud::metadata_is_dataless(&metadata) {
+                manifest.scan_complete = false;
+            }
         }
     }
 
     if !manifest.scan_complete {
-        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
+        manifest
+            .records
+            .push("!incomplete\0bounded-artifact-manifest".into());
     }
     manifest.records.sort_unstable();
     manifest.fingerprint = metadata_fingerprint(&manifest.records);
@@ -157,8 +232,16 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
 }
 
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
-    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+    let duration = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!(
+        "{}:{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
 }
 
 fn metadata_fingerprint(records: &[String]) -> String {
@@ -179,6 +262,16 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
+        return Vec::new();
+    };
+    if !root.is_absolute()
+        || root_metadata.file_type().is_symlink()
+        || !root_metadata.is_dir()
+        || provider_managed_ancestry(root)
+    {
+        return Vec::new();
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -194,10 +287,14 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        let Some((_, markers)) = artifact_kind(&name) else { continue };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = !markers.is_empty() && marker_and_lockfile_present(parent, &name);
         if marker_ok {
             candidates.push(path.to_path_buf());
         }
@@ -219,10 +316,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter_map(|path| {
-            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
-            if age < min_age_days {
-                return None;
-            }
+            let age = if now_ms == u64::MAX {
+                u64::MAX
+            } else {
+                age_days(path, now_ms)
+            };
+            let _ = min_age_days; // age is display-only; it never grants cleanup authority.
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
@@ -235,6 +334,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 bytes: manifest.bytes,
+                allocated_bytes: manifest.allocated_bytes,
                 files: manifest.files,
                 skipped: manifest.skipped,
                 scan_complete: manifest.scan_complete,
@@ -260,7 +360,18 @@ pub fn clean_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    approved: bool,
 ) -> Vec<DevArtifactCleanResult> {
+    if !approved {
+        return requests
+            .iter()
+            .map(|request| DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: false,
+                error: "정리하려면 검토 화면에서 휴지통 이동을 승인하세요".into(),
+            })
+            .collect();
+    }
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
@@ -270,6 +381,8 @@ pub fn clean_artifacts(
                     && candidate.kind == request.kind
                     && candidate.project == request.project
                     && candidate.bytes == request.bytes
+                    && candidate.allocated_bytes == request.allocated_bytes
+                    && request.allocated_bytes > 0
                     && candidate.files == request.files
                     && candidate.skipped == request.skipped
                     && candidate.scan_complete
@@ -289,10 +402,24 @@ pub fn clean_artifacts(
                 };
             }
 
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&request.path),
+                2_000,
+                64,
+                true,
+            );
+            if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요".into(),
+                };
+            }
+
             match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
                 &request.object_id,
-                request.bytes,
+                request.allocated_bytes,
                 journal_path,
                 now_ms,
             ) {
@@ -316,7 +443,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
+    fn project(
+        root: &std::path::Path,
+        name: &str,
+        marker: &str,
+        artifact: &str,
+    ) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
@@ -330,7 +462,13 @@ mod tests {
     fn finds_marker_adjacent_artifacts() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "webapp", "package.json", "node_modules");
+        fs::write(
+            tmp.path().join("webapp/pnpm-lock.yaml"),
+            b"lockfileVersion: 9",
+        )
+        .unwrap();
         project(tmp.path(), "cli", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cli/Cargo.lock"), b"version = 4").unwrap();
         // 마커 없는 가짜 — 탐지되면 안 됨
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
@@ -351,30 +489,26 @@ mod tests {
     }
 
     #[test]
-    fn finds_regenerable_codegraph_indexes() {
+    fn requires_a_recognized_lockfile() {
         let tmp = tempfile::tempdir().unwrap();
-        let index = tmp.path().join("repo/.codegraph");
-        fs::create_dir_all(&index).unwrap();
-        fs::write(index.join("db"), b"generated").unwrap();
+        project(tmp.path(), "repo", "package.json", "node_modules");
 
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
 
-        assert!(found.iter().any(|artifact| {
-            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
-        }));
+        assert!(found.is_empty());
     }
 
     #[test]
-    fn respects_min_age() {
+    fn reports_age_without_using_it_as_cleanup_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
-        // 방금 만든 것: min_age_days=30이면 제외 (now = 실제 현재로는 나이가 0)
+        fs::write(tmp.path().join("fresh/package-lock.json"), b"{}").unwrap();
+        // 방금 만든 항목도 잠금 파일과 할당 증거가 있으면 표시한다. 나이는 정보일 뿐이다.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
-        // min_age_days=0이면 포함
+        assert_eq!(find_artifacts(tmp.path(), 30, now_ms).len(), 1);
         assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
     }
 
@@ -382,6 +516,7 @@ mod tests {
     fn artifacts_inside_artifacts_are_not_double_counted() {
         let tmp = tempfile::tempdir().unwrap();
         let nm = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/yarn.lock"), b"lock").unwrap();
         // node_modules 내부의 중첩 node_modules — 별도 항목이면 안 됨
         let nested = nm.join("dep").join("node_modules");
         fs::create_dir_all(&nested).unwrap();
@@ -394,6 +529,7 @@ mod tests {
     fn cleanup_fails_closed_when_artifact_identity_changes() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
         let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
         assert_eq!(candidates.len(), 1);
         let journal = tmp.path().join("journal.jsonl");
@@ -402,12 +538,68 @@ mod tests {
         std::fs::rename(&live, &original).unwrap();
         std::fs::create_dir(&live).unwrap();
         std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
-        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1, true);
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(!journal.exists(), "stale identity must not create a journal");
+        assert!(
+            !journal.exists(),
+            "stale identity must not create a journal"
+        );
+    }
+
+    #[test]
+    fn classifies_manual_cargo_node_and_venv_reclaim_without_age_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "cargo-6_7-gib-incident", "Cargo.toml", "target");
+        fs::write(
+            tmp.path().join("cargo-6_7-gib-incident/Cargo.lock"),
+            b"version = 4",
+        )
+        .unwrap();
+        project(tmp.path(), "node-app", "package.json", "node_modules");
+        fs::write(
+            tmp.path().join("node-app/pnpm-lock.yaml"),
+            b"lockfileVersion: 9",
+        )
+        .unwrap();
+        project(tmp.path(), "python-app", "pyproject.toml", ".venv");
+        fs::write(tmp.path().join("python-app/uv.lock"), b"version = 1").unwrap();
+
+        let found = find_artifacts(tmp.path(), u64::MAX, u64::MAX);
+
+        assert_eq!(
+            found.len(),
+            3,
+            "age threshold never decides generated-root eligibility"
+        );
+        assert!(found
+            .iter()
+            .all(|item| item.scan_complete && item.allocated_bytes > 0));
+        assert!(found.iter().any(|item| item.kind == "target"));
+        assert!(found.iter().any(|item| item.kind == "node_modules"));
+        assert!(found.iter().any(|item| item.kind == ".venv"));
+    }
+
+    #[test]
+    fn cleanup_requires_explicit_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        let result = clean_artifacts(
+            &candidates,
+            tmp.path(),
+            0,
+            &tmp.path().join("journal.jsonl"),
+            1,
+            false,
+        );
+
+        assert!(!result[0].ok);
+        assert!(artifact.exists());
     }
 }

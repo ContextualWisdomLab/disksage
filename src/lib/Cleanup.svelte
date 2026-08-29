@@ -150,7 +150,7 @@
   let totalSelected = $derived(
     artifacts
       .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
-      .reduce((sum, artifact) => sum + artifact.bytes, 0),
+      .reduce((sum, artifact) => sum + artifact.allocated_bytes, 0),
   );
 
   let selectionCount = $derived(
@@ -164,10 +164,10 @@
     );
     if (selectedArtifacts.length === 0 || !scannedRoot) return;
     const summary = selectedArtifacts.map(
-      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+      (a) => `${a.path} (로컬 ${fmtBytes(a.allocated_bytes)}, ${a.files}개)`,
     );
     const okay = await confirm(
-      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
+      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (현재 로컬 사용량 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
         "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
@@ -177,7 +177,7 @@
 
     busy = true;
     try {
-      results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
+      results = await api.cleanDevArtifacts(scannedRoot, 0, selectedArtifacts, true);
       selected = new Set();
       await load();
     } catch (e) {
@@ -220,7 +220,10 @@
     {/each}
   </ul>
 
-  <h3>오래된 개발 아티팩트 {scannedRoot ? `(${scannedRoot}, 30일+)` : "(먼저 스캔하세요)"}</h3>
+  <h3>개발 빌드 파일 {scannedRoot ? `(${scannedRoot})` : "(정리할 개발 폴더를 먼저 스캔하세요)"}</h3>
+  <p class="notice" role="status">
+    선택한 개발 폴더 안에서 다시 만들 수 있다고 확인된 Cargo·Node·Python 빌드 파일만 표시합니다. 개발 도구를 닫고 항목을 선택한 뒤 휴지통으로 보내세요.
+  </p>
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
@@ -231,13 +234,13 @@
             checked={selected.has(a.path)}
             onchange={() => (selected = toggle(selected, a.path))}
           />
-          {a.kind} <em>({a.project}, {a.age_days}일)</em>
+          {a.kind} <em>({a.project})</em>
           <span class="size">
             {!a.scan_complete
               ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
-                : fmtBytes(a.bytes)}
+                : `로컬 ${fmtBytes(a.allocated_bytes)}`}
           </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
@@ -251,7 +254,7 @@
 
   <div class="actions">
     <button onclick={executeClean} disabled={busy || selectionCount === 0}>
-      {busy ? "정리 중…" : `선택 항목 휴지통으로 (논리 ${fmtBytes(totalSelected)})`}
+      {busy ? "정리 중…" : `선택 항목 휴지통으로 (로컬 ${fmtBytes(totalSelected)})`}
     </button>
   </div>
 

@@ -167,8 +167,9 @@ pub fn clean_dev_artifacts_inner(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    approved: bool,
 ) -> Vec<CleanResult> {
-    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
+    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms, approved)
         .into_iter()
         .map(|result| CleanResult {
             path: result.path,
@@ -737,6 +738,7 @@ pub fn clean_dev_artifacts(
     root: String,
     min_age_days: u64,
     artifacts: Vec<dev_artifacts::DevArtifact>,
+    approved: bool,
     app: AppHandle,
 ) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;
@@ -746,6 +748,7 @@ pub fn clean_dev_artifacts(
         min_age_days,
         &jp,
         now_ms(),
+        approved,
     ))
 }
 
@@ -3623,6 +3626,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let artifact = project.join("node_modules");
         fs::create_dir_all(&artifact).unwrap();
         fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(project.join("package-lock.json"), b"{}").unwrap();
         fs::write(artifact.join("payload.bin"), b"old").unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3637,6 +3641,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             0,
             &tmp.path().join("journal.jsonl"),
             now,
+            true,
         );
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
