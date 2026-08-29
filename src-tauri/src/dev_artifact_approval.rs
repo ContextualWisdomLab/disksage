@@ -91,7 +91,7 @@ fn rejection(requests: &[DevArtifact], code: &str) -> Vec<DevArtifactCleanResult
         .collect()
 }
 
-pub fn clean_artifacts_with_approval(
+pub fn clean_artifacts_with_confirmation(
     requests: &[DevArtifact],
     root: &Path,
     min_age_days: u64,
@@ -126,6 +126,27 @@ pub fn clean_artifacts_with_approval(
     )
 }
 
+/// CLI callers reconstruct `DevArtifactApproval` from a phrase the operator typed on the command
+/// line, so the approval field itself remains the independent confirmation channel there.
+pub fn clean_artifacts_with_approval(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    approval: &DevArtifactApproval,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_confirmation(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        approval,
+        &approval.exact_phrase,
+    )
+}
+
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn review_dev_artifacts(
@@ -146,7 +167,7 @@ pub fn clean_dev_artifacts_bound(
     app: tauri::AppHandle,
 ) -> Result<Vec<crate::commands::CleanResult>, String> {
     let journal_path = crate::commands::journal_file_path(&app)?;
-    Ok(clean_artifacts_with_approval(
+    Ok(clean_artifacts_with_confirmation(
         &artifacts,
         Path::new(&root),
         min_age_days,
@@ -208,7 +229,6 @@ mod tests {
             &temp.path().join("journal.jsonl"),
             10 + MAX_REVIEW_AGE_MS + 1,
             &approval,
-            &approval.exact_phrase,
         );
         assert_eq!(result[0].error, "development-artifact-approval-invalid-or-stale");
     }
