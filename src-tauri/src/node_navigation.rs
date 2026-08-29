@@ -173,7 +173,7 @@ mod tests {
             .entries
             .iter()
             .all(|entry| entry.name != "provider-managed"));
-        assert_eq!(node_view(&result, &pruned).unwrap_err(), NOT_IN_SCAN);
+        assert!(matches!(node_view(&result, &pruned), Err(error) if error == NOT_IN_SCAN));
     }
 
     #[test]
