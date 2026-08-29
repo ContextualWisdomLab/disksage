@@ -84,7 +84,6 @@ fn stale_open_head_exempts_only_its_own_open_pull_request_membership() {
     let stale_pull_request_number = 101u64;
     let other_open_pull_request_number = 202u64;
     let stale_heads = StaleOpenPullRequestHeads::from([(
-        stale_pull_request_number,
         "refs/heads/stale-open".to_string(),
         base.clone(),
     )]);
