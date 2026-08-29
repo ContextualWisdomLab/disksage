@@ -103,6 +103,30 @@ fn deny_boundary(path: &Path) -> bool {
     .any(|marker| value.contains(marker))
 }
 
+fn hash_reader_bounded<R: Read>(
+    reader: &mut R,
+    hasher: &mut blake3::Hasher,
+    hashed_bytes: &mut u64,
+    limit: u64,
+) -> Result<(), String> {
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|_| "generated-cache-file-unreadable".to_string())?;
+        if read == 0 {
+            return Ok(());
+        }
+        *hashed_bytes = hashed_bytes
+            .checked_add(read as u64)
+            .ok_or("generated-cache-content-bound-exceeded")?;
+        if *hashed_bytes > limit {
+            return Err("generated-cache-content-bound-exceeded".into());
+        }
+        hasher.update(&buffer[..read]);
+    }
+}
+
 pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationContract> {
     let pairs = [
         (
@@ -137,6 +161,7 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
+    let mut estimated_content_bytes = 0_u64;
     let mut hashed_content_bytes = 0_u64;
     let mut locks = Vec::new();
     let mut hasher = blake3::Hasher::new();
@@ -176,24 +201,20 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
             locks.push(current.to_string_lossy().into_owned());
         }
         if metadata.is_file() {
-            hashed_content_bytes = hashed_content_bytes
+            estimated_content_bytes = estimated_content_bytes
                 .checked_add(metadata.len())
                 .ok_or("generated-cache-content-bound-exceeded")?;
-            if hashed_content_bytes > MAX_HASHED_CONTENT_BYTES {
+            if estimated_content_bytes > MAX_HASHED_CONTENT_BYTES {
                 return Err("generated-cache-content-bound-exceeded".into());
             }
             let mut file = std::fs::File::open(&current)
                 .map_err(|_| "generated-cache-file-unreadable".to_string())?;
-            let mut buffer = [0_u8; 64 * 1024];
-            loop {
-                let read = file
-                    .read(&mut buffer)
-                    .map_err(|_| "generated-cache-file-unreadable".to_string())?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..read]);
-            }
+            hash_reader_bounded(
+                &mut file,
+                &mut hasher,
+                &mut hashed_content_bytes,
+                MAX_HASHED_CONTENT_BYTES,
+            )?;
         } else {
             let mut children = std::fs::read_dir(&current)
                 .map_err(|_| "generated-cache-directory-unreadable".to_string())?
@@ -330,7 +351,35 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
             Err(_) => evidence.evidence_complete = false,
         }
     }
-    plan_with_evidence(path, home, evidence, observed_at_ms)
+    let mut plan = plan_with_evidence(path, home, evidence, observed_at_ms)?;
+    // Content hashing can be long-running. Probe again afterward so the returned plan never relies
+    // solely on activity evidence collected before the manifest scan.
+    let final_active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
+    if !final_active.assessed || !final_active.evidence_complete {
+        if !plan
+            .blockers
+            .contains(&"active-use-evidence-incomplete".into())
+        {
+            plan.blockers.push("active-use-evidence-incomplete".into());
+        }
+        plan.activity.evidence_complete = false;
+    }
+    if final_active.active || !final_active.observed_pids.is_empty() {
+        if !plan.blockers.contains(&"process-active".into()) {
+            plan.blockers.push("process-active".into());
+        }
+        plan.activity.live_cwd_present |= final_active.active;
+        plan.activity.open_pids.extend(final_active.observed_pids);
+        plan.activity.open_pids.sort_unstable();
+        plan.activity.open_pids.dedup();
+    }
+    if !plan.blockers.is_empty() {
+        // Any post-hash activity makes this plan non-executable. Its approval phrase is retained
+        // only for stable output; approve() rejects every blocker.
+        plan.blockers.sort();
+        plan.blockers.dedup();
+    }
+    Ok(plan)
 }
 
 pub fn approve(
@@ -456,6 +505,13 @@ pub fn stage_and_remove_regenerable_root(
         let (_, _, fingerprint, locks) = observe_tree(&staged)?;
         if fingerprint != plan.content_fingerprint || !locks.is_empty() {
             return Err("generated-cache-staged-manifest-mismatch".into());
+        }
+        let active_after_hash = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        if !active_after_hash.assessed
+            || !active_after_hash.evidence_complete
+            || active_after_hash.active
+        {
+            return Err("generated-cache-staged-active-use".into());
         }
         std::fs::remove_dir_all(&staged)
             .map_err(|_| "generated-cache-remove-failed".to_string())?;
@@ -743,5 +799,17 @@ mod tests {
                 &plan.plan_fingerprint[..16]
             ))
             .exists());
+    }
+
+    #[test]
+    fn bytes_read_not_stale_metadata_enforce_content_bound() {
+        let mut reader = std::io::Cursor::new(b"grew-after-metadata".to_vec());
+        let mut hasher = blake3::Hasher::new();
+        let mut hashed = 0;
+        assert_eq!(
+            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4).unwrap_err(),
+            "generated-cache-content-bound-exceeded"
+        );
+        assert!(hashed > 4);
     }
 }
