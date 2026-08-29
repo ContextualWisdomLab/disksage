@@ -720,7 +720,7 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
+pub(crate) fn file_providerctl_status(path: impl AsRef<std::ffi::OsStr>) -> Result<String, String> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
