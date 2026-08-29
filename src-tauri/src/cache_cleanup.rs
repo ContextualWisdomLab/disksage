@@ -313,10 +313,17 @@ pub(crate) fn clean_cache_contents_inner(
                     journal_path,
                     now_ms,
                 ) {
-                    Ok(()) => CleanResult {
+                    Ok(outcome) if outcome.deleted => CleanResult {
                         path: target.path,
                         ok: true,
                         error: String::new(),
+                        warning: safety::permanent_delete_outcome_warning(&outcome)
+                            .unwrap_or_default(),
+                    },
+                    Ok(_) => CleanResult {
+                        path: target.path,
+                        ok: false,
+                        error: "permanent deletion did not complete; rescan before cleanup".into(),
                         warning: String::new(),
                     },
                     Err(error) => CleanResult {

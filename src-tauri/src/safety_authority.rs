@@ -14,6 +14,22 @@ pub(crate) use crate::safety_core::{
 
 static CACHE_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+std::thread_local! {
+    static INJECT_FINAL_CACHE_AUTHORITY_FAILURE: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static INJECT_TERMINAL_CACHE_JOURNAL_FAILURE: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+#[cfg(test)]
+fn inject_final_cache_authority_failure_once() {
+    INJECT_FINAL_CACHE_AUTHORITY_FAILURE.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn inject_terminal_cache_journal_failure_once() {
+    INJECT_TERMINAL_CACHE_JOURNAL_FAILURE.with(|flag| flag.set(true));
+}
+
 #[cfg(windows)]
 fn strip_verbatim(path: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
@@ -145,6 +161,26 @@ fn authority_manifest_error(message: impl Into<String>) -> SafetyError {
     SafetyError::Trash(message.into())
 }
 
+fn final_cache_authority_target(path: &Path) -> Result<crate::rules::CacheTarget, String> {
+    #[cfg(test)]
+    if INJECT_FINAL_CACHE_AUTHORITY_FAILURE.with(|flag| flag.replace(false)) {
+        return Err("injected-final-cache-authority-failure".into());
+    }
+    crate::rules::cache_authority_target(path)
+}
+
+fn append_cache_journal(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
+    #[cfg(test)]
+    if entry.outcome != "pending"
+        && INJECT_TERMINAL_CACHE_JOURNAL_FAILURE.with(|flag| flag.replace(false))
+    {
+        return Err(SafetyError::Journal(
+            "injected-terminal-cache-journal-failure".into(),
+        ));
+    }
+    journal_append(journal_path, entry)
+}
+
 fn cache_authority_snapshot(
     path: &Path,
     expected_object_id: &str,
@@ -180,6 +216,39 @@ fn cache_authority_snapshot(
 
 fn cache_manifest_is_v2(manifest: &str) -> bool {
     crate::rules::cache_manifest_components(manifest).is_some()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PermanentDeleteOutcome {
+    pub deleted: bool,
+    pub terminal_journal_error: Option<String>,
+    pub staging_cleanup_error: Option<String>,
+}
+
+pub(crate) fn permanent_delete_outcome_warning(outcome: &PermanentDeleteOutcome) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(error) = &outcome.terminal_journal_error {
+        warnings.push(format!("terminal journal append failed after deletion: {error}"));
+    }
+    if let Some(error) = &outcome.staging_cleanup_error {
+        warnings.push(error.clone());
+    }
+    (!warnings.is_empty()).then(|| warnings.join("; "))
+}
+
+fn restore_final_snapshot_failure(
+    path: &Path,
+    staged: &Path,
+    staging_dir: &Path,
+    error: String,
+) -> Result<crate::rules::CacheTarget, SafetyError> {
+    let authority_error = authority_manifest_error(format!("cache authority unavailable: {error}"));
+    match restore_staged_cache(path, staged, staging_dir) {
+        Ok(()) => Err(authority_error),
+        Err(restore_error) => Err(authority_manifest_error(format!(
+            "{authority_error}; {restore_error}"
+        ))),
+    }
 }
 
 /// Move an unchanged cache target to Trash after binding the original pathname to full reviewed
@@ -292,8 +361,13 @@ pub(crate) fn trash_delete_cache_target_with_outcome(
                 }
             }
         };
-        let staged_live = crate::rules::cache_authority_target(&staged)
-            .map_err(|error| authority_manifest_error(format!("cache authority unavailable: {error}")))?;
+        let staged_live = match final_cache_authority_target(&staged) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return restore_final_snapshot_failure(path, &staged, &staging_dir, error)
+                    .map(|_| ());
+            }
+        };
         if staged_live != staged_baseline {
             return match restore_staged_cache(path, &staged, &staging_dir) {
                 Ok(()) => Err(authority_manifest_error(
@@ -342,7 +416,7 @@ pub fn permanent_delete_dir_if_identity(
     expected_manifest_fingerprint: &str,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<(), SafetyError> {
+) -> Result<PermanentDeleteOutcome, SafetyError> {
     if !cache_manifest_is_v2(expected_manifest_fingerprint) {
         if expected_manifest_fingerprint.starts_with("v2:") {
             return Err(authority_manifest_error(
@@ -357,7 +431,12 @@ pub fn permanent_delete_dir_if_identity(
             expected_manifest_fingerprint,
             journal_path,
             now_ms,
-        );
+        )
+        .map(|()| PermanentDeleteOutcome {
+            deleted: true,
+            terminal_journal_error: None,
+            staging_cleanup_error: None,
+        });
     }
 
     authorize_cache_path(path)?;
@@ -388,12 +467,12 @@ pub fn permanent_delete_dir_if_identity(
         bytes,
         outcome: "pending".into(),
     };
-    if let Err(error) = journal_append(journal_path, &entry) {
+    if let Err(error) = append_cache_journal(journal_path, &entry) {
         let _ = std::fs::remove_dir(&staging_dir);
         return Err(error);
     }
 
-    let mutation = (|| -> Result<(), SafetyError> {
+    let mutation = (|| -> Result<Option<String>, SafetyError> {
         cache_authority_snapshot(
             path,
             expected_object_id,
@@ -471,8 +550,13 @@ pub fn permanent_delete_dir_if_identity(
             };
         }
 
-        let staged_live = crate::rules::cache_authority_target(&staged)
-            .map_err(|error| authority_manifest_error(format!("cache authority unavailable: {error}")))?;
+        let staged_live = match final_cache_authority_target(&staged) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return restore_final_snapshot_failure(path, &staged, &staging_dir, error)
+                    .map(|_| None);
+            }
+        };
         if staged_live != staged_baseline {
             return match restore_staged_cache(path, &staged, &staging_dir) {
                 Ok(()) => Err(authority_manifest_error(
@@ -490,14 +574,114 @@ pub fn permanent_delete_dir_if_identity(
                 staged.display()
             )));
         }
-        let _ = std::fs::remove_dir(&staging_dir);
-        Ok(())
+        Ok(cleanup_empty_cache_staging_dir(&staging_dir))
     })();
 
     entry.outcome = match &mutation {
-        Ok(()) => "ok".into(),
+        Ok(_) => "ok".into(),
         Err(error) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    mutation
+    let terminal_journal = append_cache_journal(journal_path, &entry);
+    match mutation {
+        Ok(staging_cleanup_error) => Ok(PermanentDeleteOutcome {
+            deleted: true,
+            terminal_journal_error: terminal_journal.err().map(|error| error.to_string()),
+            staging_cleanup_error,
+        }),
+        Err(error) => match terminal_journal {
+            Ok(()) => Err(error),
+            Err(journal_error) => Err(authority_manifest_error(format!(
+                "{error}; terminal journal append failed: {journal_error}"
+            ))),
+        },
+    }
+}
+
+#[cfg(all(test, unix))]
+mod authority_failure_tests {
+    use super::*;
+
+    fn fixture(label: &str) -> (tempfile::TempDir, PathBuf, crate::rules::CacheTarget, PathBuf) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = temp.path().join(label);
+        std::fs::create_dir(&cache).expect("cache dir");
+        std::fs::write(cache.join("payload.bin"), b"disk-sage-test-payload").expect("payload");
+        let target = crate::rules::cache_authority_target(&cache).expect("authority target");
+        let journal = temp.path().join("journal.jsonl");
+        (temp, cache, target, journal)
+    }
+
+    #[test]
+    fn reversible_final_snapshot_failure_restores_original_cache() {
+        let (_temp, cache, target, journal) = fixture("reversible-cache");
+        inject_final_cache_authority_failure_once();
+
+        let error = trash_delete_cache_target_with_outcome(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            1_000,
+        )
+        .expect_err("injected final snapshot failure must abort Trash");
+
+        assert!(error.to_string().contains("injected-final-cache-authority-failure"));
+        assert!(cache.is_dir(), "the original cache path must be restored");
+        assert_eq!(
+            std::fs::read(cache.join("payload.bin")).expect("restored payload"),
+            b"disk-sage-test-payload"
+        );
+    }
+
+    #[test]
+    fn permanent_final_snapshot_failure_restores_original_cache() {
+        let (_temp, cache, target, journal) = fixture("permanent-cache");
+        inject_final_cache_authority_failure_once();
+
+        let error = permanent_delete_dir_if_identity(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            2_000,
+        )
+        .expect_err("injected final snapshot failure must abort permanent deletion");
+
+        assert!(error.to_string().contains("injected-final-cache-authority-failure"));
+        assert!(cache.is_dir(), "the original cache path must be restored");
+        assert_eq!(
+            std::fs::read(cache.join("payload.bin")).expect("restored payload"),
+            b"disk-sage-test-payload"
+        );
+    }
+
+    #[test]
+    fn completed_permanent_delete_survives_terminal_journal_failure() {
+        let (_temp, cache, target, journal) = fixture("terminal-journal-cache");
+        inject_terminal_cache_journal_failure_once();
+
+        let outcome = permanent_delete_dir_if_identity(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            3_000,
+        )
+        .expect("completed deletion must remain a completed outcome");
+
+        assert!(outcome.deleted);
+        assert!(!cache.exists(), "the generated cache was already deleted");
+        assert!(outcome
+            .terminal_journal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("injected-terminal-cache-journal-failure")));
+        assert!(permanent_delete_outcome_warning(&outcome)
+            .is_some_and(|warning| warning.contains("terminal journal")));
+    }
 }
