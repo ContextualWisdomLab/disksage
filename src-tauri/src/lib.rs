@@ -71,6 +71,7 @@ pub mod organization_lineage;
 mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod opencode_artifact_reclaim;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;

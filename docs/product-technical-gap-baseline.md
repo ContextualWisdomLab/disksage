@@ -1130,6 +1130,37 @@ runner's private workspace temp root instead of weakening the shared production 
   with physical recovery. Colima remains unavailable on this host and its missing executable is
   reported as an unavailable runtime, not as reclaim authority.
 
+## 2026-08-29 OpenCode reference-lineage reclaim boundary
+
+- The live OpenCode data root occupied 9,127,148 KiB. Its 8,683,069,440-byte SQLite database had
+  2,119,890 pages and zero free-list pages, so `VACUUM` has no evidenced reclaim and the database
+  remains preserved. All 20 `session_diff` files map to existing session IDs; all snapshots and
+  every current/unknown session remain preserved.
+- Native JSON references in SQLite identify 59 of 63 present tool-output files. Four regular,
+  single-link files have no `part.data.state.metadata.outputPath` reference and account for
+  270,336 allocated bytes. DiskSage now plans only this exact complement, binds database/WAL and
+  content identities, requires complete idle evidence plus attributed fingerprint approval, and
+  re-plans before moving candidates to Trash. No age or size threshold grants authority.
+- A second exact-identity approval then permanently purged only those four DiskSage-journaled
+  quarantine objects. It rejected generic Trash contents and revalidated source absence,
+  database/WAL identity, direct Trash containment, inode/allocation/content identity, and active
+  use immediately before removal. The 260,637 logical bytes and 270,336 allocated bytes are exact;
+  APFS availability decreased by 48,730,112 bytes during the external before/after window because
+  of concurrent writes, so attributable physical reclaim remains zero rather than being inferred.
+- Current-head security review subsequently proved that the former path-based mutation boundary
+  could not authenticate a caller-selected shared journal, atomically bind the validated inode to
+  the Trash move, isolate repeated batches, or guarantee per-item outcomes after partial failure.
+  Trash execution and permanent purge are therefore fail-closed disabled. Re-enablement requires
+  a current-user-owned create-only batch manifest bound to the prior approval, OS-enforced
+  replacement-resistant movement/unlink, and restart-safe immutable per-item outcomes.
+- The referenced 594,168,241-byte tool output remains preserved despite dominating the sidecar
+  directory. Customer-visible large-session selection/export and native session deletion remain a
+  product gap; DiskSage will not choose sessions merely to satisfy the 300 GB target.
+- In a separate bounded development-artifact execution, existing DiskSage identity and active-use
+  guards excluded active builds and removed only inactive generated targets. APFS availability
+  increased from 23,400,624,128 to 26,340,622,336 bytes, an observed gain of 2,939,998,208 bytes;
+  repository paths are intentionally omitted from the shared baseline.
+
 ## 2026-08-29 OneDrive native local-eviction boundary
 
 - The selected OneDrive root is a registered macOS File Provider domain. A bounded native status

@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Reclaim only OpenCode tool-output sidecars absent from the native SQLite
+  `part.data.state.metadata.outputPath` reference set. Plans bind database/WAL and file identities,
+  require idle active-use evidence and an exact attributed approval, then re-plan before moving
+  preserve exact candidates while read-only planning remains available. Trash and permanent purge
+  execution are disabled until authenticated batch lineage, identity-bound OS mutation, and
+  restart-safe immutable per-item outcomes are implemented.
 - Inspect completed DiskSage-owned top-level shared-temporary artifacts through create-only
   lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
   atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
