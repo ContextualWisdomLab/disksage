@@ -560,7 +560,7 @@ where
 {
     let (common_dir, repository_object_id, _head) =
         checkout_binding(repository_root, retention_references, observed_at_ms)?;
-    let _lease_guard = lock_checkout_lease(&common_dir)?;
+    let lease_guard = lock_checkout_lease(&common_dir)?;
     let lease = read_checkout_lease(&common_dir)?
         .ok_or_else(|| "git-checkout-lease-missing".to_string())?;
     validate_checkout_lease(&lease, &repository_object_id, observed_at_ms)?;
@@ -573,6 +573,7 @@ where
     std::fs::remove_file(&lease_path)
         .map_err(|_| "git-checkout-lease-release-failed".to_string())?;
     if sync_directory(&common_dir).is_ok() {
+        drop(lease_guard);
         return Ok(());
     }
     let restore_result = std::fs::OpenOptions::new()
@@ -581,8 +582,10 @@ where
         .open(&lease_path)
         .and_then(|mut file| file.write_all(&encoded).and_then(|_| file.sync_all()));
     if restore_result.is_err() || sync_checkout_lease_directory(&common_dir).is_err() {
+        drop(lease_guard);
         return Err("git-checkout-lease-release-restore-failed".into());
     }
+    drop(lease_guard);
     Err("git-checkout-lease-release-failed".into())
 }
 
