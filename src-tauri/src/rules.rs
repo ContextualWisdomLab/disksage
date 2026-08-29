@@ -61,13 +61,12 @@ pub struct CacheTarget {
     pub bytes: u64,
     pub modified_ms: u64,
     pub object_id: String,
-    /// Deterministic recursive metadata-and-content manifest for the reviewed tree.
+    /// Deterministic recursive metadata manifest for the reviewed tree.
     #[serde(default)]
     pub manifest_fingerprint: String,
 }
 
 const MAX_CACHE_TARGETS: usize = 4_096;
-const MAX_CACHE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_CACHE_MANIFEST_ENTRIES: usize = 100_000;
 
 #[cfg(test)]
@@ -634,16 +633,12 @@ fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
 
 #[derive(Debug, Clone, Copy)]
 struct CacheManifestBudget {
-    remaining_bytes: u64,
     remaining_entries: usize,
 }
 
 impl CacheManifestBudget {
-    fn new(remaining_bytes: u64, remaining_entries: usize) -> Self {
-        Self {
-            remaining_bytes,
-            remaining_entries,
-        }
+    fn new(remaining_entries: usize) -> Self {
+        Self { remaining_entries }
     }
 
     fn consume_entry(&mut self) -> Result<(), String> {
@@ -654,13 +649,32 @@ impl CacheManifestBudget {
         Ok(())
     }
 
-    fn consume_bytes(&mut self, bytes: u64) -> Result<(), String> {
-        self.remaining_bytes = self
-            .remaining_bytes
-            .checked_sub(bytes)
-            .ok_or_else(|| "cache-target-manifest-byte-limit-exceeded".to_string())?;
-        Ok(())
+}
+
+pub(crate) fn cache_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cache-metadata-v1\0");
+    hasher.update(&metadata.len().to_le_bytes());
+    hasher.update(&modified_ms(metadata).to_le_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hasher.update(&metadata.dev().to_le_bytes());
+        hasher.update(&metadata.ino().to_le_bytes());
+        hasher.update(&metadata.ctime().to_le_bytes());
+        hasher.update(&metadata.ctime_nsec().to_le_bytes());
+        hasher.update(&metadata.blocks().to_le_bytes());
+        hasher.update(&metadata.mode().to_le_bytes());
+        hasher.update(&metadata.nlink().to_le_bytes());
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        hasher.update(&metadata.creation_time().to_le_bytes());
+        hasher.update(&metadata.last_write_time().to_le_bytes());
+        hasher.update(&metadata.file_attributes().to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 fn update_cache_manifest(
@@ -687,8 +701,8 @@ fn update_cache_manifest(
         0
     };
     hasher.update(&[entry_kind]);
-    hasher.update(&metadata.len().to_le_bytes());
-    hasher.update(&modified_ms(&metadata).to_le_bytes());
+    let metadata_fingerprint = cache_metadata_fingerprint(&metadata);
+    update_manifest_bytes(hasher, metadata_fingerprint.as_bytes());
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
     update_manifest_bytes(hasher, object_id.as_bytes());
@@ -697,41 +711,16 @@ fn update_cache_manifest(
             .map_err(|_| "cache-target-manifest-symlink-unavailable".to_string())?;
         update_manifest_name(hasher, destination.as_os_str());
     } else if metadata.is_file() {
-        use std::io::Read;
-        if metadata.len() > budget.remaining_bytes {
-            return Err("cache-target-manifest-byte-limit-exceeded".into());
-        }
-        let mut file = std::fs::File::open(path)
-            .map_err(|_| "cache-target-manifest-file-unavailable".to_string())?;
-        let mut buffer = [0u8; 64 * 1024];
-        let mut bytes_read = 0u64;
-        loop {
-            let read = file
-                .read(&mut buffer)
-                .map_err(|_| "cache-target-manifest-file-read-failed".to_string())?;
-            if read == 0 {
-                break;
-            }
-            let read = u64::try_from(read)
-                .map_err(|_| "cache-target-manifest-byte-limit-exceeded".to_string())?;
-            budget.consume_bytes(read)?;
-            bytes_read = bytes_read
-                .checked_add(read)
-                .ok_or_else(|| "cache-target-manifest-byte-limit-exceeded".to_string())?;
-            hasher.update(&buffer[..usize::try_from(read).expect("buffer read fits usize")]);
-        }
         let refreshed = std::fs::symlink_metadata(path)
-            .map_err(|_| "cache-target-manifest-file-changed-during-read".to_string())?;
+            .map_err(|_| "cache-target-manifest-file-changed-during-scan".to_string())?;
         let refreshed_object_id = crate::safety::filesystem_object_id(path)
-            .map_err(|_| "cache-target-manifest-file-changed-during-read".to_string())?;
+            .map_err(|_| "cache-target-manifest-file-changed-during-scan".to_string())?;
         if !refreshed.is_file()
             || refreshed.file_type().is_symlink()
-            || bytes_read != metadata.len()
-            || refreshed.len() != metadata.len()
-            || modified_ms(&refreshed) != modified_ms(&metadata)
+            || cache_metadata_fingerprint(&refreshed) != metadata_fingerprint
             || refreshed_object_id != object_id
         {
-            return Err("cache-target-manifest-file-changed-during-read".into());
+            return Err("cache-target-manifest-file-changed-during-scan".into());
         }
     } else if metadata.is_dir() {
         let child_limit = budget.remaining_entries;
@@ -781,8 +770,7 @@ fn update_cache_manifest(
         if refreshed_names != child_names
             || !refreshed.is_dir()
             || refreshed.file_type().is_symlink()
-            || refreshed.len() != metadata.len()
-            || modified_ms(&refreshed) != modified_ms(&metadata)
+            || cache_metadata_fingerprint(&refreshed) != metadata_fingerprint
             || refreshed_object_id != object_id
         {
             return Err("cache-target-manifest-directory-changed-during-read".into());
@@ -816,9 +804,6 @@ fn cache_target_with_budget(
     } else {
         metadata.len()
     };
-    if bytes > budget.remaining_bytes {
-        return Err("cache-target-manifest-byte-limit-exceeded".into());
-    }
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
     let manifest_fingerprint = cache_manifest_fingerprint_with_budget(path, budget)?;
@@ -833,7 +818,7 @@ fn cache_target_with_budget(
 
 /// Snapshot one exact cache child with the complete mutation manifest used by catalog review.
 pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
-    let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, MAX_CACHE_MANIFEST_ENTRIES);
+    let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_ENTRIES);
     cache_target_with_budget(path, &mut budget)
 }
 
@@ -867,8 +852,7 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
         if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
-        let mut budget =
-            CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, MAX_CACHE_MANIFEST_ENTRIES);
+        let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_ENTRIES);
         match cache_target_with_budget(&path, &mut budget) {
             Ok(target) => targets.push(target),
             Err(error) if error == "cache-target-type-unsupported" => continue,
@@ -1075,7 +1059,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         fs::write(root.join("one.bin"), b"one").unwrap();
         let mut hasher = blake3::Hasher::new();
-        let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, 1);
+        let mut budget = CacheManifestBudget::new(1);
 
         let error = update_cache_manifest(&root, &mut hasher, &mut budget)
             .expect_err("manifest traversal must stop when its entry budget is exhausted");
@@ -1091,7 +1075,7 @@ mod tests {
         fs::write(root.join("one.bin"), b"one").unwrap();
         fs::write(root.join("two.bin"), b"two").unwrap();
         let mut hasher = blake3::Hasher::new();
-        let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_BYTES, 2);
+        let mut budget = CacheManifestBudget::new(2);
 
         let error = update_cache_manifest(&root, &mut hasher, &mut budget)
             .expect_err("enumeration must reject the child that exceeds the remaining budget");
@@ -1100,17 +1084,36 @@ mod tests {
     }
 
     #[test]
-    fn cache_manifest_byte_budget_counts_actual_file_reads() {
+    fn cache_manifest_uses_metadata_without_reading_file_content() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("payload.bin");
         fs::write(&file, b"four").unwrap();
         let mut hasher = blake3::Hasher::new();
-        let mut budget = CacheManifestBudget::new(3, 1);
+        let mut budget = CacheManifestBudget::new(1);
 
-        let error = update_cache_manifest(&file, &mut hasher, &mut budget)
-            .expect_err("content reads must stop at the byte budget");
+        update_cache_manifest(&file, &mut hasher, &mut budget)
+            .expect("metadata manifest must not read file content");
+    }
 
-        assert_eq!(error, "cache-target-manifest-byte-limit-exceeded");
+    #[cfg(unix)]
+    #[test]
+    fn cache_manifest_accepts_unreadable_sparse_large_file() {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::PermissionsExt;
+        const LARGE_LOGICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024 + 1;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("sparse.bin");
+        let handle = OpenOptions::new().create_new(true).write(true).open(&file).unwrap();
+        handle.set_len(LARGE_LOGICAL_BYTES).unwrap();
+        drop(handle);
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&file, permissions).unwrap();
+        let target = cache_target(&file).expect("metadata manifest must not open file content");
+        assert_eq!(target.bytes, LARGE_LOGICAL_BYTES);
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&file, permissions).unwrap();
     }
 
     #[test]
@@ -1120,11 +1123,26 @@ mod tests {
         let second = tmp.path().join("second.bin");
         fs::write(&first, b"abc").unwrap();
         fs::write(&second, b"def").unwrap();
-        let mut first_budget = CacheManifestBudget::new(3, 1);
-        let mut second_budget = CacheManifestBudget::new(3, 1);
+        let mut first_budget = CacheManifestBudget::new(1);
+        let mut second_budget = CacheManifestBudget::new(1);
 
         cache_target_with_budget(&first, &mut first_budget).unwrap();
         cache_target_with_budget(&second, &mut second_budget).unwrap();
+    }
+
+    #[test]
+    fn cache_manifest_detects_same_size_path_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("payload.bin");
+        fs::write(&file, b"aaaa").unwrap();
+        let reviewed = cache_target(&file).unwrap();
+        let replacement = tmp.path().join("replacement.bin");
+        fs::write(&replacement, b"bbbb").unwrap();
+        fs::rename(&replacement, &file).unwrap();
+        let live = cache_target(&file).unwrap();
+        assert_eq!(reviewed.bytes, live.bytes);
+        assert_ne!(reviewed.object_id, live.object_id);
+        assert_ne!(reviewed.manifest_fingerprint, live.manifest_fingerprint);
     }
 
     #[test]

@@ -536,6 +536,25 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_rejects_same_size_replacement_before_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        fs::create_dir(&bases.temp).unwrap();
+        let victim = bases.temp.join("keep.bin");
+        fs::write(&victim, b"keep").unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let targets = rules::cache_targets(&bases.temp).unwrap();
+        let replacement = bases.temp.join("replacement.bin");
+        fs::write(&replacement, b"safe").unwrap();
+        fs::rename(&replacement, &victim).unwrap();
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
+            .err().expect("same-size replacement must invalidate the reviewed manifest");
+        assert_eq!(error, "cache-cleanup-targets-stale");
+        assert_eq!(fs::read(&victim).unwrap(), b"safe");
+        assert!(!journal.exists());
+    }
+
+    #[test]
     fn active_use_evidence_blocks_cache_mutation() {
         let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
             method: "lsof-file-pid".into(),
