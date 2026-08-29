@@ -679,3 +679,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-29 OneDrive provider-cache pressure boundary
+
+- A bounded read-only live observation found 13,663,981,568 allocated bytes across 13
+  provider-managed cache files. The aggregate File Provider state was `error` and contained the
+  provider's local-disk-full marker. Active-use collection for the cache root completed with no
+  observed users. No item name, user path, provider blob, or database row is retained in the report.
+- DiskSage now reports `internal-pressure` from that conjunction. It does not infer orphanhood from
+  cache age or size and cannot authorize provider-internal deletion, reset, or restart. A sync stall
+  requires two complete equal aggregate observations separated by an explicit service deadline;
+  incomplete evidence is `unavailable`.
+- The remaining physical-reclaim path is item-level native eviction after exact upload and safety
+  attestation. Provider-owned cache compaction has no safe public DiskSage authority and remains an
+  explicit non-feature rather than a destructive cleanup candidate.
