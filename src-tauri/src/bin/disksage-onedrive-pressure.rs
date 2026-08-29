@@ -155,4 +155,13 @@ mod tests {
             expected
         );
     }
+
+    #[test]
+    fn oversized_previous_observation_is_rejected_before_json_parsing() {
+        let oversized = vec![b' '; 64 * 1024 + 1];
+        assert_eq!(
+            decode_previous_observation(&oversized).unwrap_err(),
+            "previous-observation-too-large"
+        );
+    }
 }
