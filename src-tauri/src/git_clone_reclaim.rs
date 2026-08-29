@@ -1204,17 +1204,50 @@ fn execute_git_clone_reclaim_with_authority(
     }
     let live_root = PathBuf::from(&live.repository_root);
     let evidence_matches = |candidate_root: &Path| {
-        let candidate = plan_git_clone_reclaim_with_authority_and_membership(
-            candidate_root,
-            retention_references,
-            &closed,
-            &stale_open,
-            &membership,
-            stale_open_pull_request_cutoff_ms,
-            default_branch_evidence,
-            options,
-            requested_at_ms,
-        );
+        let candidate = if default_branch_evidence.is_some() {
+            plan_git_clone_reclaim_with_default_branch(
+                candidate_root,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                options,
+                requested_at_ms,
+            )
+        } else {
+            let refreshed_closed = if include_closed_pull_requests {
+                git_worktree::github_closed_pull_request_heads_with_options(candidate_root, options)
+            } else {
+                Ok(ClosedPullRequestHeads::new())
+            };
+            let refreshed_stale = stale_open_pull_request_cutoff_ms.map_or_else(
+                || Ok(StaleOpenPullRequestHeads::new()),
+                |cutoff_ms| {
+                    git_worktree::github_stale_open_pull_request_heads(
+                        candidate_root,
+                        cutoff_ms,
+                        options.command_timeout_ms,
+                    )
+                },
+            );
+            refreshed_closed
+                .and_then(|closed| refreshed_stale.map(|stale| (closed, stale)))
+                .and_then(|(closed, stale)| {
+                    git_worktree::github_pull_request_commit_membership(candidate_root, options)
+                        .and_then(|membership| {
+                            plan_git_clone_reclaim_with_authority_and_membership(
+                                candidate_root,
+                                retention_references,
+                                &closed,
+                                &stale,
+                                &membership,
+                                stale_open_pull_request_cutoff_ms,
+                                None,
+                                options,
+                                requested_at_ms,
+                            )
+                        })
+                })
+        };
         let Ok(candidate) = candidate else { return false };
         let same_authority = candidate.repository_object_id == live.repository_object_id
             && candidate.head == live.head
