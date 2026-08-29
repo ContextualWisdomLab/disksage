@@ -23,8 +23,6 @@ fn main() {
     let result = (|| {
         enforce_cli_platform()?;
         validate_cli_argument_tokens(&args)?;
-        let prlctl = PathBuf::from(value(&args, "--prlctl")?);
-        let disk_tool = PathBuf::from(value(&args, "--disk-tool")?);
         let vm_id = value(&args, "--vm-id")?;
         let bundle = PathBuf::from(value(&args, "--bundle")?);
         let disk = PathBuf::from(value(&args, "--disk")?);
@@ -32,7 +30,7 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| "시스템 시간을 확인하세요.".to_string())?
             .as_millis() as u64;
-        plan(&prlctl, &disk_tool, &vm_id, &bundle, &disk, now)
+        plan(&vm_id, &bundle, &disk, now)
     })();
     match result {
         Ok(plan) => println!("{}", serde_json::to_string_pretty(&plan).unwrap()),

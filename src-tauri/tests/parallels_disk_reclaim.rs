@@ -160,10 +160,6 @@ fn plan_fingerprint_changes_when_active_use_evidence_changes() {
 #[test]
 fn cli_argument_contract_rejects_unknown_tokens() {
     let args = [
-        "--prlctl",
-        "/Applications/Parallels Desktop.app/Contents/MacOS/prlctl",
-        "--disk-tool",
-        "/Applications/Parallels Desktop.app/Contents/MacOS/prl_disk_tool",
         "--vm-id",
         "vm-123",
         "--bundle",
@@ -182,11 +178,53 @@ fn cli_argument_contract_rejects_unknown_tokens() {
     assert_eq!(error, "지원하지 않는 인자가 있습니다: --bundel");
 }
 
+#[test]
+fn plan_fingerprint_binds_observation_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let prlctl = root.join("prlctl");
+    let disk_tool = root.join("prl_disk_tool");
+    std::fs::write(&prlctl, b"fake").unwrap();
+    std::fs::write(&disk_tool, b"fake").unwrap();
+    let bundle = root.join("Work Windows.pvm");
+    let disk = bundle.join("Work Windows-0.hdd");
+    std::fs::create_dir_all(&disk).unwrap();
+    let runner = FakeRunner {
+        home: bundle.to_string_lossy().into_owned(),
+    };
+    let first = plan_with_runner(
+        &runner,
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        1,
+        inactive(),
+    )
+    .unwrap();
+    let second = plan_with_runner(
+        &runner,
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        2,
+        inactive(),
+    )
+    .unwrap();
+    assert_ne!(first.plan_fingerprint, second.plan_fingerprint);
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn parallels_cli_rejects_unsupported_host_platforms() {
     let error = enforce_cli_platform().unwrap_err();
-    assert_eq!(error, "Parallels 디스크 회수 계획은 macOS에서만 지원합니다.");
+    assert_eq!(
+        error,
+        "Parallels 디스크 회수 계획은 macOS에서만 지원합니다."
+    );
 }
 
 #[cfg(unix)]

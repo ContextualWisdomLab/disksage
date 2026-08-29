@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const TREE_ALLOCATION_BUDGET: Duration = Duration::from_secs(5);
 const MAX_ENTRIES: usize = 100_000;
-const CLI_FLAGS: [&str; 5] = ["--prlctl", "--disk-tool", "--vm-id", "--bundle", "--disk"];
+const CLI_FLAGS: [&str; 3] = ["--vm-id", "--bundle", "--disk"];
+const PRLCTL_PATH: &str = "/Applications/Parallels Desktop.app/Contents/MacOS/prlctl";
+const DISK_TOOL_PATH: &str = "/Applications/Parallels Desktop.app/Contents/MacOS/prl_disk_tool";
 
 pub trait ParallelsCommandRunner {
     fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String>;
@@ -111,8 +113,8 @@ fn canonical_bundle_for_active_use(bundle: &Path) -> Result<PathBuf, String> {
     if path_has_symlink(bundle) {
         return Err("parallels-symlink-path-rejected".into());
     }
-    let bundle = std::fs::canonicalize(bundle)
-        .map_err(|_| "parallels-bundle-unavailable".to_string())?;
+    let bundle =
+        std::fs::canonicalize(bundle).map_err(|_| "parallels-bundle-unavailable".to_string())?;
     if bundle.extension().and_then(|value| value.to_str()) != Some("pvm")
         || bundle.to_string_lossy().contains("/Library/CloudStorage/")
         || bundle
@@ -270,7 +272,10 @@ pub fn plan_with_runner(
         .ok_or_else(|| "parallels-vm-not-found".to_string())?;
     let registered_bundle = std::fs::canonicalize(Path::new(&vm.home))
         .map_err(|_| "parallels-vm-home-unavailable".to_string())?;
-    if registered_bundle.extension().and_then(|value| value.to_str()) != Some("pvm")
+    if registered_bundle
+        .extension()
+        .and_then(|value| value.to_str())
+        != Some("pvm")
         || registered_bundle != bundle
     {
         return Err("parallels-vm-bundle-mismatch".into());
@@ -321,6 +326,7 @@ pub fn plan_with_runner(
             logical,
             physical,
             reclaimable,
+            observed_at_ms,
             active_use.assessed as u64,
             active_use.evidence_complete as u64,
             active_use.active as u64,
@@ -355,8 +361,6 @@ pub fn plan_with_runner(
 }
 
 pub fn plan(
-    prlctl: &Path,
-    disk_tool: &Path,
     vm_id: &str,
     bundle: &Path,
     disk: &Path,
@@ -366,8 +370,8 @@ pub fn plan(
     let active = crate::git_worktree::active_use_evidence(&canonical_bundle, 30_000, 256, true);
     plan_with_runner(
         &ProcessParallelsCommandRunner,
-        prlctl,
-        disk_tool,
+        Path::new(PRLCTL_PATH),
+        Path::new(DISK_TOOL_PATH),
         vm_id,
         &canonical_bundle,
         disk,
