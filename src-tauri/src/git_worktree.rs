@@ -499,6 +499,8 @@ fn run_git(
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GitHubPullRequestHead {
+    #[serde(default)]
+    number: Option<u64>,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
     #[serde(rename = "headRefOid")]
@@ -528,7 +530,7 @@ struct GitHubSearchPullRequest {
 }
 
 pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
-pub type StaleOpenPullRequestHeads = BTreeSet<(String, String)>;
+pub type StaleOpenPullRequestHeads = BTreeMap<(String, String), BTreeSet<u64>>;
 pub type PullRequestCommits = BTreeSet<String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -715,7 +717,11 @@ fn parse_stale_open_pull_request_heads(
             }
             (branch_ref, oid)
         };
-        stale_heads.insert(binding);
+        let number = record
+            .number
+            .filter(|number| *number > 0)
+            .ok_or_else(|| "github-open-pr-number-missing".to_string())?;
+        stale_heads.entry(binding).or_default().insert(number);
     }
     if stale_heads.len() > 10_000 {
         return Err("github-open-pr-count-exceeds-limit".into());
@@ -1081,7 +1087,7 @@ pub fn github_stale_open_pull_request_heads(
             OsString::from("--limit"),
             OsString::from("10001"),
             OsString::from("--json"),
-            OsString::from("headRefName,headRefOid,isCrossRepository,state,createdAt"),
+            OsString::from("number,headRefName,headRefOid,isCrossRepository,state,createdAt"),
         ],
         repository_root,
         timeout_ms,
@@ -1562,7 +1568,7 @@ fn removal_authority_fingerprint(
     removal_authority_fingerprint_with_open(
         retention_fingerprint,
         closed_pull_request_heads,
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         &BTreeSet::new(),
         &BTreeMap::new(),
         None,
@@ -1604,10 +1610,13 @@ fn removal_authority_fingerprint_with_open(
         hash_field(&mut hasher, branch_ref);
         hash_field(&mut hasher, oid);
     }
-    for (branch_ref, oid) in stale_open_pull_request_heads {
+    for ((branch_ref, oid), pull_request_numbers) in stale_open_pull_request_heads {
         hash_field(&mut hasher, "stale-open");
         hash_field(&mut hasher, branch_ref);
         hash_field(&mut hasher, oid);
+        for pull_request_number in pull_request_numbers {
+            hash_field(&mut hasher, &pull_request_number.to_string());
+        }
     }
     for oid in completed_pull_request_commits {
         hash_field(&mut hasher, "completed-commit");
@@ -2052,7 +2061,7 @@ pub fn audit_git_worktrees_with_closed_pull_request_heads(
         repository_root,
         retention_references,
         closed_pull_request_heads,
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         None,
         options,
         generated_at_ms,
@@ -2103,7 +2112,12 @@ pub fn audit_git_worktrees_with_pull_request_membership(
     if stale_open_pull_request_heads.len() > 10_000
         || stale_open_pull_request_heads
             .iter()
-            .any(|(branch_ref, oid)| validate_reference(branch_ref).is_err() || !is_oid(oid))
+            .any(|((branch_ref, oid), pull_request_numbers)| {
+                validate_reference(branch_ref).is_err()
+                    || !is_oid(oid)
+                    || pull_request_numbers.is_empty()
+                    || pull_request_numbers.contains(&0)
+            })
         || (!stale_open_pull_request_heads.is_empty()
             && stale_open_pull_request_cutoff_ms.is_none())
     {
@@ -2179,15 +2193,17 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         let closed_pull_request_head = raw.branch.as_ref().is_some_and(|branch_ref| {
             closed_pull_request_heads.contains(&(branch_ref.clone(), raw.head.clone()))
         });
-        let stale_open_pull_request_head = raw.branch.as_ref().is_some_and(|branch_ref| {
-            stale_open_pull_request_heads.contains(&(branch_ref.clone(), raw.head.clone()))
+        let stale_open_pull_request_numbers = raw.branch.as_ref().and_then(|branch_ref| {
+            stale_open_pull_request_heads.get(&(branch_ref.clone(), raw.head.clone()))
         });
+        let stale_open_pull_request_head = stale_open_pull_request_numbers.is_some();
         let completed_pull_request_commit = pull_request_commits.completed.contains(&raw.head);
         let open_pull_request_commit = pull_request_commits
             .open
             .get(&raw.head)
             .is_some_and(|pull_request_numbers| {
-                !stale_open_pull_request_head || pull_request_numbers.len() > 1
+                stale_open_pull_request_numbers
+                    .is_none_or(|stale_numbers| !pull_request_numbers.is_subset(stale_numbers))
             });
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
         let size = if path_valid {
@@ -3152,10 +3168,10 @@ mod tests {
     fn stale_open_pull_request_evidence_requires_valid_timestamp_and_filters_explicit_cutoff() {
         let json = format!(
             r#"[
-              {{"headRefName":"old-local","headRefOid":"{}","isCrossRepository":false,"state":"OPEN","createdAt":"2026-01-01T00:00:00Z"}},
-              {{"headRefName":"new-local","headRefOid":"{}","isCrossRepository":false,"state":"OPEN","createdAt":"2026-08-28T00:00:00Z"}},
-              {{"headRefName":"forked","headRefOid":"{}","isCrossRepository":true,"state":"OPEN","createdAt":"2020-01-01T00:00:00Z"}},
-              {{"headRefName":"closed","headRefOid":"{}","isCrossRepository":false,"state":"CLOSED","createdAt":"2020-01-01T00:00:00Z"}}
+              {{"number":1,"headRefName":"old-local","headRefOid":"{}","isCrossRepository":false,"state":"OPEN","createdAt":"2026-01-01T00:00:00Z"}},
+              {{"number":2,"headRefName":"new-local","headRefOid":"{}","isCrossRepository":false,"state":"OPEN","createdAt":"2026-08-28T00:00:00Z"}},
+              {{"number":3,"headRefName":"forked","headRefOid":"{}","isCrossRepository":true,"state":"OPEN","createdAt":"2020-01-01T00:00:00Z"}},
+              {{"number":4,"headRefName":"closed","headRefOid":"{}","isCrossRepository":false,"state":"CLOSED","createdAt":"2020-01-01T00:00:00Z"}}
             ]"#,
             oid('a'),
             oid('b'),
@@ -3165,7 +3181,7 @@ mod tests {
         let cutoff = parse_github_timestamp_ms("2026-08-01T00:00:00Z").unwrap();
         assert_eq!(
             parse_stale_open_pull_request_heads(json.as_bytes(), cutoff).unwrap(),
-            BTreeSet::from([("refs/heads/old-local".into(), oid('a'))])
+            BTreeMap::from([(("refs/heads/old-local".into(), oid('a')), BTreeSet::from([1]))])
         );
         assert!(parse_github_timestamp_ms("2026-02-30T00:00:00Z").is_none());
         assert!(parse_github_timestamp_ms("2026-01-01T00:00:00+00:00").is_none());
