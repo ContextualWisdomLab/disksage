@@ -157,7 +157,7 @@ fn run(raw: impl IntoIterator<Item = OsString>) -> Result<(), String> {
             exact_approval_phrase: plan.exact_approval_phrase,
             private_evidence: evidence.result,
             completed: Some(evidence.outcome.completed),
-            physically_reclaimed_bytes: Some(evidence.outcome.physically_reclaimed_bytes),
+            physically_reclaimed_bytes: evidence.outcome.physically_reclaimed_bytes,
             reason_code: Some(evidence.outcome.reason_code),
         }
     } else {
