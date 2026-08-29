@@ -172,4 +172,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, "--home must match process HOME");
     }
+
+    #[test]
+    fn disabled_mutations_are_not_advertised_or_accepted() {
+        assert!(!USAGE.contains("--execute"));
+        assert!(!USAGE.contains("--purge-quarantined"));
+        assert_eq!(
+            parse(&["--execute".into()]).unwrap_err(),
+            "OpenCode artifact mutation is unavailable"
+        );
+        assert_eq!(
+            parse(&["--purge-quarantined".into()]).unwrap_err(),
+            "OpenCode artifact mutation is unavailable"
+        );
+    }
 }
