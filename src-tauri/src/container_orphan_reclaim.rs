@@ -995,11 +995,17 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let mut candidate_ids = Vec::with_capacity(candidates.len());
-                for candidate in candidates {
+                let stopped_ids = bounded_exact_candidate_ids(
+                    candidates
+                        .iter()
+                        .map(|candidate| candidate.id.clone())
+                        .collect(),
+                )?;
+                let mut candidate_ids = Vec::with_capacity(stopped_ids.len());
+                for candidate_id in stopped_ids {
                     let mut inspect_args: Vec<&str> =
                         prefix.iter().skip(1).map(String::as_str).collect();
-                    inspect_args.extend(["container", "inspect", &candidate.id]);
+                    inspect_args.extend(["container", "inspect", &candidate_id]);
                     let inspect_output = command_text(
                         &target.binary_path,
                         &inspect_args,
@@ -1007,7 +1013,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         "orphan-container-storage-lineage",
                     )?;
                     if !container_has_storage_mounts(&inspect_output)? {
-                        candidate_ids.push(candidate.id.clone());
+                        candidate_ids.push(candidate_id);
                     }
                 }
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
