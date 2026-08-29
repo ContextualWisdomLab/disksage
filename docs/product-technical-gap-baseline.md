@@ -1295,3 +1295,22 @@ runner's private workspace temp root instead of weakening the shared production 
 - The audit performed no mutation. Quarantine planning cannot begin without one survivor per group;
   execution additionally requires the exact plan phrase, fresh full re-audit, inactive files, and
   unchanged filesystem identities before any non-survivor moves to OS Trash.
+
+## 2026-08-29 Google Drive local-allocation boundary
+
+- A metadata-only audit detected four registered Google Drive File Provider roots: two personal,
+  one shared, and one organization root. Two bounded roots completed without evidence gaps; the
+  larger personal root remained incomplete after 11,732 entries because 22 entries could not meet
+  the metadata policy, and the shared root remained incomplete after 194 entries with eight entry
+  errors. No file content was opened or materialized.
+- At the 1 MiB allocation floor, all four roots produced zero local-copy candidates and zero
+  allocated candidate bytes. At the zero-byte reporting floor, only the incomplete personal scan
+  emitted candidates: 59 metadata-sized items totaling 319,488 allocated bytes. This is neither
+  meaningful reclaim nor complete-root eviction evidence.
+- The provider-generic batch planner rejects the Google Drive root before planning because its
+  public Foundation eligibility and postcondition contract has not been verified. DiskSage keeps
+  this fail-closed boundary: it emits no eligibility claim or executable fingerprint, and it does
+  not broaden the OneDrive/iCloud executor merely because Google Drive uses File Provider. The
+  private mode-0700/0600 receipt is identified as
+  `disksage-google-drive-live-20260829-e53df609`; no customer path or provider identifier is
+  recorded here, and no mutation occurred.

@@ -79,6 +79,19 @@ under exact fingerprint
 `ad0118c3316579e768df8de2e1942b8109c76e92381b4346b2824e146e01b80a`.
 The top-128 result is not whole-root authority, and neither read-only plan performed a mutation.
 
+## Amendment: Google Drive fail-closed evidence (2026-08-29)
+
+A metadata-only audit detected two personal, one shared, and one organization Google Drive File
+Provider root. At the 1 MiB allocation floor every root produced zero candidates and zero allocated
+candidate bytes. A zero-byte-floor probe emitted only 59 metadata-sized items totaling 319,488
+allocated bytes from an incomplete personal-root scan; the other roots emitted none. The generic
+batch planner therefore continues to reject Google Drive: DiskSage has not established the public
+Foundation eligibility, item-identity revalidation, or post-eviction contract required to inherit
+the iCloud and OneDrive executor. Receipt `disksage-google-drive-live-20260829-e53df609` retains the
+path-free observation under mode 0700/0600. No eligibility fingerprint or mutation was produced.
+Adding an executor for this negligible, incomplete cohort would weaken the provider boundary
+without a measurable customer benefit.
+
 ## Rejected alternatives
 
 - OneDrive's undocumented `/unpin` command: observed builds can print a native failure while
