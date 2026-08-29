@@ -71,9 +71,18 @@ fn admit_file(manifest: &mut DirectoryFileManifest, name: &OsStr, size: u64) {
 }
 
 pub(crate) fn current_directory_file_manifest(path: &Path) -> Option<DirectoryFileManifest> {
+    let entries = std::fs::read_dir(path)
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    directory_file_manifest_from_entries(&entries)
+}
+
+pub(crate) fn directory_file_manifest_from_entries(
+    entries: &[std::fs::DirEntry],
+) -> Option<DirectoryFileManifest> {
     let mut manifest = DirectoryFileManifest::default();
-    for entry in std::fs::read_dir(path).ok()? {
-        let entry = entry.ok()?;
+    for entry in entries {
         let file_type = entry.file_type().ok()?;
         if file_type.is_symlink() || !file_type.is_file() {
             continue;
