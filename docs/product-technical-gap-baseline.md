@@ -7,6 +7,27 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## Open pull-request snapshot — 2026-08-29 20:49:59 +0900
+
+This table records the exact remote head observed immediately before this documentation commit.
+Because committing this table necessarily advances PR #304 itself, its listed SHA is the
+pre-documentation observation, not a claim that the self-referential row remains its current head.
+Every push invalidates prior check and review evidence; the protected branch state must be queried
+again before a normal merge.
+
+| PR | Exact head observed | Product responsibility | Protected-gate state at observation |
+| --- | --- | --- | --- |
+| #298 | `a21c1eb5a5af6fea696dcd8f26e498e91eb5ae49` | Bound test-runner disk allocation. | Blocked: source checks passed, but Strix failed on an oversized sidecar request and OpenCode produced no qualifying exact-head verdict. |
+| #300 | `c8af6ada10c2a8ca369ad5c41b2d4b923498a254` | Prove when a standalone clone is safely reclaimable. | Unstable: the Windows release build was running and `test` had failed; failure diagnosis remained required. |
+| #302 | `1878181f6cccf691a8de56a9380db94f375059e2` | Preserve dormant checkout ownership with durable leases. | Unstable: fresh build, cache-cleanup, LLM, and test checks were queued or running after the lease serialization fix. |
+| #303 | `0c97ee3bb032d973334ba8fe709038518436b71a` | Reclaim provider caches only from identity-bound evidence. | Blocked: platform builds were running, `test` still failed, and OpenCode/Noema had no passing exact-head gate evidence. |
+| #304 | `d7aa316e954c08c03bd131591ffc6fb7978e7e47` | Diagnose OneDrive provider-cache pressure without granting deletion authority. | Blocked: platform builds and tests were running; Strix, OpenCode, and Noema were failed at the observation head. |
+
+The immediate loop is therefore: diagnose source-owned test failures on #300 and #303, allow
+#302's new exact-head checks to finish while doing that work, and treat provider/review-agent
+failures separately from source defects. No row above authorizes bypass, force-push, self-approval,
+cloud mutation, or local deletion.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
