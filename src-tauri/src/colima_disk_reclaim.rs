@@ -54,11 +54,30 @@ pub struct ColimaDiskReclaimReceipt {
     pub schema_version: u32,
     pub profile: String,
     pub plan_fingerprint: String,
+    /// Explicit local user identity that authorized this fresh receipt.
+    pub approved_by: String,
     pub executed_at_ms: u64,
     pub executed: bool,
     pub physically_reclaimed_bytes: Option<u64>,
     pub outcome: String,
     pub customer_next_action: String,
+}
+
+fn valid_local_approval_actor(value: &str) -> bool {
+    let Some(local_name) = value.strip_prefix("human:") else {
+        return false;
+    };
+    if local_name.is_empty()
+        || local_name
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return false;
+    }
+    !matches!(
+        local_name.to_ascii_lowercase().as_str(),
+        "unknown" | "anonymous" | "placeholder" | "unset" | "none" | "n/a"
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,6 +297,12 @@ pub fn execute_unavailable(
     approval: &ColimaDiskReclaimApproval,
     executed_at_ms: u64,
 ) -> Result<ColimaDiskReclaimReceipt, String> {
+    if !valid_local_approval_actor(&approval.approved_by) {
+        return Err(
+            "유효한 로컬 사용자 이름을 확인한 뒤 --approved-by human:이름으로 다시 승인하세요."
+                .into(),
+        );
+    }
     if approval.plan_fingerprint != plan.plan_fingerprint
         || approval.exact_approval_phrase != plan.exact_approval_phrase
         || plan.schema_version != COLIMA_DISK_RECLAIM_SCHEMA_VERSION
@@ -285,7 +310,6 @@ pub fn execute_unavailable(
         || executed_at_ms.saturating_sub(plan.observed_at_ms) > APPROVAL_MAX_AGE_MS
         || executed_at_ms < approval.approved_at_ms
         || executed_at_ms.saturating_sub(approval.approved_at_ms) > APPROVAL_MAX_AGE_MS
-        || !approval.approved_by.starts_with("human:")
         || approval.rationale.trim().is_empty()
     {
         return Err("colima-disk-reclaim-approval-invalid-or-stale".into());
@@ -294,6 +318,7 @@ pub fn execute_unavailable(
         schema_version: COLIMA_DISK_RECLAIM_SCHEMA_VERSION,
         profile: plan.profile.clone(),
         plan_fingerprint: plan.plan_fingerprint.clone(),
+        approved_by: approval.approved_by.clone(),
         executed_at_ms,
         executed: false,
         physically_reclaimed_bytes: None,
@@ -460,5 +485,6 @@ mod tests {
         let receipt = execute_unavailable(&plan, &approval, 21).unwrap();
         assert!(!receipt.executed);
         assert_eq!(receipt.physically_reclaimed_bytes, None);
+        assert_eq!(receipt.approved_by, "human:operator");
     }
 }

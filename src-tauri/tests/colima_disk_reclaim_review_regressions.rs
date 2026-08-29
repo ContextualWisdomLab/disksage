@@ -76,8 +76,35 @@ fn bare_human_prefix_is_not_attributed_approval() {
 
     assert_eq!(
         execute_unavailable(&plan, &approval, 120).unwrap_err(),
-        "colima-disk-reclaim-approval-invalid-or-stale"
+        "유효한 로컬 사용자 이름을 확인한 뒤 --approved-by human:이름으로 다시 승인하세요."
     );
+}
+
+#[test]
+fn unsafe_local_identity_forms_never_receive_an_audit_receipt() {
+    let (_temp, home, bin) = fixture();
+    let plan = plan_at(&home, &bin, 100);
+
+    for approved_by in ["human:   ", "human:local\nuser", "human:anonymous"] {
+        let approval = ColimaDiskReclaimApproval {
+            plan_fingerprint: plan.plan_fingerprint.clone(),
+            exact_approval_phrase: plan.exact_approval_phrase.clone(),
+            approved_at_ms: 110,
+            approved_by: approved_by.into(),
+            rationale: "reviewed exact stopped profile evidence".into(),
+        };
+        assert!(execute_unavailable(&plan, &approval, 120).is_err());
+    }
+
+    let approval = ColimaDiskReclaimApproval {
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        exact_approval_phrase: plan.exact_approval_phrase.clone(),
+        approved_at_ms: 110,
+        approved_by: "human:local-test-user".into(),
+        rationale: "reviewed exact stopped profile evidence".into(),
+    };
+    let receipt = execute_unavailable(&plan, &approval, 120).unwrap();
+    assert_eq!(receipt.approved_by, "human:local-test-user");
 }
 
 #[test]
