@@ -240,8 +240,11 @@ pub fn plan_exact_photo_duplicate_quarantine(
 #[tauri::command]
 pub async fn audit_exact_photo_duplicates(
     paths: Vec<String>,
-    generated_at_ms: u64,
 ) -> Result<PhotoDuplicateAudit, String> {
+    let generated_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "photo-exact-audit-clock-unavailable".to_string())?
+        .as_millis() as u64;
     let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
     tauri::async_runtime::spawn_blocking(move || Ok(audit_photos(&paths, generated_at_ms)))
         .await

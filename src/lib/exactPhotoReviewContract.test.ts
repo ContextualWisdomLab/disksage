@@ -15,6 +15,12 @@ describe("exact photo review safety and accessibility contract", () => {
     expect(source).toContain("비슷해 보이는 사진은 자동 처리하지 않습니다");
   });
 
+  it("lets customers compare different encodings without byte-duplicate prefiltering", () => {
+    expect(source).toContain("사진 직접 선택");
+    expect(source).toContain("selectedPaths = Array.isArray(chosen)");
+    expect(source).toContain("auditExactPhotoDuplicates(selectedPaths)");
+  });
+
   it("announces results and preserves keyboard-visible 44px controls", () => {
     expect(source).toContain('role="status" aria-live="polite"');
     expect(source).toContain('role="alert"');

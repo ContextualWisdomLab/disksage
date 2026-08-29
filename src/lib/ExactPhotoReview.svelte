@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+  import { open } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot, duplicateGroups }: { scannedRoot: string; duplicateGroups: api.DupeGroup[] } = $props();
   let audit: api.PhotoDuplicateAudit | null = $state(null);
@@ -13,14 +14,28 @@
   let busy = $state(false);
   let status = $state("");
   let error = $state("");
+  let selectedPaths: string[] = $state([]);
+  let initialized = false;
+  $effect(() => {
+    if (!initialized) {
+      selectedPaths = duplicateGroups.flatMap((group) => group.paths);
+      initialized = true;
+    }
+  });
 
-  const relative = (path: string) => path.startsWith(`${scannedRoot}/`) ? path.slice(scannedRoot.length + 1) : path;
+  const relative = (path: string) => {
+    const normalizedPath = path.replaceAll("\\", "/");
+    const normalizedRoot = scannedRoot.replaceAll("\\", "/").replace(/\/$/, "");
+    return normalizedPath.startsWith(`${normalizedRoot}/`)
+      ? normalizedPath.slice(normalizedRoot.length + 1)
+      : normalizedPath;
+  };
   const allSelected = () => audit ? selectionsForGroups(audit.exact_groups, keepers) !== null : false;
 
   async function review() {
     busy = true; error = ""; plan = null; receipt = null;
     try {
-      audit = await api.auditExactPhotoDuplicates(duplicateGroups.flatMap((group) => group.paths), Date.now());
+      audit = await api.auditExactPhotoDuplicates(selectedPaths);
       keepers = Object.fromEntries(audit.exact_groups.flatMap((group) =>
         group.keeper_path ? [[group.content_digest, relative(group.keeper_path)]] : [],
       ));
@@ -30,6 +45,14 @@
     } catch {
       error = "사진을 확인하지 못했습니다. 파일이 로컬에 내려받아져 있는지 확인한 뒤 다시 시도하세요.";
     } finally { busy = false; }
+  }
+
+  async function choosePhotos() {
+    const chosen = await open({ multiple: true, directory: false, filters: [{ name: "사진", extensions: ["png"] }] });
+    if (!chosen) return;
+    selectedPaths = Array.isArray(chosen) ? chosen : [chosen];
+    audit = null; plan = null; receipt = null;
+    status = `${selectedPaths.length}개 사진을 선택했습니다. 화질 검토를 시작하세요.`;
   }
 
   async function makePlan() {
@@ -63,7 +86,7 @@
 <section class="photo-review" aria-labelledby="photo-review-title">
   <div class="heading">
     <div><p class="eyebrow">정확한 사진 사본</p><h3 id="photo-review-title">남길 사진을 먼저 고르세요</h3></div>
-    <button class="secondary" onclick={review} disabled={busy}>{busy ? "확인 중…" : "사진 화질 검토"}</button>
+    <div class="heading-actions"><button class="secondary" onclick={choosePhotos} disabled={busy}>사진 직접 선택</button><button class="secondary" onclick={review} disabled={busy || selectedPaths.length < 2}>{busy ? "확인 중…" : "사진 화질 검토"}</button></div>
   </div>
   <p class="guidance">픽셀이 정확히 같은 사진만 표시합니다. 비슷해 보이는 사진은 자동 처리하지 않습니다.</p>
   <div class="status" role="status" aria-live="polite">{status}</div>
@@ -108,7 +131,7 @@
 
 <style>
   .photo-review { --ink:#17221d; --paper:#f5f0e4; --accent:#176b4b; margin-top:1rem; padding:1rem; border:1px solid #b8ad98; border-radius:10px; color:var(--ink); background:linear-gradient(135deg,var(--paper),#fffdf7); }
-  .heading { display:flex; justify-content:space-between; gap:1rem; align-items:center; }
+  .heading { display:flex; justify-content:space-between; gap:1rem; align-items:center; } .heading-actions{display:flex;gap:.5rem;flex-wrap:wrap;}
   h3 { margin:.1rem 0; font-family:Georgia,serif; } .eyebrow { margin:0; color:var(--accent); font-size:.75rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
   .guidance,.evidence,small { color:#514b40; } .status:empty { display:none; }
   fieldset { margin:1rem 0; border:1px solid #c9bea9; border-radius:8px; } legend { font-weight:700; }

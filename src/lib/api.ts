@@ -201,8 +201,8 @@ export interface PhotoQuarantineReceipt {
   permanent_delete_performed: boolean;
   items: Array<{ member_fingerprint: string; moved_to_os_trash: boolean; error: string | null }>;
 }
-export const auditExactPhotoDuplicates = (paths: string[], generatedAtMs: number) =>
-  invoke<PhotoDuplicateAudit>("audit_exact_photo_duplicates", { paths, generatedAtMs });
+export const auditExactPhotoDuplicates = (paths: string[]) =>
+  invoke<PhotoDuplicateAudit>("audit_exact_photo_duplicates", { paths });
 export const planExactPhotoDuplicateQuarantine = (
   sourceRoot: string,
   audit: PhotoDuplicateAudit,
