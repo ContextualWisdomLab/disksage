@@ -18,6 +18,19 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** Fail closed unless the invoked generator bytes match the reviewed contract. */
+function validateGeneratorIdentity(contract) {
+  const generatorPath = fileURLToPath(import.meta.url);
+  const generatorDigest = sha256(readFileSync(generatorPath));
+  if (
+    contract.generator !== "scripts/generate-icons.mjs"
+    || contract.generator_sha256 !== generatorDigest
+  ) {
+    throw new Error("icon-generator-identity-mismatch");
+  }
+  return generatorDigest;
+}
+
 /** Fail closed if the compressor runtime differs from the audited generation contract. */
 function validateGeneratorRuntime(contract) {
   const expected = contract.generator_runtime;
@@ -457,6 +470,7 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
   const source = readFileSync(sourcePath);
   const sourceDigest = sha256(source);
   const contract = JSON.parse(readFileSync(contractPath, "utf8"));
+  const generatorDigest = validateGeneratorIdentity(contract);
   validateGeneratorRuntime(contract);
   if (contract.source_sha256 !== sourceDigest) {
     throw new Error(
@@ -505,6 +519,7 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
     source: contract.source,
     source_sha256: sourceDigest,
     generator: contract.generator,
+    generator_sha256: generatorDigest,
     generator_runtime: {
       node: process.versions.node,
       zlib: process.versions.zlib,

@@ -88,6 +88,32 @@ describe("deterministic icon generator runtime", () => {
     }
   });
 
+  it("fails closed before creating output when generator bytes are not approved", () => {
+    const root = mkdtempSync(resolve(tmpdir(), "disksage-icon-generator-mismatch-"));
+    const copiedContract = resolve(root, "icon-contract.json");
+    const outputDirectory = resolve(root, "generated");
+
+    try {
+      const contract = JSON.parse(readFileSync(contractPath, "utf8")) as Record<string, unknown>;
+      writeFileSync(
+        copiedContract,
+        `${JSON.stringify({ ...contract, generator_sha256: "0".repeat(64) }, null, 2)}\n`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [generatorPath, "--source", sourcePath, "--contract", copiedContract, "--output", outputDirectory],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("icon-generator-identity-mismatch");
+      expect(existsSync(outputDirectory)).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("records the exact compressor runtime in the generated integrity manifest", () => {
     const root = mkdtempSync(resolve(tmpdir(), "disksage-icon-runtime-manifest-"));
     try {

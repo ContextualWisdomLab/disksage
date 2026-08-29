@@ -4,6 +4,7 @@
   "source": "icon-source.svg",
   "source_sha256": "42ba6bb93f6ee9faf4783adc279dee900fd2a33c14a926a7bbb16685c0862419",
   "generator": "scripts/generate-icons.mjs",
+  "generator_sha256": "b02fea34609ba63de20351837e8138d0e23b85ae182739ffc826171000ef4953",
   "generator_runtime": {
     "node_major": 20,
     "zlib": "1.3.0.1-motley-82a5fec"

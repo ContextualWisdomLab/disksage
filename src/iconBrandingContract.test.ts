@@ -38,6 +38,7 @@ interface PngAssetContract {
 interface IconContract {
   brand: string;
   generator: string;
+  generator_sha256: string;
   icns: {
     chunks: Array<{ size: number; type: string }>;
     path: string;
@@ -66,6 +67,7 @@ interface GeneratedManifest {
   assets: GeneratedAsset[];
   brand: string;
   generator: string;
+  generator_sha256: string;
   schema: string;
   source: string;
   source_sha256: string;
@@ -226,6 +228,7 @@ describe("DiskSage product icon identity", () => {
     expect(contract).toMatchObject({
       brand: "DiskSage",
       generator: "scripts/generate-icons.mjs",
+      generator_sha256: sha256(readFileSync(generatorPath)),
       schema: "disksage.icon-contract/v1",
       source: "icon-source.svg",
       source_sha256: EXPECTED_SOURCE_SHA256,
@@ -233,6 +236,7 @@ describe("DiskSage product icon identity", () => {
     expect(manifest).toMatchObject({
       brand: contract.brand,
       generator: contract.generator,
+      generator_sha256: contract.generator_sha256,
       schema: "disksage.icon-set/v1",
       source: contract.source,
       source_sha256: contract.source_sha256,
