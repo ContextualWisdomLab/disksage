@@ -304,7 +304,13 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     if !require_runtime_observation(CloudProvider::Onedrive, 0)? {
         return Err("provider-client-runtime-not-observed-before-eviction".into());
     }
-    request_quit("OneDrive")?;
+    let primary_runtime_observed = crate::provider_client_runtime::collect_provider_primary_runtime(
+        CloudProvider::Onedrive,
+    )
+    .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
+    if primary_runtime_observed {
+        request_quit("OneDrive")?;
+    }
     let operation = (|| {
         let mut deadline = Instant::now() + Duration::from_secs(10);
         let mut graceful_term_requested = false;
