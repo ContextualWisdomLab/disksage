@@ -1,9 +1,9 @@
 # DiskSage
 
 > **The wise way to reclaim your disk.**
-> 디스크의 현자 — 내 디스크에 뭐가 있는지 알려주고, 지워도 되는지 판별해주는 크로스플랫폼 디스크 정리 앱.
+> 디스크의 현자 — 무엇이 공간을 차지하는지 보여주고, 지금 검토하거나 해결할 다음 안전 행동을 안내하는 크로스플랫폼 디스크 정리 앱.
 
-**DiskSage** is a cross-platform (Windows / Linux / macOS) disk-space manager by [ContextualWisdomLab](https://github.com/ContextualWisdomLab). It scans your drives, shows what's actually there, and uses a fully offline on-device LLM to advise whether files are safe to delete — while an OWL ontology keeps your files organized.
+**DiskSage** is a cross-platform (Windows / Linux / macOS) disk-space manager by [ContextualWisdomLab](https://github.com/ContextualWisdomLab). It shows what occupies your disk, identifies evidence-backed recovery candidates, and tells you what to review or resolve next. Advice can help explain a candidate, but only current safety evidence can make an action available.
 
 See the canonical [product requirements](docs/PRD.md) for supported outcomes, safety invariants,
 provider capabilities, and acceptance criteria. Current implementation and open work are tracked in

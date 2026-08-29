@@ -117,6 +117,9 @@ are defined by [ADR-0011](architecture/adr/0011-cloud-transfer-failure-and-mater
 ## Product states and next actions
 
 Customer-facing text describes the state and a next action, not an internal module or error code.
+Engineering terms elsewhere in this document define product constraints; they are not approved
+interface copy. A customer message must translate them into an observable condition and a safe next
+action without exposing implementation ownership.
 
 | Product state | Meaning | Required next action shown to the person |
 | --- | --- | --- |
