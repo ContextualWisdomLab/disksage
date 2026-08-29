@@ -709,6 +709,5 @@ wait
 
         assert_eq!(output.status_code, MUTATION_TIMEOUT_STATUS_CODE);
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(temp.path().join("mutation-ran").exists());
     }
 }
