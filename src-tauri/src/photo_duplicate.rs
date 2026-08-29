@@ -264,27 +264,37 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     if path.to_str().is_none() {
         return Err("photo-input-path-encoding-unsupported".into());
     }
-    let metadata = std::fs::symlink_metadata(path)
+    let entry_metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
-    if let Some(blocker) = admission_blocker(path, &metadata) {
+    if entry_metadata.file_type().is_symlink() || !entry_metadata.is_file() {
+        return Err("photo-input-not-materialized-regular-file".into());
+    }
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|_| "photo-input-canonical-path-unavailable".to_string())?;
+    let metadata = std::fs::symlink_metadata(&canonical_path)
+        .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
+    if let Some(blocker) = admission_blocker(&canonical_path, &metadata) {
         return Err(blocker.into());
     }
-    let identity = crate::safety::filesystem_object_id(path)
+    let identity = crate::safety::filesystem_object_id(&canonical_path)
         .map_err(|_| "photo-input-identity-unavailable".to_string())?;
     // Audit is read-only. Active-use evidence belongs to the fresh execution preflight; requiring
     // Unix `lsof` here made otherwise valid Windows evidence impossible to collect.
-    let extension = path
+    let extension = canonical_path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
     if !extension.eq_ignore_ascii_case("png") {
         return Err("photo-codec-unsupported".into());
     }
-    let (blake3, current_bytes) = hash_current_file(path, &metadata, &identity)?;
+    let (blake3, current_bytes) = hash_current_file(&canonical_path, &metadata, &identity)?;
     let (width, height, bit_depth, metadata_field_count, decoded_pixel_digest) =
         read_png_evidence(&current_bytes)?;
-    let final_metadata = std::fs::symlink_metadata(path).ok();
-    if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(identity.as_str())
+    let final_metadata = std::fs::symlink_metadata(&canonical_path).ok();
+    if crate::safety::filesystem_object_id(&canonical_path)
+        .ok()
+        .as_deref()
+        != Some(identity.as_str())
         || final_metadata.as_ref().map(std::fs::Metadata::len) != Some(metadata.len())
         || final_metadata
             .as_ref()
@@ -294,7 +304,7 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
         return Err("photo-input-changed".into());
     }
     Ok(PhotoEvidence {
-        path: path.to_string_lossy().into_owned(),
+        path: canonical_path.to_string_lossy().into_owned(),
         object_id: identity,
         bytes: metadata.len(),
         filesystem_modified_ms: metadata
@@ -565,6 +575,25 @@ mod tests {
         assert_eq!(
             inspect_photo(&library).unwrap_err(),
             "photo-input-managed-library"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_symlink_cannot_hide_provider_managed_photo() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let provider = temp
+            .path()
+            .join("Library/CloudStorage/OneDrive-Personal/image.png");
+        std::fs::create_dir_all(provider.parent().unwrap()).unwrap();
+        png(&provider, 8, 8, 1);
+        let alias = temp.path().join("ordinary-folder");
+        symlink(provider.parent().unwrap(), &alias).unwrap();
+        assert_eq!(
+            inspect_photo(&alias.join("image.png")).unwrap_err(),
+            "photo-input-provider-managed"
         );
     }
 

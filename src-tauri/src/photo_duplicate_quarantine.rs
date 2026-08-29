@@ -171,7 +171,10 @@ pub fn plan_exact_photo_quarantine(
 ) -> Result<PhotoQuarantinePlan, String> {
     let paths = audit_paths(audit);
     let fresh = audit_photos(&paths, audit.generated_at_ms);
-    if fresh != *audit {
+    if !fresh.evidence_complete
+        || fresh.audit_fingerprint != audit.audit_fingerprint
+        || fresh.exact_groups != audit.exact_groups
+    {
         return Err("photo-exact-quarantine-audit-stale-or-forged".into());
     }
     let (report, selections) = exact_report(source_root, audit, customer_selections)?;
@@ -338,5 +341,23 @@ mod tests {
             plan_exact_photo_quarantine(root.path(), &audit, &[]).unwrap_err(),
             "photo-exact-quarantine-audit-stale-or-forged"
         );
+    }
+
+    #[test]
+    fn unrelated_inspected_photo_does_not_invalidate_duplicate_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first.png");
+        let second = root.path().join("second.png");
+        let unique = root.path().join("unique.png");
+        png(&first, 42, "one");
+        png(&second, 42, "two");
+        png(&unique, 7, "unique");
+        let audit = audit_photos(&[first, second, unique], 7);
+        let group = &audit.exact_groups[0];
+        let selection = PhotoQuarantineSelection {
+            group_fingerprint: group.content_digest.clone(),
+            survivor_relative_path: "first.png".into(),
+        };
+        assert!(plan_exact_photo_quarantine(root.path(), &audit, &[selection]).is_ok());
     }
 }
