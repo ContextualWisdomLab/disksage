@@ -297,6 +297,9 @@ pub fn plan_uv_cache_reclaim(
         },
     };
     let mut blockers = Vec::new();
+    if cache.skipped > 0 {
+        blockers.push("cache-inventory-incomplete".into());
+    }
     if !active_use.assessed || !active_use.evidence_complete {
         blockers.push("active-use-evidence-incomplete".into());
     } else if active_use.active {
