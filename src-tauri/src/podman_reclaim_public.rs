@@ -28,6 +28,8 @@ pub struct PodmanStorageRepairExecution {
     pub candidate_set_sha256: String,
     pub command: Vec<String>,
     pub status_code: i32,
+    pub command_attempted: bool,
+    pub execution_issue: Option<String>,
     pub executed: bool,
     pub repaired_layer_records: Option<u64>,
     pub remaining_damaged_layer_records: Option<u64>,
@@ -73,6 +75,8 @@ pub fn execute_podman_storage_repair(
         candidate_set_sha256: raw.candidate_set_sha256,
         command: raw.command,
         status_code: raw.status_code,
+        command_attempted: raw.command_attempted,
+        execution_issue: raw.execution_issue,
         executed,
         repaired_layer_records: counts_verified.then_some(raw.repaired_layer_records),
         remaining_damaged_layer_records: counts_verified

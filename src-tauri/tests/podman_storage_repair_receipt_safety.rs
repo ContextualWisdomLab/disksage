@@ -113,6 +113,28 @@ exit 2
     ))
 }
 
+fn fake_repair_output_failure() -> (tempfile::TempDir, PathBuf) {
+    let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+root="$(dirname "$0")"
+case " $* " in
+  *" system check --quick --repair "*)
+    touch "$root/repair-ran"
+    head -c 1048577 /dev/zero
+    exit 1
+    ;;
+  *" system check --quick "*)
+    echo "Damaged layer {layer_id}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
 fn fake_replaced_damage_podman() -> (tempfile::TempDir, PathBuf) {
     let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let replacement = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -246,6 +268,29 @@ fn a_failed_postcheck_after_mutation_still_returns_an_auditable_receipt() {
     assert_eq!(json["postcheck_complete"], false);
     assert!(json["repaired_layer_records"].is_null());
     assert!(json["remaining_damaged_layer_records"].is_null());
+}
+
+#[test]
+fn a_post_spawn_capture_failure_still_returns_an_auditable_receipt() {
+    let (temp, fake) = fake_repair_output_failure();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "preserve attempted mutation evidence after capture failure",
+        5,
+    )
+    .expect("a post-spawn failure must remain an auditable repair attempt");
+
+    assert!(temp.path().join("repair-ran").exists());
+    assert!(receipt.command_attempted);
+    assert_eq!(receipt.status_code, -1);
+    assert_eq!(
+        receipt.execution_issue.as_deref(),
+        Some("podman-storage-repair-output-too-large")
+    );
 }
 
 #[test]

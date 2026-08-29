@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
 - Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
 - Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
+- Repair inconsistent Podman storage through an explicitly machine-scoped, non-forced native
+  command and retain attempted-operation receipts plus bounded postcheck evidence after failures.
 - Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
   Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
   environment trees without recursively scanning them, and the

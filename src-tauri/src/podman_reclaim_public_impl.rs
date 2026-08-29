@@ -103,14 +103,16 @@ fn run_bounded(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| format!("{label}-spawn"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{label}-stdout-pipe-unavailable"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("{label}-stderr-pipe-unavailable"))?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{label}-stdout-pipe-unavailable"));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{label}-stderr-pipe-unavailable"));
+    };
     let stdout_reader = thread::spawn(move || drain_bounded(stdout));
     let stderr_reader = thread::spawn(move || drain_bounded(stderr));
     let started = Instant::now();
@@ -245,12 +247,10 @@ fn storage_check_evidence(
         schema_version: 1,
         machine: machine.to_string(),
         damaged_layer_records: ids.len() as u64,
-        candidate_set_sha256: fingerprint.clone(),
+        candidate_set_sha256: fingerprint,
         evidence_complete: complete,
         exact_approval_phrase: (complete && !ids.is_empty()).then(|| {
-            format!(
-                "DiskSage Podman machine storage repair 승인 {scope_fingerprint} evidence {fingerprint}"
-            )
+            format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")
         }),
         issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
     };
@@ -260,9 +260,8 @@ fn storage_check_evidence(
 /// Capture bounded native Podman storage-check evidence.
 ///
 /// The candidate fingerprint is evidence about the current damaged-layer set. The approval phrase
-/// binds the selected machine, the exact broad native repair command, and that current evidence
-/// fingerprint. Podman's native repair remains machine-scoped, but candidate drift must require a
-/// fresh human confirmation before mutation.
+/// is deliberately bound to the selected machine plus the exact broad native repair command,
+/// because `podman system check --repair` cannot be constrained to a caller-supplied layer list.
 pub fn plan_podman_storage_repair(
     podman_bin: &Path,
     machine: &str,
@@ -291,7 +290,7 @@ pub fn execute_podman_storage_repair(
         return Err("podman-storage-repair-confirmation-mismatch".into());
     }
 
-    let output = run_bounded(
+    let (output, execution_issue) = match run_bounded(
         podman_bin,
         &[
             "--connection",
@@ -303,7 +302,18 @@ pub fn execute_podman_storage_repair(
         ],
         PODMAN_STORAGE_CHECK_TIMEOUT,
         "podman-storage-repair",
-    )?;
+    ) {
+        Ok(output) => (output, None),
+        Err(error) if error == "podman-storage-repair-spawn" => return Err(error),
+        Err(error) => (
+            BoundedOutput {
+                status_code: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            Some(error),
+        ),
+    };
 
     let (postcheck_complete, repaired_layer_records, remaining_damaged_layer_records) =
         match storage_check_evidence(podman_bin, machine) {
@@ -333,8 +343,9 @@ pub fn execute_podman_storage_repair(
             "--repair".into(),
         ],
         status_code: output.status_code,
-        executed: output.status_code == 0
-            || (postcheck_complete && repaired_layer_records > 0),
+        command_attempted: true,
+        execution_issue,
+        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
