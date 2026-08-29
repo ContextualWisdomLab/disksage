@@ -206,18 +206,26 @@ fn canonical_bundle_for_active_use(bundle: &Path) -> Result<PathBuf, String> {
     }
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         let report = crate::cloud::discover_cloud_roots_report(&home);
-        let overlaps_root = report.roots.iter().any(|root| {
-            std::fs::canonicalize(&root.path).is_ok_and(|root| bundle.starts_with(root))
-        });
+        let overlaps_root = report
+            .roots
+            .iter()
+            .any(|root| overlaps_canonical_root(&bundle, Path::new(&root.path)));
         let overlaps_incomplete_root = report
             .issues
             .iter()
-            .any(|issue| bundle.starts_with(Path::new(&issue.path)));
+            .any(|issue| overlaps_canonical_root(&bundle, Path::new(&issue.path)));
         if overlaps_root || overlaps_incomplete_root {
             return Err("parallels-provider-or-path-boundary-rejected".into());
         }
     }
     Ok(bundle)
+}
+
+fn overlaps_canonical_root(canonical_path: &Path, root: &Path) -> bool {
+    std::fs::canonicalize(root).map_or_else(
+        |_| canonical_path.starts_with(root),
+        |root| canonical_path.starts_with(root),
+    )
 }
 
 fn identity(_path: &Path, metadata: &std::fs::Metadata) -> String {
@@ -946,6 +954,24 @@ mod tests {
 
         assert!(canonical.is_absolute());
         assert_eq!(canonical, std::fs::canonicalize(&relative).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_root_alias_is_compared_after_canonicalization() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let provider_root = temp.path().join("provider-root");
+        let bundle = provider_root.join("VM.pvm");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let alias = temp.path().join("provider-alias");
+        symlink(&provider_root, &alias).unwrap();
+
+        assert!(overlaps_canonical_root(
+            &std::fs::canonicalize(bundle).unwrap(),
+            &alias,
+        ));
     }
 
     #[test]
