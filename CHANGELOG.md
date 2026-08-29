@@ -69,6 +69,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   private databases and derivatives as independent duplicate-delete candidates. Reclaim also
   canonicalizes every approved member immediately before mutation and fails closed if a replaced
   parent symlink redirects it outside the audited root or into a managed Photos library.
+- Stage each verified duplicate by filesystem identity before permanent removal, restoring rather
+  than deleting a pathname replacement that races the approved audit.
 - Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
   removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
   each pull-request lookup.

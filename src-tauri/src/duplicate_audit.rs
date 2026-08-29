@@ -286,10 +286,15 @@ fn metadata_fingerprint(metadata: &ExactDuplicateProductionMetadata) -> String {
 
 #[cfg(unix)]
 fn storage_identity_fingerprint(observation: &FileObservation) -> Option<String> {
+    storage_identity_fingerprint_from_metadata(observation.device, observation.inode)
+}
+
+#[cfg(unix)]
+fn storage_identity_fingerprint_from_metadata(device: u64, inode: u64) -> Option<String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-exact-duplicate-storage-identity-v1\0");
-    hash_value(&mut hasher, &observation.device.to_le_bytes());
-    hash_value(&mut hasher, &observation.inode.to_le_bytes());
+    hash_value(&mut hasher, &device.to_le_bytes());
+    hash_value(&mut hasher, &inode.to_le_bytes());
     Some(hasher.finalize().to_hex().to_string())
 }
 
@@ -536,6 +541,61 @@ fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, 
     Err("duplicate-reclaim-active-use-unsupported-platform".into())
 }
 
+#[cfg(unix)]
+fn remove_if_storage_identity(
+    path: &Path,
+    expected_storage_identity: &str,
+    staging_token: u64,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
+    let (device, inode) = unix_identity(&metadata);
+    if storage_identity_fingerprint_from_metadata(device, inode).as_deref()
+        != Some(expected_storage_identity)
+    {
+        return Err("duplicate-reclaim-candidate-changed".into());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "duplicate-reclaim-candidate-parent-missing".to_string())?;
+    let staging_dir = parent.join(format!(
+        ".disksage-duplicate-stage-{}-{staging_token}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&staging_dir)
+        .map_err(|_| "duplicate-reclaim-staging-unavailable".to_string())?;
+    let staged = staging_dir.join(
+        path.file_name()
+            .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?,
+    );
+    if let Err(error) = std::fs::rename(path, &staged) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(format!("duplicate-reclaim-staging-failed:{error}"));
+    }
+    let staged_matches = std::fs::symlink_metadata(&staged)
+        .ok()
+        .map(|metadata| unix_identity(&metadata))
+        .and_then(|(device, inode)| storage_identity_fingerprint_from_metadata(device, inode))
+        .as_deref()
+        == Some(expected_storage_identity);
+    if !staged_matches {
+        if !path.exists() {
+            let _ = std::fs::rename(&staged, path);
+        }
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err("duplicate-reclaim-candidate-changed-during-staging".into());
+    }
+    if let Err(error) = std::fs::remove_file(&staged) {
+        if !path.exists() {
+            let _ = std::fs::rename(&staged, path);
+        }
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(format!("duplicate-reclaim-delete-failed:{error}"));
+    }
+    let _ = std::fs::remove_dir(&staging_dir);
+    Ok(())
+}
+
 /// Permanently remove only freshly re-hashed members of exact-content clusters while retaining
 /// one provenance-preferred, byte-identical canonical member in every cluster.
 #[cfg(not(coverage))]
@@ -623,25 +683,38 @@ pub fn execute_exact_duplicate_reclaim_from_report(
                 return Err("duplicate-reclaim-candidate-changed".into());
             }
             if expected.member_fingerprint != retained {
-                verified.push((path, allocated_bytes(&metadata)));
+                verified.push((
+                    path,
+                    allocated_bytes(&metadata),
+                    expected
+                        .storage_identity_fingerprint
+                        .clone()
+                        .ok_or_else(|| "duplicate-reclaim-storage-identity-missing".to_string())?,
+                ));
             }
         }
     }
     let active = active_duplicate_candidates(
         &verified
             .iter()
-            .map(|(path, _)| path.clone())
+            .map(|(path, _, _)| path.clone())
             .collect::<Vec<_>>(),
     )?;
     let removable = verified
         .into_iter()
-        .filter(|(path, _)| !active.contains(path))
+        .filter(|(path, _, _)| !active.contains(path))
         .collect::<Vec<_>>();
 
     let mut removed_file_count = 0usize;
     let mut removed_allocated_bytes_upper_bound = 0u64;
-    for (path, bytes) in removable {
-        if std::fs::remove_file(path).is_ok() {
+    for (index, (path, bytes, storage_identity)) in removable.into_iter().enumerate() {
+        if remove_if_storage_identity(
+            &path,
+            &storage_identity,
+            executed_at_ms.saturating_add(index as u64),
+        )
+        .is_ok()
+        {
             removed_file_count = removed_file_count.saturating_add(1);
             removed_allocated_bytes_upper_bound =
                 removed_allocated_bytes_upper_bound.saturating_add(bytes);
@@ -1327,6 +1400,25 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_bound_remove_preserves_replacement_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement bytes").unwrap();
+        assert_eq!(
+            remove_if_storage_identity(&path, &approved, 1).unwrap_err(),
+            "duplicate-reclaim-candidate-changed"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
     }
 
     #[test]
