@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::process::Command;
 
 #[test]
@@ -19,7 +20,10 @@ fn userprofile_only_windows_environment_still_discovers_build_roots() {
     )
     .expect("write Cargo marker");
     fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lock");
-    fs::write(target.join("generated.bin"), vec![0x5a; 4096]).expect("write generated payload");
+    let mut generated = fs::File::create(target.join("generated.bin"))
+        .expect("create generated sparse fixture");
+    generated.write_all(&[0x5a; 4096]).expect("write allocated prefix");
+    generated.set_len(64 * 1024 * 1024).expect("extend sparse fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))
         .args(["--root", temp.path().to_str().expect("UTF-8 temp path")])
@@ -38,6 +42,12 @@ fn userprofile_only_windows_environment_still_discovers_build_roots() {
     assert_eq!(report["candidate_count"], 1);
     assert_eq!(report["candidates"][0]["kind"], "target");
     assert_eq!(report["candidates"][0]["project"], "cargo-app");
+    let logical = report["candidates"][0]["bytes"].as_u64().expect("logical bytes");
+    let allocated = report["candidates"][0]["allocated_bytes"]
+        .as_u64()
+        .expect("allocated bytes");
+    assert_eq!(logical, 64 * 1024 * 1024);
+    assert!(allocated > 0 && allocated < logical);
 
     let home_text = home.to_string_lossy();
     let fallback = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))

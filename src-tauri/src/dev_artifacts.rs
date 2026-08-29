@@ -70,20 +70,42 @@ struct ArtifactManifest {
 }
 
 #[cfg(unix)]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
-    metadata.blocks().saturating_mul(512)
+    Some(metadata.blocks().saturating_mul(512))
 }
 
 #[cfg(windows)]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    metadata.file_size()
+fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    const INVALID_FILE_SIZE: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCompressedFileSizeW(file_name: *const u16, high: *mut u32) -> u32;
+        fn GetLastError() -> u32;
+        fn SetLastError(error: u32);
+    }
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    wide.push(0);
+    let mut high = 0_u32;
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 path and `high` is writable for the call.
+    let low = unsafe {
+        SetLastError(0);
+        GetCompressedFileSizeW(wide.as_ptr(), &mut high)
+    };
+    // INVALID_FILE_SIZE can also be a valid low word; GetLastError disambiguates it.
+    if low == INVALID_FILE_SIZE && unsafe { GetLastError() } != 0 {
+        return None;
+    }
+    Some((u64::from(high) << 32) | u64::from(low))
 }
 
 #[cfg(not(any(unix, windows)))]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
-    metadata.len()
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(metadata.len())
 }
 
 fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
@@ -233,7 +255,11 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 "<unknown>".into()
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
-            let allocated = allocated_bytes(&metadata);
+            let Some(allocated) = allocated_bytes(entry_path, &metadata) else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
             manifest.allocated_bytes = manifest.allocated_bytes.saturating_add(allocated);
             manifest.files = manifest.files.saturating_add(1);
             manifest.records.push(format!(
