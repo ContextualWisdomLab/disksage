@@ -5,6 +5,9 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Ship the macOS OneDrive Finder post-action verifier as a checksummed, provenance-attested
+  operational CLI, and require fresh provider-sync evidence before allocation reduction counts as
+  verified local-space recovery.
 - Revalidate OneDrive's exact File Provider item/version identity immediately
   before the Foundation eviction call, including every latest sync, policy,
   size, eviction-capability, and Files On-Demand gate, and let approved OneDrive batches use

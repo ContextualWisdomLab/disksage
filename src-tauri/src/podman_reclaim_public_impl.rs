@@ -385,11 +385,13 @@ fn storage_repair_provider_issue(output: &BoundedOutput) -> Option<String> {
         return None;
     }
     let provider_diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
-    let dependent_container = provider_diagnostic.contains("layer")
-        && provider_diagnostic.contains("container")
-        && ["in use", "used by", "referenced by"]
-            .iter()
-            .any(|marker| provider_diagnostic.contains(marker));
+    let dependent_container = provider_diagnostic.lines().any(|line| {
+        line.contains("layer")
+            && line.contains("container")
+            && ["in use", "used by", "referenced by"]
+                .iter()
+                .any(|marker| line.contains(marker))
+    });
     Some(
         if dependent_container {
             "podman-storage-repair-provider-unable-to-detach-damaged-container"
@@ -725,6 +727,28 @@ mod mutation_runner_tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn provider_issue_requires_one_coherent_dependency_diagnostic_line() {
+        let separate_lines = BoundedOutput {
+            status_code: 1,
+            stdout: "damaged layer abc\ncontainer inventory follows".into(),
+            stderr: "resource is in use".into(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&separate_lines).as_deref(),
+            Some("podman-storage-repair-provider-refused")
+        );
+        let coherent = BoundedOutput {
+            status_code: 1,
+            stdout: "layer abc is used by container def".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&coherent).as_deref(),
+            Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+        );
+    }
 
     #[test]
     fn timed_out_readonly_command_terminates_descendants_holding_output_pipes() {

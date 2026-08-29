@@ -366,8 +366,11 @@ fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
         && plan.icloud_state.is_ubiquitous
         && plan.icloud_state.is_uploaded
         && !plan.icloud_state.is_uploading
+        && !plan.icloud_state.upload_error_present
         && !plan.icloud_state.is_downloading
+        && !plan.icloud_state.download_error_present
         && plan.icloud_state.downloading_status_current
+        && !plan.icloud_state.downloading_status_not_downloaded
         && !plan.icloud_state.has_unresolved_conflicts
         && !plan.icloud_state.is_excluded_from_sync
         && match plan.icloud_state.observation_method {
@@ -886,7 +889,9 @@ where
             return Err("onedrive-finder-assistance-item-identity-changed".into());
         }
         total_after = total_after.saturating_add(current.allocated_bytes);
-        if current.allocated_bytes < item.allocated_bytes_before {
+        if item_plan_sync_is_complete(&current)
+            && current.allocated_bytes < item.allocated_bytes_before
+        {
             verified_count = verified_count.saturating_add(1);
         }
     }
@@ -913,6 +918,21 @@ where
     };
     result.verification_id = finder_verification_id(&result);
     Ok(result)
+}
+
+fn item_plan_sync_is_complete(plan: &IcloudLocalEvictionPlan) -> bool {
+    plan.icloud_state.is_ubiquitous
+        && plan.icloud_state.is_uploaded
+        && !plan.icloud_state.is_uploading
+        && !plan.icloud_state.upload_error_present
+        && !plan.icloud_state.is_downloading
+        && !plan.icloud_state.download_error_present
+        && plan.icloud_state.downloading_status_current
+        && !plan.icloud_state.downloading_status_not_downloaded
+        && !plan.icloud_state.has_unresolved_conflicts
+        && !plan.icloud_state.is_excluded_from_sync
+        && plan.icloud_state.is_sync_paused == Some(false)
+        && plan.icloud_state.is_trashed == Some(false)
 }
 
 /// Verify path retention, provider item identity, and allocated-byte reduction after the customer
@@ -1463,6 +1483,16 @@ mod tests {
         assert!(verification.verification_complete);
         assert_eq!(verification.observed_allocation_reduction_bytes, 2_000);
 
+        let mut unsynced = online_only.clone();
+        unsynced.icloud_state.is_uploaded = false;
+        let incomplete =
+            verify_onedrive_finder_assistance_with(&onedrive_root, &receipt, 24, |_, _, _| {
+                Ok(unsynced.clone())
+            })
+            .unwrap();
+        assert!(!incomplete.verification_complete);
+        assert_eq!(incomplete.verified_count, 0);
+
         let mut tampered = receipt;
         tampered.total_allocated_bytes_before += 1;
         tampered.receipt_id = finder_receipt_id(&tampered);
@@ -1511,6 +1541,14 @@ mod tests {
 
         let mut unsafe_plan = safe.clone();
         unsafe_plan.icloud_state.provider_reported_bytes = Some(safe.logical_bytes + 1);
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.upload_error_present = true;
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.downloading_status_not_downloaded = true;
         assert!(!item_plan_is_safe(&unsafe_plan));
 
         let mut unsafe_plan = safe;
