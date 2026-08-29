@@ -121,6 +121,7 @@ fn fixed_brew_path() -> Result<PathBuf, String> {
 
     for path in [
         Path::new("/opt/homebrew/bin/brew"),
+        Path::new("/usr/local/Homebrew/bin/brew"),
         Path::new("/usr/local/bin/brew"),
     ] {
         let metadata = std::fs::symlink_metadata(path).ok();
