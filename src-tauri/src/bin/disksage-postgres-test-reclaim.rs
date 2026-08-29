@@ -235,6 +235,14 @@ mod tests {
     }
 
     #[test]
+    fn help_is_only_valid_as_the_sole_argument() {
+        assert!(parse_args(["--help"].map(OsString::from)).unwrap().is_none());
+        assert!(parse_args(["-h"].map(OsString::from)).unwrap().is_none());
+        assert!(parse_args(["--help", "--execute"].map(OsString::from)).is_err());
+        assert!(parse_args(["--execute", "--help"].map(OsString::from)).is_err());
+    }
+
+    #[test]
     fn public_output_contains_no_local_path_field() {
         let json = serde_json::to_string(&PublicOutput {
             mode: "plan",
