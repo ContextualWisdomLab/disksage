@@ -8,12 +8,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- Add a fingerprint-bound Podman storage consistency repair CLI. It delegates to native
-  `podman system check --quick --repair` without `--force`, records partial repairs from pre/post
-  damaged-layer counts, and leaves dependent or running-container state untouched.
-- Allow exact, freshly re-audited non-running container candidates to use `container rm --force`
-  so damaged writable-layer metadata cannot block unrelated stale-container cleanup; volumes
-  remain a separately approved category.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
