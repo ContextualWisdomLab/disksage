@@ -366,6 +366,18 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
+/// Permanently reclaim only inactive, unchanged npx environments; package downloads are
+/// regenerable and every directory is identity-bound, active-use checked, and journaled.
+pub fn clean_inactive_npx_environments_headless(
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    let npx = bases.home.join(".npm").join("_npx");
+    let targets = rules::cache_targets(&npx)?;
+    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms, true)
+}
+
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
 #[cfg(not(coverage))]
 #[tauri::command]

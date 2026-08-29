@@ -558,7 +558,9 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
-    catalog(bases).iter().any(|(_, _, p)| p == dir) && CatalogRoot::open(dir).is_some()
+    catalog(bases).iter().any(|(id, _, path)| {
+        path == dir || (*id == "npm-cache" && path.join("_npx") == dir)
+    }) && CatalogRoot::open(dir).is_some()
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
@@ -777,7 +779,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
+        let npx = bases.home.join(".npm/_npx");
+        fs::create_dir_all(&npx).unwrap();
         assert!(is_catalog_path(&bases, &bases.temp));
+        assert!(is_catalog_path(&bases, &npx));
         assert!(!is_catalog_path(&bases, tmp.path()));
     }
 

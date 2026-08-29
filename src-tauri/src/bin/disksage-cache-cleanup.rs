@@ -4,12 +4,13 @@
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
 use disksage_lib::cache_cleanup::{
-    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+    clean_inactive_npx_environments_headless, clean_regenerable_caches_headless,
+    proven_cache_trash_candidates, purge_proven_cache_trash,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--npx-only | --purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
 inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
 only structurally proven cache directories already in OS Trash.";
@@ -17,6 +18,7 @@ only structurally proven cache directories already in OS Trash.";
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
+    npx_only: bool,
     purge_proven_cache_trash: bool,
     journal_path: PathBuf,
 }
@@ -67,12 +69,14 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     }
 
     let mut execute = false;
+    let mut npx_only = false;
     let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
+            Some("--npx-only") => npx_only = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
@@ -88,8 +92,12 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
+    if npx_only && purge_proven_cache_trash {
+        return Err("--npx-only and --purge-proven-cache-trash are mutually exclusive".into());
+    }
     Ok(Some(Args {
         execute,
+        npx_only,
         purge_proven_cache_trash,
         journal_path,
     }))
@@ -142,7 +150,15 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         );
         return Ok(());
     }
-    let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
+    let evidence = if args.npx_only {
+        serde_json::to_value(clean_inactive_npx_environments_headless(
+            &args.journal_path,
+            now_ms(),
+        )?)
+        .map_err(|error| error.to_string())?
+    } else {
+        clean_regenerable_caches_headless(&args.journal_path, now_ms())?
+    };
     println!(
         "{}",
         serde_json::json!({
@@ -196,6 +212,21 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!args.execute);
+        assert!(!args.npx_only);
         assert!(args.purge_proven_cache_trash);
+    }
+
+    #[test]
+    fn npx_only_scope_is_explicit_and_exclusive() {
+        let args = parse_args([OsString::from("--execute"), OsString::from("--npx-only")])
+            .unwrap()
+            .unwrap();
+        assert!(args.execute);
+        assert!(args.npx_only);
+        assert!(parse_args([
+            OsString::from("--npx-only"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .is_err());
     }
 }
