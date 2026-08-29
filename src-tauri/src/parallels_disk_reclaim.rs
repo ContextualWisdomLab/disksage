@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -69,6 +69,23 @@ fn path_has_symlink(path: &Path) -> bool {
         current = candidate.parent();
     }
     false
+}
+
+fn canonical_bundle_for_active_use(bundle: &Path) -> Result<PathBuf, String> {
+    if path_has_symlink(bundle) {
+        return Err("parallels-symlink-path-rejected".into());
+    }
+    let bundle = std::fs::canonicalize(bundle)
+        .map_err(|_| "parallels-bundle-unavailable".to_string())?;
+    if bundle.extension().and_then(|value| value.to_str()) != Some("pvm")
+        || bundle.to_string_lossy().contains("/Library/CloudStorage/")
+        || bundle
+            .to_string_lossy()
+            .contains("/Library/Mobile Documents/")
+    {
+        return Err("parallels-provider-or-path-boundary-rejected".into());
+    }
+    Ok(bundle)
 }
 
 fn identity(_path: &Path, metadata: &std::fs::Metadata) -> String {
@@ -180,23 +197,13 @@ pub fn plan_with_runner(
     if !trusted_executable(prlctl) || !trusted_executable(disk_tool) {
         return Err("parallels-command-unavailable-or-untrusted".into());
     }
-    if path_has_symlink(bundle) || path_has_symlink(disk) {
+    if path_has_symlink(disk) {
         return Err("parallels-symlink-path-rejected".into());
     }
-    let bundle = std::fs::canonicalize(bundle).map_err(|_| "parallels-bundle-unavailable")?;
+    let bundle = canonical_bundle_for_active_use(bundle)?;
     let disk = std::fs::canonicalize(disk).map_err(|_| "parallels-disk-unavailable")?;
-    if !disk.starts_with(&bundle) || bundle.extension().and_then(|v| v.to_str()) != Some("pvm") {
+    if !disk.starts_with(&bundle) {
         return Err("parallels-disk-outside-bundle".into());
-    }
-    if bundle
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-        || bundle.to_string_lossy().contains("/Library/CloudStorage/")
-        || bundle
-            .to_string_lossy()
-            .contains("/Library/Mobile Documents/")
-    {
-        return Err("parallels-provider-or-path-boundary-rejected".into());
     }
     let bundle_meta =
         std::fs::symlink_metadata(&bundle).map_err(|_| "parallels-bundle-unavailable")?;
@@ -307,13 +314,14 @@ pub fn plan(
     disk: &Path,
     observed_at_ms: u64,
 ) -> Result<ParallelsDiskReclaimPlan, String> {
-    let active = crate::git_worktree::active_use_evidence(bundle, 30_000, 256, true);
+    let canonical_bundle = canonical_bundle_for_active_use(bundle)?;
+    let active = crate::git_worktree::active_use_evidence(&canonical_bundle, 30_000, 256, true);
     plan_with_runner(
         &ProcessParallelsCommandRunner,
         prlctl,
         disk_tool,
         vm_id,
-        bundle,
+        &canonical_bundle,
         disk,
         observed_at_ms,
         active,
@@ -323,7 +331,6 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn active_use_bundle_path_is_absolute_before_probe() {
