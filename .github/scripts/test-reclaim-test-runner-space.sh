@@ -13,7 +13,7 @@ summary_file="$work_dir/summary.md"
 
 DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
 GITHUB_STEP_SUMMARY="$summary_file" \
-  "$helper" "$fixture_root/sdk-root"
+  bash "$helper" "$fixture_root/sdk-root"
 
 test ! -e "$fixture_root/sdk-root"
 reclaimed_bytes="$(sed -n 's/^runner_reclaimed_bytes=//p' "$summary_file")"
@@ -25,7 +25,7 @@ fi
 missing_summary="$work_dir/missing-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
    GITHUB_STEP_SUMMARY="$missing_summary" \
-   "$helper" "$fixture_root/missing-root"; then
+   bash "$helper" "$fixture_root/missing-root"; then
   echo "expected an absent reclaim root to fail closed" >&2
   exit 1
 fi
@@ -35,7 +35,7 @@ ln -s "$fixture_root/real-root" "$fixture_root/link-root"
 symlink_summary="$work_dir/symlink-summary.md"
 if DISKSAGE_RECLAIM_TEST_ROOT="$fixture_root" \
    GITHUB_STEP_SUMMARY="$symlink_summary" \
-   "$helper" "$fixture_root/link-root"; then
+   bash "$helper" "$fixture_root/link-root"; then
   echo "expected a symlink reclaim root to fail closed" >&2
   exit 1
 fi
