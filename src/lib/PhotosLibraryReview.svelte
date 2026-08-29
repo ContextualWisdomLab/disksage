@@ -83,7 +83,11 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 
   {#if inventory?.unavailable_count}
-    <p class="blocker" role="alert">확인하지 못한 원본은 다운로드하거나 삭제하지 않습니다. 사진 앱에서 원본 다운로드를 완료한 뒤 다시 확인하세요.</p>
+    {#if inventory.next_action === "exclude-unsupported-compound-assets-and-review-again"}
+      <p class="blocker" role="alert">한 장의 사진으로 안전하게 구분할 수 없는 항목이 있습니다. 해당 항목을 검토 범위에서 제외한 뒤 다시 확인하세요.</p>
+    {:else}
+      <p class="blocker" role="alert">확인하지 못한 원본은 다운로드하거나 삭제하지 않습니다. 사진 앱에서 원본 다운로드를 완료한 뒤 다시 확인하세요.</p>
+    {/if}
   {/if}
   {#if inventory?.inventory_truncated}
     <p class="blocker" role="alert">검토 범위가 너무 큽니다. 사진 앱에서 검토할 사진을 줄인 뒤 다시 확인하세요.</p>

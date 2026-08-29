@@ -538,9 +538,14 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_rejects_compound_assets_and_bounds_callbacks() {
+    fn native_boundary_selects_one_still_from_live_photos_and_bounds_callbacks() {
         let source = include_str!("../native/photos_bridge.m");
-        assert!(source.contains("resources.count != 1"));
+        assert!(source.contains("resource.type == PHAssetResourceTypePhoto"));
+        assert!(source.contains("resource.type == PHAssetResourceTypeFullSizePhoto"));
+        assert!(source.contains("photos.count == 1"));
+        assert!(source.contains("fullSizePhotos.count == 1"));
+        assert!(source.contains("compound-photo-still-resource-ambiguous"));
+        assert!(source.contains("exclude-unsupported-compound-assets-and-review-again"));
         assert!(source.contains("networkAccessAllowed = NO"));
         assert!(source.contains("cancelDataRequest:requestID"));
         assert!(source.contains("DSAuthorizationTimeoutNanos"));

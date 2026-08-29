@@ -41,11 +41,26 @@ static NSString *DSMetadataFingerprint(PHAsset *asset, PHAssetResource *resource
   return DSHex(digest, sizeof(digest));
 }
 
+static PHAssetResource *DSStillPhotoResource(NSArray<PHAssetResource *> *resources) {
+  NSPredicate *photoPredicate = [NSPredicate predicateWithBlock:^BOOL(PHAssetResource *resource, NSDictionary *bindings) {
+    (void)bindings;
+    return resource.type == PHAssetResourceTypePhoto;
+  }];
+  NSArray<PHAssetResource *> *photos = [resources filteredArrayUsingPredicate:photoPredicate];
+  if (photos.count == 1) return photos.firstObject;
+  if (photos.count > 1) return nil;
+  NSPredicate *fullSizePredicate = [NSPredicate predicateWithBlock:^BOOL(PHAssetResource *resource, NSDictionary *bindings) {
+    (void)bindings;
+    return resource.type == PHAssetResourceTypeFullSizePhoto;
+  }];
+  NSArray<PHAssetResource *> *fullSizePhotos = [resources filteredArrayUsingPredicate:fullSizePredicate];
+  return fullSizePhotos.count == 1 ? fullSizePhotos.firstObject : nil;
+}
+
 static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
   NSArray<PHAssetResource *> *resources = [PHAssetResource assetResourcesForAsset:asset];
-  if (resources.count != 1) return @{ @"state": @"unavailable", @"blocker": @"compound-photo-review-unavailable" };
-  PHAssetResource *resource = resources.firstObject;
-  if (!resource) return @{ @"state": @"unavailable", @"blocker": @"no-original-resource" };
+  PHAssetResource *resource = DSStillPhotoResource(resources);
+  if (!resource) return @{ @"state": @"unavailable", @"blocker": @"compound-photo-still-resource-ambiguous" };
   PHAssetResourceRequestOptions *options = [PHAssetResourceRequestOptions new];
   options.networkAccessAllowed = NO;
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -139,10 +154,14 @@ static NSDictionary *DSInventory(NSUInteger maxAssets, uint64_t maxBytes, NSArra
   NSData *canonical = [NSJSONSerialization dataWithJSONObject:fingerprintSource options:NSJSONWritingSortedKeys error:nil];
   unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(canonical.bytes, (CC_LONG)canonical.length, digest);
   BOOL truncated = fetch.count > reviewCount;
+  BOOL unsupportedCompound = [assets indexOfObjectPassingTest:^BOOL(NSDictionary *evidence, NSUInteger index, BOOL *stop) {
+    (void)index; (void)stop;
+    return [evidence[@"blocker"] isEqualToString:@"compound-photo-still-resource-ambiguous"];
+  }] != NSNotFound;
   return @{ @"authorization": DSStatus(status), @"observed_at_ms": @((uint64_t)(NSDate.date.timeIntervalSince1970 * 1000)),
             @"inventory_fingerprint": DSHex(digest, sizeof(digest)), @"evidence_complete": @(!truncated && unavailable == 0),
             @"inventory_truncated": @(truncated),
-            @"next_action": truncated ? @"reduce-photos-library-review-scope" : (unavailable ? @"download-originals-in-photos" : (groups.count ? @"choose-one-photo-to-keep-per-group" : @"no-exact-duplicates-found")),
+            @"next_action": truncated ? @"reduce-photos-library-review-scope" : (unsupportedCompound ? @"exclude-unsupported-compound-assets-and-review-again" : (unavailable ? @"download-originals-in-photos" : (groups.count ? @"choose-one-photo-to-keep-per-group" : @"no-exact-duplicates-found"))),
             @"assets": assets, @"exact_groups": groups, @"unavailable_count": @(unavailable),
             @"near_duplicate_evidence": @"unavailable-without-measured-content-equivalence" };
 }
