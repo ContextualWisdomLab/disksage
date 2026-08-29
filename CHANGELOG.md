@@ -41,6 +41,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+- Ship that generic batch planner as a checksummed, provenance-attested operational CLI on Linux,
+  Windows, and macOS so installed release artifacts can reproduce the exact read-only plan.
 
 ### Fixed
 

@@ -40,10 +40,14 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-linux-x86_64.sha256
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64.sha256
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-linux-x86_64
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-linux-x86_64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
+            eviction_batch_cli_source: src-tauri/target/release/disksage-cloud-local-eviction-batch
+            eviction_batch_cli_asset: src-tauri/target/release/disksage-cloud-local-eviction-batch-linux-x86_64
           - os: windows-2022
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
@@ -52,10 +56,14 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe.sha256
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-windows-x86_64.exe
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-windows-x86_64.exe.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan.exe
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit.exe
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
+            eviction_batch_cli_source: src-tauri/target/release/disksage-cloud-local-eviction-batch.exe
+            eviction_batch_cli_asset: src-tauri/target/release/disksage-cloud-local-eviction-batch-windows-x86_64.exe
           - os: macos-latest
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
@@ -63,10 +71,14 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-macos-arm64.sha256
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-macos-arm64
+            eviction_batch_cli_source: src-tauri/target/release/disksage-cloud-local-eviction-batch
+            eviction_batch_cli_asset: src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -145,6 +157,7 @@ jobs:
         run: >-
           cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
           --bin disksage-cloud-plan --bin disksage-duplicate-audit
+          --bin disksage-cloud-local-eviction-batch
 
       - name: Stage and verify operational CLIs
         shell: bash
@@ -180,6 +193,7 @@ jobs:
           }
           stage_cli "${{ matrix.cloud_cli_source }}" "${{ matrix.cloud_cli_asset }}" "usage: disksage-cloud-plan"
           stage_cli "${{ matrix.duplicate_cli_source }}" "${{ matrix.duplicate_cli_asset }}" "usage: disksage-duplicate-audit"
+          stage_cli "${{ matrix.eviction_batch_cli_source }}" "${{ matrix.eviction_batch_cli_asset }}" "--manifest ABSOLUTE_JSON"
 
       - name: Verify macOS DMG app signature
         if: matrix.os == 'macos-latest'
@@ -303,18 +317,21 @@ jobs:
           for required_name in \
             disksage-cloud-plan-linux-x86_64 \
             disksage-duplicate-audit-linux-x86_64 \
+            disksage-cloud-local-eviction-batch-linux-x86_64 \
             disksage-cloud-plan-windows-x86_64.exe \
             disksage-duplicate-audit-windows-x86_64.exe \
+            disksage-cloud-local-eviction-batch-windows-x86_64.exe \
             disksage-cloud-plan-macos-arm64 \
-            disksage-duplicate-audit-macos-arm64; do
+            disksage-duplicate-audit-macos-arm64 \
+            disksage-cloud-local-eviction-batch-macos-arm64; do
             require_exactly_one_file "$required_name"
             require_exactly_one_file "$required_name.sha256"
           done
           checksum_files=()
           checksum_file=""
           while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
-          if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+          if [[ ${#checksum_files[@]} -ne 9 ]]; then
+            printf 'Expected nine operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
             exit 1
           fi
           for checksum_file in "${checksum_files[@]}"; do
@@ -354,8 +371,8 @@ jobs:
           fi
           regular_file_count=0
           while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 18 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
+          if [[ $regular_file_count -ne 24 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 24 regular files, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 

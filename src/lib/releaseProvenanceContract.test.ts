@@ -16,10 +16,13 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
+  'disksage-cloud-local-eviction-batch-linux-x86_64',
   'disksage-cloud-plan-windows-x86_64.exe',
   'disksage-duplicate-audit-windows-x86_64.exe',
+  'disksage-cloud-local-eviction-batch-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
+  'disksage-cloud-local-eviction-batch-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 repository file from the source-controlled project root. */
@@ -153,7 +156,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
     expect(attestJob).toContain('disksage.spdx.json');
-    expect(attestJob).toContain('expected exactly 18 regular files');
+    expect(attestJob).toContain('expected exactly 24 regular files');
     expect(attestJob).toContain('require_exactly_one_file "$required_name"');
     expect(attestJob).toContain('require_exactly_one_file "$required_name.sha256"');
 
