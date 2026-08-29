@@ -8,6 +8,19 @@ pub struct FileMeta {
     pub size: u64,
     pub mtime_days: u64,
     pub parent: String,
+    pub production_time_ms: Option<u64>,
+    pub production_time_source: Option<String>,
+    pub production_time_confidence: Option<String>,
+}
+
+fn lineage_hint(m: &FileMeta) -> String {
+    match (m.production_time_ms, m.production_time_source.as_deref()) {
+        (Some(time), Some(source)) => format!(
+            "production_time_ms={time} source={source} confidence={}",
+            m.production_time_confidence.as_deref().unwrap_or("unknown")
+        ),
+        _ => "production_time=unavailable".into(),
+    }
 }
 
 /// LLM 확장자 추론 결과. type_desc = "무슨 파일인가" 짧은 설명, class = 후보 중 제안(없으면 None).
@@ -22,10 +35,15 @@ pub fn verdict_prompt(m: &FileMeta) -> String {
     format!(
         "You judge whether a file is safe to delete, using ONLY its metadata (never its contents).\n\
          File: name={name} parent={parent} size={size}B age={age}d\n\
+         Lineage evidence: {lineage}\n\
          Reply with ONLY this JSON, no prose:\n\
          {{\"verdict\":\"safe|caution|keep\",\"reason\":\"<short>\"}}\n\
          safe = regenerable/temporary; caution = maybe needed; keep = likely important.",
-        name = m.name, parent = m.parent, size = m.size, age = m.mtime_days
+        name = m.name,
+        parent = m.parent,
+        size = m.size,
+        age = m.mtime_days,
+        lineage = lineage_hint(m)
     )
 }
 
@@ -34,10 +52,14 @@ pub fn classify_prompt(m: &FileMeta, candidates: &[&str]) -> String {
     format!(
         "Classify this file into exactly one of the candidate classes, using ONLY metadata.\n\
          File: name={name} parent={parent}\n\
+         Lineage evidence: {lineage}\n\
          Candidates: {list}\n\
          Reply with ONLY this JSON (choose exactly one id from the list above):\n\
          {{\"class\":\"<one id from Candidates>\"}}",
-        name = m.name, parent = m.parent, list = candidates.join(", ")
+        name = m.name,
+        parent = m.parent,
+        lineage = lineage_hint(m),
+        list = candidates.join(", ")
     )
 }
 
@@ -70,13 +92,17 @@ mod tests {
     use super::*;
     fn meta() -> FileMeta {
         FileMeta { path: "/downloads/old_report.pdf".into(), name: "old_report.pdf".into(),
-                   size: 2_400_000, mtime_days: 420, parent: "downloads".into() }
+                   size: 2_400_000, mtime_days: 420, parent: "downloads".into(),
+                   production_time_ms: Some(1_700_000_000_000),
+                   production_time_source: Some("embedded:exiftool:CreateDate".into()),
+                   production_time_confidence: Some("high".into()) }
     }
     #[test]
     fn verdict_prompt_has_metadata_and_schema() {
         let p = verdict_prompt(&meta());
         assert!(p.contains("old_report.pdf"));
         assert!(p.contains("downloads"));
+        assert!(p.contains("embedded:exiftool:CreateDate"));
         assert!(p.contains(r#"{"verdict":"#));
         assert!(p.contains("safe") && p.contains("caution") && p.contains("keep"));
     }
@@ -85,6 +111,7 @@ mod tests {
         let p = classify_prompt(&meta(), &["Image", "Document", "Installer"]);
         for c in ["Image", "Document", "Installer"] { assert!(p.contains(c)); }
         assert!(p.to_lowercase().contains("exactly one"));
+        assert!(p.contains("production_time_ms=1700000000000"));
     }
     #[test]
     fn summary_prompt_includes_each_sample() {
@@ -93,8 +120,8 @@ mod tests {
     }
     #[test]
     fn summary_prompt_handles_multiple_samples() {
-        let a = FileMeta { path: "/a/x.bin".into(), name: "x.bin".into(), size: 1, mtime_days: 1, parent: "a".into() };
-        let b = FileMeta { path: "/a/y.dat".into(), name: "y.dat".into(), size: 2, mtime_days: 2, parent: "a".into() };
+        let a = FileMeta { path: "/a/x.bin".into(), name: "x.bin".into(), size: 1, mtime_days: 1, parent: "a".into(), production_time_ms: None, production_time_source: None, production_time_confidence: None };
+        let b = FileMeta { path: "/a/y.dat".into(), name: "y.dat".into(), size: 2, mtime_days: 2, parent: "a".into(), production_time_ms: None, production_time_source: None, production_time_confidence: None };
         let p = summary_prompt(&[a, b]);
         assert!(p.contains("x.bin") && p.contains("y.dat"));
     }

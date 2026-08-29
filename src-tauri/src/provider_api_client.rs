@@ -24,6 +24,12 @@ const MAX_METADATA_RESPONSE_BYTES: u64 = 256 * 1_024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneDrivePath(String);
 
+impl OneDrivePath {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// An opaque Google Drive file ID paired with the exact My Drive-relative path expected from the
 /// receipt destination. Construction validates local path containment and Unicode normalization;
 /// collection still has to prove the authenticated remote parent chain.
@@ -59,6 +65,13 @@ impl ProviderRemoteLocator {
 
     pub fn location_bound(&self) -> bool {
         matches!(self, Self::OneDriveItemPath(_))
+    }
+
+    pub(crate) fn onedrive_path(&self) -> Option<&str> {
+        match self {
+            Self::OneDriveItemPath(path) => Some(path.as_str()),
+            _ => None,
+        }
     }
 
     fn location_proof(&self) -> Option<String> {
@@ -135,7 +148,7 @@ pub fn provider_metadata_url(locator: &ProviderRemoteLocator) -> Result<String, 
     })
 }
 
-fn normalized_relative_path_segments(
+pub(crate) fn destination_path_segments(
     local_root: &Path,
     destination: &Path,
 ) -> Result<Vec<String>, String> {
@@ -174,7 +187,7 @@ pub fn onedrive_path_locator(
     local_root: &Path,
     destination: &Path,
 ) -> Result<ProviderRemoteLocator, String> {
-    let segments = normalized_relative_path_segments(local_root, destination)?;
+    let segments = destination_path_segments(local_root, destination)?;
     let locator = ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(segments.join("/")));
     provider_metadata_url(&locator)?;
     Ok(locator)
@@ -187,7 +200,7 @@ pub fn google_drive_path_locator(
     destination: &Path,
     file_id: &str,
 ) -> Result<GoogleDrivePath, String> {
-    let segments = normalized_relative_path_segments(local_root, destination)?;
+    let segments = destination_path_segments(local_root, destination)?;
     if segments.len() > MAX_GOOGLE_DRIVE_PATH_SEGMENTS {
         return Err("google-drive-path-too-deep".into());
     }

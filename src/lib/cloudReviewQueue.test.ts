@@ -65,6 +65,11 @@ function decision(
 }
 
 describe("cloud review queue", () => {
+  it("labels non-overridable managed-library blockers", () => {
+    expect(cloudDecisionReasonLabel("system-managed-photos-library-data"))
+      .toBe("Photos 라이브러리 내부 데이터는 패키지 전체 처리 없이 이동할 수 없음");
+  });
+
   it("accepts only a decision bound to the current review fingerprint", () => {
     const item = candidate("a", 10);
     const exact = decision(item, "approved");
@@ -276,6 +281,10 @@ describe("cloud review queue", () => {
       .toBe("생산일을 내장 메타데이터에서 확인하지 못함");
     expect(cloudDecisionReasonLabel("destination-exists"))
       .toBe("같은 목적지 파일이 이미 있음");
+    expect(cloudDecisionReasonLabel("provider-sync-incomplete"))
+      .toBe("공급자 동기화 증거가 불완전하여 기존 목적지를 채택할 수 없음");
+    expect(cloudDecisionReasonLabel("local-volume-headroom-insufficient"))
+      .toBe("복사에 필요한 로컬 여유공간이 부족함");
     expect(cloudDecisionReasonLabel("future-review-reason"))
       .toBe("future-review-reason");
   });

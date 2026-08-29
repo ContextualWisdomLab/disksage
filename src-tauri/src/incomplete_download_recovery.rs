@@ -394,7 +394,10 @@ fn validate_png(path: &Path, logical_bytes: u64, limit: u64) -> ContentValidatio
         result.decoded_output_bytes = worst_case_output_bytes.unwrap_or(u64::MAX);
         return result;
     }
-    let output_bytes = reader.output_buffer_size() as u64;
+    let output_bytes = reader
+        .output_buffer_size()
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .unwrap_or(u64::MAX);
     if output_bytes == 0 || output_bytes > limit {
         result.status = ContentValidationStatus::LimitExceeded;
         result.reason_code = "png-output-limit-exceeded".into();

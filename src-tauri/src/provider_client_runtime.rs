@@ -6,9 +6,12 @@
 
 use crate::cloud::CloudProvider;
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
 use std::io::Read;
+#[cfg(not(coverage))]
+use std::io::Write;
 #[cfg(not(coverage))]
 use std::process::{Command, Stdio};
 #[cfg(not(coverage))]
@@ -16,6 +19,9 @@ use std::time::{Duration, Instant};
 
 const SNAPSHOT_VERSION: u32 = 1;
 const SNAPSHOT_SCHEMA_KIND: &str = "disksage.provider-client-runtime";
+pub const PROVIDER_CLIENT_RUNTIME_EVIDENCE_DIRECTORY: &str = "provider-client-runtime-evidence";
+const MAX_PERSISTED_RUNTIME_SNAPSHOTS: usize = 128;
+const MAX_PERSISTED_RUNTIME_SNAPSHOT_BYTES: usize = 64 * 1024;
 #[cfg(not(coverage))]
 const PROCESS_OUTPUT_LIMIT: u64 = 64 * 1024;
 #[cfg(not(coverage))]
@@ -420,6 +426,128 @@ pub fn validate_provider_client_runtime_snapshot(
     Ok(())
 }
 
+/// Persist one path-free provider-client observation for incident comparison.
+///
+/// The record is create-only, fsynced, and bounded to DiskSage-shaped files. It contains process
+/// state only; command lines, local paths, account identifiers, cloud capacity, and sync claims
+/// are rejected by the snapshot validator and are never written.
+#[cfg(not(coverage))]
+pub fn write_runtime_snapshot_evidence(
+    app_data_dir: &Path,
+    snapshot: &ProviderClientRuntimeSnapshot,
+) -> Result<PathBuf, String> {
+    validate_provider_client_runtime_snapshot(snapshot)?;
+    let directory = runtime_evidence_directory(app_data_dir)?;
+    let path = directory.join(format!(
+        "{:020}-{}.json",
+        snapshot.observed_at_ms, snapshot.snapshot_fingerprint_sha256
+    ));
+    let encoded = serde_json::to_vec_pretty(snapshot)
+        .map_err(|_| "provider-client-runtime-evidence-encode-failed".to_string())?;
+    if encoded.len() > MAX_PERSISTED_RUNTIME_SNAPSHOT_BYTES {
+        return Err("provider-client-runtime-evidence-too-large".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "provider-client-runtime-evidence-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "provider-client-runtime-evidence-write-failed".to_string())?;
+        #[cfg(not(unix))]
+        file.set_len(encoded.len() as u64)
+            .map_err(|_| "provider-client-runtime-evidence-write-failed".to_string())?;
+        #[cfg(unix)]
+        std::fs::File::open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "provider-client-runtime-evidence-directory-sync-failed".to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    prune_runtime_snapshot_evidence(&directory)?;
+    Ok(path)
+}
+
+#[cfg(not(coverage))]
+fn runtime_evidence_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
+    if !app_data_dir.is_absolute()
+        || app_data_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("provider-client-runtime-evidence-parent-invalid".into());
+    }
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "provider-client-runtime-evidence-parent-create-failed".to_string())?;
+    let parent = std::fs::symlink_metadata(app_data_dir)
+        .map_err(|_| "provider-client-runtime-evidence-parent-unavailable".to_string())?;
+    if parent.file_type().is_symlink() || !parent.is_dir() {
+        return Err("provider-client-runtime-evidence-parent-unsafe".into());
+    }
+    let directory = app_data_dir.join(PROVIDER_CLIENT_RUNTIME_EVIDENCE_DIRECTORY);
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "provider-client-runtime-evidence-directory-create-failed".to_string())?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .map_err(|_| "provider-client-runtime-evidence-directory-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("provider-client-runtime-evidence-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).map_err(
+            |_| "provider-client-runtime-evidence-directory-permissions-failed".to_string(),
+        )?;
+    }
+    Ok(directory)
+}
+
+#[cfg(not(coverage))]
+fn is_runtime_snapshot_record_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some((timestamp, fingerprint)) = stem.split_once('-') else {
+        return false;
+    };
+    timestamp.len() == 20
+        && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        && fingerprint.len() == 64
+        && fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(not(coverage))]
+fn prune_runtime_snapshot_evidence(directory: &Path) -> Result<(), String> {
+    let mut records = std::fs::read_dir(directory)
+        .map_err(|_| "provider-client-runtime-evidence-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            is_runtime_snapshot_record_name(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.0.cmp(&right.0));
+    while records.len() > MAX_PERSISTED_RUNTIME_SNAPSHOTS {
+        let (_, path) = records.remove(0);
+        std::fs::remove_file(path)
+            .map_err(|_| "provider-client-runtime-evidence-retention-failed")?;
+    }
+    Ok(())
+}
+
 pub fn attach_runtime_notice(notices: &mut Vec<String>, snapshot: &ProviderClientRuntimeSnapshot) {
     notices.retain(|notice| {
         !matches!(
@@ -621,5 +749,42 @@ mod tests {
             validate_provider_client_runtime_snapshot(&forged_notices).unwrap_err(),
             "provider-client-runtime-notices-invalid"
         );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn runtime_evidence_is_path_free_create_only_and_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let first =
+            assess_provider_client_runtime(CloudProvider::GoogleDrive, Some(b"Google Drive\n"), 1);
+        let first_path = write_runtime_snapshot_evidence(temp.path(), &first).unwrap();
+        let encoded = std::fs::read(&first_path).unwrap();
+        assert!(!String::from_utf8_lossy(&encoded).contains("Google Drive"));
+        assert_eq!(
+            write_runtime_snapshot_evidence(temp.path(), &first).unwrap_err(),
+            "provider-client-runtime-evidence-create-failed"
+        );
+
+        for observed_at_ms in 2..=129 {
+            let snapshot = assess_provider_client_runtime(
+                CloudProvider::GoogleDrive,
+                Some(b"Finder\n"),
+                observed_at_ms,
+            );
+            write_runtime_snapshot_evidence(temp.path(), &snapshot).unwrap();
+        }
+        let records =
+            std::fs::read_dir(temp.path().join(PROVIDER_CLIENT_RUNTIME_EVIDENCE_DIRECTORY))
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(is_runtime_snapshot_record_name)
+                })
+                .count();
+        assert_eq!(records, MAX_PERSISTED_RUNTIME_SNAPSHOTS);
+        assert!(!first_path.exists());
     }
 }
