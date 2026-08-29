@@ -978,6 +978,23 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
+fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
+    if path.is_empty() || command.len() < path.len() {
+        return false;
+    }
+    (0..=command.len() - path.len()).any(|start| {
+        let end = start + path.len();
+        command[start..end] == *path
+            && (start == 0
+                || command[start - 1].is_ascii_whitespace()
+                || command[start - 1] == b'=')
+            && (end == command.len()
+                || command[end].is_ascii_whitespace()
+                || (recursive && command[end] == b'/'))
+    })
+}
+
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -1078,10 +1095,55 @@ pub fn active_use_evidence(
         }
         pids.insert(pid);
     }
+    let ps = match run_bounded_command(
+        "ps",
+        &[OsString::from("-axo"), OsString::from("pid=,command=")],
+        command_cwd,
+        timeout_ms,
+    ) {
+        Ok(result)
+            if !result.timed_out
+                && !result.stdout_truncated
+                && !result.stderr_truncated
+                && result.status_code == Some(0) =>
+        {
+            result
+        }
+        _ => {
+            return GitWorktreeActiveUseEvidence {
+                method: format!("{method}+ps-command"),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some("active-use-process-command-unavailable".into()),
+            };
+        }
+    };
+    let path_bytes = path.as_os_str().as_encoded_bytes();
+    for line in ps.stdout.split(|byte| *byte == b'\n') {
+        let line = &line[line
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(line.len())..];
+        let split = line.iter().position(|byte| byte.is_ascii_whitespace());
+        let Some(split) = split else { continue };
+        let Ok(pid) = std::str::from_utf8(&line[..split])
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or(())
+        else {
+            continue;
+        };
+        if pid != ps.child_pid && command_contains_path(&line[split..], path_bytes, recursive) {
+            pids.insert(pid);
+        }
+    }
     let results_truncated = pids.len() > max_pids;
     let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
     GitWorktreeActiveUseEvidence {
-        method: method.into(),
+        method: format!("{method}+ps-command"),
         assessed: true,
         evidence_complete: !results_truncated,
         active: !observed_pids.is_empty(),
@@ -2672,6 +2734,32 @@ mod tests {
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_includes_process_command_paths_not_held_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("npx-environment");
+        fs::create_dir(&marker).unwrap();
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 20 & wait", marker.to_str().unwrap()])
+            .spawn()
+            .unwrap();
+
+        let evidence = active_use_evidence(&marker, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+        assert!(!command_contains_path(b"tool /cache/env-old", b"/cache/env", true));
+        assert!(command_contains_path(
+            b"tool /cache/env with spaces/child",
+            b"/cache/env with spaces",
+            true,
+        ));
     }
 
     #[test]

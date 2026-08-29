@@ -3775,10 +3775,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
             [
                 "npm-cache",
+                "pip-cache",
                 "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
                 "uv-cache",
+                "node-cache",
                 "trivy-cache",
                 "appmap-download-cache",
                 "superset-http-cache",
@@ -3795,10 +3797,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         for id in crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS {
             let path = match id {
                 "npm-cache" => bases.home.join(".npm"),
+                "pip-cache" => bases.home.join("Library/Caches/pip"),
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
                 "uv-cache" => bases.local_data.join("uv"),
+                "node-cache" => bases.local_data.join("node"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
                 "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
@@ -3810,7 +3814,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 10);
+        assert_eq!(results.len(), crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS.len());
         assert!(results.iter().all(|result| result.ok));
     }
 

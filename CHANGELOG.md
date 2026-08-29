@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Reclaim pip downloads, Corepack's Node.js package-manager archive, and each inactive npx
+  environment through the existing identity-bound, active-use-checked regenerable-cache action.
 - Plan and execute uv's native `cache prune` without `--force`: bind the real executable and cache
   directory, veto active or incomplete `lsof` evidence, require a fresh exact fingerprint, and
   retain immutable approval/result records with filesystem-availability measurements.
@@ -224,9 +226,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   authority now require an explicit user opt-in.
 - Catalog the Cargo registry source tree as an explicit, identity-bound regenerable-cache target;
   keep it out of automatic cleanup because rebuilding may require network downloads.
-- Catalog the observed Node.js, PyTorch, Prisma, and GitHub CLI cache trees as identity-bound
-  manual-review targets; keep them out of automatic cleanup until their active-use and rebuild
-  contracts are independently established.
+- Catalog the observed PyTorch, Prisma, and GitHub CLI cache trees as identity-bound manual-review
+  targets; keep them out of automatic cleanup until their active-use and rebuild contracts are
+  independently established.
 - Add buyer-verifiable release artifact provenance with read-only platform build jobs, a tag-only least-privilege attestation job, exact 18-file admission including a source-bound SPDX SBOM, adjacent operational-CLI SHA-256 verification, preserved artifact namespaces, non-regular-entry rejection, and a separate publication job that cannot publish before attestation succeeds.
 - Require explicit organization-tenant authority when either the destination account scope is organization-owned or the canonical organization-sensitive review reason is present; fail closed in both frontend projection and durable Rust transfer authorization even when the ordinary review flag is absent, and regression-test contradictory signal combinations.
 - Enable an explicit fail-closed Tauri Content Security Policy to keep executable scripts and fonts local, grant production network authority only to the Tauri IPC transport, confine Vite WebSocket HMR to a separate development-only CSP, deny object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-test against null, wildcard, remote-script/style, eval, and development-authority leakage.

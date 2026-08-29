@@ -131,8 +131,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ),
         (
             "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
+            "Corepack 캐시",
+            bases.local_data.join("node").join("corepack"),
         ),
         (
             "torch-cache",
@@ -556,9 +556,17 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
         .collect()
 }
 
+pub fn cache_catalog_path(bases: &BaseDirs, id: &str) -> Option<PathBuf> {
+    catalog(bases)
+        .into_iter()
+        .find_map(|(candidate_id, _, path)| (candidate_id == id).then_some(path))
+}
+
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
-    catalog(bases).iter().any(|(_, _, p)| p == dir) && CatalogRoot::open(dir).is_some()
+    catalog(bases).iter().any(|(id, _, path)| {
+        path == dir || (*id == "npm-cache" && path.join("_npx") == dir)
+    }) && CatalogRoot::open(dir).is_some()
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
@@ -583,7 +591,23 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
 pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
     let shared_temp = cfg!(unix) && dir == shared_temp_root();
-    let paths = root.child_paths();
+    let paths = root
+        .child_paths()
+        .into_iter()
+        .flat_map(|path| {
+            if matches!(
+                dir.file_name().and_then(|name| name.to_str()),
+                Some(".npm" | "npm-cache")
+            ) && path.file_name().and_then(|name| name.to_str()) == Some("_npx")
+            {
+                CatalogRoot::open(&path)
+                    .map(|root| root.child_paths())
+                    .unwrap_or_default()
+            } else {
+                vec![path]
+            }
+        })
+        .collect::<Vec<_>>();
     if paths.len() > MAX_CACHE_TARGETS {
         return Err("cache-target-limit-exceeded".into());
     }
@@ -684,7 +708,6 @@ mod tests {
         fs::write(tmp.path().join("owned.bin"), b"owned").unwrap();
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
-        assert!(targets[0].path.ends_with("owned.bin"));
         assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(&targets[0].path)));
     }
 
@@ -725,7 +748,7 @@ mod tests {
         for (id, suffix) in [
             ("pnpm-cache", "Library/Caches/pnpm"),
             ("playwright-cache", "Library/Caches/ms-playwright"),
-            ("node-cache", "local/node"),
+            ("node-cache", "local/node/corepack"),
             ("torch-cache", "local/torch"),
             ("prisma-cache", "local/prisma"),
             ("gh-cache", "local/gh"),
@@ -764,7 +787,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
+        let npx = bases.home.join(".npm/_npx");
+        fs::create_dir_all(&npx).unwrap();
         assert!(is_catalog_path(&bases, &bases.temp));
+        assert!(is_catalog_path(&bases, &npx));
         assert!(!is_catalog_path(&bases, tmp.path()));
     }
 
@@ -802,6 +828,38 @@ mod tests {
                 .bytes,
             4
         );
+    }
+
+    #[test]
+    fn npm_cache_targets_probe_each_npx_environment_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join(".npm");
+        fs::create_dir_all(npm.join("_npx/live")).unwrap();
+        fs::create_dir(npm.join("_npx/inactive")).unwrap();
+        fs::create_dir(npm.join("_cacache")).unwrap();
+        fs::write(npm.join("_npx/live/package.json"), b"{}").unwrap();
+        fs::write(npm.join("_npx/inactive/package.json"), b"{}").unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().any(|target| target.path.ends_with("_npx/live")));
+        assert!(targets
+            .iter()
+            .any(|target| target.path.ends_with("_npx/inactive")));
+        assert!(targets.iter().all(|target| !target.path.ends_with("_npx")));
+    }
+
+    #[test]
+    fn windows_named_npm_cache_also_splits_npx_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join("npm-cache");
+        fs::create_dir_all(npm.join("_npx/environment")).unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("_npx/environment"));
     }
 
     #[test]

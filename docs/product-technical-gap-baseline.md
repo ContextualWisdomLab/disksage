@@ -1231,3 +1231,32 @@ runner's private workspace temp root instead of weakening the shared production 
 - Focused Rust verification regenerated 2.2 GiB of local build output. Native `cargo clean`
   immediately returned 2,203,364 KiB of measured data-volume availability; this build cleanup is
   recorded separately from the blocked uv cache and does not imply uv reclamation.
+
+## 2026-08-29 inactive package cache follow-up
+
+- The existing cache catalog already named pip and Node.js caches, but the approval-free action did
+  not route them through its per-child identity and active-use checks. They now use that shared
+  path; PyTorch checkpoints and GitHub Actions log archives remain review-only because their local
+  value is not disproved merely by a cache-directory name.
+- A bounded live inspection found no open file descriptors below either cache. The package
+  managers' native cleanup commands removed 49,584 KiB from pip and 74,296 KiB from Corepack,
+  123,880 KiB of allocated cache blocks in total. Concurrent Rust builds reduced the filesystem's
+  reported free-space counter during the observation, so only the direct allocation delta is
+  attributed to this cleanup. After focused verification, `cargo clean` removed its 1.5 GiB target
+  and increased APFS availability by 1,528,696 KiB; that build cleanup is accounted separately.
+- The npm `_npx` root held eight environments used by running MCP processes and six independently
+  inactive environments totaling about 480 MiB. DiskSage now expands that root into one
+  identity-bound target per environment, so active tools remain protected while an inactive npx
+  installation can be reclaimed without treating the whole root as active.
+- Incident evidence: the first `--npx-only` execution at PR head `971f4136` permanently removed 12
+  regenerable environments totaling 616,388,619 logical bytes and recorded every pending/terminal
+  outcome in `~/Library/Application Support/com.contextualwisdomlab.disksage/journal.jsonl`.
+  The shared lsof-only active-use probe missed command-path-only MCP processes, so some running
+  environments were incorrectly included; their processes continued running, but this violated the
+  preservation contract. Head `441e4ca5` fixes the shared boundary by requiring both bounded lsof
+  and bounded process-command evidence. Its regression
+  `active_use_includes_process_command_paths_not_held_open` passes, and a same-head rerun preserved
+  the two remaining environments with `cache-target-active-use-detected`.
+- Regenerability was verified without stopping a customer process: an isolated npm cache executed
+  `semver 1.2.3`, its `_npx` environment was removed, and the same npm command returned `1.2.3`
+  while recreating the same cache environment. The isolated verification cache was then removed.
