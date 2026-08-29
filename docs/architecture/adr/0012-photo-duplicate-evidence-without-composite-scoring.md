@@ -1,7 +1,7 @@
 # ADR 0012: Separate photo-duplicate and keeper evidence without composite scoring
 
 - Status: Accepted
-- Date: 2026-08-30
+- Date: 2026-08-29
 
 ## Context
 
@@ -23,8 +23,9 @@ when dimensions and normalized decoded RGBA16 pixels have the same domain-separa
 permits semantically identical lossless encodings with different compression or ancillary metadata
 to share a group without a perceptual-distance threshold. Before and
 after hashing, it verifies the filesystem-object identity and size, and it rejects symlinks,
-provider-managed paths, Photos library packages, dataless objects, unsupported codecs, and files
-whose active-use evidence is incomplete or positive.
+provider-managed paths, Photos library packages, dataless objects, and unsupported codecs.
+Active-use evidence is collected fail-closed only by a fresh execution preflight; read-only audit
+does not turn platform-specific process inspection into a discovery prerequisite.
 
 The audit reports dimensions, bit depth, losslessness, metadata-field count, lineage availability,
 no-reference IQA availability, and perceptual-descriptor availability as separate evidence. It

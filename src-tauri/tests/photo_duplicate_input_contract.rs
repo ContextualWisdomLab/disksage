@@ -27,7 +27,9 @@ fn animated_png_is_not_misreported_as_first_frame_exact_evidence() {
     );
 }
 
-#[cfg(unix)]
+// Darwin filesystems reject this byte sequence before DiskSage can inspect it; exercise the
+// non-Unicode path boundary on Unix platforms that can actually materialize the fixture.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn non_unicode_path_is_rejected_before_lossy_serialization() {
     use std::ffi::OsString;

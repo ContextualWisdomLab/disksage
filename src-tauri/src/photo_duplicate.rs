@@ -224,9 +224,10 @@ fn hash_current_file(
     let opened = file
         .metadata()
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
+    let opened_identity = crate::safety::object_id_from_metadata(&opened);
     if opened.len() != expected.len()
         || opened.modified().ok() != expected.modified().ok()
-        || crate::safety::object_id_from_metadata(&opened).as_deref() != Some(expected_identity)
+        || !metadata_identity_matches(opened_identity.as_deref(), expected_identity)
     {
         return Err("photo-input-changed".into());
     }
@@ -248,6 +249,15 @@ fn hash_current_file(
     Ok((hasher.finalize().to_hex().to_string(), bytes))
 }
 
+/// Compare handle metadata identity when the platform exposes it.
+///
+/// Windows path identity remains bound by `filesystem_object_id` before and after the read; its
+/// standard metadata object does not expose the same identity and therefore contributes no
+/// contradictory value here.
+fn metadata_identity_matches(observed: Option<&str>, expected: &str) -> bool {
+    observed.is_none_or(|identity| identity == expected)
+}
+
 pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     if path.to_str().is_none() {
         return Err("photo-input-path-encoding-unsupported".into());
@@ -259,13 +269,8 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     }
     let identity = crate::safety::filesystem_object_id(path)
         .map_err(|_| "photo-input-identity-unavailable".to_string())?;
-    let active_use = crate::git_worktree::active_use_evidence(path, 2_000, 64, false);
-    if !active_use.assessed || !active_use.evidence_complete {
-        return Err("photo-input-active-use-evidence-incomplete".into());
-    }
-    if active_use.active {
-        return Err("photo-input-active-use-detected".into());
-    }
+    // Audit is read-only. Active-use evidence belongs to the fresh execution preflight; requiring
+    // Unix `lsof` here made otherwise valid Windows evidence impossible to collect.
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -572,5 +577,18 @@ mod tests {
         png(&photo, 8, 8, 4);
         let audit = audit_photos(&[photo.clone(), photo], 1);
         assert!(audit.exact_groups.is_empty());
+    }
+
+    #[test]
+    fn unavailable_metadata_identity_defers_to_path_identity_rechecks() {
+        assert!(metadata_identity_matches(None, "path-identity"));
+        assert!(metadata_identity_matches(
+            Some("path-identity"),
+            "path-identity"
+        ));
+        assert!(!metadata_identity_matches(
+            Some("replacement"),
+            "path-identity"
+        ));
     }
 }
