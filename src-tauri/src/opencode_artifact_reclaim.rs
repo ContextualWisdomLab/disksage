@@ -22,7 +22,9 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_QUERY_BYTES: usize = 1_048_576;
 const MAX_CANDIDATES: usize = 4_096;
 const MAX_JOURNAL_BYTES: u64 = 1_048_576;
-const REFERENCE_QUERY: &str = "SELECT DISTINCT json_extract(data,'$.state.metadata.outputPath') FROM part WHERE json_valid(data) AND json_type(data,'$.state.metadata.outputPath')='text' ORDER BY 1;";
+const VALID_JSON_MARKER: &str = "__DISKSAGE_PART_DATA_JSON_VALID__";
+const INVALID_JSON_MARKER: &str = "__DISKSAGE_PART_DATA_JSON_INVALID__";
+const REFERENCE_QUERY: &str = "SELECT CASE WHEN EXISTS(SELECT 1 FROM part WHERE NOT json_valid(data)) THEN '__DISKSAGE_PART_DATA_JSON_INVALID__' ELSE '__DISKSAGE_PART_DATA_JSON_VALID__' END; SELECT DISTINCT json_extract(data,'$.state.metadata.outputPath') FROM part WHERE json_valid(data) AND json_type(data,'$.state.metadata.outputPath')='text' ORDER BY 1;";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -315,8 +317,17 @@ fn referenced_paths(database: &Path) -> Result<BTreeSet<PathBuf>, String> {
     }
     let text =
         String::from_utf8(output).map_err(|_| "opencode-reference-query-not-utf8".to_string())?;
-    Ok(text
-        .lines()
+    parse_reference_query_output(&text)
+}
+
+fn parse_reference_query_output(text: &str) -> Result<BTreeSet<PathBuf>, String> {
+    let mut lines = text.lines();
+    match lines.next() {
+        Some(VALID_JSON_MARKER) => {}
+        Some(INVALID_JSON_MARKER) => return Err("opencode-reference-data-invalid-json".into()),
+        _ => return Err("opencode-reference-query-protocol-invalid".into()),
+    }
+    Ok(lines
         .filter(|line| !line.is_empty())
         .map(PathBuf::from)
         .collect())
@@ -358,6 +369,18 @@ fn database_identity(root: &Path) -> Result<String, String> {
     Ok(lower_hex(&hasher.finalize()))
 }
 
+fn require_unchanged_database_identity(
+    expected: &str,
+    observed: &str,
+    issue: &str,
+) -> Result<(), String> {
+    if expected == observed {
+        Ok(())
+    } else {
+        Err(issue.into())
+    }
+}
+
 fn candidate_fingerprint(
     database_identity: &str,
     candidates: &[Candidate],
@@ -386,9 +409,11 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OpenCodeArtifactPlan, St
     let references = referenced_paths(&database)?;
     let database_after = database_identity(&root)?;
     active_use_complete_and_idle(&database)?;
-    if database_before != database_after {
-        return Err("opencode-database-changed-during-plan".into());
-    }
+    require_unchanged_database_identity(
+        &database_before,
+        &database_after,
+        "opencode-database-changed-during-plan",
+    )?;
     let canonical_tool_output = std::fs::canonicalize(&tool_output)
         .map_err(|_| "opencode-tool-output-unavailable".to_string())?;
     if !canonical_tool_output.starts_with(&root) {
@@ -441,12 +466,19 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OpenCodeArtifactPlan, St
         sum.checked_add(item.identity.allocated_bytes)
             .ok_or_else(|| "opencode-size-overflow".to_string())
     })?;
-    let fingerprint = candidate_fingerprint(&database_after, &candidates)?;
+    let database_final = database_identity(&root)?;
+    active_use_complete_and_idle(&database)?;
+    require_unchanged_database_identity(
+        &database_after,
+        &database_final,
+        "opencode-database-changed-during-output-scan",
+    )?;
+    let fingerprint = candidate_fingerprint(&database_final, &candidates)?;
     Ok(OpenCodeArtifactPlan {
         schema_version: SCHEMA_VERSION,
         schema_kind: "disksage.opencode-tool-output-orphan-plan".into(),
         observed_at_ms,
-        database_identity_sha256: database_after,
+        database_identity_sha256: database_final,
         referenced_tool_output_count: references.len() as u64,
         candidate_count: candidates.len() as u64,
         candidate_logical_bytes: logical,
@@ -767,6 +799,53 @@ mod tests {
             )
             .unwrap_err(),
             "opencode-permanent-purge-disabled"
+        );
+    }
+
+    #[test]
+    fn malformed_history_row_marker_fails_closed_before_paths_are_parsed() {
+        let output = format!("{INVALID_JSON_MARKER}\n/tool-output/tool_unsafe\n");
+        assert_eq!(
+            parse_reference_query_output(&output).unwrap_err(),
+            "opencode-reference-data-invalid-json"
+        );
+    }
+
+    #[test]
+    fn reference_query_protocol_requires_validity_attestation() {
+        assert_eq!(
+            parse_reference_query_output("/tool-output/tool_unattested\n").unwrap_err(),
+            "opencode-reference-query-protocol-invalid"
+        );
+        assert_eq!(
+            parse_reference_query_output(&format!(
+                "{VALID_JSON_MARKER}\n/tool-output/tool_a\n/tool-output/tool_b\n"
+            ))
+            .unwrap(),
+            [
+                PathBuf::from("/tool-output/tool_a"),
+                PathBuf::from("/tool-output/tool_b"),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn database_or_wal_change_during_candidate_scan_fails_closed() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("opencode.db"), b"before").unwrap();
+        let before = database_identity(temporary.path()).unwrap();
+        std::fs::write(temporary.path().join("opencode.db-wal"), b"new-reference").unwrap();
+        let after = database_identity(temporary.path()).unwrap();
+        assert_eq!(
+            require_unchanged_database_identity(
+                &before,
+                &after,
+                "opencode-database-changed-during-output-scan",
+            )
+            .unwrap_err(),
+            "opencode-database-changed-during-output-scan"
         );
     }
 }

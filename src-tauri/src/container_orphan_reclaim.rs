@@ -44,6 +44,9 @@ pub const MAX_CATEGORY_RECORDS: usize = 4_096;
 /// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
 /// supported host, including Windows command-line limits and 200-byte volume/network names.
 const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
+/// CreateProcessW accepts at most 32,767 UTF-16 code units, including the terminating NUL.
+/// Every inspect batch is sized against that platform contract even when planned elsewhere.
+const WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT: usize = 32_767;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,6 +423,73 @@ fn storage_free_container_ids(
             Some(true) => {}
             None => return Err("container-storage-lineage-identity-missing".to_string()),
         }
+    }
+    Ok(storage_free)
+}
+
+fn conservative_windows_argument_code_units(argument: &str) -> usize {
+    // Quoting every argument and doubling every backslash/quote cannot underestimate the encoded
+    // CreateProcessW command line produced by Rust's Windows process implementation.
+    2usize.saturating_add(argument.encode_utf16().fold(0usize, |units, code_unit| {
+        units.saturating_add(if matches!(code_unit, 0x22 | 0x5c) { 2 } else { 1 })
+    }))
+}
+
+fn container_inspect_batches<'a>(
+    prefix: &[String],
+    stopped_ids: &'a [String],
+) -> Result<Vec<Vec<&'a str>>, String> {
+    let fixed = prefix
+        .iter()
+        .map(String::as_str)
+        .chain(["container", "inspect"])
+        .fold(1usize, |units, argument| {
+            units
+                .saturating_add(conservative_windows_argument_code_units(argument))
+                .saturating_add(1)
+        });
+    if fixed >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+        return Err("container-storage-lineage-command-too-large".into());
+    }
+    let mut batches = Vec::<Vec<&str>>::new();
+    let mut current = Vec::new();
+    let mut current_units = fixed;
+    for id in stopped_ids {
+        let added = conservative_windows_argument_code_units(id).saturating_add(1);
+        if fixed.saturating_add(added) >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+            return Err("container-storage-lineage-command-too-large".into());
+        }
+        if current_units.saturating_add(added) >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+            batches.push(std::mem::take(&mut current));
+            current_units = fixed;
+        }
+        current.push(id.as_str());
+        current_units = current_units.saturating_add(added);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    Ok(batches)
+}
+
+fn inspect_storage_free_container_ids(
+    target: &ContainerRuntimeTarget,
+    prefix: &[String],
+    stopped_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut storage_free = Vec::new();
+    for batch in container_inspect_batches(prefix, stopped_ids)? {
+        let mut inspect_args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
+        inspect_args.extend(["container", "inspect"]);
+        inspect_args.extend(batch.iter().copied());
+        let inspect_output = command_text(
+            &target.binary_path,
+            &inspect_args,
+            ORPHAN_COMMAND_TIMEOUT,
+            "orphan-container-storage-lineage",
+        )?;
+        let expected = batch.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
+        storage_free.extend(storage_free_container_ids(&inspect_output, &expected)?);
     }
     Ok(storage_free)
 }
@@ -1031,21 +1101,8 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 if stopped_ids.windows(2).any(|pair| pair[0] == pair[1]) {
                     return Err("duplicate-candidate-id".to_string());
                 }
-                let candidate_ids = if stopped_ids.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut inspect_args: Vec<&str> =
-                        prefix.iter().skip(1).map(String::as_str).collect();
-                    inspect_args.extend(["container", "inspect"]);
-                    inspect_args.extend(stopped_ids.iter().map(String::as_str));
-                    let inspect_output = command_text(
-                        &target.binary_path,
-                        &inspect_args,
-                        ORPHAN_COMMAND_TIMEOUT,
-                        "orphan-container-storage-lineage",
-                    )?;
-                    storage_free_container_ids(&inspect_output, &stopped_ids)?
-                };
+                let candidate_ids =
+                    inspect_storage_free_container_ids(target, &prefix, &stopped_ids)?;
                 let candidate_ids = bounded_exact_candidate_ids(candidate_ids)?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
@@ -1592,6 +1649,34 @@ mod tests {
             storage_free_container_ids(&output, &expected).unwrap(),
             vec![expected.last().unwrap().clone()]
         );
+    }
+
+    #[test]
+    fn stopped_container_inspection_batches_fit_windows_command_line_contract() {
+        let prefix = vec![
+            "podman".to_string(),
+            "--connection".to_string(),
+            "machine-name".to_string(),
+        ];
+        let ids = (0..MAX_CATEGORY_RECORDS)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let batches = container_inspect_batches(&prefix, &ids).unwrap();
+        assert!(batches.len() > 1);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), ids.len());
+        for batch in batches {
+            let encoded_units = prefix
+                .iter()
+                .map(String::as_str)
+                .chain(["container", "inspect"])
+                .chain(batch)
+                .fold(1usize, |units, argument| {
+                    units
+                        .saturating_add(conservative_windows_argument_code_units(argument))
+                        .saturating_add(1)
+                });
+            assert!(encoded_units < WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT);
+        }
     }
 
     #[test]
