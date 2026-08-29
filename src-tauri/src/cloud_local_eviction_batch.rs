@@ -706,6 +706,7 @@ fn write_or_verify_immutable_record<T: Serialize>(
             expected.push(b'\n');
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
+                || !metadata.permissions().readonly()
                 || metadata.len() != expected.len() as u64
                 || std::fs::read(&path).map_err(|_| write_error.clone())? != expected
             {
@@ -773,18 +774,26 @@ where
         selected_count: plan.planned_count,
         total_allocated_bytes_before: plan.total_allocated_bytes,
         items,
-        finder_selection_requested: true,
-        customer_next_action:
-            "In Finder, choose OneDrive Free Up Space for the selected items, then verify in DiskSage."
-                .into(),
+        finder_selection_requested: false,
+        customer_next_action: "DiskSage is preparing the approved Finder selection.".into(),
     };
+    receipt.receipt_id = finder_receipt_id(&receipt);
+    write_or_verify_immutable_record(
+        record_dir,
+        &format!("{}.finder-assistance-pending.json", receipt.receipt_id),
+        &receipt,
+    )?;
+    reveal(&paths)?;
+    receipt.finder_selection_requested = true;
+    receipt.customer_next_action =
+        "In Finder, choose OneDrive Free Up Space for the selected items, then verify in DiskSage."
+            .into();
     receipt.receipt_id = finder_receipt_id(&receipt);
     write_or_verify_immutable_record(
         record_dir,
         &format!("{}.finder-assistance.json", receipt.receipt_id),
         &receipt,
     )?;
-    reveal(&paths)?;
     Ok(receipt)
 }
 
@@ -1414,6 +1423,21 @@ mod tests {
             )
             .unwrap_err(),
             "onedrive-finder-selection-failed"
+        );
+        let pending_path = std::fs::read_dir(records.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().ends_with(".finder-assistance-pending.json"))
+            .unwrap();
+        let pending: OnedriveFinderAssistanceReceipt =
+            serde_json::from_slice(&std::fs::read(pending_path).unwrap()).unwrap();
+        assert!(!pending.finder_selection_requested);
+        assert_eq!(
+            verify_onedrive_finder_assistance_with(&onedrive_root, &pending, 23, |_, _, _| {
+                Ok(item.clone())
+            })
+            .unwrap_err(),
+            "onedrive-finder-assistance-receipt-invalid"
         );
         let selected = std::cell::RefCell::new(Vec::new());
         let receipt = prepare_onedrive_finder_assistance_with(
