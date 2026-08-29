@@ -319,3 +319,24 @@ pub fn plan(
         active,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn active_use_bundle_path_is_absolute_before_probe() {
+        let temp = tempfile::Builder::new()
+            .prefix(".parallels-relative-test-")
+            .tempdir_in(".")
+            .unwrap();
+        let relative = PathBuf::from(temp.path().file_name().unwrap()).join("Relative.pvm");
+        std::fs::create_dir_all(&relative).unwrap();
+
+        let canonical = canonical_bundle_for_active_use(&relative).unwrap();
+
+        assert!(canonical.is_absolute());
+        assert_eq!(canonical, std::fs::canonicalize(&relative).unwrap());
+    }
+}
