@@ -490,7 +490,9 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
-    catalog(bases).iter().any(|(_, _, p)| p == dir) && CatalogRoot::open(dir).is_some()
+    !crate::cloud::path_inside_managed_file_provider_storage(dir)
+        && catalog(bases).iter().any(|(_, _, p)| p == dir)
+        && CatalogRoot::open(dir).is_some()
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.

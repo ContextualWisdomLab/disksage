@@ -438,6 +438,38 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_rejects_provider_managed_cache_root_without_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_cache = tmp
+            .path()
+            .join("Library/CloudStorage/OneDrive-Personal/cache");
+        fs::create_dir_all(&provider_cache).unwrap();
+        let victim = provider_cache.join("artifact.bin");
+        fs::write(&victim, b"provider-content").unwrap();
+        let bases = rules::BaseDirs {
+            temp: provider_cache.clone(),
+            local_data: tmp.path().join("local"),
+            home: tmp.path().join("home"),
+        };
+        let journal = tmp.path().join("journal.jsonl");
+        let targets = rules::cache_targets(&provider_cache).unwrap();
+
+        let error = clean_cache_contents_inner(
+            &bases,
+            &provider_cache,
+            &targets,
+            &journal,
+            1,
+        )
+        .err()
+        .expect("provider-managed cache roots must remain outside cleanup authority");
+
+        assert_eq!(error, "cache-root-not-current-or-safe");
+        assert_eq!(fs::read(&victim).unwrap(), b"provider-content");
+        assert!(!journal.exists());
+    }
+
+    #[test]
     fn cleanup_rejects_stale_target_snapshot_without_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
