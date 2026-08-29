@@ -1,7 +1,9 @@
 use disksage_lib::provider_cache_reclaim::{
     execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 
 fn validate_execute_args(args: &[String]) -> Result<(), String> {
     let valued = [
@@ -45,6 +47,11 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
         .filter(|value| !value.starts_with("--"))
         .cloned()
         .ok_or_else(|| format!("{flag} value is required"))
+}
+
+fn read_manifest_requests(path: &Path) -> Result<Vec<ProviderCacheCleanupRequest>, String> {
+    serde_json::from_slice(&std::fs::read(path).map_err(|_| "manifest read failed")?)
+        .map_err(|_| "manifest JSON invalid".to_string())
 }
 
 fn now_ms() -> u64 {
@@ -96,10 +103,7 @@ fn run() -> Result<serde_json::Value, String> {
             if !manifest.is_absolute() {
                 return Err("--manifest must be absolute".into());
             }
-            let requests: Vec<ProviderCacheCleanupRequest> = serde_json::from_slice(
-                &std::fs::read(manifest).map_err(|_| "manifest read failed")?,
-            )
-            .map_err(|_| "manifest JSON invalid")?;
+            let requests = read_manifest_requests(&manifest)?;
             let data = home.join(".local/share/disksage");
             serde_json::to_value(execute(
                 &home,
@@ -128,5 +132,25 @@ fn main() {
             eprintln!("{error}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_manifest_is_rejected_before_json_parsing() {
+        let path = std::env::temp_dir().join(format!(
+            "disksage-provider-cache-manifest-{}-{}.json",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::write(&path, vec![b' '; (MAX_MANIFEST_BYTES + 1) as usize]).unwrap();
+
+        let error = read_manifest_requests(&path).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(error, "manifest too large");
     }
 }
