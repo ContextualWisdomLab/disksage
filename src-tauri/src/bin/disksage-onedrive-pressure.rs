@@ -27,7 +27,7 @@ fn decode_previous_observation(
     }
 }
 
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 fn run() -> Result<(), String> {
     use disksage_lib::onedrive_internal_pressure::{
         assess, collect, OneDriveInternalPressureObservation,
@@ -88,6 +88,11 @@ fn run() -> Result<(), String> {
         .map_err(|_| "onedrive-pressure-report-encode-failed")?
     );
     Ok(())
+}
+
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+fn run() -> Result<(), String> {
+    Err("onedrive-pressure-native-observation-macos-only".into())
 }
 
 #[cfg(not(coverage))]
