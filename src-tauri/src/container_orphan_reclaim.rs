@@ -36,6 +36,8 @@ const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
 /// Bounded per-command wall clock; matches the existing Podman prune bound.
 const ORPHAN_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
+const CONTAINER_STORAGE_INSPECT_FORMAT: &str =
+    r#"{"Id":{{json .Id}},"MountCount":{{len .Mounts}}}"#;
 const MAX_DOCKER_HOST_BYTES: usize = 2 * 1024;
 const INDETERMINATE_MUTATION_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
 
@@ -46,6 +48,9 @@ pub const MAX_CATEGORY_RECORDS: usize = 4_096;
 /// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
 /// supported host, including Windows command-line limits and 200-byte volume/network names.
 const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
+/// CreateProcessW accepts at most 32,767 UTF-16 code units, including the terminating NUL.
+/// Every inspect batch is sized against that platform contract even when planned elsewhere.
+const WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT: usize = 32_767;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,6 +473,134 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
         records.push(ContainerRecord { id, state, names });
     }
     Ok(records)
+}
+
+/// Return the exact inspected container identities whose native record has no storage mounts.
+/// Missing, duplicate, unexpected, or malformed records fail the entire category closed.
+fn storage_free_container_ids(
+    output: &str,
+    expected_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != expected_ids.len() {
+        return Err("container-storage-lineage-record-count-invalid".to_string());
+    }
+    let mut inspected = expected_ids
+        .iter()
+        .cloned()
+        .map(|id| (id, None))
+        .collect::<BTreeMap<_, _>>();
+    if inspected.len() != expected_ids.len() {
+        return Err("duplicate-candidate-id".to_string());
+    }
+    for record in records {
+        let id = normalize_hex_id(&string_field(&record, &["Id", "ID"])?, "container")?;
+        let slot = inspected
+            .get_mut(&id)
+            .ok_or_else(|| "container-storage-lineage-identity-mismatch".to_string())?;
+        if slot.is_some() {
+            return Err("container-storage-lineage-duplicate-identity".to_string());
+        }
+        let mounted = match record.get("MountCount") {
+            Some(Value::Number(count)) => count
+                .as_u64()
+                .map(|count| count != 0)
+                .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?,
+            Some(_) => return Err("container-storage-lineage-mounts-unavailable".into()),
+            None => record
+                .get("Mounts")
+                .and_then(Value::as_array)
+                .map(|mounts| !mounts.is_empty())
+                .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?,
+        };
+        *slot = Some(mounted);
+    }
+    let mut storage_free = Vec::new();
+    for (id, mounted) in inspected {
+        match mounted {
+            Some(false) => storage_free.push(id),
+            Some(true) => {}
+            None => return Err("container-storage-lineage-identity-missing".to_string()),
+        }
+    }
+    Ok(storage_free)
+}
+
+fn conservative_windows_argument_code_units(argument: &str) -> usize {
+    // Quoting every argument and doubling every backslash/quote cannot underestimate the encoded
+    // CreateProcessW command line produced by Rust's Windows process implementation.
+    2usize.saturating_add(argument.encode_utf16().fold(0usize, |units, code_unit| {
+        units.saturating_add(if matches!(code_unit, 0x22 | 0x5c) { 2 } else { 1 })
+    }))
+}
+
+fn container_inspect_batches<'a>(
+    prefix: &[String],
+    stopped_ids: &'a [String],
+) -> Result<Vec<Vec<&'a str>>, String> {
+    let fixed = prefix
+        .iter()
+        .map(String::as_str)
+        .chain([
+            "container",
+            "inspect",
+            "--format",
+            CONTAINER_STORAGE_INSPECT_FORMAT,
+        ])
+        .fold(1usize, |units, argument| {
+            units
+                .saturating_add(conservative_windows_argument_code_units(argument))
+                .saturating_add(1)
+        });
+    if fixed >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+        return Err("container-storage-lineage-command-too-large".into());
+    }
+    let mut batches = Vec::<Vec<&str>>::new();
+    let mut current = Vec::new();
+    let mut current_units = fixed;
+    for id in stopped_ids {
+        let added = conservative_windows_argument_code_units(id).saturating_add(1);
+        if fixed.saturating_add(added) >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+            return Err("container-storage-lineage-command-too-large".into());
+        }
+        if current_units.saturating_add(added) >= WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT {
+            batches.push(std::mem::take(&mut current));
+            current_units = fixed;
+        }
+        current.push(id.as_str());
+        current_units = current_units.saturating_add(added);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    Ok(batches)
+}
+
+fn inspect_storage_free_container_ids(
+    target: &ContainerRuntimeTarget,
+    prefix: &[String],
+    stopped_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut storage_free = Vec::new();
+    for batch in container_inspect_batches(prefix, stopped_ids)? {
+        let mut inspect_args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
+        inspect_args.extend([
+            "container",
+            "inspect",
+            "--format",
+            CONTAINER_STORAGE_INSPECT_FORMAT,
+        ]);
+        inspect_args.extend(batch.iter().copied());
+        let inspect_output = command_text(
+            &target.binary_path,
+            &inspect_args,
+            ORPHAN_COMMAND_TIMEOUT,
+            "orphan-container-storage-lineage",
+        )?;
+        let expected = batch.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
+        storage_free.extend(storage_free_container_ids(&inspect_output, &expected)?);
+    }
+    Ok(storage_free)
 }
 
 /// Containers are orphan candidates only when fully stopped: `exited`, `created`, `dead`,
@@ -1084,8 +1217,17 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                let mut stopped_ids = candidates
+                    .iter()
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>();
+                stopped_ids.sort_unstable();
+                if stopped_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err("duplicate-candidate-id".to_string());
+                }
+                let candidate_ids =
+                    inspect_storage_free_container_ids(target, &prefix, &stopped_ids)?;
+                let candidate_ids = bounded_exact_candidate_ids(candidate_ids)?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1579,6 +1721,108 @@ mod tests {
             parse_container_records(&output).unwrap_err(),
             "container-names-invalid"
         );
+    }
+
+    #[test]
+    fn stopped_container_storage_lineage_requires_exact_native_identities_and_mounts() {
+        let expected = vec![DOCKER_ID_A.to_string()];
+        assert_eq!(
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_A}","Mounts":[]}}]"#),
+                &expected,
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(storage_free_container_ids(
+            &format!(r#"[{{"Id":"{DOCKER_ID_A}","Mounts":[{{"Type":"volume"}}]}}]"#),
+            &expected,
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(
+            storage_free_container_ids(
+                &format!(r#"{{"Id":"{DOCKER_ID_A}","MountCount":0}}"#),
+                &expected,
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(storage_free_container_ids(
+            &format!(r#"{{"Id":"{DOCKER_ID_A}","MountCount":12}}"#),
+            &expected,
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_A}"}}]"#),
+                &expected,
+            )
+            .unwrap_err(),
+            "container-storage-lineage-mounts-unavailable"
+        );
+        assert_eq!(
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_B}","Mounts":[]}}]"#),
+                &expected,
+            )
+            .unwrap_err(),
+            "container-storage-lineage-identity-mismatch"
+        );
+    }
+
+    #[test]
+    fn mounted_containers_do_not_exhaust_the_exact_delete_candidate_limit() {
+        let expected = (0..=MAX_EXACT_DELETE_CANDIDATES)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let output = expected
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let mounts = if index == expected.len() - 1 { "[]" } else { "[{}]" };
+                format!(r#"{{"Id":"{id}","Mounts":{mounts}}}"#)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            storage_free_container_ids(&output, &expected).unwrap(),
+            vec![expected.last().unwrap().clone()]
+        );
+    }
+
+    #[test]
+    fn stopped_container_inspection_batches_fit_windows_command_line_contract() {
+        let prefix = vec![
+            "podman".to_string(),
+            "--connection".to_string(),
+            "machine-name".to_string(),
+        ];
+        let ids = (0..MAX_CATEGORY_RECORDS)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let batches = container_inspect_batches(&prefix, &ids).unwrap();
+        assert!(batches.len() > 1);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), ids.len());
+        for batch in batches {
+            let encoded_units = prefix
+                .iter()
+                .map(String::as_str)
+                .chain([
+                    "container",
+                    "inspect",
+                    "--format",
+                    CONTAINER_STORAGE_INSPECT_FORMAT,
+                ])
+                .chain(batch)
+                .fold(1usize, |units, argument| {
+                    units
+                        .saturating_add(conservative_windows_argument_code_units(argument))
+                        .saturating_add(1)
+                });
+            assert!(encoded_units < WINDOWS_COMMAND_LINE_CODE_UNIT_LIMIT);
+        }
     }
 
     #[test]

@@ -34,7 +34,7 @@
     network: "미사용 사용자 정의 네트워크",
   };
   const CATEGORY_HINTS: Record<api.OrphanCategory, string> = {
-    container: "실행 중·일시정지 컨테이너는 절대 대상에 포함되지 않습니다.",
+    container: "실행 중이거나 저장 공간이 연결된 컨테이너는 보존합니다. 계속하려면 정지된 빈 컨테이너만 선택됐는지 확인하세요.",
     image: "태그가 붙은 이미지는 삭제되지 않고, 참조하는 컨테이너가 없는 태그 없는 이미지만 대상입니다.",
     volume: "컨테이너가 참조하는 볼륨은 대상에서 제외됩니다.",
     network: "기본 네트워크(bridge·host·none 등)와 컨테이너가 붙어 있는 네트워크는 제외됩니다.",

@@ -486,6 +486,11 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
     }
 }
 
+/// Inspect exactly one selected runtime without probing unrelated runtimes.
+pub fn inspect_one(runtime: RuntimeStorageKind) -> RuntimeStoragePlan {
+    inspect_runtime(runtime, now_ms())
+}
+
 /// Stop a reachable Podman machine only after a fresh native query proves zero running containers.
 pub fn execute_inactive_stop(
     confirmation_phrase: &str,
@@ -812,6 +817,7 @@ mod tests {
             logical_bytes: 100,
             allocated_bytes: Some(bytes),
             identity_sha256: Some(identity.into()),
+            freshness_sha256: None,
         };
         assert_eq!(
             compare_runtime_image_evidence(evidence("a", 80), evidence("b", 40)).3,

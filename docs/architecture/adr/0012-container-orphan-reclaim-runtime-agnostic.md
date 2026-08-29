@@ -26,7 +26,10 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    NDJSON (Docker) and JSON-array (Podman) envelopes. Any malformed record, unknown
    container state, missing reference count, or oversized listing fails the category closed.
 3. Candidates are strictly defined:
-   - containers in `exited`/`created`/`dead` states only;
+   - containers in `exited`/`created`/`dead` states only, and only when a fresh native container
+     inspection proves the `Mounts` array exists and is empty. A storage mount preserves the
+     container as lifecycle lineage for its data; an inspect failure or malformed/missing mount
+     evidence fails the entire container category closed;
    - untagged images with proven zero container references (tagged images are never
      candidates even when unused);
    - dangling volumes reported by the runtime's own `dangling=true` filter;
@@ -60,7 +63,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
   and receipts are schema-compatible with the existing Podman plan.
 - Positive: approval and deletion authority now refer to the same exact resource identities;
   resources that become orphaned after the fresh audit cannot be swept into the mutation.
-- Negative: exact deletion is capped at 64 candidates per category per execution so command
+- Positive: a stopped or broken container cannot be removed before its attached volume's data
+  necessity is independently established.
+- Negative: exact deletion is capped at 256 candidates per category per execution so command
   length and mutation scope remain bounded. Larger candidate sets fail closed and must be
   reduced before a new audited execution.
 - Neutral: no Figma redesign was required; the panel reuses Cleanup-screen patterns. If the
@@ -77,6 +82,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
   invocation and records the bounded result.
 - Trusting cached UI plans: rejected; stale plans are the primary footgun this design
   eliminates via mandatory re-audit.
+- Treating a stopped state as proof of disposability: rejected because stopped containers can
+  retain anonymous or named database volumes, and deleting the container can erase the runtime's
+  only queryable container-to-volume lineage.
 - Auto-detecting Colima by spawning the `colima` binary: rejected to keep the runtime
   surface to two binaries (`docker`, `podman`) with explicit contexts.
 

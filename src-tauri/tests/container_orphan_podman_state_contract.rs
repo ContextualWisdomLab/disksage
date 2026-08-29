@@ -20,8 +20,15 @@ shift 2
 case "${{1:-}}" in
   info) exit 0 ;;
   container)
-    [ "${{2:-}}" = "ps" ] || exit 93
-    printf '%s\n' '{container_json}'
+    if [ "${{2:-}}" = "ps" ]; then
+      printf '%s\n' '{container_json}'
+      exit 0
+    fi
+    if [ "${{2:-}}" = "inspect" ]; then
+      printf '[{{"Id":"%s","Mounts":[]}}]\n' "${{3:-}}"
+      exit 0
+    fi
+    exit 93
     ;;
   images|volume|network) exit 0 ;;
   *) exit 94 ;;

@@ -31,8 +31,26 @@ pub struct RawImageEvidence {
     pub logical_bytes: u64,
     /// st_blocks * 512 on Unix. This is observed host allocation, not reclaim proof.
     pub allocated_bytes: Option<u64>,
-    /// Stable hash of the host file identity (device and inode on Unix).
+    /// Path-free identity of the exact backing file observed by the plan.
     pub identity_sha256: Option<String>,
+    /// Path-free mutable state used to reject stale execution evidence.
+    pub freshness_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanHostCompactionPlan {
+    pub supported: bool,
+    pub machine_identity_sha256: Option<String>,
+    pub backing_file_identity_sha256: Option<String>,
+    pub backing_file_freshness_sha256: Option<String>,
+    pub active_container_count: Option<u64>,
+    pub stop_command: Option<Vec<String>>,
+    pub compaction_command: Option<Vec<String>>,
+    pub exact_approval_phrase: Option<String>,
+    pub rollback_policy: &'static str,
+    pub restart_policy: &'static str,
+    pub blockers: Vec<String>,
+    pub execution_performed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -129,6 +147,7 @@ pub struct PodmanReclaimPlan {
     pub unused_images: Option<PodmanUnusedImageEvidence>,
     /// Present only when the fresh evidence contains dangling (untagged, unreferenced) images.
     pub dangling_prune_approval_phrase: Option<String>,
+    pub host_compaction: PodmanHostCompactionPlan,
     pub assessment: PodmanReclaimAssessment,
     pub issues: Vec<String>,
 }
@@ -505,25 +524,37 @@ fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     #[cfg(not(unix))]
     let allocated_bytes = None;
     #[cfg(unix)]
-    let identity_sha256 = {
+    let (identity_sha256, freshness_sha256) = {
         use std::os::unix::fs::MetadataExt;
-        let mut hasher = Sha256::new();
-        hasher.update(b"disksage-runtime-image-identity-v1\0");
-        hasher.update(metadata.dev().to_le_bytes());
-        hasher.update(metadata.ino().to_le_bytes());
-        Some(lower_hex(&hasher.finalize()))
+        let mut identity = Sha256::new();
+        identity.update(b"disksage.podman-raw-image-identity.v2\0");
+        identity.update(metadata.dev().to_le_bytes());
+        identity.update(metadata.ino().to_le_bytes());
+        let mut freshness = Sha256::new();
+        freshness.update(b"disksage.podman-raw-image-freshness.v1\0");
+        freshness.update(metadata.len().to_le_bytes());
+        freshness.update(metadata.blocks().to_le_bytes());
+        freshness.update(metadata.mtime().to_le_bytes());
+        freshness.update(metadata.mtime_nsec().to_le_bytes());
+        (
+            Some(lower_hex(&identity.finalize())),
+            Some(lower_hex(&freshness.finalize())),
+        )
     };
     #[cfg(not(unix))]
     let identity_sha256 = None;
+    #[cfg(not(unix))]
+    let freshness_sha256 = None;
     Ok(RawImageEvidence {
         path: path.to_string_lossy().into_owned(),
         logical_bytes: metadata.len(),
         allocated_bytes,
         identity_sha256,
+        freshness_sha256,
     })
 }
 
-/// Reads only the configured sparse image and its current host allocation.
+/// Resolve and inspect only the sparse image configured for the selected machine.
 fn configured_raw_image_evidence(
     record: &MachineInspectRecord,
 ) -> Result<RawImageEvidence, String> {
@@ -534,7 +565,7 @@ fn configured_raw_image_evidence(
         .and_then(|path| raw_image_evidence(&path))
 }
 
-/// Reads only the configured sparse image and its current host allocation.
+/// Inspect only the sparse image configured for the exact selected machine.
 pub fn inspect_raw_image_evidence(
     podman_bin: &Path,
     requested_machine: &str,
@@ -554,6 +585,55 @@ pub fn inspect_raw_image_evidence(
         return Err("machine-name-mismatch".into());
     }
     configured_raw_image_evidence(&record)
+}
+
+fn host_compaction_plan(
+    machine: Option<&PodmanMachineEvidence>,
+    raw_image: Option<&RawImageEvidence>,
+    store: Option<&PodmanStoreEvidence>,
+) -> PodmanHostCompactionPlan {
+    let active_container_count = store.map(|value| value.containers_running);
+    let machine_identity_sha256 = machine
+        .zip(raw_image)
+        .and_then(|(machine, raw)| {
+            raw.identity_sha256
+                .as_ref()
+                .map(|identity| (machine, identity))
+        })
+        .map(|(machine, raw_identity)| {
+            let mut hasher = Sha256::new();
+            hasher.update(b"disksage.podman-machine-compaction-identity.v1\0");
+            hasher.update(machine.name.as_bytes());
+            hasher.update([0]);
+            hasher.update(raw_identity.as_bytes());
+            lower_hex(&hasher.finalize())
+        });
+    let mut blockers = vec![
+        "podman-machine-native-compaction-command-unavailable".to_string(),
+        "host-image-rewrite-prohibited".to_string(),
+        "rollback-unavailable-without-runtime-native-operation".to_string(),
+    ];
+    if active_container_count != Some(0) {
+        blockers.push("active-container-count-must-be-zero".to_string());
+    }
+    if machine_identity_sha256.is_none() {
+        blockers.push("exact-machine-backing-file-identity-unavailable".to_string());
+    }
+    blockers.sort();
+    PodmanHostCompactionPlan {
+        supported: false,
+        machine_identity_sha256,
+        backing_file_identity_sha256: raw_image.and_then(|raw| raw.identity_sha256.clone()),
+        backing_file_freshness_sha256: raw_image.and_then(|raw| raw.freshness_sha256.clone()),
+        active_container_count,
+        stop_command: None,
+        compaction_command: None,
+        exact_approval_phrase: None,
+        rollback_policy: "require-runtime-native-rollback-before-execution",
+        restart_policy: "restore-observed-running-state-after-success-or-rollback",
+        blockers,
+        execution_performed: false,
+    }
 }
 
 fn bounded_detail(value: &str) -> String {
@@ -1064,9 +1144,11 @@ pub fn probe_podman_reclaim(
         (evidence.unused_untagged_records > 0 && evidence.unused_tagged_records == 0)
             .then(|| prune_approval_phrase(&evidence.candidate_set_sha256))
     });
+    let host_compaction =
+        host_compaction_plan(machine.as_ref(), raw_image.as_ref(), store.as_ref());
     PodmanReclaimPlan {
         schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
-        schema_version: 3,
+        schema_version: 4,
         platform: std::env::consts::OS,
         evidence_complete: issues.is_empty()
             && machine.is_some()
@@ -1083,6 +1165,7 @@ pub fn probe_podman_reclaim(
         system_df,
         unused_images,
         dangling_prune_approval_phrase,
+        host_compaction,
         assessment,
         issues,
     }
@@ -1142,6 +1225,7 @@ mod tests {
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(70 * GIB),
             identity_sha256: Some("a".repeat(64)),
+            freshness_sha256: Some("c".repeat(64)),
         };
         let result = assess(
             None,
@@ -1277,6 +1361,7 @@ mod tests {
             system_df: None,
             unused_images: None,
             dangling_prune_approval_phrase: None,
+            host_compaction: host_compaction_plan(None, None, None),
             assessment: PodmanReclaimAssessment {
                 physically_reclaimable_bytes: None,
                 podman_reported_reclaimable_bytes: None,
@@ -1303,6 +1388,43 @@ mod tests {
             value["assessment"]["recommended_actions"][0]["requires_human_approval"],
             true
         );
+        assert_eq!(value["host_compaction"]["supported"], false);
+        assert!(value["host_compaction"]["exact_approval_phrase"].is_null());
+    }
+
+    #[test]
+    fn host_compaction_stays_blocked_without_a_native_operation() {
+        let machine = PodmanMachineEvidence {
+            name: DEFAULT_PODMAN_MACHINE.into(),
+            state: "running".into(),
+            configured_disk_bytes: Some(100 * GIB),
+        };
+        let raw = RawImageEvidence {
+            path: "/private/redacted.raw".into(),
+            logical_bytes: 100 * GIB,
+            allocated_bytes: Some(20 * GIB),
+            identity_sha256: Some("b".repeat(64)),
+            freshness_sha256: Some("d".repeat(64)),
+        };
+        let store = PodmanStoreEvidence {
+            graph_root: "/private/guest".into(),
+            graph_root_allocated_bytes: 10,
+            graph_root_used_bytes: 10,
+            images: 1,
+            containers_total: 0,
+            containers_running: 0,
+            containers_stopped: 0,
+        };
+        let plan = host_compaction_plan(Some(&machine), Some(&raw), Some(&store));
+        assert!(!plan.supported);
+        assert_eq!(plan.active_container_count, Some(0));
+        assert!(plan.machine_identity_sha256.is_some());
+        assert!(plan.stop_command.is_none());
+        assert!(plan.compaction_command.is_none());
+        assert!(plan.exact_approval_phrase.is_none());
+        assert!(plan
+            .blockers
+            .contains(&"podman-machine-native-compaction-command-unavailable".into()));
     }
 
     #[cfg(unix)]

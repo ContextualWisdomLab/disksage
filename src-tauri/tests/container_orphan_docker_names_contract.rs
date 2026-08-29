@@ -15,9 +15,13 @@ set -eu
 case "${{1:-}}" in
   info) exit 0 ;;
   container)
-    [ "${{2:-}}" = "ps" ] || exit 91
-    case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
-    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"{names}"}}'
+    if [ "${{2:-}}" = "ps" ]; then
+      case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
+      printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"{names}"}}'
+      exit 0
+    fi
+    [ "${{2:-}}" = "inspect" ] || exit 91
+    printf '%s\n' '[{{"Id":"{FULL_ID}","Mounts":[]}}]'
     ;;
   images|volume|network) exit 0 ;;
   *) exit 93 ;;

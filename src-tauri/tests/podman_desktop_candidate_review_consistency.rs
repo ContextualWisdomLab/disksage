@@ -6,7 +6,7 @@
 
 use disksage_lib::podman_desktop::redact_podman_reclaim_plan;
 use disksage_lib::podman_reclaim::{
-    PodmanReclaimAssessment, PodmanReclaimPlan, PodmanStoreEvidence,
+    PodmanHostCompactionPlan, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanStoreEvidence,
     PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
     PODMAN_RECLAIM_SCHEMA_KIND,
 };
@@ -56,6 +56,20 @@ fn candidate_plan_without_actions() -> PodmanReclaimPlan {
             candidate_set_sha256: "a".repeat(64),
         }),
         dangling_prune_approval_phrase: None,
+        host_compaction: PodmanHostCompactionPlan {
+            supported: false,
+            machine_identity_sha256: None,
+            backing_file_identity_sha256: None,
+            backing_file_freshness_sha256: None,
+            active_container_count: Some(1),
+            stop_command: None,
+            compaction_command: None,
+            exact_approval_phrase: None,
+            rollback_policy: "require-runtime-native-rollback-before-execution",
+            restart_policy: "restore-observed-running-state-after-success-or-rollback",
+            blockers: vec!["active-container-count-must-be-zero".to_string()],
+            execution_performed: false,
+        },
         assessment: PodmanReclaimAssessment {
             physically_reclaimable_bytes: None,
             podman_reported_reclaimable_bytes: Some(300),

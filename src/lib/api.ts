@@ -173,6 +173,13 @@ export interface PodmanReclaimPlan {
   evidence_complete: boolean;
   elapsed_ms: number;
   machine: { name: string; state: string; configured_disk_bytes: number | null } | null;
+  raw_image: {
+    path: string;
+    logical_bytes: number;
+    allocated_bytes: number | null;
+    identity_sha256: string | null;
+    freshness_sha256: string | null;
+  } | null;
   guest_filesystem: { total_bytes: number; used_bytes: number; available_bytes: number } | null;
   system_df: {
     images: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
@@ -189,6 +196,20 @@ export interface PodmanReclaimPlan {
     candidate_set_sha256: string;
   } | null;
   dangling_prune_approval_phrase: string | null;
+  host_compaction: {
+    supported: boolean;
+    machine_identity_sha256: string | null;
+    backing_file_identity_sha256: string | null;
+    backing_file_freshness_sha256: string | null;
+    active_container_count: number | null;
+    stop_command: string[] | null;
+    compaction_command: string[] | null;
+    exact_approval_phrase: string | null;
+    rollback_policy: string;
+    restart_policy: string;
+    blockers: string[];
+    execution_performed: boolean;
+  };
   assessment: {
     physically_reclaimable_bytes: number | null;
     podman_reported_reclaimable_bytes: number | null;
@@ -262,8 +283,6 @@ export interface RuntimeStorageExecution {
   runtime: RuntimeStorageKind;
   command: string[];
   status_code: number;
-  stdout: string;
-  stderr: string;
   output_truncated: boolean;
   executed: boolean;
   executed_at_ms: number;

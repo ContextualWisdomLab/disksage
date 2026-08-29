@@ -27,6 +27,7 @@ new numbered record rather than rewriting history.
 | [0019](0019-macos-file-provider-local-eviction.md) | Use each macOS File Provider domain for local-only eviction | Accepted |
 | [0020](0020-podman-native-storage-repair.md) | Use machine-scoped native Podman storage repair without force | Accepted |
 | [0021](0021-perceptual-photo-candidates.md) | Require measured evidence and a selected survivor for perceptual photo candidates | Accepted |
+| [0023](0023-opencode-tool-output-reference-lineage.md) | Preserve OpenCode history and reclaim only unreferenced tool outputs | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;

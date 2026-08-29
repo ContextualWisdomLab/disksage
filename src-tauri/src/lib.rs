@@ -77,6 +77,7 @@ pub mod organization_lineage;
 mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod opencode_artifact_reclaim;
 pub mod photo_similarity_audit;
 /// Privacy-safe desktop projection of read-only Podman reclaim evidence.
 pub mod podman_desktop;

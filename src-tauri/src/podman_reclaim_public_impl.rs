@@ -12,7 +12,7 @@ mod implementation;
 
 pub use implementation::{
     inspect_raw_image_evidence, probe_podman_reclaim, GuestFilesystemEvidence,
-    PodmanDanglingImagePruneExecution, PodmanMachineEvidence, PodmanReclaimAssessment,
+    PodmanDanglingImagePruneExecution, PodmanHostCompactionPlan, PodmanMachineEvidence, PodmanReclaimAssessment,
     PodmanReclaimPlan, PodmanRecommendedAction, PodmanRecommendedActionKind,
     PodmanStorageCheckPlan, PodmanStorageRepairExecution, PodmanStoreEvidence,
     PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
