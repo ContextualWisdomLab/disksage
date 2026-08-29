@@ -33,7 +33,7 @@ require_exactly_one_file() {
 
 expected_dirs=(
   "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-2022-${run_attempt}"
+  "release-disksage-windows-latest-${run_attempt}"
   "release-disksage-macos-latest-${run_attempt}"
 )
 
