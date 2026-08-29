@@ -251,6 +251,27 @@ fn candidate(
     })
 }
 
+fn candidate_content_still_matches(candidate: &ProviderCacheCandidate) -> Result<(), String> {
+    let path = Path::new(&candidate.path);
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "provider-cache-content-recheck-metadata-unavailable")?;
+    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+        return Err("provider-cache-content-recheck-type-changed".into());
+    }
+    if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(&candidate.object_id) {
+        return Err("provider-cache-object-identity-changed".into());
+    }
+    let current_manifest = if metadata.is_dir() {
+        tree_manifest(path).map(|(_, _, manifest)| manifest)?
+    } else {
+        file_sha256(path)?
+    };
+    if current_manifest != candidate.content_manifest {
+        return Err("provider-cache-content-changed".into());
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn plist_version(path: &Path) -> Option<String> {
     plist::Value::from_file(path)
@@ -695,13 +716,22 @@ fn permanently_purge_exact(
                 })
             }
         } else {
-            fs::remove_file(&staged).map_err(|_| {
-                if fs::rename(&staged, path).is_err() {
-                    "provider-cache-permanent-delete-failed-rollback-failed".to_string()
-                } else {
-                    "provider-cache-permanent-delete-failed".to_string()
+            match file_sha256(&staged) {
+                Ok(digest) if digest == candidate.content_manifest => {
+                    fs::remove_file(&staged).map_err(|_| {
+                        if fs::rename(&staged, path).is_err() {
+                            "provider-cache-permanent-delete-failed-rollback-failed".to_string()
+                        } else {
+                            "provider-cache-permanent-delete-failed".to_string()
+                        }
+                    })
                 }
-            })
+                _ => {
+                    fs::rename(&staged, path)
+                        .map_err(|_| "provider-cache-permanent-file-purge-restore-failed")?;
+                    Err("provider-cache-staged-content-changed".to_string())
+                }
+            }
         }
     };
     journal.outcome = if result.is_ok() { "ok" } else { "error" }.into();
@@ -786,27 +816,31 @@ pub fn execute(
     )?;
     let mut items = Vec::with_capacity(selected.len());
     for candidate in selected {
-        let active =
-            crate::cloud_local_eviction::observe_path_active_use(Path::new(&candidate.path));
-        let (outcome, audit_error) = if active_use_safe(&active) {
+        let result = candidate_content_still_matches(&candidate).and_then(|()| {
+            let active =
+                crate::cloud_local_eviction::observe_path_active_use(Path::new(&candidate.path));
+            if !active_use_safe(&active) {
+                return Err("provider-cache-active-use-or-provider-evidence-gap".into());
+            }
             match mode {
-                ProviderCacheCleanupMode::Trash => crate::safety::trash_delete_if_identity(
-                    Path::new(&candidate.path),
-                    &candidate.object_id,
-                    candidate.logical_bytes,
-                    journal_path,
-                    executed_at_ms,
-                )
-                .map_err(|error| error.to_string())
-                .map(|()| None),
+                ProviderCacheCleanupMode::Trash => {
+                    candidate_content_still_matches(&candidate)?;
+                    crate::safety::trash_delete_if_identity(
+                        Path::new(&candidate.path),
+                        &candidate.object_id,
+                        candidate.logical_bytes,
+                        journal_path,
+                        executed_at_ms,
+                    )
+                    .map_err(|error| error.to_string())
+                    .map(|()| None)
+                }
                 ProviderCacheCleanupMode::PermanentPurge => {
                     permanently_purge_exact(&candidate, journal_path, executed_at_ms)
                 }
             }
-        } else {
-            Err("provider-cache-active-use-or-provider-evidence-gap".into())
-        }
-        .map_or_else(
+        });
+        let (outcome, audit_error) = result.map_or_else(
             |error| (Err(error), None),
             |audit_error| (Ok(()), audit_error),
         );
