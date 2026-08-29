@@ -1119,7 +1119,7 @@ runner's private workspace temp root instead of weakening the shared production 
   not used as upload or eviction authority.
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
   receipt, and post-allocation verification contract for individual OneDrive files. Execution
-  additionally requires a quiet provider-wide queue, gracefully stops the verified OneDrive app,
+  uses exact item evidence, gracefully stops the verified OneDrive app,
   uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
   not require OAuth and never deletes the visible cloud item.
 - The same evidence contract now supports bounded OneDrive batches through the provider-neutral
@@ -1127,8 +1127,9 @@ runner's private workspace temp root instead of weakening the shared production 
   selected item is replanned before the first mutation, and execution stops after the first failed
   or incompletely verified item.
 - The live provider-wide probe currently shows active upload/download, indexing, and reconciliation
-  work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
-  a physical-space receipt from the live provider remain open; the 300 GB goal is not
+  work. Local-only eviction is governed by exact item evidence instead, but the desktop app did not
+  complete its bounded graceful quit, so no item was evicted. A physical-space receipt from the
+  live provider remains open; the 300 GB goal is not
   claimed complete.
 
 ## 2026-08-29 temporary-workspace generated-cache recovery

@@ -332,7 +332,8 @@ fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
                         .is_some_and(valid_hex64)
             }
             crate::cloud_local_eviction::IcloudStateObservationMethod::FoundationUbiquitousResourceValues => {
-                plan.icloud_state.is_sync_paused.is_none()
+                plan.provider == CloudProvider::Icloud
+                    && plan.icloud_state.is_sync_paused.is_none()
                     && plan.icloud_state.is_trashed.is_none()
                     && plan.icloud_state.allows_eviction.is_none()
                     && plan.icloud_state.provider_reported_bytes.is_none()
@@ -1066,6 +1067,17 @@ mod tests {
         assert!(!item_plan_is_safe(&unsafe_plan));
 
         let mut unsafe_plan = safe;
+        unsafe_plan.icloud_state.item_identifier_fingerprint = None;
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe_plan(0);
+        unsafe_plan.provider = CloudProvider::Onedrive;
+        unsafe_plan.icloud_state.observation_method =
+            crate::cloud_local_eviction::IcloudStateObservationMethod::FoundationUbiquitousResourceValues;
+        unsafe_plan.icloud_state.is_sync_paused = None;
+        unsafe_plan.icloud_state.is_trashed = None;
+        unsafe_plan.icloud_state.allows_eviction = None;
+        unsafe_plan.icloud_state.provider_reported_bytes = None;
         unsafe_plan.icloud_state.item_identifier_fingerprint = None;
         assert!(!item_plan_is_safe(&unsafe_plan));
     }
