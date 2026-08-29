@@ -36,6 +36,7 @@ const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
 /// Bounded per-command wall clock; matches the existing Podman prune bound.
 const ORPHAN_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
+const MAX_DOCKER_HOST_BYTES: usize = 2 * 1024;
 
 /// Maximum number of network-inspect probes per audit; keeps the read-only pass bounded.
 pub const MAX_NETWORK_CANDIDATES: usize = 64;
@@ -81,6 +82,7 @@ pub struct ContainerRuntimeTarget {
     pub kind: ContainerRuntimeKind,
     pub binary_path: PathBuf,
     pub scope_name: Option<String>,
+    docker_host: Option<String>,
 }
 
 fn valid_scope_name(value: &str) -> bool {
@@ -110,6 +112,23 @@ impl ContainerRuntimeTarget {
             kind,
             binary_path,
             scope_name,
+            docker_host: None,
+        })
+    }
+
+    /// Pins Docker-native commands to one resolved daemon endpoint.
+    pub(crate) fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
+        if host.is_empty()
+            || host.len() > MAX_DOCKER_HOST_BYTES
+            || host.chars().any(char::is_control)
+        {
+            return Err("unsafe-docker-host".into());
+        }
+        Ok(Self {
+            kind: ContainerRuntimeKind::DockerNative,
+            binary_path,
+            scope_name: None,
+            docker_host: Some(host),
         })
     }
 
@@ -137,7 +156,11 @@ impl ContainerRuntimeTarget {
         }
         let mut prefix = vec![binary];
         match self.kind {
-            ContainerRuntimeKind::DockerNative => {}
+            ContainerRuntimeKind::DockerNative => {
+                if let Some(host) = &self.docker_host {
+                    prefix.extend(["--host".to_string(), host.clone()]);
+                }
+            }
             ContainerRuntimeKind::DockerColimaContext | ContainerRuntimeKind::PodmanMachine => {
                 let flag = match self.kind {
                     ContainerRuntimeKind::PodmanMachine => "--connection",
@@ -156,6 +179,26 @@ impl ContainerRuntimeTarget {
         }
         Ok(prefix)
     }
+}
+
+/// Resolves a named Docker context to the endpoint used by an explicit `--host` command.
+pub(crate) fn resolve_docker_context_host(
+    binary_path: &Path,
+    context: &str,
+) -> Result<String, String> {
+    if !valid_scope_name(context) {
+        return Err("unsafe-runtime-scope-name".into());
+    }
+    let output = command_text(
+        binary_path,
+        &["context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
+        ORPHAN_COMMAND_TIMEOUT,
+        "docker-context-host-inspect",
+    )?;
+    let host: String = serde_json::from_str(output.trim())
+        .map_err(|_| "docker-context-host-invalid".to_string())?;
+    ContainerRuntimeTarget::docker_native_host(binary_path.to_path_buf(), host.clone())?;
+    Ok(host)
 }
 
 /// Orphan categories audited and pruned by this engine, one at a time.

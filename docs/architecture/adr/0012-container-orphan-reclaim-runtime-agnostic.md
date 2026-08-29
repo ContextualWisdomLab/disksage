@@ -40,6 +40,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    SHA-256 fingerprint of the exact sorted candidate identity set. A stale phrase, empty
    candidate set, incomplete evidence, duplicate identity, or candidate set above the bounded
    exact-delete limit aborts before any mutation.
+   The ambient Docker context is resolved to its daemon endpoint, bound into the approval without
+   disclosure, and passed explicitly with `--host`; a config/context change therefore cannot
+   redirect an approved deletion to another daemon.
 5. Mutation uses only exact identities produced by that fresh audit (`container rm`, `image rm`,
    `volume rm`, or `network rm`). Category-wide `prune --force` is forbidden because a resource
    that becomes orphaned after the audit is not part of the approved fingerprinted set. Candidate

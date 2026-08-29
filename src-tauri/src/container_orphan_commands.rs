@@ -89,6 +89,36 @@ fn target_for_kind(
     }
 }
 
+fn pin_docker_authority(
+    binary_path: &std::path::Path,
+    authority: &DockerAmbientAuthority,
+) -> Result<DockerAmbientAuthority, String> {
+    let host = match authority {
+        DockerAmbientAuthority::Host(host) => host.clone(),
+        DockerAmbientAuthority::Context(context) => {
+            container_orphan_reclaim::resolve_docker_context_host(binary_path, context)?
+        }
+        DockerAmbientAuthority::Default => {
+            container_orphan_reclaim::resolve_docker_context_host(binary_path, "default")?
+        }
+    };
+    Ok(DockerAmbientAuthority::Host(host))
+}
+
+fn pinned_docker_target(
+    authority: &DockerAmbientAuthority,
+) -> Result<container_orphan_reclaim::ContainerRuntimeTarget, String> {
+    match authority {
+        DockerAmbientAuthority::Host(host) => {
+            container_orphan_reclaim::ContainerRuntimeTarget::docker_native_host(
+                docker_binary(),
+                host.clone(),
+            )
+        }
+        _ => Err("docker-authority-not-pinned".into()),
+    }
+}
+
 fn validate_requested_scope(
     target: &container_orphan_reclaim::ContainerRuntimeTarget,
     requested_scope: &Option<String>,
@@ -314,15 +344,23 @@ fn bind_docker_authority_plan(
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
     let docker_authority = docker_ambient_authority();
+    let pinned_docker_authority = docker_authority
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|authority| pin_docker_authority(&docker_binary(), authority));
     runtime_kinds_for_docker_authority(&docker_authority)
         .into_iter()
         .filter_map(|kind| {
-            let target = target_for_kind(kind).ok()?;
+            let target = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+                pinned_docker_target(pinned_docker_authority.as_ref().ok()?).ok()?
+            } else {
+                target_for_kind(kind).ok()?
+            };
             let plan = container_orphan_public::sanitize_plan(
                 container_orphan_reclaim::probe_container_orphans(&target),
             );
             if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-                let authority = docker_authority.as_ref().ok()?;
+                let authority = pinned_docker_authority.as_ref().ok()?;
                 Some(bind_docker_authority_plan(plan, authority))
             } else {
                 Some(plan)
@@ -349,12 +387,23 @@ pub fn execute_container_orphan_prune(
     }
     let kind = parse_runtime_kind(&runtime_kind)?;
     let category = parse_category(&category)?;
-    let target = target_for_kind(kind)?;
+    let (target, docker_authority) = if kind
+        == container_orphan_reclaim::ContainerRuntimeKind::DockerNative
+    {
+        let ambient = docker_ambient_authority()
+            .map_err(|error| format!("orphan-prune-{error}"))?;
+        let pinned = pin_docker_authority(&docker_binary(), &ambient)
+            .map_err(|error| format!("orphan-prune-{error}"))?;
+        (pinned_docker_target(&pinned)?, Some(pinned))
+    } else {
+        (target_for_kind(kind)?, None)
+    };
     validate_requested_scope(&target, &scope_name)?;
     let engine_confirmation = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-        let authority = docker_ambient_authority()
-            .map_err(|error| format!("orphan-prune-{error}"))?;
-        unbind_docker_authority_approval(&confirmation_phrase, &authority)?
+        unbind_docker_authority_approval(
+            &confirmation_phrase,
+            docker_authority.as_ref().ok_or("docker-authority-not-pinned")?,
+        )?
     } else {
         confirmation_phrase
     };
@@ -493,6 +542,10 @@ mod tests {
             unbind_docker_authority_approval(&bound, &host_b).unwrap_err(),
             "orphan-prune-docker-authority-mismatch"
         );
+        let target = pinned_docker_target(&pin_docker_authority(&docker_binary(), &host_a).unwrap())
+            .unwrap();
+        let prefix = target.command_prefix().unwrap();
+        assert_eq!(&prefix[prefix.len() - 2..], ["--host", "unix:///tmp/customer-a.sock"]);
     }
 
     #[test]

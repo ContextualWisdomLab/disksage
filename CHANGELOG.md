@@ -83,6 +83,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
   by converting the human-readable listing with a unit heuristic; missing or mismatched identity
   evidence keeps the category blocked.
+- Pin Docker-native approval and execution to the same resolved daemon endpoint so mutable context
+  configuration cannot redirect an approved deletion.
 - Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
   current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
   Trash targets; the shared root and other-user/system-owned objects remain protected.
