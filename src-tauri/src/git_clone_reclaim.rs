@@ -301,7 +301,7 @@ fn lock_checkout_lease(common_dir: &Path) -> Result<File, String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage.git-checkout-lease-lock\0v1\0");
     hash_field(&mut hasher, &common_dir.to_string_lossy());
-    let lock_root = std::env::temp_dir().join(CHECKOUT_LEASE_LOCK_DIRECTORY);
+    let lock_root = checkout_lease_lock_root()?;
     create_private_lock_directory(&lock_root)?;
     let lock_path = lock_root.join(format!("{}.lock", hasher.finalize().to_hex()));
     let file = open_private_lock_file(&lock_path)?;
@@ -313,6 +313,12 @@ fn lock_checkout_lease(common_dir: &Path) -> Result<File, String> {
     file.try_lock()
         .map_err(|_| "git-checkout-lease-operation-active".to_string())?;
     Ok(file)
+}
+
+fn checkout_lease_lock_root() -> Result<PathBuf, String> {
+    dirs::data_local_dir()
+        .map(|directory| directory.join(CHECKOUT_LEASE_LOCK_DIRECTORY))
+        .ok_or_else(|| "git-checkout-lease-lock-unavailable".to_string())
 }
 
 #[cfg(unix)]
