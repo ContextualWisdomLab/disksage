@@ -1,6 +1,7 @@
 use disksage_lib::provider_cache_reclaim::{
     execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
 };
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
@@ -50,8 +51,23 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
 }
 
 fn read_manifest_requests(path: &Path) -> Result<Vec<ProviderCacheCleanupRequest>, String> {
-    serde_json::from_slice(&std::fs::read(path).map_err(|_| "manifest read failed")?)
-        .map_err(|_| "manifest JSON invalid".to_string())
+    let file = std::fs::File::open(path).map_err(|_| "manifest read failed".to_string())?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "manifest metadata failed".to_string())?;
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        return Err("manifest too large".to_string());
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "manifest read failed".to_string())?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err("manifest too large".to_string());
+    }
+
+    serde_json::from_slice(&bytes).map_err(|_| "manifest JSON invalid".to_string())
 }
 
 fn now_ms() -> u64 {
