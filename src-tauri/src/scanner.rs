@@ -406,6 +406,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn macos_cross_account_fallback_rejects_nested_and_mounted_home_copies() {
+        let current_home = PathBuf::from("/Users/current");
+        let roots = macos_provider_managed_roots_for_home(&current_home);
+        let private_suffix = "Library/Containers/com.vendor/Data/File Provider Storage/account/item";
+
+        assert!(!is_macos_provider_managed_path(
+            &current_home.join("project/Users/demo").join(private_suffix),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &PathBuf::from("/Volumes/Backup/Users/demo").join(private_suffix),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &PathBuf::from("/Volumes/Data/Users/demo").join(private_suffix),
+            &roots,
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn provider_root_alias_is_resolved_before_access_guidance() {
