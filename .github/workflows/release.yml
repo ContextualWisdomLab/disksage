@@ -183,7 +183,7 @@ jobs:
               cat "$help_stderr" >&2
               return 1
             fi
-            grep -F "$usage_marker" "$help_stdout"
+            grep -F -- "$usage_marker" "$help_stdout"
             if command -v sha256sum >/dev/null 2>&1; then
               (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
             else
