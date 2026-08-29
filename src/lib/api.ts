@@ -205,6 +205,62 @@ export interface PodmanReclaimPlan {
 export const inspectPodmanReclaim = () =>
   invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
 
+export interface ProviderCacheCandidate {
+  kind: "podman_machine_seed" | "edge_superseded_installed_copy" | "edge_crx_cache";
+  path: string;
+  logical_bytes: number;
+  allocated_bytes: number | null;
+  object_id: string;
+  evidence_fingerprint: string;
+  active_use: { evidence_complete: boolean; active: boolean; results_truncated: boolean; error: string | null };
+  recreation_source: string;
+}
+
+export interface ProviderCacheReclaimPlan {
+  schema_version: number;
+  platform: string;
+  observed_at_ms: number;
+  installed_edge_version: string | null;
+  podman_machine_present: boolean;
+  podman_recreation_source: string | null;
+  evidence_complete: boolean;
+  candidates: ProviderCacheCandidate[];
+  issues: string[];
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  trash_approval_phrase: string | null;
+}
+
+export const planProviderCacheReclaim = () =>
+  invoke<ProviderCacheReclaimPlan>("plan_provider_cache_reclaim");
+
+export interface ProviderCacheCleanupResult {
+  plan_fingerprint: string;
+  requested_count: number;
+  completed_count: number;
+  executed_at_ms: number;
+  rationale: string;
+  mode: "trash" | "permanent_purge";
+  immutable_receipt_path: string;
+  items: Array<{ path: string; completed: boolean; error: string | null }>;
+}
+
+export const executeProviderCacheReclaim = (
+  requests: Array<Pick<ProviderCacheCandidate, "path" | "evidence_fingerprint" | "object_id">>,
+  approvedPlanFingerprint: string,
+  confirmPlanFingerprint: string,
+  confirmationPhrase: string,
+  rationale: string,
+  mode: "trash" | "permanent_purge" = "trash",
+) => invoke<ProviderCacheCleanupResult>("execute_provider_cache_reclaim", {
+  requests,
+  approvedPlanFingerprint,
+  confirmPlanFingerprint,
+  confirmationPhrase,
+  rationale,
+  mode,
+});
+
 export interface PodmanDanglingImagePruneExecution {
   schema_version: number;
   candidate_set_sha256: string;

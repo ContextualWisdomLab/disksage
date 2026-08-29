@@ -22,7 +22,7 @@ use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
     organization_lineage,
-    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
+    podman_reclaim, provider_api_client, provider_api_write, provider_cache_reclaim, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
     provider_recovery, provider_sync, rules, orphan,
 };
@@ -514,6 +514,53 @@ pub fn execute_podman_dangling_image_prune(
         podman_reclaim::DEFAULT_PODMAN_MACHINE,
         &confirmation_phrase,
         &rationale,
+        now_ms(),
+    )
+}
+
+/// Inspect only exact, regenerable provider caches; never the active Podman raw disk.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_provider_cache_reclaim() -> Result<provider_cache_reclaim::ProviderCacheReclaimPlan, String> {
+    let home = std::env::var("HOME").map(PathBuf::from).map_err(|_| "home-directory-unavailable")?;
+    Ok(provider_cache_reclaim::plan_with_runtime(
+        &home,
+        Path::new("/Applications"),
+        &podman_binary(),
+        now_ms(),
+    ))
+}
+
+/// Revalidate an approved provider-cache plan and execute the explicitly selected lifecycle.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_provider_cache_reclaim(
+    app: AppHandle,
+    requests: Vec<provider_cache_reclaim::ProviderCacheCleanupRequest>,
+    approved_plan_fingerprint: String,
+    confirm_plan_fingerprint: String,
+    confirmation_phrase: String,
+    rationale: String,
+    mode: provider_cache_reclaim::ProviderCacheCleanupMode,
+) -> Result<provider_cache_reclaim::ProviderCacheCleanupResult, String> {
+    let home = std::env::var("HOME").map(PathBuf::from).map_err(|_| "home-directory-unavailable")?;
+    let receipt_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("receipts/provider-cache");
+    provider_cache_reclaim::execute(
+        &home,
+        Path::new("/Applications"),
+        &podman_binary(),
+        &requests,
+        &approved_plan_fingerprint,
+        &confirm_plan_fingerprint,
+        &confirmation_phrase,
+        &rationale,
+        &journal_file_path(&app)?,
+        &receipt_dir,
+        mode,
         now_ms(),
     )
 }

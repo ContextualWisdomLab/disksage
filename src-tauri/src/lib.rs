@@ -75,6 +75,7 @@ pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+pub mod provider_cache_reclaim;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
@@ -139,6 +140,8 @@ pub fn run() {
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
             commands::execute_podman_dangling_image_prune,
+            commands::plan_provider_cache_reclaim,
+            commands::execute_provider_cache_reclaim,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,

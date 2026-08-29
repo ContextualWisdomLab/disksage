@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add an evidence-bound Rust planner and executor for superseded Microsoft EdgeUpdater copies,
+  separately selected CRX cache, and content-addressed Podman AppleHV machine seeds. Planning is
+  dry-run; the active VM disk is excluded, OS Trash and permanent purge are explicit modes, and
+  permanent purge requires a fresh fingerprint twice plus a create-only private receipt.
+- Surface broken `podman system df` evidence as a fail-closed `repair-required` state that recommends
+  only the read-only `podman system check --quick` diagnostic; never auto-run native repair or
+  blanket volume/image prune when layer lineage is damaged or unknown.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
