@@ -119,6 +119,10 @@ name = "disksage-cache-cleanup"
 path = "src/bin/disksage-cache-cleanup.rs"
 
 [[bin]]
+name = "disksage-generated-cache-reclaim"
+path = "src/bin/disksage-generated-cache-reclaim.rs"
+
+[[bin]]
 name = "disksage-uv-cache-reclaim"
 path = "src/bin/disksage-uv-cache-reclaim.rs"
 

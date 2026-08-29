@@ -12,15 +12,25 @@ ownership evidence must be complete and inactive. Registered, dirty, or live tem
 are retained. Cloud-provider storage, Photos libraries, Podman/Colima storage, and Parallels virtual
 machines are outside this deletion boundary.
 
-The default result is a dry-run plan. Execution requires an unchanged content-and-activity
-fingerprint, the exact approval phrase, reviewer attribution and rationale, bounded work, and a
-create-only mode-0600 receipt. Provider data mutation remains false in every receipt.
+The default result is a dry-run plan, exposed through `disksage-generated-cache-reclaim`.
+Execution requires an unchanged content-and-activity fingerprint, the exact approval phrase,
+reviewer attribution and rationale, bounded work, and a create-only mode-0600 JSON Lines journal.
+The journal durably records a complete `pending` event before mutation and appends a terminal
+receipt afterward. A journal ending in `pending` requires reconciliation, a new observation, and a
+new approval; it is never automatic retry authority. Provider data mutation remains false in every
+event.
+
+Temporary Git workspaces are audit-only here. Even a clean, inactive workspace is routed to the
+existing Git-worktree or shared-temporary-artifact executor, which owns repository identity,
+registration, journal, and rollback semantics. This generic cache executor never removes it.
 
 ## Consequences
 
 Eligible caches can be reclaimed consistently, while an active tool, incomplete probe, lock,
 workspace registration, dirty state, or protected product boundary keeps the bytes. Adding another
-cache family requires a new explicit regeneration contract and tests.
+cache family requires a new explicit regeneration contract and tests. Customer-facing surfaces
+translate evidence codes into a concrete next action (close the named tool, finish synchronization,
+or use the specialized workspace review); they do not expose module or storage-engine boundaries.
 
 ## Rejected alternatives
 

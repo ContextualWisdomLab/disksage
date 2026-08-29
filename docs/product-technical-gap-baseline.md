@@ -1163,8 +1163,13 @@ The generated-cache safety loop now has a reusable Rust boundary: exact regenera
 Torch, Homebrew metadata, uv, and Playwright; recursive active-PID and lock evidence; bounded Git
 common-directory, registration, dirty-state, and live-use checks for temporary workspaces; and a
 hard deny boundary for cloud providers, Photos, Podman/Colima, and Parallels. Plans are dry-run by
-default. Removal requires an unchanged fingerprint, exact attributed approval, and a create-only
-private receipt. Remaining product work is wiring this engine into the customer cleanup surface.
+default. The headless customer workflow now exposes read-only planning and an explicit execution
+mode. Removal requires an unchanged fingerprint, exact attributed approval, and a create-only
+private JSON Lines journal whose parseable pending event is durable before mutation. An incomplete
+journal cannot authorize a retry. Temporary Git workspaces are always routed to DiskSage's
+specialized Git/shared-temp workflow and are never removed by the generic cache executor. The
+remaining product gap is the graphical cleanup surface: it must translate each evidence code into
+the customer's next safe action without exposing internal implementation boundaries.
 
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
 

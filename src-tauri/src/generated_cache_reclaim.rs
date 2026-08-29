@@ -1,7 +1,7 @@
 //! Evidence-bound auditing and removal of explicitly regenerable cache roots.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,18 @@ pub struct GeneratedCacheReceipt {
     pub allocated_before_bytes: u64,
     pub removed: bool,
     pub error_code: Option<String>,
+    pub provider_data_mutated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedCachePendingReceipt {
+    pub schema_version: u32,
+    pub plan_fingerprint: String,
+    pub root: String,
+    pub attempted_at_ms: u64,
+    pub allocated_before_bytes: u64,
+    pub state: String,
     pub provider_data_mutated: bool,
 }
 
@@ -186,6 +198,9 @@ pub fn plan_with_evidence(
             || activity.git_common_dir.is_some())
     {
         blockers.push("git-workspace-retained".into());
+    }
+    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
+        blockers.push("temporary-workspace-specialized-executor-required".into());
     }
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage.generated-cache-plan\0v1\0");
@@ -309,14 +324,7 @@ pub fn execute_with<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
-    if approval.plan_fingerprint != plan.plan_fingerprint
-        || fresh.plan_fingerprint != plan.plan_fingerprint
-        || !fresh.blockers.is_empty()
-        || attempted_at_ms < approval.approved_at_ms
-        || attempted_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
-    {
-        return Err("generated-cache-fresh-evidence-mismatch".into());
-    }
+    validate_execution(plan, approval, fresh, attempted_at_ms)?;
     let result = remove(Path::new(&plan.root));
     Ok(GeneratedCacheReceipt {
         schema_version: GENERATED_CACHE_SCHEMA_VERSION,
@@ -328,6 +336,23 @@ where
         error_code: result.err(),
         provider_data_mutated: false,
     })
+}
+
+fn validate_execution(
+    plan: &GeneratedCachePlan,
+    approval: &GeneratedCacheApproval,
+    fresh: &GeneratedCachePlan,
+    attempted_at_ms: u64,
+) -> Result<(), String> {
+    if approval.plan_fingerprint != plan.plan_fingerprint
+        || fresh.plan_fingerprint != plan.plan_fingerprint
+        || !fresh.blockers.is_empty()
+        || attempted_at_ms < approval.approved_at_ms
+        || attempted_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
+    {
+        return Err("generated-cache-fresh-evidence-mismatch".into());
+    }
+    Ok(())
 }
 
 pub fn remove_regenerable_root(path: &Path, home: &Path) -> Result<(), String> {
@@ -358,7 +383,10 @@ pub fn write_immutable_receipt(path: &Path, receipt: &GeneratedCacheReceipt) -> 
         .map_err(|_| "generated-cache-receipt-write-failed".into())
 }
 
-/// Reserve a create-only receipt before removal, then durably finalize success or failure.
+/// Write a parseable pending event before removal, then append a terminal receipt.
+///
+/// A file ending in `pending` is deliberately not retried: the caller must reconcile the root,
+/// create a new plan, and obtain a new approval before any further attempt.
 pub fn execute_and_record<F>(
     plan: &GeneratedCachePlan,
     approval: &GeneratedCacheApproval,
@@ -372,26 +400,42 @@ where
 {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
+    validate_execution(plan, approval, fresh, attempted_at_ms)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(receipt_path)
         .map_err(|_| "generated-cache-receipt-create-failed".to_string())?;
-    file.sync_all()
-        .map_err(|_| "generated-cache-receipt-reserve-failed".to_string())?;
+    let pending = GeneratedCachePendingReceipt {
+        schema_version: GENERATED_CACHE_SCHEMA_VERSION,
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        root: plan.root.clone(),
+        attempted_at_ms,
+        allocated_before_bytes: plan.allocated_bytes,
+        state: "pending".into(),
+        provider_data_mutated: false,
+    };
+    let pending_bytes = serde_json::to_vec(&pending)
+        .map_err(|_| "generated-cache-receipt-encode-failed".to_string())?;
+    file.write_all(&pending_bytes)
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "generated-cache-receipt-pending-write-failed".to_string())?;
     let receipt = execute_with(plan, approval, fresh, attempted_at_ms, remove)?;
-    let bytes = serde_json::to_vec_pretty(&receipt)
+    let bytes = serde_json::to_vec(&receipt)
         .map_err(|_| "generated-cache-receipt-encode-failed".to_string())?;
     file.write_all(&bytes)
+        .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_all())
-        .map_err(|_| "generated-cache-receipt-write-failed".to_string())?;
+        .map_err(|_| "generated-cache-receipt-terminal-write-failed".to_string())?;
     Ok(receipt)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
         GeneratedCacheActivityEvidence {
@@ -444,6 +488,9 @@ mod tests {
         evidence.git_worktree_registered = true;
         let plan = plan_with_evidence(&root, home, evidence, 1).unwrap();
         assert!(plan.blockers.contains(&"git-workspace-retained".into()));
+        assert!(plan
+            .blockers
+            .contains(&"temporary-workspace-specialized-executor-required".into()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -485,6 +532,31 @@ mod tests {
             execute_and_record(&plan, &approval, &plan, 3, &receipt_path, |_| Ok(())).unwrap();
         assert!(receipt.removed);
         assert!(!receipt.provider_data_mutated);
+        let journal = std::fs::read_to_string(&receipt_path).unwrap();
+        let events = journal.lines().collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        let pending: GeneratedCachePendingReceipt = serde_json::from_str(events[0]).unwrap();
+        assert_eq!(pending.state, "pending");
+        let terminal: GeneratedCacheReceipt = serde_json::from_str(events[1]).unwrap();
+        assert!(terminal.removed);
         assert!(execute_and_record(&plan, &approval, &plan, 4, &receipt_path, |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn invalid_execution_never_reserves_a_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
+        let approval = GeneratedCacheApproval {
+            plan_fingerprint: "not-the-plan".into(),
+            approved_at_ms: 2,
+            approved_by: "human:test".into(),
+            rationale: "test mismatch".into(),
+        };
+        let receipt_path = temp.path().join("receipt.jsonl");
+        assert!(execute_and_record(&plan, &approval, &plan, 3, &receipt_path, |_| Ok(())).is_err());
+        assert!(!receipt_path.exists());
     }
 }

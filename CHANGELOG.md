@@ -8,7 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add an exact-allowlist generated-cache auditor that defaults to dry-run, blocks live processes,
   tool locks, registered or dirty temporary Git workspaces, and provider/Photos/VM boundaries, and
-  requires a fingerprint-bound approval plus immutable private receipt before removal.
+  requires a fingerprint-bound approval plus a crash-recoverable private JSON Lines receipt before
+  removal. Add a plan-first CLI; temporary Git workspaces remain audit-only and route to the
+  specialized workspace executor.
 
 ### Added
 
