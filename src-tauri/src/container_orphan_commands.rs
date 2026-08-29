@@ -93,16 +93,19 @@ fn pin_docker_authority(
     binary_path: &std::path::Path,
     authority: &DockerAmbientAuthority,
 ) -> Result<DockerAmbientAuthority, String> {
-    let host = match authority {
-        DockerAmbientAuthority::Host(host) => host.clone(),
+    match authority {
+        DockerAmbientAuthority::Host(host) => Ok(DockerAmbientAuthority::Host(host.clone())),
         DockerAmbientAuthority::Context(context) => {
-            container_orphan_reclaim::resolve_docker_context_host(binary_path, context)?
+            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, context)?;
+            Ok(DockerAmbientAuthority::PinnedContext { name: context.clone(), fingerprint })
         }
         DockerAmbientAuthority::Default => {
-            container_orphan_reclaim::resolve_docker_context_host(binary_path, "default")?
+            let name = "default".to_string();
+            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, &name)?;
+            Ok(DockerAmbientAuthority::PinnedContext { name, fingerprint })
         }
-    };
-    Ok(DockerAmbientAuthority::Host(host))
+        DockerAmbientAuthority::PinnedContext { .. } => Err("docker-authority-already-pinned".into()),
+    }
 }
 
 fn pinned_docker_target(
@@ -113,6 +116,12 @@ fn pinned_docker_target(
             container_orphan_reclaim::ContainerRuntimeTarget::docker_native_host(
                 docker_binary(),
                 host.clone(),
+            )
+        }
+        DockerAmbientAuthority::PinnedContext { name, .. } => {
+            container_orphan_reclaim::ContainerRuntimeTarget::docker_native_context(
+                docker_binary(),
+                name.clone(),
             )
         }
         _ => Err("docker-authority-not-pinned".into()),
@@ -164,6 +173,7 @@ enum DockerHostEnvironment {
 enum DockerAmbientAuthority {
     Default,
     Context(String),
+    PinnedContext { name: String, fingerprint: String },
     Host(String),
 }
 
@@ -289,6 +299,13 @@ fn docker_authority_binding(authority: &DockerAmbientAuthority) -> String {
             hasher.update(b"context");
             hasher.update([0]);
             hasher.update(context.as_bytes());
+        }
+        DockerAmbientAuthority::PinnedContext { name, fingerprint } => {
+            hasher.update(b"pinned-context");
+            hasher.update([0]);
+            hasher.update(name.as_bytes());
+            hasher.update([0]);
+            hasher.update(fingerprint.as_bytes());
         }
         DockerAmbientAuthority::Host(host) => {
             hasher.update(b"host");
@@ -546,6 +563,24 @@ mod tests {
             .unwrap();
         let prefix = target.command_prefix().unwrap();
         assert_eq!(&prefix[prefix.len() - 2..], ["--host", "unix:///tmp/customer-a.sock"]);
+
+        let tls_context = DockerAmbientAuthority::PinnedContext {
+            name: "customer-tls".to_string(),
+            fingerprint: "context-definition-a".to_string(),
+        };
+        let changed_tls_context = DockerAmbientAuthority::PinnedContext {
+            name: "customer-tls".to_string(),
+            fingerprint: "context-definition-b".to_string(),
+        };
+        let target = pinned_docker_target(&tls_context).unwrap();
+        assert_eq!(
+            &target.command_prefix().unwrap()[1..],
+            ["--context", "customer-tls"]
+        );
+        assert_ne!(
+            bind_docker_authority_approval(base, &tls_context),
+            bind_docker_authority_approval(base, &changed_tls_context)
+        );
     }
 
     #[test]

@@ -84,6 +84,7 @@ pub struct ContainerRuntimeTarget {
     pub binary_path: PathBuf,
     pub scope_name: Option<String>,
     docker_host: Option<String>,
+    docker_context: Option<String>,
 }
 
 fn valid_scope_name(value: &str) -> bool {
@@ -114,6 +115,7 @@ impl ContainerRuntimeTarget {
             binary_path,
             scope_name,
             docker_host: None,
+            docker_context: None,
         })
     }
 
@@ -130,6 +132,21 @@ impl ContainerRuntimeTarget {
             binary_path,
             scope_name: None,
             docker_host: Some(host),
+            docker_context: None,
+        })
+    }
+
+    /// Pins Docker-native commands to a named CLI context, preserving its TLS material.
+    pub(crate) fn docker_native_context(binary_path: PathBuf, context: String) -> Result<Self, String> {
+        if !valid_scope_name(&context) {
+            return Err("unsafe-runtime-scope-name".into());
+        }
+        Ok(Self {
+            kind: ContainerRuntimeKind::DockerNative,
+            binary_path,
+            scope_name: None,
+            docker_host: None,
+            docker_context: Some(context),
         })
     }
 
@@ -158,7 +175,9 @@ impl ContainerRuntimeTarget {
         let mut prefix = vec![binary];
         match self.kind {
             ContainerRuntimeKind::DockerNative => {
-                if let Some(host) = &self.docker_host {
+                if let Some(context) = &self.docker_context {
+                    prefix.extend(["--context".to_string(), context.clone()]);
+                } else if let Some(host) = &self.docker_host {
                     prefix.extend(["--host".to_string(), host.clone()]);
                 }
             }
@@ -200,6 +219,32 @@ pub(crate) fn resolve_docker_context_host(
         .map_err(|_| "docker-context-host-invalid".to_string())?;
     ContainerRuntimeTarget::docker_native_host(binary_path.to_path_buf(), host.clone())?;
     Ok(host)
+}
+
+/// Returns a stable fingerprint of the complete context definition, including TLS metadata.
+pub(crate) fn resolve_docker_context_fingerprint(
+    binary_path: &Path,
+    context: &str,
+) -> Result<String, String> {
+    if !valid_scope_name(context) {
+        return Err("unsafe-runtime-scope-name".into());
+    }
+    let output = command_text(
+        binary_path,
+        &["context", "inspect", context, "--format", "{{json .}}"],
+        ORPHAN_COMMAND_TIMEOUT,
+        "docker-context-inspect",
+    )?;
+    let value: Value = serde_json::from_str(output.trim())
+        .map_err(|_| "docker-context-invalid".to_string())?;
+    let canonical = serde_json::to_vec(&value).map_err(|_| "docker-context-invalid".to_string())?;
+    let digest = Sha256::digest(canonical);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").map_err(|_| "docker-context-invalid".to_string())?;
+    }
+    Ok(encoded)
 }
 
 /// Orphan categories audited and pruned by this engine, one at a time.
