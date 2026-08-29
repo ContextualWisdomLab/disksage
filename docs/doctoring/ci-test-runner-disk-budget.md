@@ -6,6 +6,8 @@ The Ubuntu test job removes only three fixed, image-owned SDK roots that DiskSag
 Android, .NET, and GHC. It records filesystem availability before and after cleanup and fails if
 available capacity decreases. Cargo incremental compilation and test-profile debug information are
 disabled because the job consumes test results, not reusable incremental state or debugger symbols.
+Cloud and archive feature tests are compiled together once. This preserves the complete feature
+test set while avoiding six overlapping archive and link passes in one shared Cargo target.
 
 This is a deterministic capability boundary, not a free-space threshold. The workflow neither
 walks customer data nor chooses deletion targets from observed size. Package-manager indexes are
@@ -22,7 +24,8 @@ failure between pull requests but could not remove the shared capacity defect.
 
 The workflow publishes `runner_available_bytes_before`, `runner_available_bytes_after`, and
 `runner_reclaimed_bytes` in the GitHub job summary. The existing full Rust, feature-specific CLI,
-frontend, and production-build checks remain unchanged.
+frontend, and production-build checks remain unchanged; feature-specific tests run through one
+combined Cargo invocation.
 
 ## Reference
 
