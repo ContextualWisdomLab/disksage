@@ -41,7 +41,11 @@ fn init_repository(path: &std::path::Path) {
 }
 
 #[test]
-fn pull_request_membership_report_uses_v4_schema() {
+fn pull_request_membership_report_matches_shared_v4_contract() {
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/git-worktree-audit-v4.json"
+    ))
+    .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repository");
     init_repository(&repository);
@@ -58,6 +62,22 @@ fn pull_request_membership_report_uses_v4_schema() {
     )
     .unwrap();
 
-    assert_eq!(report.schema_kind, "disksage.git-worktree-audit/v4");
-    assert_eq!(report.version, 4);
+    assert_eq!(
+        report.schema_kind,
+        contract["schema_kind"].as_str().unwrap()
+    );
+    assert_eq!(report.version, contract["version"].as_u64().unwrap() as u32);
+
+    let serialized_entry = serde_json::to_value(report.entries.first().expect("audit entry"))
+        .expect("serialize audit entry");
+    for field in contract["entry_membership_fields"]
+        .as_array()
+        .expect("membership field list")
+    {
+        let field = field.as_str().expect("membership field name");
+        assert!(
+            serialized_entry.get(field).is_some(),
+            "runtime audit entry is missing shared contract field {field}"
+        );
+    }
 }
