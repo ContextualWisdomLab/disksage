@@ -6,11 +6,11 @@ export interface VerdictBadge {
   title: string;
 }
 
-/** LLM 삭제-안전 판정 → 배지 표시. 미상/미판정은 unrated로 폴백. 자문(advisory)일 뿐. */
+/** LLM 위험도 자문 결과 → 배지 표시. 미상/미판정은 unrated로 폴백하며 삭제 권한을 부여하지 않는다. */
 export function verdictBadge(v: Verdict | string): VerdictBadge {
   switch (v) {
     case "safe":
-      return { label: "안전", cls: "badge-safe", title: "삭제해도 안전 (자문)" };
+      return { label: "낮은 위험", cls: "badge-safe", title: "모델 자문: 낮은 위험 — 작업 전 검증 필요" };
     case "caution":
       return { label: "주의", cls: "badge-caution", title: "삭제 주의 — 확인 권장 (자문)" };
     case "keep":

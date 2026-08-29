@@ -56,6 +56,14 @@ labels a positive native snapshot `available` rather than inventing a provider h
 the same exact byte-plus-reserve comparison still gates the copy. A zero remaining count is
 `exceeded`.
 
+For a personal OneDrive or Google Drive root, DiskSage has a narrowly scoped native-client
+exception: when the matching desktop client is observed running, the only unavailable capacity
+reason is `provider-oauth-connection-missing`, and a fresh provider-wide sync admission is clear,
+the copy-only step may proceed with `native-client-copy-capacity-unverified`. The plan keeps
+`can_fit` unknown and makes no remote-capacity claim. Organization/shared roots, other OAuth
+failures, and every API-upload path remain blocked. Per-item provider sync evidence and the
+explicit source-eviction gate are unchanged.
+
 The plan-level assessment uses the total potentially reclaimable candidate bytes. A plan may report
 that the full batch does not fit even though a smaller individual candidate can fit; the copy command
 therefore re-evaluates that exact candidate against the plan's freshly collected, root-bound

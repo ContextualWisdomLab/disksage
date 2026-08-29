@@ -10,6 +10,14 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -17,10 +25,13 @@ use std::time::{Duration, Instant};
 
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
-const MAX_REFERENCE_BYTES: usize = 1_024;
+/// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
+pub const MAX_REFERENCE_BYTES: usize = 1_024;
 const MAX_REACHABLE_COMMITS: usize = 100_000;
 const GIT_WORKTREE_REMOVAL_VERSION: u32 = 1;
 const MAX_RATIONALE_BYTES: usize = 1_000;
+const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
+const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -224,6 +235,7 @@ struct RawWorktree {
     lock_reason: Option<String>,
     prunable: bool,
     prunable_reason: Option<String>,
+    fallback_evidence_incomplete: bool,
 }
 
 #[derive(Default)]
@@ -255,6 +267,7 @@ impl RawWorktreeBuilder {
             lock_reason: self.lock_reason,
             prunable: self.prunable,
             prunable_reason: self.prunable_reason,
+            fallback_evidence_incomplete: false,
         })
     }
 
@@ -316,7 +329,7 @@ fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_reference(reference: &str) -> Result<(), String> {
+pub fn validate_reference(reference: &str) -> Result<(), String> {
     if reference.is_empty()
         || reference.len() > MAX_REFERENCE_BYTES
         || reference.starts_with('-')
@@ -373,6 +386,17 @@ fn run_bounded_command(
     if program == "git" {
         command.env("GIT_OPTIONAL_LOCKS", "0");
     }
+    #[cfg(unix)]
+    // Keep descendants in a private process group so a timeout cannot leave a Git helper holding
+    // stdout/stderr pipes open and make the bounded reader join hang indefinitely.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .spawn()
         .map_err(|_| format!("{program}-command-spawn-failed"))?;
@@ -394,11 +418,19 @@ fn run_bounded_command(
             Ok(Some(status)) => break Some(status),
             Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
                 timed_out = true;
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 break child.wait().ok();
             }
             Ok(None) => thread::sleep(Duration::from_millis(POLL_INTERVAL_MS)),
             Err(_) => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -440,6 +472,61 @@ fn run_git(
         return Err(format!("{reason}-output-truncated"));
     }
     Ok(result)
+}
+
+fn git_admin_metadata_blocker(
+    status: &crate::provider_sync::FileProviderItemStatus,
+) -> Option<&'static str> {
+    (!status.is_local_current()).then_some("git-worktree-admin-metadata-not-local-current")
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "git-worktree-admin-metadata-stat-failed".to_string())?;
+    let output = match crate::provider_sync::file_providerctl_status(&path.to_string_lossy()) {
+        Ok(output) => output,
+        // A regular local file is not a File Provider item; Git can inspect it normally.
+        Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
+        Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
+    };
+    let status = crate::provider_sync::parse_file_providerctl_item_status(&output, metadata.len())
+        .map_err(|error| format!("git-worktree-admin-metadata-{error}"))?;
+    Ok(git_admin_metadata_blocker(&status))
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn ensure_git_admin_metadata_local(repository_root: &Path) -> Result<(), String> {
+    let git_entry = repository_root.join(".git");
+    let mut paths = Vec::new();
+    match fs::symlink_metadata(&git_entry) {
+        Ok(metadata) if metadata.is_dir() => {
+            paths.push(git_entry.join("HEAD"));
+            paths.push(git_entry.join("config"));
+        }
+        Ok(_) => paths.push(git_entry),
+        Err(_) => {
+            let head = repository_root.join("HEAD");
+            if fs::symlink_metadata(&head).is_ok() {
+                paths.push(head);
+                paths.push(repository_root.join("config"));
+            }
+        }
+    }
+    for path in paths {
+        if fs::symlink_metadata(&path).is_err() {
+            continue;
+        }
+        if let Some(blocker) = check_file_provider_git_metadata(&path)? {
+            return Err(blocker.into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+fn ensure_git_admin_metadata_local(_repository_root: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn parse_worktree_porcelain(bytes: &[u8]) -> Result<Vec<RawWorktree>, String> {
@@ -675,6 +762,10 @@ pub(crate) fn active_use_evidence(
     }
     let mut pids = BTreeSet::new();
     for field in result.stdout.split(|byte| *byte == 0) {
+        // `lsof -F0` terminates each field with NUL and each process/file set with NL. Therefore
+        // every PID field after the first may begin with that set-separator newline. Strip exactly
+        // the protocol separator before interpreting the field; do not trim arbitrary bytes.
+        let field = field.strip_prefix(b"\n").unwrap_or(field);
         let Some(raw_pid) = field.strip_prefix(b"p") else {
             continue;
         };
@@ -1004,6 +1095,153 @@ fn list_worktrees(
     Ok(entries)
 }
 
+const GIT_WORKTREE_LIST_TIMEOUT: &str = "git-worktree-list-timeout";
+
+#[cfg(unix)]
+fn open_admin_fallback_file(path: &Path) -> std::io::Result<fs::File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let mut directory_options = fs::OpenOptions::new();
+    directory_options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = directory_options.open(parent)?;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(not(unix))]
+fn open_admin_fallback_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new().read(true).open(path)
+}
+
+fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
+    let file = open_admin_fallback_file(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "git-worktree-admin-fallback-file-missing".to_string()
+        } else {
+            "git-worktree-admin-fallback-file-open-failed".to_string()
+        }
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "git-worktree-admin-fallback-file-metadata-failed".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("git-worktree-admin-fallback-file-unsafe".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::darwin::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        if metadata.st_flags() & SF_DATALESS != 0 {
+            return Err("git-worktree-admin-fallback-file-dataless".into());
+        }
+    }
+    if metadata.len() > MAX_ADMIN_FALLBACK_FILE_BYTES {
+        return Err("git-worktree-admin-fallback-file-too-large".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_ADMIN_FALLBACK_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "git-worktree-admin-fallback-file-read-failed".to_string())?;
+    if bytes.len() as u64 > MAX_ADMIN_FALLBACK_FILE_BYTES {
+        return Err("git-worktree-admin-fallback-file-too-large".into());
+    }
+    String::from_utf8(bytes)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| "git-worktree-admin-fallback-file-not-utf8".into())
+}
+
+/// Recover bounded registration facts when Git's porcelain listing hangs on a malformed entry.
+/// The returned records intentionally retain evidence gaps, so no removal operation can use them.
+fn admin_fallback_worktrees(
+    common_dir: &Path,
+    options: GitWorktreeAuditOptions,
+) -> (Vec<RawWorktree>, Vec<String>) {
+    let admin_dir = common_dir.join("worktrees");
+    let mut issues = vec![
+        "read-only-git-admin-fallback".into(),
+        "git-worktree-remove-not-invoked".into(),
+        "git-worktree-prune-not-invoked".into(),
+    ];
+    let mut entries: Vec<_> = match fs::read_dir(&admin_dir) {
+        Ok(read_dir) => read_dir.filter_map(Result::ok).collect(),
+        Err(_) => {
+            issues.push("git-worktree-admin-fallback-directory-unavailable".into());
+            return (Vec::new(), issues);
+        }
+    };
+    entries.sort_by_key(|entry| entry.file_name());
+    if entries.len() > options.max_worktrees.min(MAX_ADMIN_FALLBACK_ENTRIES) {
+        issues.push("git-worktree-admin-fallback-entry-limit".into());
+    }
+    entries.truncate(options.max_worktrees.min(MAX_ADMIN_FALLBACK_ENTRIES));
+    let mut worktrees = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let admin_entry = entry.path();
+        let safe_dir = fs::symlink_metadata(&admin_entry)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if !safe_dir {
+            issues.push(format!("git-worktree-admin-fallback-entry-unsafe:{name}"));
+            continue;
+        }
+        let gitdir = read_admin_fallback_file(&admin_entry.join("gitdir"));
+        let path = gitdir
+            .as_ref()
+            .ok()
+            .and_then(|value| Path::new(value).parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(format!("<worktree-admin:{name}>")));
+        let head = read_admin_fallback_file(&admin_entry.join("HEAD"))
+            .ok()
+            .filter(|value| is_oid(value))
+            .unwrap_or_else(|| "admin-unknown-head".into());
+        let locked = fs::symlink_metadata(admin_entry.join("locked")).is_ok();
+        let lock_reason = locked
+            .then(|| read_admin_fallback_file(&admin_entry.join("locked")).unwrap_or_default())
+            .filter(|value| !value.is_empty());
+        let prunable = fs::symlink_metadata(admin_entry.join("prunable")).is_ok();
+        let prunable_reason = prunable
+            .then(|| read_admin_fallback_file(&admin_entry.join("prunable")).unwrap_or_default())
+            .filter(|value| !value.is_empty());
+        if gitdir.is_err() {
+            issues.push(format!("git-worktree-admin-gitdir-unavailable:{name}"));
+        }
+        if head == "admin-unknown-head" {
+            issues.push(format!("git-worktree-admin-head-unavailable:{name}"));
+        }
+        worktrees.push(RawWorktree {
+            path,
+            head,
+            branch: None,
+            detached: true,
+            bare: false,
+            locked,
+            lock_reason,
+            prunable,
+            prunable_reason,
+            fallback_evidence_incomplete: true,
+        });
+    }
+    (worktrees, issues)
+}
+
 fn status_observation(path: &Path, timeout_ms: u64) -> (Option<bool>, Option<u64>) {
     let result = match run_git(
         path,
@@ -1098,6 +1336,7 @@ pub fn audit_git_worktrees(
         return Err("git-worktree-repository-root-not-absolute".into());
     }
     let repository_root = canonical_real_directory(repository_root)?;
+    ensure_git_admin_metadata_local(&repository_root)?;
     let common_dir = resolve_common_dir(&repository_root, options.command_timeout_ms)?;
     let retention_references = resolve_references(
         &repository_root,
@@ -1114,12 +1353,21 @@ pub fn audit_git_worktrees(
         &retention_references,
         options.command_timeout_ms,
     )?;
-    let raw_worktrees = list_worktrees(&repository_root, options)?;
+    let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options) {
+        Ok(raw_worktrees) => (raw_worktrees, Vec::new()),
+        // `run_git` appends `-timeout` to the operation reason. Only that typed-by-contract
+        // condition permits the read-only admin fallback; malformed output and spawn failures
+        // remain hard errors.
+        Err(error) if error == GIT_WORKTREE_LIST_TIMEOUT => {
+            admin_fallback_worktrees(&common_dir, options)
+        }
+        Err(error) => return Err(error),
+    };
     let actor_cwd = canonical_actor_cwd();
     let common_dir_string = common_dir.to_string_lossy().into_owned();
     let audit_origin = repository_root.clone();
     let mut entries = Vec::with_capacity(raw_worktrees.len());
-    let mut issues = Vec::new();
+    let mut issues = fallback_issues;
 
     for (index, raw) in raw_worktrees.into_iter().enumerate() {
         let path_result = canonical_real_directory(&raw.path);
@@ -1190,7 +1438,10 @@ pub fn audit_git_worktrees(
             active_use_active: active_use.active,
             ..preliminary
         };
-        let blockers = candidate_blockers(&classification);
+        let mut blockers = candidate_blockers(&classification);
+        if raw.fallback_evidence_incomplete {
+            blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
+        }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -2086,12 +2337,111 @@ mod tests {
         assert!(parse_worktree_porcelain(invalid_head).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_surfaces_stale_registration_without_creating_removal_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let common_dir = temp.path().join(".git");
+        let admin = common_dir.join("worktrees").join("stale");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(admin.join("gitdir"), "/missing-worktree/.git\n").unwrap();
+        fs::write(admin.join("HEAD"), "not-a-head\n").unwrap();
+        let (entries, issues) =
+            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, PathBuf::from("/missing-worktree"));
+        assert_eq!(entries[0].head, "admin-unknown-head");
+        assert!(entries[0].fallback_evidence_incomplete);
+        assert_eq!(
+            disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
+            GitWorktreeDisposition::EvidenceGap
+        );
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "read-only-git-admin-fallback"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue == "git-worktree-admin-head-unavailable:stale"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_with_valid_oid_and_clean_path_stays_evidence_gap() {
+        let temp = tempfile::tempdir().unwrap();
+        let common_dir = temp.path().join(".git");
+        let worktree = temp.path().join("linked");
+        fs::create_dir_all(&worktree).unwrap();
+        let admin = common_dir.join("worktrees").join("linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(admin.join("gitdir"), format!("{}/.git\n", worktree.display())).unwrap();
+        fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
+
+        let (entries, _) =
+            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, worktree);
+        assert!(is_oid(&entries[0].head));
+        assert!(entries[0].path.is_dir());
+        assert!(entries[0].fallback_evidence_incomplete);
+        assert_eq!(
+            disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
+            GitWorktreeDisposition::EvidenceGap
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_file_rejects_symlinks_and_bounds_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        let symlink = temp.path().join("symlink");
+        fs::write(temp.path().join("target"), b"safe").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("target"), &symlink).unwrap();
+        assert_eq!(
+            read_admin_fallback_file(&symlink).unwrap_err(),
+            "git-worktree-admin-fallback-file-open-failed"
+        );
+
+        let oversized = temp.path().join("oversized");
+        fs::write(
+            &oversized,
+            vec![b'x'; (MAX_ADMIN_FALLBACK_FILE_BYTES + 1) as usize],
+        )
+        .unwrap();
+        assert_eq!(
+            read_admin_fallback_file(&oversized).unwrap_err(),
+            "git-worktree-admin-fallback-file-too-large"
+        );
+    }
+
     #[test]
     fn retention_reachability_membership_is_exact_and_fail_closed() {
         let reachable = BTreeSet::from([oid('a'), oid('b')]);
         assert_eq!(containment_observation(&oid('a'), &reachable), Some(true));
         assert_eq!(containment_observation(&oid('c'), &reachable), Some(false));
         assert_eq!(containment_observation("not-an-oid", &reachable), None);
+    }
+
+    #[test]
+    fn offloaded_git_metadata_is_a_hard_blocker() {
+        let status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: false,
+            is_downloading: false,
+            is_most_recent_version_downloaded: false,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            capabilities: 0,
+            allows_eviction: false,
+            observed_bytes: 30,
+            item_identifier_fingerprint: "f".repeat(64),
+        };
+        assert_eq!(
+            git_admin_metadata_blocker(&status),
+            Some("git-worktree-admin-metadata-not-local-current")
+        );
     }
 
     #[test]
