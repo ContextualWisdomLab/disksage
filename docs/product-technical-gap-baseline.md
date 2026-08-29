@@ -20,9 +20,20 @@ queued or stale status.
   Files On-Demand eviction, observes the primary app separately from its resident File Provider
   helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
   client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
-- The remaining acceptance proof is a successful vendor `/unpin` on a freshly replanned item,
-  immutable result recording, and observed allocation reduction. Until then the measured 58.8 GB
-  is opportunity, not reclaimed capacity.
+- The vendor `/unpin` command printed `Failed operation=2 ... status=-2` but exited zero, proving
+  that its exit code is not completion evidence. The same result was observed with the primary
+  OneDrive app running and with both NFC and NFD path spellings, so neither client lifecycle nor
+  Unicode normalization repairs that unsupported boundary. A harmless public-API identity probe against a
+  real OneDrive File Provider item then failed with `NSFileProviderErrorProviderNotFound` (`-2001`).
+  DiskSage therefore blocks OneDrive native execution. The macOS 11 helper and Rust boundary bind
+  item plus domain identity and reject path replacement, but they cannot authorize eviction.
+- The remaining acceptance proof is a reviewed provider-supported eviction on a freshly replanned item,
+  immutable result recording, and observed allocation reduction. Apple exposes OneDrive's registered
+  custom action to the extension implementation, not as a public third-party invocation API.
+  DiskSage now uses public AppKit through its existing opener dependency to select the exact approved
+  items in Finder, records that selection as non-mutating assistance, and verifies retained provider
+  identity plus allocated-byte reduction only after the customer chooses **Free Up Space**. Until
+  that postcheck succeeds, the measured 58.8 GB is opportunity, not reclaimed capacity.
 
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
@@ -109,6 +120,7 @@ never converted into a deletion estimate by a heuristic.
 | Priority | Gap | Current state | Smallest next proof |
 | --- | --- | --- | --- |
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
+| P0 | iCloud local-copy eviction needs an exact production plan and runtime receipt. | A 2026-08-29 15:53 +0900 public Foundation snapshot found 61 uploaded, current, idle, conflict/error-free local copies totaling 2,955,091,968 allocated bytes; 10 additional items totaling 632,115,200 bytes reported the iCloud server unavailable and remain blocked. The cohort changed during observation; the aggregate audit opened no content and emitted no mutation fingerprint. | Merge the public per-item evidence path, generate a fresh exact-head batch fingerprint, obtain attributed approval, then require retained uploaded ubiquitous identity, `notDownloaded` status, reduced allocation, and secondary APFS before/after evidence. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P0 | Shared `/tmp` physical reclaim remains unavailable. | DiskSage can inventory current-user top-level artifacts and record advisory completion evidence, but permanent execution and approval deliberately fail closed because same-user markers do not authenticate producers and path APIs do not atomically bind final revalidation, deletion, journal durability, and receipt durability. This PR therefore recovers zero bytes from `/tmp`. | Implement an OS-enforced producer authority plus descriptor-relative, race-resistant tree mutation and a deletion protocol whose durable intent and outcome survive receipt failure; keep every `/tmp` child non-mutable until those proofs pass adversarial reality tests. |
 | P1 | The central hourly development/review loop is live; the repository-local advisory path remains manual-only. | The repository-local `.github/workflows/hourly-product-loop.yml` remains `workflow_dispatch`-only because its contextual-orchestrator call is advisory. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *`; scheduled run [`32986653461`](https://github.com/ContextualWisdomLab/.github/actions/runs/32986653461) completed successfully on central head `e00bd7964f332b69cf7b430b0cb5ad486eef8258`, following four other successful scheduled runs. | Retain successful scheduled receipts, read-only repository permissions, exact-head binding, and no provider-secret import or foreign-repository mutation; verify the local advisory receipt only when manually configured. |
@@ -1166,6 +1178,16 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 merged-worktree and isolated-project-cache execution
 
+### Exact PR commit membership boundary
+
+- The worktree authority now verifies each registered HEAD against the exact same-repository
+  GitHub pull-request commit list. This closes the squash/rebase ancestry gap and safely recognizes
+  detached intermediate commits without inferring identity from a directory or branch name.
+- A SHA may occur in more than one PR. Verified membership in any open PR is therefore a mandatory
+  preserve veto, even if another PR containing the same SHA is already closed or merged. Search
+  caps, pagination/output bounds, repository mismatch, authentication failure, and timeout remain
+  evidence gaps rather than cleanup authority.
+
 - A live Naruon audit exposed a second squash-merge boundary: PR #1370's clean, inactive worktree
   has the exact merged pull-request head, but that head is not an ancestor of the retained branch.
   DiskSage now obtains closed-unmerged heads separately and scopes merged queries to branches in
@@ -1176,6 +1198,11 @@ runner's private workspace temp root instead of weakening the shared production 
   path and Git registration absence were verified, the branch was retained, and the fresh audit
   reports 28 preserved worktrees, zero candidates, complete evidence, and zero gaps. Its
   253,673,472-byte allocated upper bound is not presented as physical APFS recovery.
+- The exact-duplicate collector now prunes `.photoslibrary` and `.photolibrary` packages and rejects
+  either package as a scan root. A regression test proves identical bytes inside a Photos package
+  cannot form a deletion cluster with an external file. The 44 external Pictures images currently
+  have unique exact-content digests; perceptual comparison and measured quality-survivor selection
+  remain an open product Gap and no non-identical photo was deleted.
 
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open
