@@ -270,4 +270,16 @@ mod tests {
             OsString::from("--npx-only"),
         ]).is_err());
     }
+
+    #[test]
+    fn permanent_cache_mode_fails_closed_until_final_target_revalidation_is_bound() {
+        let error = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--cache-id"),
+            OsString::from("gradle-cache"),
+            OsString::from("--permanent-cache"),
+        ])
+        .unwrap_err();
+        assert_eq!(error, "permanent-cache-execution-disabled");
+    }
 }
