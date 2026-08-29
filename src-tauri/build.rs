@@ -44,9 +44,14 @@ fn compile_fileprovider_helper() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let source = manifest_dir.join("native/fileprovider-evict.swift");
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("disksage-fileprovider-evict");
+    let swift_target = match target.as_str() {
+        "aarch64-apple-darwin" => "arm64-apple-macos11.0",
+        "x86_64-apple-darwin" => "x86_64-apple-macos11.0",
+        _ => panic!("unsupported macOS target for native File Provider helper: {target}"),
+    };
     println!("cargo:rerun-if-changed={}", source.display());
     let status = Command::new("xcrun")
-        .args(["swiftc", "-parse-as-library", "-O"])
+        .args(["swiftc", "-parse-as-library", "-O", "-target", swift_target])
         .arg(&source)
         .arg("-o")
         .arg(&output)
