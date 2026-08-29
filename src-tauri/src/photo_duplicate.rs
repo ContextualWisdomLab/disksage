@@ -282,7 +282,8 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
         .into_iter()
         .filter_map(|(content_digest, mut members)| {
             members.sort_by(|left, right| left.path.cmp(&right.path));
-            members.dedup_by(|left, right| left.object_id == right.object_id);
+            let mut seen_object_ids = std::collections::BTreeSet::new();
+            members.retain(|member| seen_object_ids.insert(member.object_id.clone()));
             if members.len() < 2 {
                 return None;
             }
