@@ -319,6 +319,29 @@ pub fn collect_provider_client_runtime(
     assess_provider_client_runtime(provider, process_names.as_deref(), observed_at_ms)
 }
 
+/// Observe only the provider's primary desktop process.
+///
+/// Provider extensions may remain alive after the desktop app quits, so recovery operations must
+/// not use the broader copy-prerequisite observation when waiting to run a vendor maintenance CLI.
+#[cfg(not(coverage))]
+pub(crate) fn collect_provider_primary_runtime(provider: CloudProvider) -> Option<bool> {
+    if provider == CloudProvider::Icloud {
+        return Some(true);
+    }
+    let expected = match provider {
+        CloudProvider::Onedrive => "OneDrive",
+        CloudProvider::GoogleDrive => "Google Drive",
+        CloudProvider::Icloud => unreachable!(),
+    };
+    collect_macos_process_names().ok().and_then(|names| {
+        std::str::from_utf8(&names).ok().map(|names| {
+            names
+                .lines()
+                .any(|name| name.trim().eq_ignore_ascii_case(expected))
+        })
+    })
+}
+
 #[cfg(not(coverage))]
 pub fn require_provider_client_runtime(
     provider: CloudProvider,

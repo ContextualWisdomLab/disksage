@@ -1067,8 +1067,6 @@ fn validate_approval(
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<Vec<String>, String> {
     if root.provider == CloudProvider::Onedrive {
-        let sync = crate::provider_global_sync::inspect_new_copy_admission(root.provider)?;
-        crate::provider_global_sync::require_new_copy_admission(&sync)?;
         return crate::provider_recovery::unpin_onedrive_local_copy(path)
             .map(|outcome| outcome.restart_blockers);
     }

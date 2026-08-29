@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
+  squash-merged and detached intermediate commits can be classified without ancestry or branch
+  guesses; any exact membership in an open PR takes precedence and preserves the worktree.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
@@ -18,10 +21,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   environment trees without recursively scanning them, and the
   cleanup screen names each Python cache and test environment so the next action is clear.
 - Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
-  command only after the provider-wide queue is quiet, then restart sync and verify allocation
-  reduction while retaining the cloud item and the existing approval and receipt contract.
+  command after stopping the sync app, then restart sync and verify allocation reduction while
+  retaining the cloud item and the existing approval and receipt contract. Provider-wide
+  new-copy admission remains confined to copy/upload workflows and cannot deadlock local-space
+  recovery while unrelated downloads, indexing, or historical provider errors exist. If the
+  normal quit request stalls, DiskSage uses one bounded graceful `SIGTERM` fallback and never
+  force-kills the client; the stop check distinguishes the desktop app from its resident File
+  Provider helper. The execution path uses the already-bound File Provider item evidence instead
+  of making the vendor's optional `/getpin` query a second, weaker prerequisite.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
+- Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
+  and post-allocation verification contract to OneDrive Files On-Demand. The generic
+  `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
   a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
   outcome; the default remains reversible OS Trash.
@@ -47,6 +59,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Reclaim clean, inactive worktrees for same-repository pull requests closed without merge only
   when GitHub reports an exact branch-and-head match; refresh that evidence before each removal
   and preserve fork, detached, dirty, active, or changed worktrees.
+- Reclaim clean, inactive worktrees whose exact branch and head match a same-repository merged pull
+  request even when squash or rebase history does not retain that head. Closed-unmerged and merged
+  evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
+  registered as worktrees so repositories with long merged histories remain auditable. All lookup
+  calls consume one shared timeout budget rather than multiplying the configured wait per branch.
+- Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
+  library selected as the scan root. External files remain auditable without interpreting Photos'
+  private databases and derivatives as independent duplicate-delete candidates. Reclaim also
+  canonicalizes every approved member immediately before mutation and fails closed if a replaced
+  parent symlink redirects it outside the audited root or into a managed Photos library.
+- Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
+  removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
+  each pull-request lookup.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution

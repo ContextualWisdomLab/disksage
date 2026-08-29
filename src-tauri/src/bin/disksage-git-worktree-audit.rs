@@ -207,28 +207,18 @@ fn write_private_report(
 }
 
 fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, String> {
-    let closed_heads = if args.include_closed_pull_requests {
-        disksage_lib::git_worktree::github_closed_pull_request_heads(
-            &args.repository_root,
-            args.options.command_timeout_ms,
-        )?
-    } else {
-        Default::default()
-    };
-    let stale_open_heads = if let Some(cutoff_ms) = args.stale_open_pull_request_cutoff_ms {
-        disksage_lib::git_worktree::github_stale_open_pull_request_heads(
-            &args.repository_root,
-            cutoff_ms,
-            args.options.command_timeout_ms,
-        )?
-    } else {
-        Default::default()
-    };
-    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_heads(
+    let evidence = disksage_lib::git_worktree_github_evidence::collect(
+        &args.repository_root,
+        args.include_closed_pull_requests,
+        args.stale_open_pull_request_cutoff_ms,
+        args.options,
+    )?;
+    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
         &args.retention_references,
-        &closed_heads,
-        &stale_open_heads,
+        &evidence.closed_heads,
+        &evidence.stale_open_heads,
+        &evidence.pull_request_commits,
         args.stale_open_pull_request_cutoff_ms,
         args.options,
         observed_at_ms,

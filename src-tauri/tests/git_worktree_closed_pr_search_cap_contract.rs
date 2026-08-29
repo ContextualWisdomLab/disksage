@@ -4,10 +4,36 @@ use disksage_lib::git_worktree::github_closed_pull_request_heads;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 
 #[test]
 fn search_cap_warning_never_counts_as_complete_closed_pr_evidence() {
     let temp = tempfile::tempdir().expect("temporary repository root");
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(temp.path())
+        .status()
+        .expect("initialize fixture repository");
+    fs::write(temp.path().join("tracked.txt"), b"fixture\n").expect("write tracked fixture");
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(temp.path())
+        .status()
+        .expect("stage fixture");
+    Command::new("git")
+        .args([
+            "-c",
+            "user.name=DiskSage Test",
+            "-c",
+            "user.email=disksage@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ])
+        .current_dir(temp.path())
+        .status()
+        .expect("commit fixture");
     let bin_dir = temp.path().join("bin");
     fs::create_dir(&bin_dir).expect("create fake bin directory");
 

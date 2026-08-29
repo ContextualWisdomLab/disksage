@@ -123,8 +123,8 @@ fn primary_worktree_audit_keeps_machine_json_path_redacted_and_read_only() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).expect("audit stdout should remain UTF-8 JSON");
     let report: serde_json::Value = serde_json::from_str(&stdout).expect("audit stdout should be JSON");
-    assert_eq!(report["schema_kind"], "disksage.git-worktree-audit/v3");
-    assert_eq!(report["version"], 3);
+    assert_eq!(report["schema_kind"], "disksage.git-worktree-audit/v4");
+    assert_eq!(report["version"], 4);
     assert_eq!(report["worktree_count"], 1);
     assert_eq!(report["removal_candidate_count"], 0);
     assert_eq!(report["preserved_count"], 1);
