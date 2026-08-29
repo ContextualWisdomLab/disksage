@@ -301,9 +301,6 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     let path = path
         .to_str()
         .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
-    if !require_runtime_observation(CloudProvider::Onedrive, 0)? {
-        return Err("provider-client-runtime-not-observed-before-eviction".into());
-    }
     let primary_runtime_observed = crate::provider_client_runtime::collect_provider_primary_runtime(
         CloudProvider::Onedrive,
     )
