@@ -96,6 +96,15 @@ fn windows_api_path(path: &Path) -> Option<Vec<u16>> {
     if !path.is_absolute() || wide.starts_with(&device_prefix) {
         return None;
     }
+
+    // `\\?\` disables Win32 dot-component normalization. Resolve ordinary absolute
+    // paths before entering that namespace so `workspace\detour\..\target` remains a
+    // valid allocation query while preserving already-verbatim paths above.
+    let normalized = std::path::absolute(path).ok()?;
+    wide = normalized.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
     for unit in &mut wide {
         if *unit == FORWARD_SLASH {
             *unit = BACKSLASH;
