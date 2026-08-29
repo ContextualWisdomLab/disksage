@@ -31,7 +31,7 @@ function addCli(artifactRoot: string, directory: string, name: string) {
   );
 }
 
-/** Materializes the exact 17-file Linux, Windows, and macOS release artifact contract. */
+/** Materializes the exact 19-file Linux, Windows, and macOS release artifact contract. */
 function materializeExactArtifactSet(artifactRoot: string) {
   write(join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb'), 'deb');
   write(join(artifactRoot, platformDirectories.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
@@ -45,6 +45,7 @@ function materializeExactArtifactSet(artifactRoot: string) {
   addCli(artifactRoot, platformDirectories.windows, 'disksage-duplicate-audit-windows-x86_64.exe');
   addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-plan-macos-arm64');
   addCli(artifactRoot, platformDirectories.macos, 'disksage-duplicate-audit-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-parallels-disk-reclaim-macos-arm64');
 }
 
 /** Runs the repository-owned verifier against one isolated downloaded-artifact fixture. */

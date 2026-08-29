@@ -81,12 +81,14 @@ require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64
 require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64.sha256
 require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64
 require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64.sha256
+require_exactly_one_file "${expected_dirs[2]}" disksage-parallels-disk-reclaim-macos-arm64
+require_exactly_one_file "${expected_dirs[2]}" disksage-parallels-disk-reclaim-macos-arm64.sha256
 
 checksum_files=()
 checksum_file=""
 while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find "$artifact_root" -type f -name '*.sha256' -print0)
-if [[ ${#checksum_files[@]} -ne 6 ]]; then
-  printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+if [[ ${#checksum_files[@]} -ne 7 ]]; then
+  printf 'Expected seven operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
   exit 1
 fi
 
@@ -124,7 +126,7 @@ done
 
 regular_file_count=0
 while IFS= read -r -d '' _; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
-if [[ $regular_file_count -ne 17 ]]; then
-  printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+if [[ $regular_file_count -ne 19 ]]; then
+  printf 'Unexpected release artifact entries: expected exactly 19 regular files, found %s.\n' "$regular_file_count" >&2
   exit 1
 fi

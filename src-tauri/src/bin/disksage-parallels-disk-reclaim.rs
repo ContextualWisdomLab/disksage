@@ -3,6 +3,8 @@ use disksage_lib::parallels_disk_reclaim::{
 };
 use std::path::PathBuf;
 
+const USAGE: &str = "usage: disksage-parallels-disk-reclaim --vm-id ID --bundle ABSOLUTE.pvm --disk ABSOLUTE.hdd";
+
 fn value(args: &[String], flag: &str) -> Result<String, String> {
     let positions: Vec<_> = args
         .iter()
@@ -20,6 +22,10 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--help"] || args == ["-h"] {
+        println!("{USAGE}");
+        return;
+    }
     let result = (|| {
         enforce_cli_platform()?;
         validate_cli_argument_tokens(&args)?;
