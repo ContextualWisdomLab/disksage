@@ -26,7 +26,23 @@ is_allowed_root() {
   return 1
 }
 
+filesystem_state() {
+  local path="$1"
+  local line
+  line="$(df --output=target,avail -B1 -- "$path" | tail -n 1)" || return 1
+  local available="${line##* }"
+  local mount_target="${line%"$available"}"
+  mount_target="${mount_target#"${mount_target%%[![:space:]]*}"}"
+  mount_target="${mount_target%"${mount_target##*[![:space:]]}"}"
+  if [[ -z "$mount_target" || ! "$available" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  printf '%s\t%s\n' "$mount_target" "$available"
+}
+
 roots=()
+mount_targets=()
+mount_available_before=()
 existing_roots=0
 for requested_root in "$@"; do
   if [[ "$requested_root" != /* ]]; then
@@ -50,6 +66,24 @@ for requested_root in "$@"; do
       echo "reclaim root is not a directory: $canonical_root" >&2
       exit 65
     fi
+    state="$(filesystem_state "$canonical_root")" || {
+      echo "could not measure reclaim-root filesystem" >&2
+      exit 68
+    }
+    mount_target="${state%%$'\t'*}"
+    available_before="${state##*$'\t'}"
+
+    already_recorded=false
+    for known_mount in "${mount_targets[@]:-}"; do
+      if [[ "$known_mount" == "$mount_target" ]]; then
+        already_recorded=true
+        break
+      fi
+    done
+    if [[ "$already_recorded" == false ]]; then
+      mount_targets+=("$mount_target")
+      mount_available_before+=("$available_before")
+    fi
     existing_roots=$((existing_roots + 1))
   fi
 done
@@ -57,12 +91,6 @@ done
 if [[ "$existing_roots" -eq 0 ]]; then
   echo "runner reclaim has no existing allowlisted root" >&2
   exit 67
-fi
-
-available_before="$(df --output=avail -B1 / | tail -1 | tr -d ' ')"
-if ! [[ "$available_before" =~ ^[0-9]+$ ]]; then
-  echo "could not measure runner availability before reclaim" >&2
-  exit 68
 fi
 
 for root in "${roots[@]}"; do
@@ -79,19 +107,38 @@ for root in "${roots[@]}"; do
   fi
 done
 
-available_after="$(df --output=avail -B1 / | tail -1 | tr -d ' ')"
-if ! [[ "$available_after" =~ ^[0-9]+$ ]]; then
-  echo "could not measure runner availability after reclaim" >&2
-  exit 68
-fi
-if [[ "$available_after" -le "$available_before" ]]; then
+reclaimed_bytes=0
+summary_lines=()
+for index in "${!mount_targets[@]}"; do
+  mount_target="${mount_targets[$index]}"
+  available_before="${mount_available_before[$index]}"
+  state="$(filesystem_state "$mount_target")" || {
+    echo "could not remeasure reclaim-root filesystem" >&2
+    exit 68
+  }
+  measured_mount="${state%%$'\t'*}"
+  available_after="${state##*$'\t'}"
+  if [[ "$measured_mount" != "$mount_target" ]]; then
+    echo "reclaim-root filesystem identity changed during cleanup" >&2
+    exit 70
+  fi
+  if [[ "$available_after" -le "$available_before" ]]; then
+    echo "runner reclaim did not prove positive free-space recovery" >&2
+    exit 71
+  fi
+  filesystem_reclaimed=$((available_after - available_before))
+  reclaimed_bytes=$((reclaimed_bytes + filesystem_reclaimed))
+  summary_lines+=("runner_reclaim_filesystem=$mount_target")
+  summary_lines+=("runner_available_bytes_before=$available_before")
+  summary_lines+=("runner_available_bytes_after=$available_after")
+done
+
+if [[ "$reclaimed_bytes" -le 0 ]]; then
   echo "runner reclaim did not prove positive free-space recovery" >&2
   exit 71
 fi
-reclaimed_bytes=$((available_after - available_before))
 
 {
-  echo "runner_available_bytes_before=$available_before"
-  echo "runner_available_bytes_after=$available_after"
+  printf '%s\n' "${summary_lines[@]}"
   echo "runner_reclaimed_bytes=$reclaimed_bytes"
 } >> "$summary_file"
