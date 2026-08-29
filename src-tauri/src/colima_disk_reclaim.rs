@@ -303,8 +303,13 @@ pub fn execute_unavailable(
                 .into(),
         );
     }
-    if approval.plan_fingerprint != plan.plan_fingerprint
-        || approval.exact_approval_phrase != plan.exact_approval_phrase
+    let expected_fingerprint = fingerprint(plan);
+    let expected_approval_phrase =
+        format!("DiskSage Colima 디스크 회수 승인 {expected_fingerprint}");
+    if plan.plan_fingerprint != expected_fingerprint
+        || plan.exact_approval_phrase != expected_approval_phrase
+        || approval.plan_fingerprint != expected_fingerprint
+        || approval.exact_approval_phrase != expected_approval_phrase
         || plan.schema_version != COLIMA_DISK_RECLAIM_SCHEMA_VERSION
         || executed_at_ms < plan.observed_at_ms
         || executed_at_ms.saturating_sub(plan.observed_at_ms) > APPROVAL_MAX_AGE_MS
@@ -454,7 +459,7 @@ mod tests {
 
     #[test]
     fn execution_requires_fresh_attributed_exact_approval_and_never_mutates() {
-        let plan = ColimaDiskReclaimPlan {
+        let mut plan = ColimaDiskReclaimPlan {
             schema_version: 1,
             profile: "default".into(),
             runtime_state: "Stopped".into(),
@@ -471,10 +476,13 @@ mod tests {
             blockers: vec!["colima-native-stopped-compaction-unavailable".into()],
             customer_next_action: "wait".into(),
             observed_at_ms: 10,
-            plan_fingerprint: "a".repeat(64),
-            exact_approval_phrase: format!("DiskSage Colima 디스크 회수 승인 {}", "a".repeat(64)),
+            plan_fingerprint: String::new(),
+            exact_approval_phrase: String::new(),
             mutation_performed: false,
         };
+        plan.plan_fingerprint = fingerprint(&plan);
+        plan.exact_approval_phrase =
+            format!("DiskSage Colima 디스크 회수 승인 {}", plan.plan_fingerprint);
         let approval = ColimaDiskReclaimApproval {
             plan_fingerprint: plan.plan_fingerprint.clone(),
             exact_approval_phrase: plan.exact_approval_phrase.clone(),
