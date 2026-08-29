@@ -240,6 +240,11 @@ fn run_mutation_bounded(
         }
     };
 
+    // A completed leader does not imply that inherited capture pipes are closed: a descendant
+    // may still own them. The command was isolated in a private process group, so terminate any
+    // remaining descendants before joining the readers and preserve the leader's exit status.
+    terminate_mutation_process_tree(&mut child);
+
     let stdout = match stdout_reader.join() {
         Ok(Ok(value)) => value,
         Ok(Err(_)) | Err(_) => {
@@ -761,6 +766,28 @@ wait
         .expect("spawned timeout must remain representable as output evidence");
 
         assert_eq!(output.status_code, MUTATION_TIMEOUT_STATUS_CODE);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn completed_mutation_terminates_descendants_holding_output_pipes() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("mutation-completed");
+        fs::write(&fake, "#!/bin/sh\nsleep 5 &\nexit 0\n").expect("write mutation fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let started = Instant::now();
+        let output = run_mutation_bounded(
+            &fake,
+            &[],
+            Duration::from_secs(1),
+            "mutation-completed-fixture",
+        )
+        .expect("direct completion must not hang on inherited pipes");
+
+        assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
