@@ -44,7 +44,7 @@ fn exact_250_commit_pr_list_is_incomplete_evidence() {
 set -eu
 case " $* " in
   *' repo view '*) printf '%s\n' 'ContextualWisdomLab/disksage' ;;
-  *' search prs '*) printf '%s' '[{{"number":1,"state":"open","repository":{{"nameWithOwner":"ContextualWisdomLab/disksage"}}}}]' ;;
+  *' search prs '*) printf '%s' '[{{"number":1,"state":"open","repository":{{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}}}}]' ;;
   *' api --paginate repos/ContextualWisdomLab/disksage/pulls/1/commits?per_page=100 '*)
     printf '%s\n' '{head}'
     i=1
