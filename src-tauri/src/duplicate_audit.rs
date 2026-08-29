@@ -573,6 +573,8 @@ fn preserve_staged_candidate(
 fn remove_if_storage_identity(
     path: &Path,
     expected_storage_identity: &str,
+    expected_logical_bytes: u64,
+    expected_content_digests: &ContentDigests,
     staging_token: u64,
 ) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path)
@@ -610,6 +612,24 @@ fn remove_if_storage_identity(
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
         return recovery.and(Err("duplicate-reclaim-candidate-changed-during-staging".into()));
+    }
+    let staged_observation = FileObservation {
+        path: staged.clone(),
+        relative_path: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        logical_bytes: expected_logical_bytes,
+        filesystem_created_ms: system_time_ms(metadata.created()),
+        filesystem_modified_ms: system_time_ms(metadata.modified()),
+        device,
+        inode,
+    };
+    if hash_stable_file(&staged_observation).as_ref() != Ok(expected_content_digests) {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return recovery.and(Err("duplicate-reclaim-candidate-content-changed".into()));
     }
     if let Err(error) = std::fs::remove_file(&staged) {
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
@@ -717,6 +737,8 @@ pub fn execute_exact_duplicate_reclaim_from_report(
                 verified.push((
                     path,
                     allocated_bytes(&metadata),
+                    expected.logical_bytes,
+                    cluster.content_digests.clone(),
                     expected
                         .storage_identity_fingerprint
                         .clone()
@@ -728,21 +750,25 @@ pub fn execute_exact_duplicate_reclaim_from_report(
     let active = active_duplicate_candidates(
         &verified
             .iter()
-            .map(|(path, _, _)| path.clone())
+            .map(|(path, _, _, _, _)| path.clone())
             .collect::<Vec<_>>(),
     )?;
     let removable = verified
         .into_iter()
-        .filter(|(path, _, _)| !active.contains(path))
+        .filter(|(path, _, _, _, _)| !active.contains(path))
         .collect::<Vec<_>>();
 
     let mut removed_file_count = 0usize;
     let mut removed_allocated_bytes_upper_bound = 0u64;
     let mut failure_reasons = BTreeSet::new();
-    for (index, (path, bytes, storage_identity)) in removable.into_iter().enumerate() {
+    for (index, (path, bytes, logical_bytes, content_digests, storage_identity)) in
+        removable.into_iter().enumerate()
+    {
         match remove_if_storage_identity(
             &path,
             &storage_identity,
+            logical_bytes,
+            &content_digests,
             executed_at_ms.saturating_add(index as u64),
         ) {
             Ok(()) => {
@@ -1456,13 +1482,24 @@ mod tests {
         let metadata = std::fs::symlink_metadata(&path).unwrap();
         let (device, inode) = unix_identity(&metadata);
         let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
 
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, b"replacement bytes").unwrap();
-        assert_eq!(
-            remove_if_storage_identity(&path, &approved, 1).unwrap_err(),
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            1,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.as_str(),
             "duplicate-reclaim-candidate-changed"
-        );
+                | "duplicate-reclaim-candidate-content-changed"
+        ));
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
         assert_eq!(
             removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
