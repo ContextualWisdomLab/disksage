@@ -38,8 +38,8 @@ fn automatic_node_cleanup_reclaims_only_corepack_subtree() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        !cache_home.join("node/corepack").exists(),
-        "Corepack cache should be reclaimed"
+        !corepack_archive.exists(),
+        "Corepack cache archive should be reclaimed while retaining its catalog root"
     );
     assert_eq!(
         fs::read(unrelated_node_cache.join("keep.bin")).unwrap(),
