@@ -78,6 +78,47 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
+fn looks_like_updater_download_cache(path: &Path) -> bool {
+    let Ok(root_entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    let Ok(root_entries) = root_entries.collect::<Result<Vec<_>, _>>() else {
+        return false;
+    };
+    let root_names: Vec<_> = root_entries
+        .into_iter()
+        .map(|entry| entry.file_name())
+        .collect();
+    if root_names.len() != 1 || root_names[0] != "pending" {
+        return false;
+    }
+    let pending = path.join("pending");
+    let Ok(entries) = std::fs::read_dir(&pending) else {
+        return false;
+    };
+    let mut update_info = false;
+    let mut archives = 0usize;
+    let Ok(entries) = entries.collect::<Result<Vec<_>, _>>() else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            return false;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return false;
+        }
+        if entry.file_name() == "update-info.json" {
+            update_info = true;
+        } else if entry.path().extension().is_some_and(|extension| extension == "zip") {
+            archives += 1;
+        } else {
+            return false;
+        }
+    }
+    update_info && archives == 1
+}
+
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
     let signature = match name {
         "_cacache"
@@ -130,7 +171,7 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         | "cursor-updater"
         | "reason-plus-companion-app-updater"
         | "@mendeley-internaldesktop-reference-manager-updater"
-            if direct_child_is_dir(path, "pending") =>
+            if looks_like_updater_download_cache(path) =>
         {
             "electron-updater-download-cache"
         }
@@ -602,6 +643,8 @@ mod tests {
         assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
 
         fs::create_dir(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
         let candidates = proven_cache_trash_candidates(tmp.path());
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].signature, "electron-updater-download-cache");
@@ -609,7 +652,12 @@ mod tests {
         let unobserved = trash.join("unknown-updater");
         fs::create_dir(&unobserved).unwrap();
         fs::create_dir(unobserved.join("pending")).unwrap();
+        fs::write(unobserved.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(unobserved.join("pending/update.zip"), b"archive").unwrap();
         assert_eq!(proven_cache_trash_candidates(tmp.path()).len(), 1);
+
+        fs::write(updater.join("pending/user-file.txt"), b"keep").unwrap();
+        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
     }
 
     #[cfg(unix)]
