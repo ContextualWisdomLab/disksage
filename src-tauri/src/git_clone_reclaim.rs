@@ -600,7 +600,10 @@ mod tests {
         std::fs::write(repository.path().join("tracked.txt"), b"open\n").unwrap();
         git(repository.path(), &["commit", "-am", "open"]);
         let head = git(repository.path(), &["rev-parse", "HEAD"]);
-        let stale = StaleOpenPullRequestHeads::from([("refs/heads/open-pr".into(), head)]);
+        let stale = StaleOpenPullRequestHeads::from([(
+            ("refs/heads/open-pr".into(), head),
+            std::collections::BTreeSet::from([1]),
+        )]);
 
         let error = plan_git_clone_reclaim_with_pull_request_heads(
             repository.path(),
