@@ -205,6 +205,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Verify Podman network membership through its container listing, follow installed CLI symlinks,
   hide unavailable runtime panels behind one actionable summary, terminate runtime subprocess
   groups on timeout, and exclude merged history before bounding closed-PR evidence.
+- Add a read-only exact-photo duplicate audit that records byte identity with BLAKE3 and groups
+  current materialized PNGs only when dimensions and normalized decoded RGBA16 pixels match;
+  choose a displayed keeper only under unique Pareto dominance across losslessness, source bit
+  depth, metadata completeness, and lineage, while ties require customer selection and all cleanup
+  remains unavailable. Provider paths, Photos libraries, placeholders, symlinks, and replacement
+  races remain rejected; active-use evidence is reserved for fresh execution preflight.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

@@ -47,6 +47,7 @@ pub mod git_clone_reclaim;
 pub mod git_worktree;
 /// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
 pub mod git_worktree_github_evidence;
+pub mod photo_duplicate;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
