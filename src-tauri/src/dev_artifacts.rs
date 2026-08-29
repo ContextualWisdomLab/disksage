@@ -76,8 +76,47 @@ fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+fn windows_api_path(path: &Path) -> Option<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
+
+    const BACKSLASH: u16 = b'\\' as u16;
+    const FORWARD_SLASH: u16 = b'/' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    let verbatim_prefix = [BACKSLASH, BACKSLASH, QUESTION, BACKSLASH];
+    if wide.starts_with(&verbatim_prefix) {
+        wide.push(0);
+        return Some(wide);
+    }
+    let device_prefix = [BACKSLASH, BACKSLASH, DOT, BACKSLASH];
+    if !path.is_absolute() || wide.starts_with(&device_prefix) {
+        return None;
+    }
+    for unit in &mut wide {
+        if *unit == FORWARD_SLASH {
+            *unit = BACKSLASH;
+        }
+    }
+    let mut extended: Vec<u16> = if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        r"\\?\UNC\".encode_utf16().collect()
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        extended.extend_from_slice(&wide[2..]);
+    } else {
+        extended.extend_from_slice(&wide);
+    }
+    extended.push(0);
+    Some(extended)
+}
+
+#[cfg(windows)]
+fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
     const INVALID_FILE_SIZE: u32 = u32::MAX;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -85,13 +124,9 @@ fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
         fn GetLastError() -> u32;
         fn SetLastError(error: u32);
     }
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if wide.contains(&0) {
-        return None;
-    }
-    wide.push(0);
+    let wide = windows_api_path(path)?;
     let mut high = 0_u32;
-    // SAFETY: `wide` is a live NUL-terminated UTF-16 path and `high` is writable for the call.
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 absolute path and `high` is writable.
     let low = unsafe {
         SetLastError(0);
         GetCompressedFileSizeW(wide.as_ptr(), &mut high)
