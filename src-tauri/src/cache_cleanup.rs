@@ -336,15 +336,15 @@ pub(crate) fn clean_regenerable_caches_inner(
                         &targets,
                         journal_path,
                         now_ms,
-                        matches!(candidate.id.as_str(), "npm-cache" | "pip-cache" | "node-cache"),
+                        false,
                     )
-                        .unwrap_or_else(|error| {
-                            vec![CleanResult {
-                                path: candidate.path,
-                                ok: false,
-                                error,
-                            }]
-                        })
+                    .unwrap_or_else(|error| {
+                        vec![CleanResult {
+                            path: candidate.path,
+                            ok: false,
+                            error,
+                        }]
+                    })
                 }
                 Err(error) => vec![CleanResult {
                     path: candidate.path,
@@ -476,7 +476,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn automatic_node_cache_cleanup_reclaims_directories_permanently() {
+    fn automatic_node_cache_cleanup_moves_directories_to_trash() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         let corepack = bases.local_data.join("node/corepack");
@@ -489,9 +489,9 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].ok);
         assert!(!corepack.exists());
-        assert!(fs::read_to_string(journal)
-            .unwrap()
-            .contains("permanent_generated_directory_delete"));
+        let journal_text = fs::read_to_string(journal).unwrap();
+        assert!(journal_text.contains("\"op\":\"trash_delete\""));
+        assert!(!journal_text.contains("permanent_generated_directory_delete"));
     }
 
     #[test]
@@ -537,7 +537,6 @@ mod tests {
         let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1, false)
             .err()
             .expect("symlink root must be rejected");
-
         assert_eq!(error, "cache-root-not-current-or-safe");
         assert_eq!(fs::read(&outside_file).unwrap(), b"outside");
     }
