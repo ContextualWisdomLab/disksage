@@ -36,7 +36,7 @@ fn permanent_shared_temp_reclaim_stays_fail_closed_until_object_bound() {
     assert_eq!(
         execute_shared_temp_reclaim(&plan, &approval, &journal_path, &receipt_path, 13)
             .unwrap_err(),
-        "shared-temp-permanent-reclaim-not-object-bound"
+        "shared-temp-permanent-execution-disabled"
     );
     assert!(artifact_path.exists());
     assert!(!journal_path.exists());
