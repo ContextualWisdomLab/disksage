@@ -14,6 +14,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Audit non-identical JPEG, PNG, TIFF, and WebP photo candidates with a standards-grounded DCT
+  perceptual hash, measured resolution/bit-depth/compression evidence, and an optional unweighted
+  Pareto-dominant survivor recommendation. Managed Photos libraries remain excluded; a user must
+  select one survivor per group before the other members can move reversibly to OS Trash under an
+  exact plan fingerprint and per-item receipt.
 - Admit iCloud local-copy eviction from Apple Foundation's public, per-item ubiquitous metadata
   only when the item is uploaded, current, idle, conflict-free, error-free, and not excluded from
   sync. Upload/download errors remain explicit blockers; exact approval is invalidated by the new

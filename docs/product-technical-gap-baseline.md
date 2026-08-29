@@ -89,7 +89,7 @@ queued or stale status.
 | Domain | What DiskSage may propose | Required proof before mutation | Explicitly out of scope |
 | --- | --- | --- | --- |
 | Cloud/local duplicate | Copy or adopt an already-present cloud object, then evict only the local copy | Provider item identity, content digest, sync attestation, current local identity, and fresh headroom | Deleting a local placeholder or treating `is_uploaded=false` as uploaded |
-| Exact duplicate photos/files | Keep one user-selected member and move the others to Trash | Stable content digest, complete metadata probe, source recheck, and per-group confirmation | Perceptual/near-duplicate deletion or “best quality” guessed from names |
+| Duplicate photos/files | Keep one user-selected member and move the others to Trash | Exact copies require stable content identity; non-identical candidates require DCT perceptual evidence, measured dimensions/bit depth/compression preservation, fresh source identity, and one explicit survivor per group | Automatic perceptual-duplicate deletion or “best quality” guessed from names |
 | Podman/Docker | Remove only stopped, unreferenced resources proven by a runtime re-audit | Runtime inventory, reference/label evidence, size evidence, and exact approval | Removing active volumes, BuildKit state, or raw VM images |
 | Colima/Podman VM storage | Run bounded guest `fstrim` while the guest is running | Fresh runtime state, fixed command, exact phrase, and bounded output receipt | `qemu-img`, sparse-file truncation, VM stop/delete, or host allocation claims |
 | Shared temporary storage (`/tmp` or macOS `/private/tmp`) | Show current-user-owned children and advisory lifecycle evidence for top-level DiskSage artifacts; permanent execution is disabled | Real-directory root, sealed object identity, bounded tree fingerprint, ownership and active-use evidence, and explicit execution-disabled blocker | Same-user marker as producer authentication, age/name-only authority, symlinks, active references, database/worktree data, journal/receipt races, and deleting the shared root or any child |
@@ -111,7 +111,7 @@ never converted into a deletion estimate by a heuristic.
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
 | P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
 | P0 | A 300 GB target cannot be met by cache pruning alone; VM-backed stores and user data need separate measured plans. | Current host observations show only tens of GB in proven regenerable/runtime candidates, while DaisyDisk’s large Application Support/Mobile Documents totals are not deletion authority. | Dashboard reports measured reclaimable bytes by domain, requires provider confirmation before local eviction, and leaves the remainder explicitly unresolved. |
-| P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | Exact-content duplicate audit can prove byte identity; non-identical images need dimensions, codec, and metadata evidence plus a human choice. | Group exact matches automatically, show measured image evidence when available, keep one selected original, and never delete a non-identical photo automatically. |
+| P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | The perceptual-photo audit now groups distinct-content candidates using Zauner DCT pHash, exact aspect ratio, and the published pHash Hamming bound; it shows resolution, bit depth, format, compression preservation, and an unweighted Pareto rationale. | Completed in source: managed libraries are excluded, every group requires an explicit survivor, execution re-audits identity and moves only non-survivors to OS Trash with receipts, and no automatic or permanent deletion exists. Runtime review against the user's external photo folders remains a separate operational action. |
 | P1 | A stale PR worktree may point at a branch that is still open, so age alone is not deletion authority. | The worktree audit already binds same-repository closed/merged PR head OIDs and protects dirty, active, detached, fork, locked, and retained-tip worktrees. | Require an explicit cutoff and fresh same-repository PR state before proposing an old open-PR worktree; preserve the branch/commit and remove only a clean, inactive worktree after exact approval. |
 | P1 | A standalone clone on a closed or explicitly old open PR head was invisible because the worktree remover always preserves its primary checkout. | The standalone-clone plan now reuses exact Git/GitHub worktree evidence, requires one clean inactive checkout and an internal Git directory, then revalidates identity before Trash. | App commands return a measured plan and execute only its exact approval; the original path disappears, branch and Git maintenance commands are untouched, and physical reclaim remains pending until Trash is emptied. |
 
@@ -1255,3 +1255,22 @@ runner's private workspace temp root instead of weakening the shared production 
   bytes to about 20.3 GiB; the bounded host observation increased APFS availability by
   22,816,916 KiB. The remaining stopped container and its volumes stay preserved because neither
   exact container removal nor non-forced repair can safely unlink its damaged writable layer.
+
+## 2026-08-29 perceptual photo evidence
+
+- A read-only audit of the user-owned `Pictures` root completed with fingerprint
+  `22c1fbfaa1f5bbb06c99ee7d693f40f1c3277b8951be2b3c36aab221daee9518`: 58 entries were
+  observed, 45 local photos decoded, one managed Photos Library pruned before descent, zero
+  dataless cloud placeholders read, and zero evidence gaps recorded.
+- Five distinct-content PNG files formed two exact-aspect-ratio DCT pHash candidate groups. The
+  first group contained three 8-bit lossless variants with maximum pairwise Hamming distance 4;
+  the 4,408×6,616 member uniquely Pareto-dominated the 2,204×3,308 and 551×827 variants and is shown
+  as a review recommendation, not deletion authority. The two lower-resolution encoded files total
+  172,074 logical bytes.
+- The second group contained two 9,921×14,031, 8-bit lossless variants with maximum pairwise
+  Hamming distance 4. Their measured preservation dimensions are equal, so file-size difference is
+  not converted into a quality claim and no survivor is recommended. Direct image/metadata review
+  and an explicit survivor selection remain required.
+- The audit performed no mutation. Quarantine planning cannot begin without one survivor per group;
+  execution additionally requires the exact plan phrase, fresh full re-audit, inactive files, and
+  unchanged filesystem identities before any non-survivor moves to OS Trash.

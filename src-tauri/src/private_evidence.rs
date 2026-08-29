@@ -28,6 +28,17 @@ pub fn write_private_json_create_new(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<PrivateEvidenceReceipt, String> {
+    write_private_json_create_new_with_limit(source_root, path, value, MAX_PRIVATE_EVIDENCE_BYTES)
+}
+
+/// Persist exact local evidence with a domain-specific encoded-size ceiling.
+#[cfg(unix)]
+pub fn write_private_json_create_new_with_limit(
+    source_root: &Path,
+    path: &Path,
+    value: &impl Serialize,
+    max_encoded_bytes: usize,
+) -> Result<PrivateEvidenceReceipt, String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let parent = path
@@ -56,7 +67,7 @@ pub fn write_private_json_create_new(
     let final_path = canonical_parent.join(file_name);
     let encoded = serde_json::to_vec_pretty(value)
         .map_err(|_| "private-evidence-json-invalid".to_string())?;
-    if encoded.len() > MAX_PRIVATE_EVIDENCE_BYTES {
+    if encoded.len() > max_encoded_bytes {
         return Err("private-evidence-too-large".into());
     }
 
@@ -108,6 +119,16 @@ pub fn write_private_json_create_new(
     _source_root: &Path,
     _path: &Path,
     _value: &impl Serialize,
+) -> Result<PrivateEvidenceReceipt, String> {
+    Err("private-evidence-secure-mode-unsupported".into())
+}
+
+#[cfg(not(unix))]
+pub fn write_private_json_create_new_with_limit(
+    _source_root: &Path,
+    _path: &Path,
+    _value: &impl Serialize,
+    _max_encoded_bytes: usize,
 ) -> Result<PrivateEvidenceReceipt, String> {
     Err("private-evidence-secure-mode-unsupported".into())
 }
