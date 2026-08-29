@@ -49,6 +49,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Retry transient iCloud metadata failures during the bounded post-eviction check instead of
+  misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
   item is beneath its discovered cloud root; sibling roots remain rejected component by component.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only

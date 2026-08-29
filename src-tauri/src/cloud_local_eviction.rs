@@ -147,6 +147,7 @@ struct LocalFileObservation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PostEvictionObservation {
     path_retained: bool,
+    state_observation_complete: bool,
     is_ubiquitous: bool,
     is_uploaded: bool,
     downloading_status_not_downloaded: bool,
@@ -1362,6 +1363,7 @@ fn observe_post_eviction(root: &CloudRoot, path: &Path) -> PostEvictionObservati
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return PostEvictionObservation {
             path_retained: false,
+            state_observation_complete: false,
             is_ubiquitous: false,
             is_uploaded: false,
             downloading_status_not_downloaded: false,
@@ -1371,6 +1373,7 @@ fn observe_post_eviction(root: &CloudRoot, path: &Path) -> PostEvictionObservati
     let state = observe_icloud_state(root, path, metadata.len()).ok();
     PostEvictionObservation {
         path_retained: metadata.is_file() && !metadata.file_type().is_symlink(),
+        state_observation_complete: state.is_some(),
         is_ubiquitous: state.as_ref().is_some_and(|state| state.is_ubiquitous),
         is_uploaded: state.as_ref().is_some_and(|state| state.is_uploaded),
         downloading_status_not_downloaded: state
@@ -1430,14 +1433,18 @@ fn build_result(
     if !post.path_retained {
         blockers.push("icloud-cloud-item-path-not-retained".into());
     }
-    if !post.is_ubiquitous {
-        blockers.push("icloud-ubiquitous-identity-not-retained".into());
-    }
-    if !post.is_uploaded {
-        blockers.push("icloud-upload-not-confirmed-after-eviction".into());
-    }
-    if !post.downloading_status_not_downloaded {
-        blockers.push("icloud-local-copy-status-not-evicted".into());
+    if !post.state_observation_complete {
+        blockers.push("icloud-post-eviction-state-unavailable".into());
+    } else {
+        if !post.is_ubiquitous {
+            blockers.push("icloud-ubiquitous-identity-not-retained".into());
+        }
+        if !post.is_uploaded {
+            blockers.push("icloud-upload-not-confirmed-after-eviction".into());
+        }
+        if !post.downloading_status_not_downloaded {
+            blockers.push("icloud-local-copy-status-not-evicted".into());
+        }
     }
     if !reduced {
         blockers.push("local-allocation-reduction-unverified".into());
@@ -1470,6 +1477,43 @@ fn build_result(
     result
 }
 
+fn post_eviction_observation_is_terminal(
+    observed: &PostEvictionObservation,
+    allocated_bytes_before: u64,
+    timed_out: bool,
+) -> bool {
+    !observed.path_retained
+        || (observed.state_observation_complete
+            && (!observed.is_ubiquitous
+                || (observed.is_uploaded
+                    && observed.downloading_status_not_downloaded
+                    && observed.allocated_bytes < allocated_bytes_before)))
+        || timed_out
+}
+
+fn wait_for_post_eviction_with<O, S>(
+    allocated_bytes_before: u64,
+    deadline: Instant,
+    mut observe: O,
+    mut sleep: S,
+) -> PostEvictionObservation
+where
+    O: FnMut() -> PostEvictionObservation,
+    S: FnMut(Duration),
+{
+    loop {
+        let observed = observe();
+        if post_eviction_observation_is_terminal(
+            &observed,
+            allocated_bytes_before,
+            Instant::now() >= deadline,
+        ) {
+            return observed;
+        }
+        sleep(Duration::from_millis(100));
+    }
+}
+
 #[cfg(not(coverage))]
 pub fn execute_icloud_local_eviction(
     root: &CloudRoot,
@@ -1495,21 +1539,12 @@ pub fn execute_icloud_local_eviction(
             .as_deref(),
     )?;
 
-    let started = Instant::now();
-    let post = loop {
-        let observed = observe_post_eviction(root, path);
-        if !observed.path_retained
-            || !observed.is_ubiquitous
-            || (observed.is_uploaded
-                && observed.downloading_status_not_downloaded
-                && observed.allocated_bytes < approved_plan.allocated_bytes)
-            || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                >= POST_EVICTION_WAIT_MS
-        {
-            break observed;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let post = wait_for_post_eviction_with(
+        approved_plan.allocated_bytes,
+        Instant::now() + Duration::from_millis(POST_EVICTION_WAIT_MS),
+        || observe_post_eviction(root, path),
+        std::thread::sleep,
+    );
     Ok(build_result(
         approved_plan,
         approval,
@@ -2147,6 +2182,42 @@ mod tests {
     }
 
     #[test]
+    fn transient_post_eviction_metadata_failure_is_retried() {
+        let mut observations = std::collections::VecDeque::from([
+            PostEvictionObservation {
+                path_retained: true,
+                state_observation_complete: false,
+                is_ubiquitous: false,
+                is_uploaded: false,
+                downloading_status_not_downloaded: false,
+                allocated_bytes: 512,
+            },
+            PostEvictionObservation {
+                path_retained: true,
+                state_observation_complete: true,
+                is_ubiquitous: true,
+                is_uploaded: true,
+                downloading_status_not_downloaded: true,
+                allocated_bytes: 512,
+            },
+        ]);
+        let selected = wait_for_post_eviction_with(
+            4096,
+            Instant::now() + Duration::from_secs(1),
+            || {
+                observations
+                    .pop_front()
+                    .expect("a later observation is available")
+            },
+            |_| {},
+        );
+        assert!(observations.is_empty());
+        assert!(selected.state_observation_complete);
+        assert!(selected.is_uploaded);
+        assert!(selected.downloading_status_not_downloaded);
+    }
+
+    #[test]
     fn post_result_never_equates_path_blocks_with_volume_free_space() {
         let temp = tempfile::tempdir().unwrap();
         let plan = plan(temp.path());
@@ -2164,6 +2235,7 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: true,
+                state_observation_complete: true,
                 is_ubiquitous: true,
                 is_uploaded: true,
                 downloading_status_not_downloaded: true,
@@ -2197,6 +2269,7 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: true,
+                state_observation_complete: true,
                 is_ubiquitous: true,
                 is_uploaded: true,
                 downloading_status_not_downloaded: true,
@@ -2231,6 +2304,7 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: false,
+                state_observation_complete: false,
                 is_ubiquitous: false,
                 is_uploaded: false,
                 downloading_status_not_downloaded: false,
