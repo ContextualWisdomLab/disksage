@@ -75,7 +75,8 @@ fn permanent_purge_preserves_same_inode_seed_changed_after_replan() {
     executable(
         &fake_bin.join("lsof"),
         &format!(
-            "#!/bin/sh\ncount=$(cat '{}' 2>/dev/null || echo 0)\ncount=$((count + 1))\nprintf '%s' \"$count\" > '{}'\nif [ \"$count\" -eq 3 ]; then printf '%s' 'changed-after-replan-same-inode' > '{}'; fi\nexit 1\n",
+            "#!/bin/sh\ncount=0\nif [ -r '{}' ]; then IFS= read -r count < '{}'; fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > '{}'\nif [ \"$count\" -eq 3 ]; then printf '%s' 'changed-after-replan-same-inode' > '{}'; fi\nexit 1\n",
+            counter.display(),
             counter.display(),
             counter.display(),
             seed.display()
