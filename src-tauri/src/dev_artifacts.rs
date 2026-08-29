@@ -446,12 +446,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     );
 
     found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    #[cfg(test)]
-    AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().take() {
-            hook();
-        }
-    });
     found
 }
 
@@ -543,6 +537,12 @@ fn clean_artifacts_with_disposition(
                             .into(),
                     };
                 }
+                #[cfg(test)]
+                AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
+                    if let Some(hook) = slot.borrow_mut().take() {
+                        hook();
+                    }
+                });
                 match crate::rules::cache_target(Path::new(&request.path)) {
                     Ok(target) => Some(target),
                     Err(_) => {
