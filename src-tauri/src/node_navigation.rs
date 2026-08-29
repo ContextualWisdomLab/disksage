@@ -85,6 +85,15 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         }
         None => return Err(NOT_IN_SCAN.into()),
     };
+    let complete_file_manifest_matches = !res.cancelled
+        && res
+            .directory_file_manifests
+            .get(&display_path)
+            .or_else(|| res.directory_file_manifests.get(&canonical_path))
+            .is_some_and(|expected| {
+                crate::scanner::current_directory_file_manifest(&canonical_path).as_ref()
+                    == Some(expected)
+            });
     let mut entries = Vec::new();
     for entry in
         std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())?
@@ -104,7 +113,8 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
             };
             (size, true)
         } else {
-            if !res.admitted_files.contains(&display_entry_path)
+            if !complete_file_manifest_matches
+                && !res.admitted_files.contains(&display_entry_path)
                 && !res.admitted_files.contains(&entry_path)
             {
                 continue;

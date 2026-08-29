@@ -1,4 +1,6 @@
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -13,8 +15,10 @@ pub struct ScanStats {
 pub struct ScanResult {
     pub root: PathBuf,
     pub dir_sizes: HashMap<PathBuf, u64>,
-    /// Exact regular-file paths admitted before cancellation or policy pruning.
+    /// Bounded exact fallback for regular files admitted before cancellation.
     pub admitted_files: BTreeSet<PathBuf>,
+    /// Order-independent evidence for every regular-file child of a completely scanned directory.
+    pub(crate) directory_file_manifests: HashMap<PathBuf, DirectoryFileManifest>,
     /// 내림차순 정렬, TOP_FILES_CAP 개로 제한
     pub top_files: Vec<(PathBuf, u64)>,
     pub stats: ScanStats,
@@ -22,9 +26,63 @@ pub struct ScanResult {
 }
 
 pub const TOP_FILES_CAP: usize = 1000;
+pub const CANCELLED_FILE_ADMISSION_CAP: usize = 1000;
 const CLOUD_SCAN_GUIDANCE: &str =
     "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
 const FILE_PROVIDER_STORAGE_COMPONENT: &str = "File Provider Storage";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DirectoryFileManifest {
+    file_count: u64,
+    digest_xor: [u8; 32],
+}
+
+fn file_name_bytes(name: &OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        name.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        name.encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        name.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+fn admit_file(manifest: &mut DirectoryFileManifest, name: &OsStr, size: u64) {
+    let name = file_name_bytes(name);
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage-directory-file-admission-v1\0");
+    hasher.update((name.len() as u64).to_le_bytes());
+    hasher.update(name);
+    hasher.update(size.to_le_bytes());
+    let digest: [u8; 32] = hasher.finalize().into();
+    for (aggregate, value) in manifest.digest_xor.iter_mut().zip(digest) {
+        *aggregate ^= value;
+    }
+    manifest.file_count += 1;
+}
+
+pub(crate) fn current_directory_file_manifest(path: &Path) -> Option<DirectoryFileManifest> {
+    let mut manifest = DirectoryFileManifest::default();
+    for entry in std::fs::read_dir(path).ok()? {
+        let entry = entry.ok()?;
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_symlink() || !file_type.is_file() {
+            continue;
+        }
+        let metadata = entry.metadata().ok()?;
+        admit_file(&mut manifest, &entry.file_name(), metadata.len());
+    }
+    Some(manifest)
+}
 
 fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
     vec![
@@ -188,6 +246,7 @@ pub fn scan_dir_with_interval(
     let progress_every = progress_every.max(1);
     let mut dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
     let mut admitted_files = BTreeSet::new();
+    let mut directory_file_manifests = HashMap::new();
     // min-heap: 가장 작은 항목이 루트에 오도록 Reverse
     let mut top: BinaryHeap<std::cmp::Reverse<(u64, PathBuf)>> = BinaryHeap::new();
     let mut stats = ScanStats::default();
@@ -202,6 +261,7 @@ pub fn scan_dir_with_interval(
             root: root.to_path_buf(),
             dir_sizes,
             admitted_files,
+            directory_file_manifests,
             top_files: Vec::new(),
             stats,
             cancelled,
@@ -230,7 +290,10 @@ pub fn scan_dir_with_interval(
         let logical_path = logical_scan_path(e.path(), &traversal_root, root);
         if e.file_type().is_dir() {
             stats.dirs += 1;
-            dir_sizes.entry(logical_path).or_insert(0);
+            dir_sizes.entry(logical_path.clone()).or_insert(0);
+            directory_file_manifests
+                .entry(logical_path)
+                .or_insert_with(DirectoryFileManifest::default);
         } else if e.file_type().is_file() {
             let Ok(md) = e.metadata() else {
                 stats.skipped += 1;
@@ -239,7 +302,18 @@ pub fn scan_dir_with_interval(
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
-            admitted_files.insert(logical_path.clone());
+            if admitted_files.len() < CANCELLED_FILE_ADMISSION_CAP {
+                admitted_files.insert(logical_path.clone());
+            }
+            if let (Some(parent), Some(name)) = (logical_path.parent(), logical_path.file_name()) {
+                admit_file(
+                    directory_file_manifests
+                        .entry(parent.to_path_buf())
+                        .or_default(),
+                    name,
+                    size,
+                );
+            }
             top.push(std::cmp::Reverse((size, logical_path.clone())));
             if top.len() > TOP_FILES_CAP {
                 top.pop();
@@ -268,10 +342,15 @@ pub fn scan_dir_with_interval(
         .collect();
     top_files.sort_by(|a, b| b.1.cmp(&a.1));
 
+    if cancelled {
+        directory_file_manifests.clear();
+    }
+
     ScanResult {
         root: root.to_path_buf(),
         dir_sizes,
         admitted_files,
+        directory_file_manifests,
         top_files,
         stats,
         cancelled,
@@ -525,6 +604,24 @@ mod tests {
         }
         let res = scan_dir(root, &AtomicBool::new(false), noop);
         assert_eq!(res.top_files.len(), TOP_FILES_CAP);
+    }
+
+    #[test]
+    fn completed_large_flat_scan_retains_bounded_navigation_evidence() {
+        let tmp = tempfile::tempdir().unwrap();
+        for index in 0..10_000 {
+            write(&tmp.path().join(format!("file-{index:05}.bin")), 1);
+        }
+
+        let result = scan_dir(tmp.path(), &AtomicBool::new(false), noop);
+
+        assert_eq!(result.stats.files, 10_000);
+        assert_eq!(result.admitted_files.len(), CANCELLED_FILE_ADMISSION_CAP);
+        assert_eq!(result.directory_file_manifests.len(), 1);
+        assert_eq!(
+            result.directory_file_manifests.get(tmp.path()),
+            current_directory_file_manifest(tmp.path()).as_ref()
+        );
     }
 
     #[test]
