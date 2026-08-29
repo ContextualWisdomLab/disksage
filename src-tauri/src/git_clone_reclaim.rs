@@ -564,7 +564,9 @@ pub fn plan_git_clone_reclaim(
     )
 }
 
-/// Resolve fresh GitHub PR and default-branch evidence, then build a read-only clone plan.
+/// Resolve fresh GitHub PR evidence first; query default-branch ancestry only when PR evidence does
+/// not already authorize the primary clone. Provider failure is therefore isolated from an exact
+/// closed/stale-open PR authority path while ancestry-only candidates remain fail-closed.
 pub fn plan_git_clone_reclaim_with_default_branch(
     repository_root: &Path,
     retention_references: &[String],
@@ -587,6 +589,19 @@ pub fn plan_git_clone_reclaim_with_default_branch(
     } else {
         StaleOpenPullRequestHeads::new()
     };
+    let pr_plan = plan_git_clone_reclaim_with_authority(
+        repository_root,
+        retention_references,
+        &closed,
+        &stale_open,
+        stale_open_pull_request_cutoff_ms,
+        None,
+        options,
+        generated_at_ms,
+    )?;
+    if pr_plan.closed_pull_request_head || pr_plan.stale_open_pull_request_head {
+        return Ok(pr_plan);
+    }
     let (reference, oid) = git_worktree::github_default_branch_reference_oid(
         repository_root,
         options.command_timeout_ms,
@@ -742,7 +757,9 @@ pub fn execute_git_clone_reclaim(
     )
 }
 
-/// Revalidate exact default-branch evidence and execute the reversible clone cleanup path.
+/// Revalidate whichever authority path the approved plan actually bound. PR-authorized plans omit
+/// default-branch fields and re-query only PR evidence; ancestry-authorized plans must reproduce
+/// the exact provider reference/OID before execution.
 pub fn execute_git_clone_reclaim_with_default_branch(
     approved_plan: &GitCloneReclaimPlan,
     approval: &GitCloneReclaimApproval,
@@ -753,33 +770,53 @@ pub fn execute_git_clone_reclaim_with_default_branch(
     journal_path: &Path,
     requested_at_ms: u64,
 ) -> Result<GitCloneReclaimResult, String> {
-    let (reference, oid) = git_worktree::github_default_branch_reference_oid(
-        Path::new(&approved_plan.repository_root),
-        options.command_timeout_ms,
-    )?;
-    let evidence = DefaultBranchEvidence {
-        reference,
-        oid,
-        observed_at_ms: approved_plan
-            .default_branch_observed_at_ms
-            .ok_or_else(|| "git-clone-default-branch-evidence-missing".to_string())?,
-    };
-    if approved_plan.default_branch_reference.as_deref() != Some(evidence.reference.as_str())
-        || approved_plan.default_branch_oid.as_deref() != Some(evidence.oid.as_str())
-    {
-        return Err("git-clone-default-branch-provider-drift".into());
+    match (
+        approved_plan.default_branch_reference.as_deref(),
+        approved_plan.default_branch_oid.as_deref(),
+        approved_plan.default_branch_observed_at_ms,
+    ) {
+        (None, None, None)
+            if approved_plan.closed_pull_request_head || approved_plan.stale_open_pull_request_head =>
+        {
+            execute_git_clone_reclaim_with_authority(
+                approved_plan,
+                approval,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                None,
+                options,
+                journal_path,
+                requested_at_ms,
+            )
+        }
+        (Some(expected_reference), Some(expected_oid), Some(observed_at_ms)) => {
+            let (reference, oid) = git_worktree::github_default_branch_reference_oid(
+                Path::new(&approved_plan.repository_root),
+                options.command_timeout_ms,
+            )?;
+            if reference != expected_reference || oid != expected_oid {
+                return Err("git-clone-default-branch-provider-drift".into());
+            }
+            let evidence = DefaultBranchEvidence {
+                reference,
+                oid,
+                observed_at_ms,
+            };
+            execute_git_clone_reclaim_with_authority(
+                approved_plan,
+                approval,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                Some(&evidence),
+                options,
+                journal_path,
+                requested_at_ms,
+            )
+        }
+        _ => Err("git-clone-default-branch-evidence-missing".into()),
     }
-    execute_git_clone_reclaim_with_authority(
-        approved_plan,
-        approval,
-        retention_references,
-        include_closed_pull_requests,
-        stale_open_pull_request_cutoff_ms,
-        Some(&evidence),
-        options,
-        journal_path,
-        requested_at_ms,
-    )
 }
 
 #[cfg(test)]
