@@ -121,7 +121,7 @@ fn node_view_after_snapshot(
                 continue;
             };
             (size, true)
-        } else {
+        } else if file_type.is_file() {
             if !complete_file_manifest_matches
                 && !res.admitted_files.contains(&display_entry_path)
                 && !res.admitted_files.contains(&entry_path)
@@ -134,6 +134,8 @@ fn node_view_after_snapshot(
                     .unwrap_or_default(),
                 false,
             )
+        } else {
+            continue;
         };
         entries.push(EntryView {
             name: entry.file_name().to_string_lossy().into_owned(),
@@ -278,6 +280,23 @@ mod tests {
             .entries
             .iter()
             .all(|entry| entry.name != "post-scan.bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_is_not_returned_when_regular_file_manifest_matches() {
+        use std::os::unix::net::UnixListener;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("regular.bin"), b"regular").unwrap();
+        let socket_path = root.path().join("service.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let result = scan(root.path());
+
+        let view = node_view(&result, root.path()).unwrap();
+
+        assert!(view.entries.iter().any(|entry| entry.name == "regular.bin"));
+        assert!(view.entries.iter().all(|entry| entry.name != "service.sock"));
     }
 
     #[test]
