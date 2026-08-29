@@ -110,6 +110,12 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     if permanent_cache && cache_id.is_none() {
         return Err("--permanent-cache requires --cache-id".into());
     }
+    // Permanent Gradle deletion is disabled at the executable authority boundary until the
+    // irreversible mutation path revalidates the complete target manifest and active-use evidence
+    // immediately before staging. Read-only previews remain available for operator inspection.
+    if execute && permanent_cache {
+        return Err("permanent-cache-execution-disabled".into());
+    }
     Ok(Some(Args {
         execute,
         npx_only,
