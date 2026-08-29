@@ -722,6 +722,8 @@ export interface GitWorktreeAuditEntry {
   status_entry_count: number | null;
   contained_in_reference: boolean | null;
   closed_pull_request_head: boolean;
+  completed_pull_request_commit: boolean;
+  open_pull_request_commit: boolean;
   stale_open_pull_request_head: boolean;
   head_is_retained_tip: boolean;
   actor_cwd_inside: boolean | null;
@@ -738,7 +740,7 @@ export interface GitWorktreeReferenceBinding {
 }
 
 export interface GitWorktreeAuditReport {
-  schema_kind: "disksage.git-worktree-audit/v3";
+  schema_kind: "disksage.git-worktree-audit/v4";
   version: number;
   repository_root: string;
   common_dir: string;
