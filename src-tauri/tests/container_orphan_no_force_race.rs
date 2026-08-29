@@ -23,8 +23,8 @@ case " $* " in
     printf '[{{"ID":"{container_id}","State":"exited","Names":["stale"]}}]\n'
     exit 0
     ;;
-  *" container inspect {container_id} "*)
-    printf '[{{"Id":"{container_id}","Mounts":[]}}]\n'
+  *" container inspect --format "*" {container_id} "*)
+    printf '{{"Id":"{container_id}","MountCount":0}}\n'
     exit 0
     ;;
   *" images "*)
