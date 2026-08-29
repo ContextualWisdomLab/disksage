@@ -3,7 +3,7 @@
 //! The command re-audits immediately before mutation, requires the exact audit phrase, records
 //! immutable approval/result evidence, and never deletes branches or runs `git worktree prune`.
 
-use disksage_lib::{cloud, git_worktree};
+use disksage_lib::{cloud, git_worktree, git_worktree_github_evidence};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -152,35 +152,18 @@ struct RemovalOutput {
 fn execute(args: Args) -> Result<RemovalOutput, String> {
     let options = git_worktree::GitWorktreeAuditOptions::default();
     let audited_at_ms = cloud::system_now_ms();
-    let closed_heads = if args.include_closed_pull_requests {
-        git_worktree::github_closed_pull_request_heads_with_options(&args.repository_root, options)?
-    } else {
-        Default::default()
-    };
-    let mut pull_request_commits =
-        if args.include_closed_pull_requests || args.stale_open_pull_request_cutoff_ms.is_some() {
-            git_worktree::github_pull_request_commit_membership(&args.repository_root, options)?
-        } else {
-            Default::default()
-        };
-    if !args.include_closed_pull_requests {
-        pull_request_commits.completed.clear();
-    }
-    let stale_open_heads = if let Some(cutoff_ms) = args.stale_open_pull_request_cutoff_ms {
-        git_worktree::github_stale_open_pull_request_heads(
-            &args.repository_root,
-            cutoff_ms,
-            options.command_timeout_ms,
-        )?
-    } else {
-        Default::default()
-    };
+    let evidence = git_worktree_github_evidence::collect(
+        &args.repository_root,
+        args.include_closed_pull_requests,
+        args.stale_open_pull_request_cutoff_ms,
+        options,
+    )?;
     let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
         &args.retention_references,
-        &closed_heads,
-        &stale_open_heads,
-        &pull_request_commits,
+        &evidence.closed_heads,
+        &evidence.stale_open_heads,
+        &evidence.pull_request_commits,
         args.stale_open_pull_request_cutoff_ms,
         options,
         audited_at_ms,

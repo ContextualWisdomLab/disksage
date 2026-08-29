@@ -199,7 +199,12 @@ fn is_provider_managed_path(_path: &Path, _roots: &[PathBuf]) -> bool {
 
 fn scan_root_access_issue_with_roots(root: &Path, roots: &[PathBuf]) -> Option<&'static str> {
     let traversal_root = read_only_traversal_root(root);
-    is_macos_provider_managed_path(&traversal_root, roots).then_some(CLOUD_SCAN_GUIDANCE)
+    let traversal_policy_roots = roots
+        .iter()
+        .map(|root| read_only_traversal_root(root))
+        .collect::<Vec<_>>();
+    is_macos_provider_managed_path(&traversal_root, &traversal_policy_roots)
+        .then_some(CLOUD_SCAN_GUIDANCE)
 }
 
 pub(crate) fn scan_root_access_issue(root: &Path) -> Option<&'static str> {

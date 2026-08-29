@@ -157,10 +157,11 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('contents: read');
     expect(attestJob).toContain('id-token: write');
     expect(attestJob).toContain('attestations: write');
+    expect(attestJob).not.toContain('artifact-metadata: write');
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain('merge-multiple: false');
     expect(attestJob).toContain(
-      'actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26',
+      'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6',
     );
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
