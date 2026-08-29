@@ -513,6 +513,8 @@ struct GitHubPullRequestHead {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GitHubSearchRepository {
+    #[serde(rename = "name")]
+    _name: String,
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
 }
@@ -3081,8 +3083,8 @@ mod tests {
     #[test]
     fn pull_request_commit_discovery_is_repository_bound_and_exact() {
         let json = br#"[
-          {"number":1370,"state":"merged","repository":{"nameWithOwner":"ContextualWisdomLab/disksage"}},
-          {"number":1454,"state":"closed","repository":{"nameWithOwner":"ContextualWisdomLab/disksage"}}
+          {"number":1370,"state":"merged","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}},
+          {"number":1454,"state":"closed","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}}
         ]"#;
         assert_eq!(
             parse_pull_request_search(json, "ContextualWisdomLab/disksage").unwrap(),
