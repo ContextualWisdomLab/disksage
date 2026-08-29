@@ -45,7 +45,7 @@ fn failed_shutdown_requests_are_judged_by_primary_process_evidence() {
         .split_once("fn request_graceful_term")
         .expect("quit request helper boundary")
         .0;
-    assert!(request_quit.contains("collect_provider_primary_runtime"));
+    assert!(request_quit.contains("require_primary_runtime_observation"));
     assert!(!request_quit.contains("require_runtime_observation(provider, 0)"));
 
     let graceful_term = recovery_source
@@ -55,6 +55,15 @@ fn failed_shutdown_requests_are_judged_by_primary_process_evidence() {
         .split_once("pub fn recover_provider_client")
         .expect("graceful termination helper boundary")
         .0;
-    assert!(graceful_term.contains("collect_provider_primary_runtime"));
+    assert!(graceful_term.contains("require_primary_runtime_observation"));
     assert!(!graceful_term.contains("require_runtime_observation(provider, 0)"));
+
+    let primary_requirement = recovery_source
+        .split_once("fn require_primary_runtime_observation")
+        .expect("primary runtime requirement")
+        .1
+        .split_once("fn request_quit")
+        .expect("primary runtime requirement boundary")
+        .0;
+    assert!(primary_requirement.contains("collect_provider_primary_runtime"));
 }
