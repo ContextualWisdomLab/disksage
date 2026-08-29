@@ -500,3 +500,92 @@ pub fn permanent_delete_dir_if_identity(
     journal_append(journal_path, &entry)?;
     mutation
 }
+
+#[cfg(all(test, unix))]
+mod authority_failure_tests {
+    use super::*;
+
+    fn fixture(label: &str) -> (tempfile::TempDir, PathBuf, crate::rules::CacheTarget, PathBuf) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = temp.path().join(label);
+        std::fs::create_dir(&cache).expect("cache dir");
+        std::fs::write(cache.join("payload.bin"), b"disk-sage-test-payload").expect("payload");
+        let target = crate::rules::cache_authority_target(&cache).expect("authority target");
+        let journal = temp.path().join("journal.jsonl");
+        (temp, cache, target, journal)
+    }
+
+    #[test]
+    fn reversible_final_snapshot_failure_restores_original_cache() {
+        let (_temp, cache, target, journal) = fixture("reversible-cache");
+        inject_final_cache_authority_failure_once();
+
+        let error = trash_delete_cache_target_with_outcome(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            1_000,
+        )
+        .expect_err("injected final snapshot failure must abort Trash");
+
+        assert!(error.to_string().contains("injected-final-cache-authority-failure"));
+        assert!(cache.is_dir(), "the original cache path must be restored");
+        assert_eq!(
+            std::fs::read(cache.join("payload.bin")).expect("restored payload"),
+            b"disk-sage-test-payload"
+        );
+    }
+
+    #[test]
+    fn permanent_final_snapshot_failure_restores_original_cache() {
+        let (_temp, cache, target, journal) = fixture("permanent-cache");
+        inject_final_cache_authority_failure_once();
+
+        let error = permanent_delete_dir_if_identity(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            2_000,
+        )
+        .expect_err("injected final snapshot failure must abort permanent deletion");
+
+        assert!(error.to_string().contains("injected-final-cache-authority-failure"));
+        assert!(cache.is_dir(), "the original cache path must be restored");
+        assert_eq!(
+            std::fs::read(cache.join("payload.bin")).expect("restored payload"),
+            b"disk-sage-test-payload"
+        );
+    }
+
+    #[test]
+    fn completed_permanent_delete_survives_terminal_journal_failure() {
+        let (_temp, cache, target, journal) = fixture("terminal-journal-cache");
+        inject_terminal_cache_journal_failure_once();
+
+        let outcome = permanent_delete_dir_if_identity(
+            &cache,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            3_000,
+        )
+        .expect("completed deletion must remain a completed outcome");
+
+        assert!(outcome.deleted);
+        assert!(!cache.exists(), "the generated cache was already deleted");
+        assert!(outcome
+            .terminal_journal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("injected-terminal-cache-journal-failure")));
+        assert!(permanent_delete_outcome_warning(&outcome)
+            .is_some_and(|warning| warning.contains("terminal journal")));
+    }
+}
