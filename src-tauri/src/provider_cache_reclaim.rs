@@ -756,6 +756,13 @@ pub fn execute(
             .ok_or("provider-cache-cleanup-candidate-changed")?;
         selected.push(candidate.clone());
     }
+    if mode == ProviderCacheCleanupMode::PermanentPurge
+        && selected
+            .iter()
+            .any(|candidate| candidate.kind != ProviderCacheKind::PodmanMachineSeed)
+    {
+        return Err("provider-cache-permanent-directory-purge-disabled".into());
+    }
     let receipt = write_immutable_receipt(
         receipt_dir,
         &current,
