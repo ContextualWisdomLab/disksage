@@ -17,7 +17,7 @@ fn write_edge_version(app: PathBuf, version: &str) {
 }
 
 #[test]
-fn permanent_directory_purge_fails_closed_without_starting_recursive_deletion() {
+fn permanent_directory_purge_removes_an_unchanged_exact_edge_cache() {
     let temp = tempfile::tempdir().expect("temporary provider-cache fixture");
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -67,20 +67,10 @@ fn permanent_directory_purge_fails_closed_without_starting_recursive_deletion() 
     )
     .expect("cleanup result envelope");
 
-    assert_eq!(result.completed_count, 0);
+    assert_eq!(result.completed_count, 1);
     assert_eq!(result.items.len(), 1);
-    assert!(!result.items[0].completed);
-    assert_eq!(
-        result.items[0].error.as_deref(),
-        Some("provider-cache-permanent-directory-purge-disabled")
-    );
-    assert!(stale_cache.is_dir());
-    assert_eq!(
-        fs::read(stale_cache.join("first.bin")).expect("first child preserved"),
-        b"first"
-    );
-    assert_eq!(
-        fs::read(stale_cache.join("second.bin")).expect("second child preserved"),
-        b"second"
-    );
+    assert!(result.items[0].completed);
+    assert!(result.items[0].error.is_none());
+    assert!(!stale_cache.exists());
+    assert!(Path::new(&result.immutable_receipt_path).is_file());
 }

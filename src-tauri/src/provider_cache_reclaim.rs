@@ -1,20 +1,21 @@
 //! Exact-evidence cleanup for provider-owned, regenerable macOS caches.
 //!
-//! Only provider-owned caches with exact regeneration evidence are eligible. The active Podman raw
-//! disk, Edge's installed/current versions, and OneDrive temporary data while its client is running
-//! or cannot be observed are never candidates. Every purge is re-planned, explicitly approved,
-//! active-use checked, identity-bound, journaled, and preceded by an immutable private receipt.
+//! Only three provider cache classes are eligible: superseded Edge installed copies, the Edge CRX
+//! cache, and content-addressed Podman AppleHV machine seeds that are not the configured VM image.
+//! Every purge is re-planned, explicitly approved, active-use checked, identity-bound, journaled,
+//! and preceded by an immutable private receipt. Provider roots and inventories fail closed.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_MANIFEST_ENTRIES: usize = 200_000;
+const MAX_CLEANUP_REQUESTS: usize = 1_024;
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RATIONALE_CHARS: usize = 1_000;
 
@@ -24,7 +25,6 @@ pub enum ProviderCacheKind {
     PodmanMachineSeed,
     EdgeSupersededInstalledCopy,
     EdgeCrxCache,
-    OneDriveTemporaryCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +91,13 @@ pub struct ProviderCacheCleanupResult {
     pub mode: ProviderCacheCleanupMode,
     pub immutable_receipt_path: String,
     pub items: Vec<ProviderCacheCleanupItemResult>,
+}
+
+#[derive(Debug, Clone)]
+struct PodmanRecreationEvidence {
+    source: String,
+    active_image_path: PathBuf,
+    active_image_object_id: String,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -194,16 +201,6 @@ fn active_use_safe(evidence: &crate::cloud_local_eviction::ActiveUseEvidence) ->
         && evidence.error.is_none()
 }
 
-fn onedrive_runtime_safe(
-    snapshot: &crate::provider_client_runtime::ProviderClientRuntimeSnapshot,
-) -> bool {
-    crate::provider_client_runtime::validate_provider_client_runtime_snapshot(snapshot).is_ok()
-        && snapshot.provider == crate::cloud::CloudProvider::Onedrive
-        && snapshot.process_observation_complete
-        && snapshot.runtime_observed == Some(false)
-        && snapshot.state == crate::provider_client_runtime::ProviderClientRuntimeState::NotObserved
-}
-
 fn candidate(
     kind: ProviderCacheKind,
     path: &Path,
@@ -270,7 +267,10 @@ fn plist_version(_path: &Path) -> Option<String> {
     None
 }
 
-fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, String> {
+fn podman_recreation_evidence(
+    podman_bin: &Path,
+    machine: &str,
+) -> Result<PodmanRecreationEvidence, String> {
     let version = crate::podman_reclaim::command_text(
         podman_bin,
         &["--version"],
@@ -319,17 +319,85 @@ fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, 
                 .as_str()
                 .map(PathBuf::from)
         });
-    if name != Some(machine) || !image_path.as_ref().is_some_and(|path| path.is_file()) {
+    let image_path = image_path.ok_or("podman-recreation-active-image-unconfirmed")?;
+    let metadata = fs::symlink_metadata(&image_path)
+        .map_err(|_| "podman-recreation-active-image-unconfirmed")?;
+    if name != Some(machine) || metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("podman-recreation-active-image-unconfirmed".into());
     }
-    Ok(format!(
+    let active_image_path = fs::canonicalize(&image_path)
+        .map_err(|_| "podman-recreation-active-image-canonicalization-unavailable")?;
+    let active_image_object_id = crate::safety::filesystem_object_id(&image_path)
+        .map_err(|_| "podman-recreation-active-image-identity-unavailable")?;
+    let source = format!(
         "{}|{}|{}|{}",
         podman_bin.display(),
         version.trim(),
         machine,
-        crate::safety::filesystem_object_id(image_path.as_ref().unwrap())
-            .map_err(|_| "podman-recreation-active-image-identity-unavailable")?
-    ))
+        active_image_object_id
+    );
+    Ok(PodmanRecreationEvidence {
+        source,
+        active_image_path,
+        active_image_object_id,
+    })
+}
+
+fn directory_metadata(
+    path: &Path,
+    issue_prefix: &str,
+    issues: &mut Vec<String>,
+) -> Option<fs::Metadata> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(_) => {
+            issues.push(format!("{issue_prefix}-root-metadata-unavailable"));
+            None
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            issues.push(format!("{issue_prefix}-root-symlink-rejected"));
+            None
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            issues.push(format!("{issue_prefix}-root-type-rejected"));
+            None
+        }
+        Ok(metadata) => Some(metadata),
+    }
+}
+
+fn directory_entries(
+    path: &Path,
+    issue_prefix: &str,
+    issues: &mut Vec<String>,
+) -> Vec<fs::DirEntry> {
+    if directory_metadata(path, issue_prefix, issues).is_none() {
+        return Vec::new();
+    }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => {
+            issues.push(format!("{issue_prefix}-read-dir-failed"));
+            return Vec::new();
+        }
+    };
+    let deadline = Instant::now() + MANIFEST_TIMEOUT;
+    let mut output = Vec::new();
+    for entry in entries {
+        if Instant::now() >= deadline {
+            issues.push(format!("{issue_prefix}-inventory-timeout"));
+            break;
+        }
+        if output.len() >= MAX_MANIFEST_ENTRIES {
+            issues.push(format!("{issue_prefix}-inventory-limit-exceeded"));
+            break;
+        }
+        match entry {
+            Ok(entry) => output.push(entry),
+            Err(_) => issues.push(format!("{issue_prefix}-entry-unavailable")),
+        }
+    }
+    output
 }
 
 /// Plan with explicit platform roots, used by the desktop command and audited headless CLI.
@@ -339,23 +407,7 @@ pub fn plan_with_runtime(
     podman_bin: &Path,
     observed_at_ms: u64,
 ) -> ProviderCacheReclaimPlan {
-    let onedrive_cache = home.join("Library/Application Support/OneDrive/tmp");
-    #[cfg(not(coverage))]
-    let onedrive_runtime = onedrive_cache.is_dir().then(|| {
-        crate::provider_client_runtime::collect_provider_client_runtime(
-            crate::cloud::CloudProvider::Onedrive,
-            observed_at_ms,
-        )
-    });
-    #[cfg(coverage)]
-    let onedrive_runtime = None;
-    plan_with_runtime_evidence(
-        home,
-        applications,
-        podman_bin,
-        observed_at_ms,
-        onedrive_runtime.as_ref(),
-    )
+    plan_with_runtime_evidence(home, applications, podman_bin, observed_at_ms)
 }
 
 fn plan_with_runtime_evidence(
@@ -363,36 +415,18 @@ fn plan_with_runtime_evidence(
     applications: &Path,
     podman_bin: &Path,
     observed_at_ms: u64,
-    onedrive_runtime: Option<&crate::provider_client_runtime::ProviderClientRuntimeSnapshot>,
 ) -> ProviderCacheReclaimPlan {
     let mut candidates = Vec::new();
     let mut issues = Vec::new();
-    let onedrive_cache = home.join("Library/Application Support/OneDrive/tmp");
-    if onedrive_cache.is_dir() {
-        match onedrive_runtime.filter(|snapshot| onedrive_runtime_safe(snapshot)) {
-            Some(snapshot) => match candidate(
-                ProviderCacheKind::OneDriveTemporaryCache,
-                &onedrive_cache,
-                format!(
-                    "onedrive-client-not-observed:{}",
-                    snapshot.snapshot_fingerprint_sha256
-                ),
-                None,
-            ) {
-                Ok(value) => candidates.push(value),
-                Err(error) => issues.push(format!("onedrive-temporary-cache:{error}")),
-            },
-            None => issues
-                .push("onedrive-temporary-cache:provider-client-active-or-evidence-gap".into()),
-        }
-    }
+
     let edge_info = applications.join("Microsoft Edge.app/Contents/Info.plist");
     let installed_edge_version = plist_version(&edge_info);
     let edge_root = home.join("Library/Application Support/Microsoft/EdgeUpdater");
+    let edge_root_safe = directory_metadata(&edge_root, "edge-updater-cache", &mut issues).is_some();
     if let Some(installed) = installed_edge_version.as_deref() {
-        let versions = edge_root.join("apps/msedge-stable");
-        if let Ok(entries) = fs::read_dir(&versions) {
-            for entry in entries.flatten() {
+        if edge_root_safe {
+            let versions = edge_root.join("apps/msedge-stable");
+            for entry in directory_entries(&versions, "edge-stale-cache", &mut issues) {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let cached_info = path.join("Microsoft Edge.app/Contents/Info.plist");
@@ -409,30 +443,31 @@ fn plan_with_runtime_evidence(
                     Err(error) => issues.push(format!("edge-stale-cache:{name}:{error}")),
                 }
             }
-        }
-        let crx = edge_root.join("crx_cache");
-        if crx.is_dir() {
-            match candidate(
-                ProviderCacheKind::EdgeCrxCache,
-                &crx,
-                format!("edge-updater-installed-version:{installed}"),
-                None,
-            ) {
-                Ok(value) => candidates.push(value),
-                Err(error) => issues.push(format!("edge-crx-cache:{error}")),
+            let crx = edge_root.join("crx_cache");
+            if directory_metadata(&crx, "edge-crx-cache", &mut issues).is_some() {
+                match candidate(
+                    ProviderCacheKind::EdgeCrxCache,
+                    &crx,
+                    format!("edge-updater-installed-version:{installed}"),
+                    None,
+                ) {
+                    Ok(value) => candidates.push(value),
+                    Err(error) => issues.push(format!("edge-crx-cache:{error}")),
+                }
             }
         }
-    } else if edge_root.exists() {
+    } else if edge_root_safe {
         issues.push("edge-installed-version-unavailable".into());
     }
 
-    let podman_source =
-        podman_recreation_source(podman_bin, crate::podman_reclaim::DEFAULT_PODMAN_MACHINE);
-    let podman_recreation_source = podman_source.as_ref().ok().cloned();
-    if let Ok(source) = &podman_source {
-        let cache = home.join(".local/share/containers/podman/machine/applehv/cache");
-        if let Ok(entries) = fs::read_dir(cache) {
-            for entry in entries.flatten() {
+    let podman_evidence =
+        podman_recreation_evidence(podman_bin, crate::podman_reclaim::DEFAULT_PODMAN_MACHINE);
+    let podman_recreation_source = podman_evidence.as_ref().ok().map(|value| value.source.clone());
+    let cache = home.join(".local/share/containers/podman/machine/applehv/cache");
+    let cache_safe = directory_metadata(&cache, "podman-seed-cache", &mut issues).is_some();
+    match (&podman_evidence, cache_safe) {
+        (Ok(evidence), true) => {
+            for entry in directory_entries(&cache, "podman-seed-cache", &mut issues) {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let Some(key) = name.strip_suffix(".raw.zst") else {
@@ -442,25 +477,54 @@ fn plan_with_runtime_evidence(
                     issues.push(format!("podman-seed-cache-key-invalid:{name}"));
                     continue;
                 }
-                match file_sha256(&path).and_then(|digest| {
-                    candidate(
-                        ProviderCacheKind::PodmanMachineSeed,
-                        &path,
-                        source.clone(),
-                        Some(digest),
-                    )
-                }) {
+                let object_id = match crate::safety::filesystem_object_id(&path) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        issues.push(format!(
+                            "podman-seed-cache:{name}:provider-cache-object-identity-unavailable"
+                        ));
+                        continue;
+                    }
+                };
+                let canonical_path = match fs::canonicalize(&path) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        issues.push(format!("podman-seed-cache:{name}:canonical-path-unavailable"));
+                        continue;
+                    }
+                };
+                if object_id == evidence.active_image_object_id
+                    || canonical_path == evidence.active_image_path
+                {
+                    issues.push("podman-seed-cache-configured-image-excluded".into());
+                    continue;
+                }
+                let digest = match file_sha256(&path) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        issues.push(format!("podman-seed-cache:{name}:{error}"));
+                        continue;
+                    }
+                };
+                if !digest.eq_ignore_ascii_case(key) {
+                    issues.push(format!("podman-seed-cache-digest-mismatch:{name}"));
+                    continue;
+                }
+                match candidate(
+                    ProviderCacheKind::PodmanMachineSeed,
+                    &path,
+                    evidence.source.clone(),
+                    Some(digest),
+                ) {
                     Ok(value) => candidates.push(value),
                     Err(error) => issues.push(format!("podman-seed-cache:{name}:{error}")),
                 }
             }
         }
-    } else if home
-        .join(".local/share/containers/podman/machine/applehv/cache")
-        .exists()
-    {
-        issues.push(podman_source.unwrap_err());
+        (Err(error), true) => issues.push(error.clone()),
+        _ => {}
     }
+
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
     issues.sort();
     issues.dedup();
@@ -642,7 +706,7 @@ fn finish_purge_result(
     deletion.map(|()| audit.err())
 }
 
-/// Re-plan and permanently remove only explicitly approved, exact regenerable caches.
+/// Re-plan and remove only explicitly approved, exact regenerable caches.
 pub fn execute(
     home: &Path,
     applications: &Path,
@@ -657,6 +721,9 @@ pub fn execute(
     mode: ProviderCacheCleanupMode,
     executed_at_ms: u64,
 ) -> Result<ProviderCacheCleanupResult, String> {
+    if requested.len() > MAX_CLEANUP_REQUESTS {
+        return Err("provider-cache-cleanup-request-count-exceeds-limit".into());
+    }
     if requested.is_empty() || !valid_rationale(rationale) || executed_at_ms == 0 {
         return Err("provider-cache-cleanup-request-invalid".into());
     }
@@ -702,17 +769,7 @@ pub fn execute(
     for candidate in selected {
         let active =
             crate::cloud_local_eviction::observe_path_active_use(Path::new(&candidate.path));
-        #[cfg(not(coverage))]
-        let provider_runtime_safe = candidate.kind != ProviderCacheKind::OneDriveTemporaryCache
-            || onedrive_runtime_safe(
-                &crate::provider_client_runtime::collect_provider_client_runtime(
-                    crate::cloud::CloudProvider::Onedrive,
-                    executed_at_ms,
-                ),
-            );
-        #[cfg(coverage)]
-        let provider_runtime_safe = candidate.kind != ProviderCacheKind::OneDriveTemporaryCache;
-        let (outcome, audit_error) = if active_use_safe(&active) && provider_runtime_safe {
+        let (outcome, audit_error) = if active_use_safe(&active) {
             match mode {
                 ProviderCacheCleanupMode::Trash => crate::safety::trash_delete_if_identity(
                     Path::new(&candidate.path),
@@ -758,16 +815,6 @@ pub fn execute(
 mod tests {
     use super::*;
 
-    fn onedrive_runtime(
-        process_names: Option<&[u8]>,
-    ) -> crate::provider_client_runtime::ProviderClientRuntimeSnapshot {
-        crate::provider_client_runtime::assess_provider_client_runtime(
-            crate::cloud::CloudProvider::Onedrive,
-            process_names,
-            1,
-        )
-    }
-
     #[test]
     fn active_use_requires_the_complete_empty_bounded_observation() {
         let mut evidence = crate::cloud_local_eviction::ActiveUseEvidence {
@@ -784,63 +831,6 @@ mod tests {
         evidence.observed_pids.clear();
         evidence.method = "unrecognized".into();
         assert!(!active_use_safe(&evidence));
-    }
-
-    #[test]
-    fn onedrive_temporary_cache_fails_closed_while_client_runs_or_evidence_is_missing() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let cache = home.join("Library/Application Support/OneDrive/tmp");
-        fs::create_dir_all(&cache).unwrap();
-        fs::write(cache.join("provider.tmp"), b"in-flight").unwrap();
-        let apps = temp.path().join("Applications");
-
-        for runtime in [
-            onedrive_runtime(Some(b"OneDrive\n")),
-            onedrive_runtime(None),
-        ] {
-            let plan = plan_with_runtime_evidence(
-                &home,
-                &apps,
-                Path::new("/missing/podman"),
-                1,
-                Some(&runtime),
-            );
-            assert!(plan.candidates.is_empty());
-            assert!(!plan.evidence_complete);
-            assert_eq!(
-                plan.issues,
-                ["onedrive-temporary-cache:provider-client-active-or-evidence-gap"]
-            );
-            assert!(plan.exact_approval_phrase.is_none());
-            assert!(plan.trash_approval_phrase.is_none());
-        }
-    }
-
-    #[test]
-    fn onedrive_temporary_cache_requires_complete_process_absence_evidence() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let cache = home.join("Library/Application Support/OneDrive/tmp");
-        fs::create_dir_all(&cache).unwrap();
-        fs::write(cache.join("provider.tmp"), b"stable-cache").unwrap();
-        let runtime = onedrive_runtime(Some(b"Finder\n"));
-        let plan = plan_with_runtime_evidence(
-            &home,
-            &temp.path().join("Applications"),
-            Path::new("/missing/podman"),
-            1,
-            Some(&runtime),
-        );
-        assert!(plan.evidence_complete, "{:?}", plan.issues);
-        assert_eq!(plan.candidates.len(), 1);
-        assert_eq!(
-            plan.candidates[0].kind,
-            ProviderCacheKind::OneDriveTemporaryCache
-        );
-        assert!(plan.candidates[0]
-            .recreation_source
-            .ends_with(&runtime.snapshot_fingerprint_sha256));
     }
 
     #[cfg(target_os = "macos")]
@@ -921,17 +911,17 @@ mod tests {
         fs::create_dir(&path).unwrap();
         fs::write(path.join("first.tmp"), b"first").unwrap();
         let first = candidate(
-            ProviderCacheKind::OneDriveTemporaryCache,
+            ProviderCacheKind::EdgeCrxCache,
             &path,
-            "provider-not-observed".into(),
+            "provider-cache".into(),
             None,
         )
         .unwrap();
         fs::write(path.join("second.tmp"), b"second").unwrap();
         let second = candidate(
-            ProviderCacheKind::OneDriveTemporaryCache,
+            ProviderCacheKind::EdgeCrxCache,
             &path,
-            "provider-not-observed".into(),
+            "provider-cache".into(),
             None,
         )
         .unwrap();
