@@ -602,6 +602,7 @@ pub fn permanent_delete_dir_if_identity(
     expected_object_id: &str,
     bytes: u64,
     expected_modified_ms: u64,
+    expected_manifest_fingerprint: &str,
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
@@ -639,6 +640,7 @@ pub fn permanent_delete_dir_if_identity(
                 target.object_id == expected_object_id
                     && target.bytes == bytes
                     && target.modified_ms == expected_modified_ms
+                    && target.manifest_fingerprint == expected_manifest_fingerprint
             })
     };
     let file_name = path.file_name().ok_or_else(|| {
@@ -1130,13 +1132,19 @@ mod tests {
         let generated = tmp.path().join("node_modules");
         std::fs::create_dir(&generated).unwrap();
         std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
-        let object_id = filesystem_object_id(&generated).unwrap();
-        let modified_ms =
-            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
+        let target = crate::rules::cache_target(&generated).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        permanent_delete_dir_if_identity(&generated, &object_id, 9, modified_ms, &journal, 1)
-            .unwrap();
+        permanent_delete_dir_if_identity(
+            &generated,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            1,
+        )
+        .unwrap();
 
         assert!(!generated.exists());
         let entries = journal_recent(&journal, 2);
@@ -1156,17 +1164,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let generated = tmp.path().join("generated-cache");
         std::fs::create_dir(&generated).unwrap();
-        std::fs::write(generated.join("generated.bin"), b"changed").unwrap();
-        let object_id = filesystem_object_id(&generated).unwrap();
-        let modified_ms =
-            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
+        let nested = generated.join("generated.bin");
+        std::fs::write(&nested, b"before!").unwrap();
+        let target = crate::rules::cache_target(&generated).unwrap();
+        std::fs::write(&nested, b"changed").unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
         let result = permanent_delete_dir_if_identity(
             &generated,
-            &object_id,
-            1,
-            modified_ms,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
             &journal,
             2,
         );
@@ -1185,16 +1194,15 @@ mod tests {
         let generated = tmp.path().join("generated-cache");
         std::fs::create_dir(&generated).unwrap();
         let open_file = std::fs::File::create(generated.join("in-use.bin")).unwrap();
-        let object_id = filesystem_object_id(&generated).unwrap();
-        let modified_ms =
-            crate::rules::modified_ms(&std::fs::symlink_metadata(&generated).unwrap());
+        let target = crate::rules::cache_target(&generated).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
         let result = permanent_delete_dir_if_identity(
             &generated,
-            &object_id,
-            0,
-            modified_ms,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
             &journal,
             2,
         );

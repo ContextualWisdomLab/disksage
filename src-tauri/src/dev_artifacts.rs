@@ -536,11 +536,15 @@ fn clean_artifacts_with_disposition(
                 let modified_ms = std::fs::symlink_metadata(&request.path)
                     .map(|metadata| crate::rules::modified_ms(&metadata))
                     .unwrap_or(0);
+                let manifest_fingerprint = crate::rules::cache_target(Path::new(&request.path))
+                    .map(|target| target.manifest_fingerprint)
+                    .unwrap_or_default();
                 crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
                     &request.object_id,
                     request.bytes,
                     modified_ms,
+                    &manifest_fingerprint,
                     journal_path,
                     now_ms,
                 )

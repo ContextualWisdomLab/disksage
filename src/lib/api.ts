@@ -37,6 +37,7 @@ export interface CacheTarget {
   bytes: number;
   modified_ms: number;
   object_id: string;
+  manifest_fingerprint: string;
 }
 export interface DevArtifact {
   path: string;
