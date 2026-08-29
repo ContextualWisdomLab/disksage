@@ -109,6 +109,38 @@ fn eligible_plan_serializes_every_execution_authority_value() {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
+fn exactly_sixty_four_candidates_remain_a_complete_eligible_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..64 {
+        let project = temp.path().join(format!("project-{index:02}"));
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            format!("[package]\nname='fixture-{index:02}'\nversion='0.0.0'\n"),
+        )
+        .unwrap();
+        fs::write(project.join("target/output"), b"generated").unwrap();
+    }
+    let path = isolated_tool_path(&temp, b"#!/bin/sh\nexit 1\n");
+
+    let output = run_plan_with_tmp(temp.path(), Some(&path));
+    assert!(
+        output.status.success(),
+        "planning failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let candidates = plan["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 64, "all bounded candidates must be returned");
+    assert_eq!(plan["scan_complete"], true, "the supported boundary is inclusive");
+    assert!(candidates.iter().all(|candidate| {
+        candidate["eligible_for_approval"] == true
+            && candidate["exact_approval_phrase"].is_string()
+    }));
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
 fn active_use_probe_cannot_overrun_native_temp_discovery_budget() {
     let temp = tempfile::tempdir().unwrap();
     marker_bound_target(&temp);
