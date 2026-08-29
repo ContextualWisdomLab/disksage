@@ -5,6 +5,7 @@ use disksage_lib::git_worktree::{
     GitWorktreeAuditOptions, GitWorktreeDisposition, PullRequestCommitMembership,
     StaleOpenPullRequestHeads,
 };
+use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command;
 
@@ -18,7 +19,7 @@ fn git(repository: &std::path::Path, args: &[&str]) {
 }
 
 #[test]
-fn exact_stale_open_head_can_use_explicit_cutoff_authority_despite_open_membership() {
+fn stale_open_head_exempts_only_its_own_open_pull_request_membership() {
     let temp = tempfile::tempdir().expect("temporary fixture root");
     let repository = temp.path().join("repository");
     let stale_worktree = temp.path().join("stale-open-worktree");
@@ -80,24 +81,67 @@ fn exact_stale_open_head_can_use_explicit_cutoff_authority_despite_open_membersh
         ],
     );
 
+    let stale_pull_request_number = 101u64;
+    let other_open_pull_request_number = 202u64;
     let stale_heads = StaleOpenPullRequestHeads::from([(
+        stale_pull_request_number,
         "refs/heads/stale-open".to_string(),
         base.clone(),
     )]);
-    let mut membership = PullRequestCommitMembership::default();
-    membership.open.insert(base.clone());
+    let mut own_membership = PullRequestCommitMembership::default();
+    own_membership.open.insert(
+        base.clone(),
+        BTreeSet::from([stale_pull_request_number]),
+    );
 
     let report = audit_git_worktrees_with_pull_request_membership(
         &repository,
         &["refs/heads/main".into()],
         &ClosedPullRequestHeads::new(),
         &stale_heads,
-        &membership,
+        &own_membership,
         Some(1),
         GitWorktreeAuditOptions::default(),
         2,
     )
-    .expect("audit stale-open worktree");
+    .expect("audit stale-open worktree with only its own open membership");
+
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.branch.as_deref() == Some("refs/heads/stale-open"))
+        .expect("stale-open worktree entry");
+    assert!(entry.stale_open_pull_request_head);
+    assert!(
+        !entry.open_pull_request_commit,
+        "the stale PR's own membership is the explicitly authorized stale-head relationship"
+    );
+    assert_eq!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
+    assert!(
+        !entry.blockers.iter().any(|blocker| blocker == "open-pull-request-commit"),
+        "the exact stale-open head may use its own explicit cutoff authority: {:?}",
+        entry.blockers
+    );
+
+    let mut independent_open_membership = PullRequestCommitMembership::default();
+    independent_open_membership.open.insert(
+        base,
+        BTreeSet::from([
+            stale_pull_request_number,
+            other_open_pull_request_number,
+        ]),
+    );
+    let report = audit_git_worktrees_with_pull_request_membership(
+        &repository,
+        &["refs/heads/main".into()],
+        &ClosedPullRequestHeads::new(),
+        &stale_heads,
+        &independent_open_membership,
+        Some(1),
+        GitWorktreeAuditOptions::default(),
+        3,
+    )
+    .expect("audit stale-open worktree with independent open membership");
 
     let entry = report
         .entries
@@ -106,10 +150,9 @@ fn exact_stale_open_head_can_use_explicit_cutoff_authority_despite_open_membersh
         .expect("stale-open worktree entry");
     assert!(entry.stale_open_pull_request_head);
     assert!(entry.open_pull_request_commit);
-    assert_eq!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
-    assert!(
-        !entry.blockers.iter().any(|blocker| blocker == "open-pull-request-commit"),
-        "the exact stale-open head must use its explicit cutoff authority rather than be vetoed by its own PR membership: {:?}",
-        entry.blockers
-    );
+    assert!(entry
+        .blockers
+        .iter()
+        .any(|blocker| blocker == "open-pull-request-commit"));
+    assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
 }
