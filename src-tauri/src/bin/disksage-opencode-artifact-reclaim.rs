@@ -138,4 +138,17 @@ mod tests {
         let error = parse(&["--execute".into()]).unwrap_err();
         assert!(error.contains("execution requires"));
     }
+
+    #[test]
+    fn explicit_home_must_match_process_home() {
+        let process_home = std::env::var_os("HOME").expect("test process HOME");
+        let alternate_home = tempfile::tempdir().unwrap();
+        assert_ne!(alternate_home.path(), PathBuf::from(process_home));
+        let error = parse(&[
+            "--home".into(),
+            alternate_home.path().to_string_lossy().into_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(error, "--home must match process HOME");
+    }
 }
