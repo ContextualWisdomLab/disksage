@@ -48,6 +48,8 @@ struct VmRecord {
     name: String,
     #[serde(rename = "Status", alias = "status", alias = "State", alias = "state")]
     status: String,
+    #[serde(rename = "Home", alias = "home")]
+    home: String,
 }
 
 fn trusted_executable(path: &Path) -> bool {
@@ -202,13 +204,22 @@ pub fn plan_with_runner(
     if !bundle_meta.is_dir() || !(disk_meta.is_dir() || disk_meta.is_file()) {
         return Err("parallels-bundle-or-disk-kind-invalid".into());
     }
-    let list = runner.run(prlctl, &["list", "-a", "-j"], "parallels-list")?;
+    // Detailed JSON is required because the inventory Home field is the authoritative
+    // registration boundary that binds a stopped VM identity to the requested .pvm bundle.
+    let list = runner.run(prlctl, &["list", "-a", "-i", "-j"], "parallels-list")?;
     let records: Vec<VmRecord> =
         serde_json::from_str(&list).map_err(|_| "parallels-list-json-invalid".to_string())?;
     let vm = records
         .iter()
         .find(|vm| vm.id == vm_id)
         .ok_or_else(|| "parallels-vm-not-found".to_string())?;
+    let registered_bundle = std::fs::canonicalize(Path::new(&vm.home))
+        .map_err(|_| "parallels-vm-home-unavailable".to_string())?;
+    if registered_bundle.extension().and_then(|value| value.to_str()) != Some("pvm")
+        || registered_bundle != bundle
+    {
+        return Err("parallels-vm-bundle-mismatch".into());
+    }
     let info = runner.run(
         disk_tool,
         &[
