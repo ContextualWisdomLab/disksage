@@ -10,6 +10,7 @@ use crate::git_worktree::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,7 @@ pub const GIT_CLONE_RECLAIM_VERSION: u32 = 2;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1_000;
 const CHECKOUT_LEASE_FILENAME: &str = "disksage-checkout-lease.json";
+const CHECKOUT_LEASE_LOCK_FILENAME: &str = "disksage-checkout-lease.lock";
 const MAX_CHECKOUT_LEASE_BYTES: u64 = 16 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,6 +295,30 @@ fn checkout_lease_path(common_dir: &Path) -> PathBuf {
     common_dir.join(CHECKOUT_LEASE_FILENAME)
 }
 
+fn lock_checkout_lease(common_dir: &Path) -> Result<File, String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(common_dir.join(CHECKOUT_LEASE_LOCK_FILENAME))
+        .map_err(|_| "git-checkout-lease-lock-unavailable".to_string())?;
+    file.try_lock()
+        .map_err(|_| "git-checkout-lease-operation-active".to_string())?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn sync_checkout_lease_directory(common_dir: &Path) -> Result<(), String> {
+    File::open(common_dir)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "git-checkout-lease-directory-sync-failed".into())
+}
+
+#[cfg(not(unix))]
+fn sync_checkout_lease_directory(_common_dir: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 fn read_checkout_lease(common_dir: &Path) -> Result<Option<GitCheckoutLease>, String> {
     let path = checkout_lease_path(common_dir);
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -392,6 +418,14 @@ pub fn acquire_git_checkout_lease(
     }
     let (common_dir, repository_object_id, head) =
         checkout_binding(repository_root, retention_references, issued_at_ms)?;
+    let _lease_guard = lock_checkout_lease(&common_dir)?;
+    if let Some(existing) = read_checkout_lease(&common_dir)? {
+        if validate_checkout_lease(&existing, &repository_object_id, issued_at_ms)? {
+            return Err("git-checkout-lease-already-exists-or-unwritable".into());
+        }
+        std::fs::remove_file(checkout_lease_path(&common_dir))
+            .map_err(|_| "git-checkout-lease-expired-replacement-failed".to_string())?;
+    }
     let lease_fingerprint = checkout_lease_fingerprint(
         &repository_object_id,
         &head,
@@ -416,9 +450,16 @@ pub fn acquire_git_checkout_lease(
         .create_new(true)
         .open(checkout_lease_path(&common_dir))
         .map_err(|_| "git-checkout-lease-already-exists-or-unwritable".to_string())?;
-    file.write_all(&encoded)
+    if file
+        .write_all(&encoded)
         .and_then(|_| file.sync_all())
-        .map_err(|_| "git-checkout-lease-write-failed".to_string())?;
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(checkout_lease_path(&common_dir));
+        return Err("git-checkout-lease-write-failed".into());
+    }
+    sync_checkout_lease_directory(&common_dir)?;
     Ok(lease)
 }
 
@@ -431,6 +472,7 @@ pub fn release_git_checkout_lease(
 ) -> Result<(), String> {
     let (common_dir, repository_object_id, _head) =
         checkout_binding(repository_root, retention_references, observed_at_ms)?;
+    let _lease_guard = lock_checkout_lease(&common_dir)?;
     let lease = read_checkout_lease(&common_dir)?
         .ok_or_else(|| "git-checkout-lease-missing".to_string())?;
     validate_checkout_lease(&lease, &repository_object_id, observed_at_ms)?;
@@ -917,6 +959,12 @@ fn execute_git_clone_reclaim_with_authority(
     }
     validate_journal_destination(Path::new(&approved_plan.repository_root), journal_path)?;
     let repository_root = Path::new(&approved_plan.repository_root);
+    let common_dir = std::fs::canonicalize(repository_root.join(".git"))
+        .map_err(|_| "git-clone-git-directory-unavailable".to_string())?;
+    if !has_bounded_standalone_git_directory(repository_root, &common_dir) {
+        return Err("git-clone-git-directory-not-real-or-bounded".into());
+    }
+    let _lease_guard = lock_checkout_lease(&common_dir)?;
     let closed = if include_closed_pull_requests {
         git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
     } else {
@@ -1197,6 +1245,19 @@ mod tests {
 
         release_git_checkout_lease(repository.path(), &references, &lease.lease_fingerprint, 12)
             .expect("only the exact owner-created lease is released");
+        let cleanup_guard = lock_checkout_lease(&repository.path().join(".git")).unwrap();
+        assert_eq!(
+            acquire_git_checkout_lease(
+                repository.path(),
+                &references,
+                "agent/session-2",
+                13,
+                None,
+            )
+            .unwrap_err(),
+            "git-checkout-lease-operation-active"
+        );
+        drop(cleanup_guard);
         let released = plan_git_clone_reclaim_with_authority(
             repository.path(),
             &references,

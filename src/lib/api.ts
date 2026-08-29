@@ -730,9 +730,6 @@ export interface GitWorktreeAuditEntry {
   actor_cwd_inside: boolean | null;
   size: GitWorktreeSizeEvidence;
   active_use: GitWorktreeActiveUseEvidence;
-  checkout_lease_active: boolean;
-  checkout_lease_expires_at_ms: number | null;
-  checkout_lease_fingerprint: string | null;
   disposition: GitWorktreeDisposition;
   blockers: string[];
   entry_fingerprint: string;
@@ -846,6 +843,9 @@ export interface GitCloneReclaimPlan {
   head_is_default_branch_ancestor: boolean;
   size: GitWorktreeSizeEvidence;
   active_use: GitWorktreeActiveUseEvidence;
+  checkout_lease_active: boolean;
+  checkout_lease_expires_at_ms: number | null;
+  checkout_lease_fingerprint: string | null;
   authority_fingerprint: string;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;

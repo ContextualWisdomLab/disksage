@@ -22,7 +22,8 @@ launchers must acquire the applicable lease or lock before yielding the checkout
 only when no later turn will reuse that folder.
 
 The existing exact closed-PR, owner-cutoff stale-open-PR, and fresh default-branch ancestry
-authorities remain available when no active lease or lock exists.
+authorities remain available only when lease evidence is complete and valid and no active lease or
+lock exists.
 
 ## Consequences
 
