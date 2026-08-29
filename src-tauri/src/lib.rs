@@ -80,6 +80,8 @@ pub mod orphan;
 pub mod photo_duplicate;
 pub mod photo_duplicate_quarantine;
 pub mod photo_similarity_audit;
+/// PhotoKit-only duplicate review and system-confirmed deletion for Apple Photos libraries.
+pub mod photos_library;
 /// Privacy-safe desktop projection of read-only Podman reclaim evidence.
 pub mod podman_desktop;
 /// Distinct IPC registration for the privacy-safe Podman evidence contract.
@@ -149,6 +151,11 @@ pub fn run() {
             photo_duplicate_quarantine::audit_exact_photo_duplicates,
             photo_duplicate_quarantine::plan_exact_photo_duplicate_quarantine,
             photo_duplicate_quarantine::execute_exact_photo_duplicate_quarantine,
+            photos_library::photos_authorization_status,
+            photos_library::request_photos_authorization,
+            photos_library::inspect_photos_duplicates,
+            photos_library::plan_photos_duplicate_deletion,
+            photos_library::execute_photos_duplicate_deletion,
             commands::get_ontology,
             commands::disk_inventory,
             commands::ontology_coherence,
