@@ -10,7 +10,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add a bounded, path-free OneDrive provider-cache and transient-work pressure diagnostic that
   requires repeated complete, unchanged, quiescent evidence before recommending the supported
-  quit/reopen/rescan action and never authorizes provider-internal deletion, reset, or restart.
+  quit/reopen/rescan action; the customer-triggered action is bound to fresh exact approval,
+  unchanged evidence, the fixed app identity, bounded graceful quit/open commands, and an immutable
+  partial-failure receipt, while provider-internal deletion and reset remain unreachable.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

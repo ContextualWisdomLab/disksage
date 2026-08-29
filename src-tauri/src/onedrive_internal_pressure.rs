@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub const ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION: u32 = 2;
+pub const ONEDRIVE_RESTART_APPROVAL_MAX_AGE_MS: u64 = 15 * 60 * 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -63,6 +64,168 @@ pub struct OneDriveInternalPressureReport {
     pub provider_restart_authorized: bool,
     /// True only when a person should quit, reopen, and rescan OneDrive through its supported UI.
     pub restart_rescan_ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneDriveRestartPlan {
+    pub schema_version: u32,
+    pub observation: OneDriveInternalPressureObservation,
+    pub executable_identity: crate::provider_recovery::ProviderClientExecutableIdentity,
+    pub planned_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub plan_fingerprint: String,
+    pub exact_approval_phrase: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneDriveRestartApproval {
+    pub plan_fingerprint: String,
+    pub approved_at_ms: u64,
+    pub reviewed_by: String,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneDriveRestartReceipt {
+    pub schema_version: u32,
+    pub plan_fingerprint: String,
+    pub approval: OneDriveRestartApproval,
+    pub attempted_at_ms: u64,
+    pub before: OneDriveInternalPressureObservation,
+    pub after: Option<OneDriveInternalPressureObservation>,
+    pub recovery: Option<crate::provider_recovery::ProviderRecoveryOutput>,
+    pub completed: bool,
+    pub error_code: Option<String>,
+    pub provider_storage_deleted: bool,
+    pub oauth_used: bool,
+}
+
+fn bounded_attribution(value: &str, max_chars: usize) -> bool {
+    !value.trim().is_empty()
+        && value.chars().count() <= max_chars
+        && !value.chars().any(char::is_control)
+}
+
+pub fn create_restart_plan(
+    observation: &OneDriveInternalPressureObservation,
+    report: &OneDriveInternalPressureReport,
+    executable_identity: crate::provider_recovery::ProviderClientExecutableIdentity,
+    planned_at_ms: u64,
+) -> Result<OneDriveRestartPlan, String> {
+    if !report.restart_rescan_ready || report.observed_at_ms != observation.observed_at_ms {
+        return Err("onedrive-restart-not-ready".into());
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.onedrive.restart-plan\0v1\0");
+    hasher.update(
+        &serde_json::to_vec(&(observation, &executable_identity, planned_at_ms))
+            .map_err(|_| "onedrive-restart-plan-encode-failed")?,
+    );
+    let plan_fingerprint = hasher.finalize().to_hex().to_string();
+    Ok(OneDriveRestartPlan {
+        schema_version: ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION,
+        observation: observation.clone(),
+        executable_identity,
+        planned_at_ms,
+        expires_at_ms: planned_at_ms.saturating_add(ONEDRIVE_RESTART_APPROVAL_MAX_AGE_MS),
+        exact_approval_phrase: format!("DiskSage OneDrive 다시 시작 승인 {plan_fingerprint}"),
+        plan_fingerprint,
+    })
+}
+
+pub fn approve_restart(
+    plan: &OneDriveRestartPlan,
+    confirmation: &str,
+    reviewed_by: &str,
+    rationale: &str,
+    approved_at_ms: u64,
+) -> Result<OneDriveRestartApproval, String> {
+    if confirmation != plan.exact_approval_phrase {
+        return Err("onedrive-restart-confirmation-mismatch".into());
+    }
+    if approved_at_ms < plan.planned_at_ms || approved_at_ms > plan.expires_at_ms {
+        return Err("onedrive-restart-plan-expired".into());
+    }
+    if !bounded_attribution(reviewed_by, 256) || !bounded_attribution(rationale, 1_000) {
+        return Err("onedrive-restart-attribution-invalid".into());
+    }
+    Ok(OneDriveRestartApproval {
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        approved_at_ms,
+        reviewed_by: reviewed_by.trim().into(),
+        rationale: rationale.trim().into(),
+    })
+}
+
+fn unchanged_restart_evidence(
+    planned: &OneDriveInternalPressureObservation,
+    fresh: &OneDriveInternalPressureObservation,
+) -> bool {
+    fresh.observed_at_ms >= planned.observed_at_ms
+        && fresh.cache_scan_complete
+        && fresh.active_use_evidence_complete
+        && fresh.active_reader_writer_count == 0
+        && fresh.provider_reported_local_disk_full
+        && fresh.provider_cache_fingerprint == planned.provider_cache_fingerprint
+        && fresh.provider_temp_fingerprint == planned.provider_temp_fingerprint
+        && fresh.provider_cache_allocated_bytes == planned.provider_cache_allocated_bytes
+        && fresh.provider_temp_allocated_bytes == planned.provider_temp_allocated_bytes
+        && matches!(
+            fresh.global_sync_state,
+            ProviderGlobalSyncState::Pending | ProviderGlobalSyncState::Error
+        )
+}
+
+pub fn execute_restart_with<F>(
+    plan: &OneDriveRestartPlan,
+    approval: &OneDriveRestartApproval,
+    fresh: OneDriveInternalPressureObservation,
+    fresh_identity: crate::provider_recovery::ProviderClientExecutableIdentity,
+    attempted_at_ms: u64,
+    restart: F,
+) -> Result<OneDriveRestartReceipt, String>
+where
+    F: FnOnce() -> (
+        Result<crate::provider_recovery::ProviderRecoveryOutput, String>,
+        Option<OneDriveInternalPressureObservation>,
+    ),
+{
+    if approval.plan_fingerprint != plan.plan_fingerprint
+        || approval.approved_at_ms > attempted_at_ms
+        || attempted_at_ms > plan.expires_at_ms
+    {
+        return Err("onedrive-restart-approval-invalid".into());
+    }
+    if fresh_identity != plan.executable_identity {
+        return Err("onedrive-restart-app-changed".into());
+    }
+    if !unchanged_restart_evidence(&plan.observation, &fresh) {
+        return Err("onedrive-restart-evidence-changed".into());
+    }
+    let (result, after) = restart();
+    let (recovery, error_code) = match result {
+        Ok(recovery) => (Some(recovery), None),
+        Err(error) => (None, Some(error)),
+    };
+    let completed = recovery.as_ref().is_some_and(|value| {
+        value.quit_requested && value.launch_requested && value.blockers.is_empty()
+    });
+    Ok(OneDriveRestartReceipt {
+        schema_version: ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION,
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        approval: approval.clone(),
+        attempted_at_ms,
+        before: fresh,
+        after,
+        recovery,
+        completed,
+        error_code,
+        provider_storage_deleted: false,
+        oauth_used: false,
+    })
 }
 
 /// Assess aggregate provider-cache pressure without inventing an age or size threshold.
@@ -370,6 +533,47 @@ mod tests {
 
         current.provider_temp_fingerprint = "changed".into();
         assert!(!assess(&current, Some(&previous), Some(1_000)).restart_rescan_ready);
+    }
+
+    #[test]
+    fn restart_execution_is_fresh_exact_and_records_partial_failure() {
+        let mut previous = observation(1_000);
+        previous.provider_reported_local_disk_full = true;
+        previous.global_sync_state = ProviderGlobalSyncState::Error;
+        let mut current = observation(2_000);
+        current.provider_reported_local_disk_full = true;
+        current.global_sync_state = ProviderGlobalSyncState::Error;
+        let report = assess(&current, Some(&previous), Some(1_000));
+        let identity = crate::provider_recovery::ProviderClientExecutableIdentity {
+            bytes: 42,
+            modified_ms: 7,
+            device: 1,
+            inode: 2,
+        };
+        let plan = create_restart_plan(&current, &report, identity.clone(), 2_000).unwrap();
+        let approval = approve_restart(
+            &plan,
+            &plan.exact_approval_phrase,
+            "human:local:test",
+            "동기화 정체를 안전하게 다시 확인",
+            2_001,
+        )
+        .unwrap();
+        let mut fresh = current.clone();
+        fresh.observed_at_ms = 2_002;
+        let after = current.clone();
+        let receipt = execute_restart_with(&plan, &approval, fresh, identity, 2_003, || {
+            (Err("provider-recovery-launch-failed".into()), Some(after))
+        })
+        .unwrap();
+        assert!(!receipt.completed);
+        assert_eq!(
+            receipt.error_code.as_deref(),
+            Some("provider-recovery-launch-failed")
+        );
+        assert!(!receipt.provider_storage_deleted);
+        assert!(!receipt.oauth_used);
+        assert!(receipt.after.is_some());
     }
 
     #[test]

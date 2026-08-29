@@ -125,6 +125,11 @@ path = "src/bin/disksage-onedrive-pressure.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-onedrive-restart"
+path = "src/bin/disksage-onedrive-restart.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 

@@ -15,10 +15,12 @@ local-disk-full error in both, and an explicit caller-supplied service deadline.
 is not a stall. Provider-reported local-disk-full plus nonzero provider
 cache allocation is `internal-pressure`. Missing scan or active-use evidence is `unavailable`.
 
-After two complete unchanged observations, provider-reported local disk full, pending sync, and no
-observed provider activity, DiskSage may recommend the supported customer action: pause and quit
-OneDrive from its menu, reopen it, and rescan. DiskSage does not terminate the process, run a reset,
-or delete provider storage. The diagnostic cannot authorize a provider restart. Item-local space recovery continues through
+After two complete unchanged observations, provider-reported local disk full, pending/error sync,
+and no observed provider activity, DiskSage may offer the supported customer action: gracefully
+quit the fixed `/Applications/OneDrive.app`, reopen it, and rescan. Execution requires a fresh exact
+approval and rationale, rechecks the unchanged aggregate and fixed executable identity, uses only
+bounded literal platform commands, and writes an immutable outcome including partial failure.
+DiskSage never runs a reset, sends a force-quit signal, or deletes provider storage. Item-local space recovery continues through
 the operating system's File Provider eviction API after exact upload, identity, conflict, pin, and
 open-file checks. A OneDrive reset remains an operator recovery because Microsoft documents that it
 disconnects sync connections, requires setup again, and performs a full sync. It is therefore not a
@@ -37,6 +39,10 @@ and restart authorization remained false.
 
 Customer guidance describes the next action without exposing DBFS, SQLite, container identifiers,
 or provider implementation boundaries.
+
+The recovery uses no OAuth and grants no cloud-write, local-copy eviction, or provider-internal
+deletion authority. A changed aggregate, active handle, unavailable observation, changed app
+identity, stale approval, quit timeout, failed launch, or missing receipt destination fails closed.
 
 ## References
 

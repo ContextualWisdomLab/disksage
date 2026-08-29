@@ -7,6 +7,19 @@ use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
 
 pub const PROVIDER_RECOVERY_SCHEMA_VERSION: u32 = 1;
+const FIXED_ONEDRIVE_APP: &str = "/Applications/OneDrive.app";
+
+/// Object identity of the fixed, vendor-installed OneDrive executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderClientExecutableIdentity {
+    pub bytes: u64,
+    pub modified_ms: u64,
+    #[serde(default)]
+    pub device: u64,
+    #[serde(default)]
+    pub inode: u64,
+}
 const FINDER_COPY_CANCEL_SCRIPT: &str = "tell application \"Finder\" to activate\ntell application \"System Events\" to tell process \"Finder\" to key code 53\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +126,43 @@ fn verified_bundle(path: &Path, expected_bundle_id: &str) -> bool {
         == Some(expected_bundle_id)
 }
 
+#[cfg(all(not(coverage), target_os = "macos"))]
+pub fn fixed_onedrive_executable_identity() -> Result<ProviderClientExecutableIdentity, String> {
+    use std::os::unix::fs::MetadataExt;
+    let bundle = Path::new(FIXED_ONEDRIVE_APP);
+    if !verified_bundle(bundle, "com.microsoft.OneDrive") {
+        return Err("onedrive-restart-app-identity-invalid".into());
+    }
+    for path in [
+        bundle.to_path_buf(),
+        bundle.join("Contents"),
+        bundle.join("Contents/MacOS"),
+    ] {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "onedrive-restart-app-identity-invalid".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("onedrive-restart-app-identity-invalid".into());
+        }
+    }
+    let metadata = std::fs::symlink_metadata(bundle.join("Contents/MacOS/OneDrive"))
+        .map_err(|_| "onedrive-restart-app-identity-invalid".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("onedrive-restart-app-identity-invalid".into());
+    }
+    Ok(ProviderClientExecutableIdentity {
+        bytes: metadata.len(),
+        modified_ms: metadata.mtime().max(0) as u64 * 1_000
+            + (metadata.mtime_nsec().max(0) as u64 / 1_000_000),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(any(coverage, not(target_os = "macos")))]
+pub fn fixed_onedrive_executable_identity() -> Result<ProviderClientExecutableIdentity, String> {
+    Err("onedrive-restart-platform-unsupported".into())
+}
+
 #[cfg(not(coverage))]
 #[cfg(not(target_os = "macos"))]
 fn verified_bundle(_path: &Path, _expected_bundle_id: &str) -> bool {
@@ -144,11 +194,25 @@ fn app_path(provider: CloudProvider) -> Result<PathBuf, String> {
 
 #[cfg(not(coverage))]
 fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "provider-recovery-command-spawn-failed".to_string())?;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -159,16 +223,70 @@ fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Ok(None) => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("provider-recovery-command-timeout".into());
             }
             Err(_) => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("provider-recovery-command-wait-failed".into());
             }
         }
+    }
+}
+
+/// Restart only the fixed `/Applications/OneDrive.app` object after identity revalidation.
+#[cfg(not(coverage))]
+pub fn restart_fixed_onedrive(
+    expected: &ProviderClientExecutableIdentity,
+    observed_at_ms: u64,
+) -> Result<ProviderRecoveryOutput, String> {
+    if &fixed_onedrive_executable_identity()? != expected {
+        return Err("onedrive-restart-app-changed".into());
+    }
+    #[cfg(not(target_os = "macos"))]
+    return Err("onedrive-restart-platform-unsupported".into());
+    #[cfg(target_os = "macos")]
+    {
+        let pre_runtime_observed =
+            require_runtime_observation(CloudProvider::Onedrive, observed_at_ms)?;
+        request_quit("OneDrive")?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while require_runtime_observation(CloudProvider::Onedrive, observed_at_ms)? {
+            if Instant::now() >= deadline {
+                return Err("provider-recovery-quit-timeout".into());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if &fixed_onedrive_executable_identity()? != expected {
+            return Err("onedrive-restart-app-changed".into());
+        }
+        if !run_bounded(Path::new("/usr/bin/open"), &["-a", FIXED_ONEDRIVE_APP])? {
+            return Err("provider-recovery-launch-failed".into());
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        let post_runtime_observed = runtime_observation(CloudProvider::Onedrive, observed_at_ms);
+        Ok(ProviderRecoveryOutput {
+            schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+            provider: CloudProvider::Onedrive,
+            action: "restart-onedrive-then-rescan".into(),
+            pre_runtime_observed,
+            quit_requested: true,
+            launch_requested: true,
+            post_runtime_observed,
+            blockers: post_runtime_blockers(post_runtime_observed),
+            cloud_write_executed: false,
+            source_eviction_executed: false,
+        })
     }
 }
 

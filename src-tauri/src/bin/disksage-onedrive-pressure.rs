@@ -9,6 +9,7 @@ const MAX_PREVIOUS_OBSERVATION_BYTES: u64 = 64 * 1024;
 struct OneDrivePressureOutput {
     observation: disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureObservation,
     report: disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureReport,
+    restart_plan: Option<disksage_lib::onedrive_internal_pressure::OneDriveRestartPlan>,
     mutation_executed: bool,
 }
 
@@ -95,11 +96,24 @@ fn run() -> Result<(), String> {
         })
         .transpose()?;
     let report = assess(&current, prior.as_ref(), stall_after_ms);
+    let restart_plan = report
+        .restart_rescan_ready
+        .then(|| {
+            disksage_lib::provider_recovery::fixed_onedrive_executable_identity().and_then(
+                |identity| {
+                    disksage_lib::onedrive_internal_pressure::create_restart_plan(
+                        &current, &report, identity, now,
+                    )
+                },
+            )
+        })
+        .transpose()?;
     println!(
         "{}",
         serde_json::to_string_pretty(&OneDrivePressureOutput {
             observation: current,
             report,
+            restart_plan,
             mutation_executed: false,
         })
         .map_err(|_| "onedrive-pressure-report-encode-failed")?
@@ -169,6 +183,7 @@ mod tests {
                 provider_restart_authorized: false,
                 restart_rescan_ready: false,
             },
+            restart_plan: None,
             mutation_executed: false,
         })
         .unwrap();
