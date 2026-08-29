@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "macos", not(coverage)))]
 use std::time::{Duration, Instant};
 
-pub const ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION: u32 = 2;
+pub const ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION: u32 = 3;
 pub const ONEDRIVE_RESTART_APPROVAL_MAX_AGE_MS: u64 = 15 * 60 * 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +45,12 @@ pub struct OneDriveInternalPressureObservation {
     pub active_use_evidence_complete: bool,
     pub global_sync_state: ProviderGlobalSyncState,
     pub provider_reported_local_disk_full: bool,
+    /// Whether path-free global markers prove upload, download, indexing, or reconciliation work.
+    #[serde(default)]
+    pub provider_global_activity_present: bool,
+    /// False for legacy observations because they did not retain global activity evidence.
+    #[serde(default)]
+    pub provider_global_activity_evidence_complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +174,8 @@ fn unchanged_restart_evidence(
         && fresh.cache_scan_complete
         && fresh.active_use_evidence_complete
         && fresh.active_reader_writer_count == 0
+        && fresh.provider_global_activity_evidence_complete
+        && !fresh.provider_global_activity_present
         && fresh.provider_reported_local_disk_full
         && fresh.provider_cache_fingerprint == planned.provider_cache_fingerprint
         && fresh.provider_temp_fingerprint == planned.provider_temp_fingerprint
@@ -237,13 +245,18 @@ pub fn assess(
     previous: Option<&OneDriveInternalPressureObservation>,
     stall_after_ms: Option<u64>,
 ) -> OneDriveInternalPressureReport {
-    let evidence_complete = current.cache_scan_complete && current.active_use_evidence_complete;
+    let evidence_complete = current.cache_scan_complete
+        && current.active_use_evidence_complete
+        && current.provider_global_activity_evidence_complete;
     let stalled = previous
         .zip(stall_after_ms)
         .is_some_and(|(previous, deadline)| {
             deadline > 0
                 && previous.cache_scan_complete
                 && previous.active_use_evidence_complete
+                && previous.provider_global_activity_evidence_complete
+                && !previous.provider_global_activity_present
+                && !current.provider_global_activity_present
                 && current
                     .observed_at_ms
                     .saturating_sub(previous.observed_at_ms)
@@ -275,6 +288,7 @@ pub fn assess(
     } else if stalled {
         OneDriveInternalPressureState::ProviderSyncStalled
     } else if current.active_reader_writer_count > 0
+        || current.provider_global_activity_present
         || current.global_sync_state == ProviderGlobalSyncState::Pending
     {
         OneDriveInternalPressureState::ProviderBusy
@@ -320,7 +334,9 @@ pub fn assess(
         next_action: next_action.into(),
         provider_internal_mutation_authorized: false,
         provider_restart_authorized: false,
-        restart_rescan_ready: stalled && current.provider_reported_local_disk_full,
+        restart_rescan_ready: stalled
+            && current.provider_reported_local_disk_full
+            && !current.provider_global_activity_present,
     }
 }
 
@@ -425,27 +441,78 @@ pub fn collect(
     home: &Path,
     observed_at_ms: u64,
 ) -> Result<OneDriveInternalPressureObservation, String> {
-    let root = provider_cache_root(home)?;
-    let (allocated, files, fingerprint) = scan_cache(&root)?;
-    let active = crate::git_worktree::active_use_evidence(&root, 5_000, 64, true);
-    let temp_root = provider_temp_root(home)?;
+    if !home.is_absolute()
+        || home
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err("onedrive-pressure-home-invalid".into());
+    }
+    let (allocated, files, fingerprint, cache_complete, active_count, active_complete) =
+        match provider_cache_root(home).and_then(|root| scan_cache(&root).map(|scan| (root, scan)))
+        {
+            Ok((root, (allocated, files, fingerprint))) => {
+                let active = crate::git_worktree::active_use_evidence(&root, 5_000, 64, true);
+                (
+                    allocated,
+                    files,
+                    fingerprint,
+                    true,
+                    active.observed_pids.len() as u64,
+                    active.evidence_complete,
+                )
+            }
+            Err(_) => (0, 0, String::new(), false, 0, false),
+        };
+    let temp_root = provider_temp_root(home);
     let (temp_allocated, temp_files, temp_fingerprint, temp_active_count, temp_active_complete) =
-        if let Some(temp_root) = temp_root {
-            let (allocated, files, fingerprint) = scan_cache(&temp_root)?;
-            let active = crate::git_worktree::active_use_evidence(&temp_root, 5_000, 64, true);
-            (
-                allocated,
-                files,
-                fingerprint,
-                active.observed_pids.len() as u64,
-                active.evidence_complete,
-            )
-        } else {
+        if let Ok(Some(temp_root)) = &temp_root {
+            match scan_cache(&temp_root) {
+                Ok((allocated, files, fingerprint)) => {
+                    let active =
+                        crate::git_worktree::active_use_evidence(&temp_root, 5_000, 64, true);
+                    (
+                        allocated,
+                        files,
+                        fingerprint,
+                        active.observed_pids.len() as u64,
+                        active.evidence_complete,
+                    )
+                }
+                Err(_) => (0, 0, String::new(), 0, false),
+            }
+        } else if matches!(temp_root, Ok(None)) {
             (0, 0, String::new(), 0, true)
+        } else {
+            (0, 0, String::new(), 0, false)
         };
     let global = crate::provider_global_sync::inspect_new_copy_admission(
         crate::cloud::CloudProvider::Onedrive,
-    )?;
+    );
+    let (global_sync_state, local_disk_full, global_activity, global_complete) = match global {
+        Ok(global) => {
+            let activity = global.upload_progress_present
+                || global.download_progress_present
+                || global.blockers.iter().any(|blocker| {
+                    matches!(
+                        blocker.as_str(),
+                        "provider-global-sync-transfer-active"
+                            | "provider-global-sync-indexing-pending"
+                            | "provider-global-sync-reconciliation-pending"
+                    )
+                });
+            (
+                global.state,
+                global
+                    .blockers
+                    .iter()
+                    .any(|blocker| blocker == "provider-global-sync-local-disk-full"),
+                activity,
+                global.evidence_complete,
+            )
+        }
+        Err(_) => (ProviderGlobalSyncState::Unavailable, false, true, false),
+    };
     Ok(OneDriveInternalPressureObservation {
         observed_at_ms,
         provider_cache_allocated_bytes: allocated,
@@ -454,15 +521,13 @@ pub fn collect(
         provider_temp_allocated_bytes: temp_allocated,
         provider_temp_file_count: temp_files,
         provider_temp_fingerprint: temp_fingerprint,
-        cache_scan_complete: true,
-        active_reader_writer_count: (active.observed_pids.len() as u64)
-            .saturating_add(temp_active_count),
-        active_use_evidence_complete: active.evidence_complete && temp_active_complete,
-        global_sync_state: global.state,
-        provider_reported_local_disk_full: global
-            .blockers
-            .iter()
-            .any(|blocker| blocker == "provider-global-sync-local-disk-full"),
+        cache_scan_complete: cache_complete && temp_active_complete,
+        active_reader_writer_count: active_count.saturating_add(temp_active_count),
+        active_use_evidence_complete: active_complete && temp_active_complete,
+        global_sync_state,
+        provider_reported_local_disk_full: local_disk_full,
+        provider_global_activity_present: global_activity,
+        provider_global_activity_evidence_complete: global_complete,
     })
 }
 
@@ -484,6 +549,8 @@ mod tests {
             active_use_evidence_complete: true,
             global_sync_state: ProviderGlobalSyncState::Pending,
             provider_reported_local_disk_full: false,
+            provider_global_activity_present: false,
+            provider_global_activity_evidence_complete: true,
         }
     }
 
@@ -533,6 +600,32 @@ mod tests {
 
         current.provider_temp_fingerprint = "changed".into();
         assert!(!assess(&current, Some(&previous), Some(1_000)).restart_rescan_ready);
+    }
+
+    #[test]
+    fn active_global_transfer_blocks_disk_full_restart_guidance() {
+        let mut previous = observation(1_000);
+        previous.provider_reported_local_disk_full = true;
+        previous.global_sync_state = ProviderGlobalSyncState::Error;
+        previous.provider_global_activity_present = true;
+        let mut current = previous.clone();
+        current.observed_at_ms = 2_000;
+        let report = assess(&current, Some(&previous), Some(1_000));
+        assert!(!report.restart_rescan_ready);
+        assert_eq!(
+            report.state,
+            OneDriveInternalPressureState::InternalPressure
+        );
+    }
+
+    #[test]
+    fn incomplete_global_activity_evidence_remains_diagnostic_but_fails_closed() {
+        let mut current = observation(2_000);
+        current.provider_global_activity_evidence_complete = false;
+        let report = assess(&current, None, None);
+        assert_eq!(report.state, OneDriveInternalPressureState::Unavailable);
+        assert!(!report.evidence_complete);
+        assert!(!report.restart_rescan_ready);
     }
 
     #[test]
@@ -586,7 +679,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(coverage)))]
     #[test]
     fn one_directory_cannot_bypass_the_entry_cap() {
         let temp = tempfile::tempdir().unwrap();
@@ -598,7 +691,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(coverage)))]
     #[test]
     fn queued_paths_consume_the_remaining_entry_budget() {
         assert_eq!(remaining_entry_budget(5, 2, 3), 0);

@@ -12,8 +12,9 @@ not classified as orphaned or reclaimable, and DiskSage never deletes or resets 
 `provider-sync-stalled` requires two complete observations with the same path-free aggregate
 fingerprint, either a pending global state in both observations or the same provider-reported
 local-disk-full error in both, and an explicit caller-supplied service deadline. A cache size alone
-is not a stall. Provider-reported local-disk-full plus nonzero provider
-cache allocation is `internal-pressure`. Missing scan or active-use evidence is `unavailable`.
+is not a stall. When sync is not stalled, provider-reported local-disk-full plus a nonzero combined
+provider-cache and temporary-work allocation is `internal-pressure`. Missing scan, active-use, or
+global-activity evidence is `unavailable`.
 
 After two complete unchanged observations, provider-reported local disk full, pending/error sync,
 and no observed provider activity, DiskSage may offer the supported customer action: gracefully
@@ -52,5 +53,5 @@ Developer Documentation. https://developer.apple.com/documentation/fileprovider/
 Apple Inc. (n.d.). *Synchronizing the File Provider extension*. Apple Developer Documentation.
 https://developer.apple.com/documentation/fileprovider/synchronizing-the-file-provider-extension
 
-Microsoft. (n.d.). *Reset OneDrive*. Microsoft Support. Retrieved August 30, 2026, from
+Microsoft. (n.d.). *Reset OneDrive*. Microsoft Support.
 https://support.microsoft.com/en-us/onedrive/reset-onedrive

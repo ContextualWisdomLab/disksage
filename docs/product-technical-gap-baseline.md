@@ -25,7 +25,7 @@ again before a normal merge.
 | #304 | `81fd7cf74d456a4cd931cc560bf827188e727fe4` | Diagnose OneDrive provider-cache pressure without granting deletion authority. | Blocked: this row records the documentation commit's observed parent; platform, test, LLM, and Strix checks were running, while OpenCode and Noema had no passing exact-head evidence. |
 
 The immediate loop is therefore: diagnose source-owned test failures on #300 and #303, allow
-#302's new exact-head checks to finish while doing that work, and treat provider/review-agent
+PR #302's new exact-head checks to finish while doing that work, and treat provider/review-agent
 failures separately from source defects. No row above authorizes bypass, force-push, self-approval,
 cloud mutation, or local deletion.
 

@@ -160,6 +160,8 @@ mod tests {
             active_use_evidence_complete: true,
             global_sync_state: ProviderGlobalSyncState::Pending,
             provider_reported_local_disk_full: false,
+            provider_global_activity_present: false,
+            provider_global_activity_evidence_complete: true,
         }
     }
 
@@ -169,7 +171,7 @@ mod tests {
         let encoded = serde_json::to_vec(&OneDrivePressureOutput {
             observation: expected.clone(),
             report: OneDriveInternalPressureReport {
-                schema_version: 2,
+                schema_version: 3,
                 state: OneDriveInternalPressureState::ProviderBusy,
                 observed_at_ms: 10,
                 provider_cache_allocated_bytes: 20,
