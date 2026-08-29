@@ -242,7 +242,7 @@ export interface ProviderCacheCleanupResult {
   rationale: string;
   mode: "trash" | "permanent_purge";
   immutable_receipt_path: string;
-  items: Array<{ path: string; completed: boolean; error: string | null }>;
+  items: Array<{ path: string; completed: boolean; error: string | null; audit_error: string | null }>;
 }
 
 export const executeProviderCacheReclaim = (
