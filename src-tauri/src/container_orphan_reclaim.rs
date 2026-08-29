@@ -381,19 +381,47 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
     Ok(records)
 }
 
-/// Returns whether the runtime's native container inspection reports any storage mount.
-/// Missing, malformed, or multiple records are not evidence that a stopped container is
-/// storage-free and therefore fail closed.
-fn container_has_storage_mounts(output: &str) -> Result<bool, String> {
+/// Return the exact inspected container identities whose native record has no storage mounts.
+/// Missing, duplicate, unexpected, or malformed records fail the entire category closed.
+fn storage_free_container_ids(
+    output: &str,
+    expected_ids: &[String],
+) -> Result<Vec<String>, String> {
     let records = split_json_envelopes(output)?;
-    if records.len() != 1 {
+    if records.len() != expected_ids.len() {
         return Err("container-storage-lineage-record-count-invalid".to_string());
     }
-    records[0]
-        .get("Mounts")
-        .and_then(Value::as_array)
-        .map(|mounts| !mounts.is_empty())
-        .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())
+    let mut inspected = expected_ids
+        .iter()
+        .cloned()
+        .map(|id| (id, None))
+        .collect::<BTreeMap<_, _>>();
+    if inspected.len() != expected_ids.len() {
+        return Err("duplicate-candidate-id".to_string());
+    }
+    for record in records {
+        let id = normalize_hex_id(&string_field(&record, &["Id", "ID"])?, "container")?;
+        let slot = inspected
+            .get_mut(&id)
+            .ok_or_else(|| "container-storage-lineage-identity-mismatch".to_string())?;
+        if slot.is_some() {
+            return Err("container-storage-lineage-duplicate-identity".to_string());
+        }
+        let mounts = record
+            .get("Mounts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())?;
+        *slot = Some(!mounts.is_empty());
+    }
+    let mut storage_free = Vec::new();
+    for (id, mounted) in inspected {
+        match mounted {
+            Some(false) => storage_free.push(id),
+            Some(true) => {}
+            None => return Err("container-storage-lineage-identity-missing".to_string()),
+        }
+    }
+    Ok(storage_free)
 }
 
 /// Containers are orphan candidates only when fully stopped: `exited`, `created`, `dead`,
@@ -995,27 +1023,30 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let stopped_ids = bounded_exact_candidate_ids(
-                    candidates
-                        .iter()
-                        .map(|candidate| candidate.id.clone())
-                        .collect(),
-                )?;
-                let mut candidate_ids = Vec::with_capacity(stopped_ids.len());
-                for candidate_id in stopped_ids {
+                let mut stopped_ids = candidates
+                    .iter()
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>();
+                stopped_ids.sort_unstable();
+                if stopped_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err("duplicate-candidate-id".to_string());
+                }
+                let candidate_ids = if stopped_ids.is_empty() {
+                    Vec::new()
+                } else {
                     let mut inspect_args: Vec<&str> =
                         prefix.iter().skip(1).map(String::as_str).collect();
-                    inspect_args.extend(["container", "inspect", &candidate_id]);
+                    inspect_args.extend(["container", "inspect"]);
+                    inspect_args.extend(stopped_ids.iter().map(String::as_str));
                     let inspect_output = command_text(
                         &target.binary_path,
                         &inspect_args,
                         ORPHAN_COMMAND_TIMEOUT,
                         "orphan-container-storage-lineage",
                     )?;
-                    if !container_has_storage_mounts(&inspect_output)? {
-                        candidate_ids.push(candidate_id);
-                    }
-                }
+                    storage_free_container_ids(&inspect_output, &stopped_ids)?
+                };
+                let candidate_ids = bounded_exact_candidate_ids(candidate_ids)?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1509,20 +1540,57 @@ mod tests {
     }
 
     #[test]
-    fn stopped_container_storage_lineage_requires_one_native_mounts_array() {
-        assert!(!container_has_storage_mounts(r#"[{"Mounts":[]}]"#).unwrap());
-        assert!(container_has_storage_mounts(
-            r#"[{"Mounts":[{"Type":"volume","Name":"database_data","Destination":"/var/lib/postgresql"}]}]"#
-        )
-        .unwrap());
+    fn stopped_container_storage_lineage_requires_exact_native_identities_and_mounts() {
+        let expected = vec![DOCKER_ID_A.to_string()];
         assert_eq!(
-            container_has_storage_mounts(r#"[{"Id":"container-without-mount-evidence"}]"#)
-                .unwrap_err(),
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_A}","Mounts":[]}}]"#),
+                &expected,
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(storage_free_container_ids(
+            &format!(r#"[{{"Id":"{DOCKER_ID_A}","Mounts":[{{"Type":"volume"}}]}}]"#),
+            &expected,
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_A}"}}]"#),
+                &expected,
+            )
+            .unwrap_err(),
             "container-storage-lineage-mounts-unavailable"
         );
         assert_eq!(
-            container_has_storage_mounts(r#"[{"Mounts":[]},{"Mounts":[]}]"#).unwrap_err(),
-            "container-storage-lineage-record-count-invalid"
+            storage_free_container_ids(
+                &format!(r#"[{{"Id":"{DOCKER_ID_B}","Mounts":[]}}]"#),
+                &expected,
+            )
+            .unwrap_err(),
+            "container-storage-lineage-identity-mismatch"
+        );
+    }
+
+    #[test]
+    fn mounted_containers_do_not_exhaust_the_exact_delete_candidate_limit() {
+        let expected = (0..=MAX_EXACT_DELETE_CANDIDATES)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let output = expected
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let mounts = if index == expected.len() - 1 { "[]" } else { "[{}]" };
+                format!(r#"{{"Id":"{id}","Mounts":{mounts}}}"#)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            storage_free_container_ids(&output, &expected).unwrap(),
+            vec![expected.last().unwrap().clone()]
         );
     }
 
