@@ -985,7 +985,9 @@ fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
     (0..=command.len() - path.len()).any(|start| {
         let end = start + path.len();
         command[start..end] == *path
-            && (start == 0 || command[start - 1].is_ascii_whitespace())
+            && (start == 0
+                || command[start - 1].is_ascii_whitespace()
+                || command[start - 1] == b'=')
             && (end == command.len()
                 || command[end].is_ascii_whitespace()
                 || (recursive && command[end] == b'/'))
