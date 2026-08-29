@@ -58,7 +58,10 @@ fn parse_selection(value: OsString) -> Result<PhotoQuarantineSelection, String> 
     })
 }
 
-fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+fn parse_args_with_execution_support(
+    arguments: impl IntoIterator<Item = OsString>,
+    execution_supported: bool,
+) -> Result<Args, String> {
     let mut arguments = arguments.into_iter();
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
@@ -121,14 +124,10 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, Str
                 )?));
             }
             Some("--execute") if !execute => {
-                #[cfg(windows)]
-                {
+                if !execution_supported {
                     return Err(EXECUTION_UNSUPPORTED.into());
                 }
-                #[cfg(not(windows))]
-                {
-                    execute = true;
-                }
+                execute = true;
             }
             Some("--help") | Some("-h") => return Err(USAGE.into()),
             _ => return Err("photo-audit-argument-invalid".into()),
@@ -145,6 +144,10 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, Str
         journal_path,
         execute,
     })
+}
+
+fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+    parse_args_with_execution_support(arguments, cfg!(not(windows)))
 }
 
 fn now_ms() -> u64 {
@@ -300,6 +303,20 @@ mod tests {
         assert_eq!(args.max_entries, 100);
         assert!(!args.execute);
         assert!(parse_selection(OsString::from("bad")).is_err());
+    }
+
+    #[test]
+    fn unsupported_execution_is_rejected_before_domain_work() {
+        let error = parse_args_with_execution_support(
+            [
+                OsString::from("--execute"),
+                OsString::from("--root"),
+                OsString::from("/photos"),
+            ],
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(error, EXECUTION_UNSUPPORTED);
     }
 
     #[cfg(windows)]
