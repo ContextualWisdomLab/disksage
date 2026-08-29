@@ -37,11 +37,14 @@ review but is not part of the automatic six-cache action because rebuilding it m
 downloads. Cache contents are not cloud candidates: they are reproducible local artifacts, while
 user files continue through the metadata-first cloud planner and its provider sync/eviction gates.
 
-When no Gradle process is active, the headless command can apply the same identity-bound per-child
-checks to a catalogued Gradle regeneration root:
+When no Gradle process is active, the headless command can apply the same reversible,
+identity-bound per-child checks to a catalogued Gradle regeneration root:
 
-`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --execute --cache-id gradle-wrapper-cache --permanent-cache --journal-path /ABSOLUTE/journal.jsonl`
+`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --execute --cache-id gradle-wrapper-cache --journal-path /ABSOLUTE/journal.jsonl`
 
 The accepted IDs are `gradle-cache`, `gradle-wrapper-cache`, `gradle-jdk-cache`, and
-`gradle-daemon-cache`. `--permanent-cache` rejects every non-Gradle ID and never targets project
-sources, Maven local artifacts, Gradle configuration, or an arbitrary path.
+`gradle-daemon-cache`. Executing `--permanent-cache` is deliberately fail-closed with
+`permanent-cache-execution-disabled` until the irreversible path can revalidate a complete target
+manifest and active-use evidence at the final mutation boundary. A read-only invocation may still
+include the flag for operator inspection, but it grants no deletion authority. Gradle cleanup never
+targets project sources, Maven local artifacts, Gradle configuration, or an arbitrary path.
