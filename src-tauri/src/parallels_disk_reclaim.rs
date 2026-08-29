@@ -243,6 +243,13 @@ pub fn plan_with_runner(
         blockers.push("parallels-bundle-active-use-unresolved".into());
     }
     blockers.push("parallels-compact-execution-not-implemented".into());
+    let active_pids = active_use
+        .observed_pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let blockers_fingerprint = blockers.join("\n");
     let fp = fingerprint(
         &[
             vm_id,
@@ -250,8 +257,20 @@ pub fn plan_with_runner(
             &vm.status,
             &bundle_identity,
             &disk_identity,
+            &active_use.method,
+            active_use.error.as_deref().unwrap_or(""),
+            &active_pids,
+            &blockers_fingerprint,
         ],
-        &[logical, physical, reclaimable],
+        &[
+            logical,
+            physical,
+            reclaimable,
+            active_use.assessed as u64,
+            active_use.evidence_complete as u64,
+            active_use.active as u64,
+            active_use.results_truncated as u64,
+        ],
     );
     let next_action = if reclaimable == 0 {
         "확보 가능한 공간이 없습니다. VM을 그대로 유지하세요."
