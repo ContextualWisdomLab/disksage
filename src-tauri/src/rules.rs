@@ -108,14 +108,17 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         .or_else(|| absolute_env_path("HF_HOME").map(|path| path.join("hub")))
         .unwrap_or_else(|| bases.local_data.join("huggingface"));
     #[cfg(target_os = "macos")]
+    let gradle_home =
+        absolute_env_path("GRADLE_USER_HOME").unwrap_or_else(|| bases.home.join(".gradle"));
+    #[cfg(target_os = "macos")]
     entries.extend([
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
-        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
-        ("gradle-wrapper-cache", "Gradle 실행 파일 캐시", bases.home.join(".gradle").join("wrapper").join("dists")),
-        ("gradle-jdk-cache", "Gradle JDK 캐시", bases.home.join(".gradle").join("jdks")),
-        ("gradle-daemon-cache", "Gradle 실행 기록 캐시", bases.home.join(".gradle").join("daemon")),
+        ("gradle-cache", "Gradle 캐시", gradle_home.join("caches")),
+        ("gradle-wrapper-cache", "Gradle 실행 파일 캐시", gradle_home.join("wrapper").join("dists")),
+        ("gradle-jdk-cache", "Gradle JDK 캐시", gradle_home.join("jdks")),
+        ("gradle-daemon-cache", "Gradle 실행 기록 캐시", gradle_home.join("daemon")),
         ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
             bases.home.join("Library").join("Application Support").join("Caches")),
         (
