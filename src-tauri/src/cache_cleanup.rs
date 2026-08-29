@@ -460,7 +460,8 @@ mod tests {
             1,
             true,
         )
-        .unwrap_err();
+        .err()
+        .expect("non-Gradle permanent cache cleanup must fail");
         assert_eq!(error, "permanent-cache-id-not-approved");
     }
 
