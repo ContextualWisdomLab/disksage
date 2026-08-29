@@ -69,32 +69,53 @@ fn parse_args(values: &[String]) -> Result<Args, String> {
     })
 }
 
-fn run(values: &[String]) -> Result<String, String> {
+fn utf8_args(values: impl Iterator<Item = std::ffi::OsString>) -> Result<Vec<String>, String> {
+    values
+        .map(|value| value.into_string().map_err(|_| "argument-not-utf8".into()))
+        .collect()
+}
+
+fn run(values: &[String]) -> Result<(String, bool), String> {
     let args = parse_args(values)?;
-    let value = match (args.confirmation.as_deref(), args.rationale.as_deref()) {
-        (Some(confirmation), Some(rationale)) => serde_json::to_value(
-            runtime_storage::execute_trim(args.runtime, confirmation, rationale)?,
-        ),
+    let (value, successful) = match (args.confirmation.as_deref(), args.rationale.as_deref()) {
+        (Some(confirmation), Some(rationale)) => {
+            let execution = runtime_storage::execute_trim(args.runtime, confirmation, rationale)?;
+            let successful = execution.executed;
+            (serde_json::to_value(execution), successful)
+        }
         _ => {
             let plan = runtime_storage::inspect()
                 .into_iter()
                 .find(|plan| plan.runtime == args.runtime)
                 .ok_or("runtime-storage-plan-unavailable")?;
-            serde_json::to_value(plan)
+            (serde_json::to_value(plan), true)
         }
-    }
-    .map_err(|error| error.to_string())?;
-    if args.pretty {
+    };
+    let value = value.map_err(|error| error.to_string())?;
+    let encoded = if args.pretty {
         serde_json::to_string_pretty(&value)
     } else {
         serde_json::to_string(&value)
     }
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    Ok((encoded, successful))
 }
 
 fn main() {
-    match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
-        Ok(output) => println!("{output}"),
+    let values = match utf8_args(std::env::args_os().skip(1)) {
+        Ok(values) => values,
+        Err(error) => {
+            eprintln!("disksage-runtime-storage: {error}");
+            std::process::exit(2);
+        }
+    };
+    match run(&values) {
+        Ok((output, successful)) => {
+            println!("{output}");
+            if !successful {
+                std::process::exit(1);
+            }
+        }
         Err(error) if error == USAGE => println!("{USAGE}"),
         Err(error) => {
             eprintln!("disksage-runtime-storage: {error}");
@@ -127,5 +148,14 @@ mod tests {
         assert_eq!(args.runtime, RuntimeStorageKind::Colima);
         assert!(args.pretty);
         assert!(args.confirmation.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_argument_is_a_controlled_error() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let error = utf8_args([std::ffi::OsString::from_vec(vec![0xff])].into_iter()).unwrap_err();
+        assert_eq!(error, "argument-not-utf8");
     }
 }
