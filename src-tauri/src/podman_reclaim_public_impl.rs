@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -10,9 +11,8 @@ use std::time::{Duration, Instant};
 mod implementation;
 
 pub use implementation::{
-    execute_podman_storage_repair, plan_podman_storage_repair, probe_podman_reclaim,
-    GuestFilesystemEvidence, PodmanDanglingImagePruneExecution, PodmanMachineEvidence,
-    PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
+    probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
+    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
     PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStorageRepairExecution,
     PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
     PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
@@ -23,6 +23,7 @@ const MAX_CAPTURE_BYTES: usize = 1_048_576;
 const MAX_EXACT_DELETE_IDS: usize = 256;
 const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
 const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
+const PODMAN_STORAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Deserialize)]
 struct MachineInspectRecord {
@@ -59,6 +60,7 @@ struct ExactCandidate {
 struct BoundedOutput {
     status_code: i32,
     stdout: String,
+    stderr: String,
 }
 
 fn valid_machine_name(value: &str) -> bool {
@@ -136,13 +138,14 @@ fn run_bounded(
         .join()
         .map_err(|_| format!("{label}-stdout-reader-panicked"))?
         .map_err(|_| format!("{label}-output-too-large"))?;
-    let _stderr = stderr_reader
+    let stderr = stderr_reader
         .join()
         .map_err(|_| format!("{label}-stderr-reader-panicked"))?
         .map_err(|_| format!("{label}-output-too-large"))?;
     Ok(BoundedOutput {
         status_code: status.code().unwrap_or(-1),
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
+        stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
     })
 }
 
@@ -172,6 +175,169 @@ fn lower_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn damaged_layer_ids(output: &str) -> Result<Vec<String>, String> {
+    let mut ids = output
+        .lines()
+        .filter_map(|line| line.strip_prefix("Damaged layer "))
+        .filter_map(|line| line.strip_suffix(':'))
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    if ids
+        .iter()
+        .any(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err("podman-storage-check-invalid-layer-id".into());
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn storage_check_fingerprint(ids: &[String]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"disksage.podman-storage-check.v1\0");
+    for id in ids {
+        hash_frame(&mut digest, id.as_bytes());
+    }
+    lower_hex(&digest.finalize())
+}
+
+fn storage_repair_scope_fingerprint(machine: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"disksage.podman-machine-storage-repair-scope.v1\0");
+    hash_frame(&mut digest, machine.as_bytes());
+    for token in ["podman", "--connection", machine, "system", "check", "--quick", "--repair"] {
+        hash_frame(&mut digest, token.as_bytes());
+    }
+    lower_hex(&digest.finalize())
+}
+
+fn storage_check_complete(status_code: i32, output: &str, ids: &[String]) -> bool {
+    let expected_damage_completion = output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line == "Error: damage detected in local storage");
+    (status_code == 0 && ids.is_empty()) || (!ids.is_empty() && expected_damage_completion)
+}
+
+fn storage_check_evidence(
+    podman_bin: &Path,
+    machine: &str,
+) -> Result<(PodmanStorageCheckPlan, Vec<String>), String> {
+    if !valid_machine_name(machine) {
+        return Err("unsafe-requested-machine-name".into());
+    }
+    let output = run_bounded(
+        podman_bin,
+        &["--connection", machine, "system", "check", "--quick"],
+        PODMAN_STORAGE_CHECK_TIMEOUT,
+        "podman-storage-check",
+    )?;
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    let ids = damaged_layer_ids(&combined)?;
+    let fingerprint = storage_check_fingerprint(&ids);
+    let complete = storage_check_complete(output.status_code, &combined, &ids);
+    let scope_fingerprint = storage_repair_scope_fingerprint(machine);
+    let plan = PodmanStorageCheckPlan {
+        schema_version: 1,
+        machine: machine.to_string(),
+        damaged_layer_records: ids.len() as u64,
+        candidate_set_sha256: fingerprint,
+        evidence_complete: complete,
+        exact_approval_phrase: (complete && !ids.is_empty()).then(|| {
+            format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")
+        }),
+        issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
+    };
+    Ok((plan, ids))
+}
+
+/// Capture bounded native Podman storage-check evidence.
+///
+/// The candidate fingerprint is evidence about the current damaged-layer set. The approval phrase
+/// is deliberately bound to the selected machine plus the exact broad native repair command,
+/// because `podman system check --repair` cannot be constrained to a caller-supplied layer list.
+pub fn plan_podman_storage_repair(
+    podman_bin: &Path,
+    machine: &str,
+) -> Result<PodmanStorageCheckPlan, String> {
+    storage_check_evidence(podman_bin, machine).map(|(plan, _)| plan)
+}
+
+/// Execute one explicitly machine-scoped native Podman storage repair and retain an auditable
+/// receipt even when the fresh postcheck cannot be parsed after the mutation occurred.
+pub fn execute_podman_storage_repair(
+    podman_bin: &Path,
+    machine: &str,
+    confirmation_phrase: &str,
+    rationale: &str,
+    executed_at_ms: u64,
+) -> Result<PodmanStorageRepairExecution, String> {
+    if executed_at_ms == 0 || rationale.trim().is_empty() || rationale != rationale.trim() {
+        return Err("podman-storage-repair-request-invalid".into());
+    }
+
+    let (plan, pre_ids) = storage_check_evidence(podman_bin, machine)?;
+    if !plan.evidence_complete || pre_ids.is_empty() {
+        return Err("podman-storage-repair-not-required".into());
+    }
+    if plan.exact_approval_phrase.as_deref() != Some(confirmation_phrase) {
+        return Err("podman-storage-repair-confirmation-mismatch".into());
+    }
+
+    let output = run_bounded(
+        podman_bin,
+        &[
+            "--connection",
+            machine,
+            "system",
+            "check",
+            "--quick",
+            "--repair",
+        ],
+        PODMAN_STORAGE_CHECK_TIMEOUT,
+        "podman-storage-repair",
+    )?;
+
+    let (postcheck_complete, repaired_layer_records, remaining_damaged_layer_records) =
+        match storage_check_evidence(podman_bin, machine) {
+            Ok((postcheck, post_ids)) => {
+                let remaining = post_ids.len() as u64;
+                let post_set = post_ids.into_iter().collect::<HashSet<_>>();
+                let repaired = pre_ids
+                    .iter()
+                    .filter(|id| !post_set.contains(id.as_str()))
+                    .count() as u64;
+                (postcheck.evidence_complete, repaired, remaining)
+            }
+            Err(_) => (false, 0, 0),
+        };
+
+    Ok(PodmanStorageRepairExecution {
+        schema_version: 1,
+        machine: machine.to_string(),
+        candidate_set_sha256: plan.candidate_set_sha256,
+        command: vec![
+            "podman".into(),
+            "--connection".into(),
+            machine.into(),
+            "system".into(),
+            "check".into(),
+            "--quick".into(),
+            "--repair".into(),
+        ],
+        status_code: output.status_code,
+        executed: output.status_code == 0
+            || (postcheck_complete && repaired_layer_records > 0),
+        repaired_layer_records,
+        remaining_damaged_layer_records,
+        postcheck_complete,
+        executed_at_ms,
+        rationale: rationale.to_string(),
+    })
 }
 
 fn exact_candidates(output: &str) -> Result<Vec<ExactCandidate>, String> {
