@@ -7,6 +7,8 @@ pub mod archive_git_tree;
 mod brew_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
+/// Read-only target-manifest and active-use evidence for one catalog cache.
+pub mod cache_cleanup_preview;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 pub mod cloud_adr;
