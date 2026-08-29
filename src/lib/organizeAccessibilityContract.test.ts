@@ -28,6 +28,15 @@ describe("Organize accessibility status contract", () => {
     expect(source).toContain('{results.filter((r) => r.ok).length}/{results.length}개 완료');
   });
 
+  it("keeps clipboard handoff feedback mounted before asynchronous status text changes", () => {
+    const source = readSource("src/lib/Organize.svelte");
+
+    expect(source).toContain(
+      '<p class="muted export-status live-region" role="status" aria-live="polite" aria-atomic="true">{exportStatus}</p>',
+    );
+    expect(source).not.toContain('{#if exportStatus}<p class="muted">{exportStatus}</p>{/if}');
+  });
+
   it("announces when undo succeeds but there is no recent move record to restore", () => {
     const source = readSource("src/lib/Organize.svelte");
 
