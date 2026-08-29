@@ -34,6 +34,8 @@ pub struct RawImageEvidence {
     pub allocated_bytes: Option<u64>,
     /// Path-free identity of the exact backing file observed by the plan.
     pub identity_sha256: Option<String>,
+    /// Path-free mutable state used to reject stale execution evidence.
+    pub freshness_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,6 +43,7 @@ pub struct PodmanHostCompactionPlan {
     pub supported: bool,
     pub machine_identity_sha256: Option<String>,
     pub backing_file_identity_sha256: Option<String>,
+    pub backing_file_freshness_sha256: Option<String>,
     pub active_container_count: Option<u64>,
     pub stop_command: Option<Vec<String>>,
     pub compaction_command: Option<Vec<String>>,
@@ -647,25 +650,33 @@ fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     #[cfg(not(unix))]
     let allocated_bytes = None;
     #[cfg(unix)]
-    let identity_sha256 = {
+    let (identity_sha256, freshness_sha256) = {
         use std::os::unix::fs::MetadataExt;
-        let mut hasher = Sha256::new();
-        hasher.update(b"disksage.podman-raw-image-identity.v1\0");
-        hasher.update(metadata.len().to_le_bytes());
-        hasher.update(metadata.dev().to_le_bytes());
-        hasher.update(metadata.ino().to_le_bytes());
-        hasher.update(metadata.blocks().to_le_bytes());
-        hasher.update(metadata.mtime().to_le_bytes());
-        hasher.update(metadata.mtime_nsec().to_le_bytes());
-        Some(lower_hex(&hasher.finalize()))
+        let mut identity = Sha256::new();
+        identity.update(b"disksage.podman-raw-image-identity.v2\0");
+        identity.update(metadata.dev().to_le_bytes());
+        identity.update(metadata.ino().to_le_bytes());
+        let mut freshness = Sha256::new();
+        freshness.update(b"disksage.podman-raw-image-freshness.v1\0");
+        freshness.update(metadata.len().to_le_bytes());
+        freshness.update(metadata.blocks().to_le_bytes());
+        freshness.update(metadata.mtime().to_le_bytes());
+        freshness.update(metadata.mtime_nsec().to_le_bytes());
+        (
+            Some(lower_hex(&identity.finalize())),
+            Some(lower_hex(&freshness.finalize())),
+        )
     };
     #[cfg(not(unix))]
     let identity_sha256 = None;
+    #[cfg(not(unix))]
+    let freshness_sha256 = None;
     Ok(RawImageEvidence {
         path: path.to_string_lossy().into_owned(),
         logical_bytes: metadata.len(),
         allocated_bytes,
         identity_sha256,
+        freshness_sha256,
     })
 }
 
@@ -687,13 +698,6 @@ fn host_compaction_plan(
             hasher.update(b"disksage.podman-machine-compaction-identity.v1\0");
             hasher.update(machine.name.as_bytes());
             hasher.update([0]);
-            hasher.update(machine.state.as_bytes());
-            hasher.update(
-                machine
-                    .configured_disk_bytes
-                    .unwrap_or_default()
-                    .to_le_bytes(),
-            );
             hasher.update(raw_identity.as_bytes());
             lower_hex(&hasher.finalize())
         });
@@ -713,6 +717,7 @@ fn host_compaction_plan(
         supported: false,
         machine_identity_sha256,
         backing_file_identity_sha256: raw_image.and_then(|raw| raw.identity_sha256.clone()),
+        backing_file_freshness_sha256: raw_image.and_then(|raw| raw.freshness_sha256.clone()),
         active_container_count,
         stop_command: None,
         compaction_command: None,
@@ -1336,6 +1341,7 @@ mod tests {
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(70 * GIB),
             identity_sha256: Some("a".repeat(64)),
+            freshness_sha256: Some("c".repeat(64)),
         };
         let result = assess(
             None,
@@ -1514,6 +1520,7 @@ mod tests {
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(20 * GIB),
             identity_sha256: Some("b".repeat(64)),
+            freshness_sha256: Some("d".repeat(64)),
         };
         let store = PodmanStoreEvidence {
             graph_root: "/private/guest".into(),

@@ -7,10 +7,8 @@ fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "disksage-{label}-{}-{nonce}",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("disksage-{label}-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&path).expect("create temp directory");
     path
 }
@@ -27,6 +25,15 @@ fn failed_native_trim_preserves_receipt_but_exits_nonzero() {
     std::fs::create_dir_all(&home).expect("create fake home");
 
     let colima = fake_bin.join("colima");
+    let podman_marker = temp.join("podman-invoked");
+    let podman = fake_bin.join("podman");
+    std::fs::write(
+        &podman,
+        format!("#!/bin/sh\ntouch '{}'\nexit 99\n", podman_marker.display()),
+    )
+    .expect("write fake podman");
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake podman executable");
     std::fs::write(
         &colima,
         r#"#!/bin/sh
@@ -34,7 +41,7 @@ case "$*" in
   "--version") exit 0 ;;
   "status --json") printf '%s\n' '{"status":"running"}'; exit 0 ;;
   "ssh -- true") exit 0 ;;
-  "ssh -- sudo fstrim -av") printf '%s\n' 'simulated trim failure' >&2; exit 7 ;;
+  "ssh -- sudo fstrim -av") printf '%s\n' 'bounded trim output'; printf '%s\n' 'simulated trim failure' >&2; exit 7 ;;
   *) exit 64 ;;
 esac
 "#,
@@ -65,6 +72,10 @@ esac
         .as_str()
         .expect("fresh plan exposes approval phrase")
         .to_owned();
+    assert!(
+        !podman_marker.exists(),
+        "selecting Colima must not invoke Podman"
+    );
 
     let execute_output = Command::new(binary)
         .args([
@@ -89,8 +100,12 @@ esac
         .expect("failed execution still preserves the JSON receipt");
     assert_eq!(receipt["status_code"], 7);
     assert_eq!(receipt["executed"], false);
+    assert_eq!(receipt["stdout"], "bounded trim output\n");
+    assert_eq!(receipt["stderr"], "simulated trim failure\n");
     assert!(
-        String::from_utf8_lossy(&execute_output.stderr).find("panicked").is_none(),
+        String::from_utf8_lossy(&execute_output.stderr)
+            .find("panicked")
+            .is_none(),
         "native command failure must remain an ordinary controlled CLI outcome"
     );
 

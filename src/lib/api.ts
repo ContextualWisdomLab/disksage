@@ -171,6 +171,13 @@ export interface PodmanReclaimPlan {
   evidence_complete: boolean;
   elapsed_ms: number;
   machine: { name: string; state: string; configured_disk_bytes: number | null } | null;
+  raw_image: {
+    path: string;
+    logical_bytes: number;
+    allocated_bytes: number | null;
+    identity_sha256: string | null;
+    freshness_sha256: string | null;
+  } | null;
   guest_filesystem: { total_bytes: number; used_bytes: number; available_bytes: number } | null;
   system_df: {
     images: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
@@ -191,6 +198,7 @@ export interface PodmanReclaimPlan {
     supported: boolean;
     machine_identity_sha256: string | null;
     backing_file_identity_sha256: string | null;
+    backing_file_freshness_sha256: string | null;
     active_container_count: number | null;
     stop_command: string[] | null;
     compaction_command: string[] | null;

@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Preserve bounded native trim output in headless receipts, probe only the selected runtime, and
+  separate Podman backing-file identity from mutable freshness evidence.
 - Expose the existing identity-bound Podman/Colima guest-trim plan and execution receipt through a
   headless CLI so storage recovery does not require the desktop UI.
 - Add a read-only Podman host-compaction safety plan that records backing-file identity, active

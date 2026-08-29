@@ -30,12 +30,16 @@ could corrupt running workloads and data-bearing volumes.
    trim.
 6. The standalone `disksage-runtime-storage` CLI calls the same Rust planner and executor as the
    desktop app. It does not add a second mutation implementation: inspection is the default, and
-   execution requires the current exact phrase plus a rationale.
+   execution requires the current exact phrase plus a rationale. It probes only the selected
+   runtime, and its bounded stdout and stderr are part of the versioned JSON receipt.
 7. The Podman reclaim plan binds the exact machine and backing-file identity, active-container
    count, rollback policy, and restart policy before considering host compaction. Podman 5.8 has no
    runtime-native compact or shrink command, so the current plan is read-only, publishes no stop or
    compaction command, and issues no approval phrase. A future executor requires zero active
    containers plus a runtime-native operation with rollback; raw-image tools remain prohibited.
+8. A backing file's stable identity (device and inode) is distinct from mutable freshness evidence
+   (length, allocation, and modification time). Future execution must bind and revalidate both;
+   ordinary guest writes must not be misrepresented as a different backing file.
 
 ## Consequences
 
@@ -55,7 +59,8 @@ could corrupt running workloads and data-bearing volumes.
 ## Evidence
 
 - Rust tests verify fixed command construction and fail-closed unavailable-runtime plans.
-- CLI tests verify that runtime selection is exact and execution authority is all-or-nothing.
+- CLI process tests verify that runtime selection does not invoke the unselected runtime, command
+  streams survive bounded receipt serialization, and execution authority is all-or-nothing.
 - Podman plan tests keep host compaction blocked without a native operation, even when no container
   is active, and bind backing-file identity without relying on a pathname alone.
 - Recovery and trim use distinct approvals; reachability is included in the plan fingerprint so a

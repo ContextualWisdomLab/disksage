@@ -84,10 +84,7 @@ fn run(values: &[String]) -> Result<(String, bool), String> {
             (serde_json::to_value(execution), successful)
         }
         _ => {
-            let plan = runtime_storage::inspect()
-                .into_iter()
-                .find(|plan| plan.runtime == args.runtime)
-                .ok_or("runtime-storage-plan-unavailable")?;
+            let plan = runtime_storage::inspect_one(args.runtime);
             (serde_json::to_value(plan), true)
         }
     };

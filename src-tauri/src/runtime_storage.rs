@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
@@ -63,9 +63,7 @@ pub struct RuntimeStorageExecution {
     pub runtime: RuntimeStorageKind,
     pub command: Vec<String>,
     pub status_code: i32,
-    #[serde(skip_serializing)]
     pub stdout: String,
-    #[serde(skip_serializing)]
     pub stderr: String,
     pub output_truncated: bool,
     pub executed: bool,
@@ -416,6 +414,11 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
             && (guest_running != Some(true) || guest_reachable.is_some()),
         issue,
     }
+}
+
+/// Inspect exactly one selected runtime without probing unrelated runtimes.
+pub fn inspect_one(runtime: RuntimeStorageKind) -> RuntimeStoragePlan {
+    inspect_runtime(runtime, now_ms())
 }
 
 /// Restart a runtime only when it reports running but its guest is unreachable.
