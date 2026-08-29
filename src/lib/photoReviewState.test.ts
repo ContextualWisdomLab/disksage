@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  manualPhotoSelectionCompatible,
   quarantineApprovalReady,
   selectionsForGroups,
   syncPhotoCandidatePaths,
@@ -40,4 +41,12 @@ describe("photo review interaction state", () => {
       .toEqual(["/scan/manual-1.png", "/scan/manual-2.png"]);
   });
 
+  it("rejects manual photo sets that cannot share one filesystem authority root", () => {
+    expect(manualPhotoSelectionCompatible(["C:\\photos\\a.png", "C:\\elsewhere\\b.png"])).toBe(true);
+    expect(manualPhotoSelectionCompatible(["C:\\photos\\a.png", "D:\\photos\\b.png"])).toBe(false);
+    expect(manualPhotoSelectionCompatible(["\\\\server\\share\\a.png", "\\\\server\\share\\nested\\b.png"])).toBe(true);
+    expect(manualPhotoSelectionCompatible(["\\\\server\\share-a\\a.png", "\\\\server\\share-b\\b.png"])).toBe(false);
+    expect(manualPhotoSelectionCompatible(["/photos/a.png", "/other/b.png"])).toBe(true);
+    expect(manualPhotoSelectionCompatible(["relative/a.png", "relative/b.png"])).toBe(false);
+  });
 });
