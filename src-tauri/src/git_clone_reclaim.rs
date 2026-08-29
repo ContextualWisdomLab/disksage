@@ -125,18 +125,6 @@ pub fn inventory_standalone_clones(
             }
             continue;
         }
-        if depth >= options.max_depth {
-            if std::fs::read_dir(&directory).is_ok_and(|entries| {
-                entries.filter_map(Result::ok).any(|entry| {
-                    entry
-                        .file_type()
-                        .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-                })
-            }) {
-                issues.push("git-clone-inventory-depth-limit-exceeded".into());
-            }
-            continue;
-        }
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(_) => {
@@ -160,7 +148,11 @@ pub fn inventory_standalone_clones(
                 continue;
             };
             if kind.is_dir() && !kind.is_symlink() {
-                queue.push_back((entry.path(), depth + 1));
+                if depth >= options.max_depth {
+                    issues.push("git-clone-inventory-depth-limit-exceeded".into());
+                } else {
+                    queue.push_back((entry.path(), depth + 1));
+                }
             }
         }
     }
