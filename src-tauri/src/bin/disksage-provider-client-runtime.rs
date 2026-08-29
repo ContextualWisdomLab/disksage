@@ -36,7 +36,8 @@ struct ProviderClientRuntimeAudit {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
+    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]\n\
+다음 단계: 공급자 앱 상태와 제시된 조치를 확인하세요. 이 명령은 공급자 앱을 재시작하지 않습니다."
 }
 
 #[cfg(target_os = "macos")]
@@ -261,13 +262,7 @@ mod tests {
         let first = directory.path().join("one.json").into_os_string();
         let second = directory.path().join("two.json").into_os_string();
         assert_eq!(
-            parse_args(&[
-                "--output".into(),
-                first,
-                "--output".into(),
-                second,
-            ])
-            .unwrap_err(),
+            parse_args(&["--output".into(), first, "--output".into(), second,]).unwrap_err(),
             "--output may be supplied once"
         );
     }
@@ -283,13 +278,7 @@ mod tests {
             .into_os_string();
 
         assert_eq!(
-            parse_args(&[
-                "--output".into(),
-                first,
-                "--output".into(),
-                second,
-            ])
-            .unwrap_err(),
+            parse_args(&["--output".into(), first, "--output".into(), second,]).unwrap_err(),
             "--output may be supplied once"
         );
     }

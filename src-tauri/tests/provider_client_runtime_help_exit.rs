@@ -4,8 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const EXPECTED_USAGE: &str =
-    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]";
+const EXPECTED_USAGE: &str = "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]\n다음 단계: 공급자 앱 상태와 제시된 조치를 확인하세요. 이 명령은 공급자 앱을 재시작하지 않습니다.";
 
 fn build_feature_gated_binary() -> PathBuf {
     let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -108,7 +107,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "mixed invalid invocation must remain visible"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -229,7 +231,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
@@ -259,7 +264,10 @@ fn provider_client_runtime_help_is_successful_and_invalid_arguments_are_bounded(
     let first_path = first.path().join("one.json");
     let second_path = second.path().join("two.json");
     let duplicate = Command::new(&binary)
-        .args([OsString::from("--output"), first_path.clone().into_os_string()])
+        .args([
+            OsString::from("--output"),
+            first_path.clone().into_os_string(),
+        ])
         .args([OsString::from("--output"), second_path.into_os_string()])
         .output()
         .expect("provider client-runtime CLI must launch for duplicate output validation");

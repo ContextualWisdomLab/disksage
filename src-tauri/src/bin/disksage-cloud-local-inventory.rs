@@ -38,7 +38,8 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
+    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]\n\
+다음 단계: 결과의 완전성과 공급자 상태를 검토하세요. 이 명령은 파일을 다운로드하거나 제거하지 않습니다."
 }
 
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {

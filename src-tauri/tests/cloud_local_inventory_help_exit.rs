@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const EXPECTED_USAGE: &str = "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]";
+const EXPECTED_USAGE: &str = "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]\n다음 단계: 결과의 완전성과 공급자 상태를 검토하세요. 이 명령은 파일을 다운로드하거나 제거하지 않습니다.";
 
 fn build_feature_gated_binary() -> PathBuf {
     let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -110,7 +110,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "mixed invalid invocation must remain visible"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -136,7 +139,10 @@ fn assert_duplicate_batch_option_is_bounded(binary: &Path, duplicate_args: &[&st
         "duplicate-option failure must not emit a successful inventory report"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "duplicate-option failure must remain visible"
+    );
 }
 
 fn assert_duplicate_all_roots_is_bounded(binary: &Path) {
@@ -190,7 +196,11 @@ fn assert_parser_admission_matrix_is_bounded(binary: &Path) {
         "--max-duration-ms",
         "--max-issues",
     ] {
-        assert_argument_failure(binary, &["--all-roots", flag], &format!("{flag} 값이 필요함"));
+        assert_argument_failure(
+            binary,
+            &["--all-roots", flag],
+            &format!("{flag} 값이 필요함"),
+        );
         assert_argument_failure(
             binary,
             &["--all-roots", flag, "not-a-number"],
@@ -198,11 +208,7 @@ fn assert_parser_admission_matrix_is_bounded(binary: &Path) {
         );
     }
 
-    assert_argument_failure(
-        binary,
-        &[],
-        "--cloud-root 또는 --all-roots 값이 필요함",
-    );
+    assert_argument_failure(binary, &[], "--cloud-root 또는 --all-roots 값이 필요함");
     assert_argument_failure(binary, &["--cloud-root"], "--cloud-root 값이 필요함");
     assert_argument_failure(
         binary,
@@ -228,7 +234,12 @@ fn assert_parser_admission_matrix_is_bounded(binary: &Path) {
     for relative in ["", "../escape", ".", "./Archive"] {
         assert_argument_failure(
             binary,
-            &["--cloud-root", absolute_root, "--relative-subpath", relative],
+            &[
+                "--cloud-root",
+                absolute_root,
+                "--relative-subpath",
+                relative,
+            ],
             "--relative-subpath는 안전한 상대 경로여야 함",
         );
     }
@@ -275,7 +286,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
