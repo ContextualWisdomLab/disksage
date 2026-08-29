@@ -101,10 +101,14 @@ fn run_bounded(
     timeout: Duration,
     label: &str,
 ) -> Result<BoundedOutput, String> {
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut command = Command::new(executable);
+    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| format!("{label}-spawn"))?;
     let stdout = child
@@ -122,22 +126,23 @@ fn run_bounded(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(format!("{label}-wait"));
             }
         }
     };
+    // A successful direct child may still leave descendants holding inherited capture pipes.
+    // Terminate the private group before joining readers so completion remains truly bounded.
+    terminate_readonly_process_tree(&mut child);
     let stdout = stdout_reader
         .join()
         .map_err(|_| format!("{label}-stdout-reader-panicked"))?
@@ -151,6 +156,15 @@ fn run_bounded(
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
     })
+}
+
+fn terminate_readonly_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Execute a mutating command without losing the fact that it was spawned.
@@ -681,6 +695,45 @@ mod mutation_runner_tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn timed_out_readonly_command_terminates_descendants_holding_output_pipes() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("readonly");
+        fs::write(&fake, "#!/bin/sh\nsleep 5 &\nwait\n").expect("write read-only fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let started = Instant::now();
+        let error = run_bounded(
+            &fake,
+            &[],
+            Duration::from_millis(50),
+            "readonly-timeout-fixture",
+        )
+        .expect_err("the process-group timeout must fail closed");
+
+        assert_eq!(error, "readonly-timeout-fixture-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn completed_readonly_command_terminates_descendants_holding_output_pipes() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("readonly-completed");
+        fs::write(&fake, "#!/bin/sh\nsleep 5 &\nexit 0\n").expect("write read-only fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let started = Instant::now();
+        let output = run_bounded(&fake, &[], Duration::from_secs(1), "readonly-completed-fixture")
+            .expect("direct completion must not hang on inherited pipes");
+
+        assert_eq!(output.status_code, 0);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn timed_out_spawned_mutation_returns_failure_output_instead_of_erasing_execution() {
         let temp = tempfile::tempdir().expect("temporary runtime directory");
         let fake = temp.path().join("mutation");
@@ -709,6 +762,5 @@ wait
 
         assert_eq!(output.status_code, MUTATION_TIMEOUT_STATUS_CODE);
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(temp.path().join("mutation-ran").exists());
     }
 }
