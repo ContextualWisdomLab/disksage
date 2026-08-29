@@ -8,6 +8,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 16_384;
+const MAX_NORMALIZED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -87,6 +89,24 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
     let info = reader.info();
     let width = info.width;
     let height = info.height;
+    let normalized_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(8))
+        .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || normalized_bytes > MAX_NORMALIZED_IMAGE_BYTES
+    {
+        return Err("photo-decoded-size-unsupported".into());
+    }
+    let output_buffer_size = reader
+        .output_buffer_size()
+        .ok_or("photo-decoded-size-unavailable")?;
+    if u64::try_from(output_buffer_size).unwrap_or(u64::MAX) > MAX_NORMALIZED_IMAGE_BYTES {
+        return Err("photo-decoded-size-unsupported".into());
+    }
     let metadata_field_count = 3
         + u32::from(info.exif_metadata.is_some())
         + u32::from(info.icc_profile.is_some())
@@ -103,12 +123,7 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
         png::BitDepth::Eight => 8,
         png::BitDepth::Sixteen => 16,
     };
-    let mut decoded = vec![
-        0;
-        reader
-            .output_buffer_size()
-            .ok_or("photo-decoded-size-unavailable")?
-    ];
+    let mut decoded = vec![0; output_buffer_size];
     let output = reader
         .next_frame(&mut decoded)
         .map_err(|_| "photo-decode-failed".to_string())?;
@@ -137,31 +152,57 @@ fn normalize_rgba16(
         return Err("photo-normalized-depth-unsupported".into());
     }
     let channels = match color {
-        png::ColorType::Grayscale => 1,
+        png::ColorType::Grayscale => 1usize,
         png::ColorType::GrayscaleAlpha => 2,
         png::ColorType::Rgb => 3,
         png::ColorType::Rgba => 4,
         png::ColorType::Indexed => return Err("photo-indexed-expansion-incomplete".into()),
     };
     let sample_bytes = usize::from(depth == png::BitDepth::Sixteen) + 1;
-    if bytes.len() % (channels * sample_bytes) != 0 {
+    let pixel_stride = channels
+        .checked_mul(sample_bytes)
+        .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
+    if bytes.len() % pixel_stride != 0 {
         return Err("photo-decoded-buffer-invalid".into());
     }
-    let samples: Vec<u16> = if sample_bytes == 1 {
-        bytes.iter().map(|value| u16::from(*value) * 257).collect()
-    } else {
-        bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-            .collect()
+    let pixel_count = bytes.len() / pixel_stride;
+    let normalized_capacity = pixel_count
+        .checked_mul(8)
+        .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
+    if u64::try_from(normalized_capacity).unwrap_or(u64::MAX) > MAX_NORMALIZED_IMAGE_BYTES {
+        return Err("photo-decoded-size-unsupported".into());
+    }
+    let sample = |pixel: &[u8], channel: usize| -> u16 {
+        let offset = channel * sample_bytes;
+        if sample_bytes == 1 {
+            u16::from(pixel[offset]) * 257
+        } else {
+            u16::from_be_bytes([pixel[offset], pixel[offset + 1]])
+        }
     };
-    let mut normalized = Vec::with_capacity(samples.len() / channels * 8);
-    for pixel in samples.chunks_exact(channels) {
+    let mut normalized = Vec::with_capacity(normalized_capacity);
+    for pixel in bytes.chunks_exact(pixel_stride) {
         let values = match color {
-            png::ColorType::Grayscale => [pixel[0], pixel[0], pixel[0], u16::MAX],
-            png::ColorType::GrayscaleAlpha => [pixel[0], pixel[0], pixel[0], pixel[1]],
-            png::ColorType::Rgb => [pixel[0], pixel[1], pixel[2], u16::MAX],
-            png::ColorType::Rgba => [pixel[0], pixel[1], pixel[2], pixel[3]],
+            png::ColorType::Grayscale => {
+                let gray = sample(pixel, 0);
+                [gray, gray, gray, u16::MAX]
+            }
+            png::ColorType::GrayscaleAlpha => {
+                let gray = sample(pixel, 0);
+                [gray, gray, gray, sample(pixel, 1)]
+            }
+            png::ColorType::Rgb => [
+                sample(pixel, 0),
+                sample(pixel, 1),
+                sample(pixel, 2),
+                u16::MAX,
+            ],
+            png::ColorType::Rgba => [
+                sample(pixel, 0),
+                sample(pixel, 1),
+                sample(pixel, 2),
+                sample(pixel, 3),
+            ],
             png::ColorType::Indexed => unreachable!(),
         };
         for value in values {
