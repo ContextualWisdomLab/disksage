@@ -20,18 +20,31 @@ pub struct ScanResult {
 }
 
 pub const TOP_FILES_CAP: usize = 1000;
+const CLOUD_SCAN_GUIDANCE: &str = "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
+
+fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Library").join("CloudStorage"),
+        home.join("Library").join("Mobile Documents"),
+        home.join("Library")
+            .join("Application Support")
+            .join("FileProvider"),
+    ]
+}
+
+fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path == root || path.starts_with(root))
+        || path.components().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new("File Provider Storage")
+        })
+}
 
 #[cfg(target_os = "macos")]
 fn provider_managed_roots() -> Vec<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
-        .map(|home| {
-            vec![
-                home.join("Library").join("CloudStorage"),
-                home.join("Library").join("Mobile Documents"),
-            ]
-        })
+        .map(|home| macos_provider_managed_roots_for_home(&home))
         .unwrap_or_default()
 }
 
@@ -40,14 +53,34 @@ fn provider_managed_roots() -> Vec<PathBuf> {
     Vec::new()
 }
 
+#[cfg(target_os = "macos")]
 fn is_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
-    roots.iter().any(|root| path == root || path.starts_with(root))
+    is_macos_provider_managed_path(path, roots)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_provider_managed_path(_path: &Path, _roots: &[PathBuf]) -> bool {
+    false
+}
+
+fn scan_root_access_issue_with_roots(
+    root: &Path,
+    roots: &[PathBuf],
+) -> Option<&'static str> {
+    let traversal_root = read_only_traversal_root(root);
+    is_macos_provider_managed_path(&traversal_root, roots).then_some(CLOUD_SCAN_GUIDANCE)
 }
 
 pub(crate) fn scan_root_access_issue(root: &Path) -> Option<&'static str> {
-    is_provider_managed_path(root, &provider_managed_roots()).then_some(
-        "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.",
-    )
+    #[cfg(target_os = "macos")]
+    {
+        return scan_root_access_issue_with_roots(root, &provider_managed_roots());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = root;
+        None
+    }
 }
 
 pub fn scan_dir(
@@ -246,11 +279,11 @@ mod tests {
     #[test]
     fn provider_managed_path_matching_is_component_aware() {
         let root = PathBuf::from("/home/customer/Library/CloudStorage");
-        assert!(is_provider_managed_path(
+        assert!(is_macos_provider_managed_path(
             &root.join("provider/item.bin"),
             std::slice::from_ref(&root),
         ));
-        assert!(!is_provider_managed_path(
+        assert!(!is_macos_provider_managed_path(
             Path::new("/home/customer/Library/CloudStorage-backup"),
             std::slice::from_ref(&root),
         ));
