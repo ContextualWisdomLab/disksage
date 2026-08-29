@@ -149,11 +149,12 @@ fn restore_staged(staged: &Path, original: &Path) -> Result<(), String> {
 /// Plans only direct Gradle daemon logs whose filename PID is no longer live and which have no
 /// open file handle. Other daemon state, registry files, and locks are never candidates.
 pub fn plan_gradle_daemon_logs(root: &Path) -> Result<Vec<GradleDaemonLogCandidate>, String> {
-    if !fs::symlink_metadata(root)
-        .map_err(|_| "gradle-daemon-root-unreadable")?
-        .file_type()
-        .is_dir()
-    {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("gradle-daemon-root-unreadable".into()),
+    };
+    if !metadata.file_type().is_dir() {
         return Err("gradle-daemon-root-not-directory".into());
     }
     let mut candidates = Vec::new();
@@ -276,6 +277,15 @@ pub fn execute_gradle_daemon_logs(
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_daemon_history_is_an_empty_plan() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let plan = plan_gradle_daemon_logs(&temp.path().join("daemon")).unwrap();
+
+        assert!(plan.is_empty());
+    }
 
     #[test]
     fn stale_daemon_log_is_revalidated_removed_and_journaled() {
