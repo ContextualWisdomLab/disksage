@@ -257,6 +257,38 @@ mod tests {
     }
 
     #[test]
+    fn macos_provider_policy_covers_private_fileprovider_forms() {
+        let home = PathBuf::from("/Users/customer");
+        let roots = macos_provider_managed_roots_for_home(&home);
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Application Support/FileProvider/com.example.provider/data"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage Backup/item"),
+            &roots,
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_root_alias_is_resolved_before_access_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let managed = home.join("Library/CloudStorage/account");
+        fs::create_dir_all(&managed).unwrap();
+        let selected = tmp.path().join("selected-cloud-root");
+        std::os::unix::fs::symlink(&managed, &selected).unwrap();
+        let roots = macos_provider_managed_roots_for_home(&home);
+
+        assert!(scan_root_access_issue_with_roots(&selected, &roots).is_some());
+    }
+
+    #[test]
     fn progress_callback_fires_at_interval() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
