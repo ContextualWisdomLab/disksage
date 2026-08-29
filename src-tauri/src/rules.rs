@@ -473,6 +473,7 @@ impl CatalogRoot {
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
     catalog(bases)
         .into_iter()
+        .filter(|(_, _, path)| !crate::cloud::path_inside_managed_file_provider_storage(path))
         .map(|(id, label, path)| {
             let root = CatalogRoot::open(&path);
             let exists = root.is_some();
