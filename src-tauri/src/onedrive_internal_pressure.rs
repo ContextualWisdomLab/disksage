@@ -151,9 +151,16 @@ fn provider_cache_root(home: &Path) -> Result<PathBuf, String> {
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn scan_cache(root: &Path) -> Result<(u64, u64, String), String> {
+    scan_cache_with_limits(root, 100_000, Duration::from_secs(5))
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn scan_cache_with_limits(
+    root: &Path,
+    max_entries: u64,
+    max_duration: Duration,
+) -> Result<(u64, u64, String), String> {
     use std::os::unix::fs::MetadataExt;
-    const MAX_ENTRIES: u64 = 100_000;
-    const MAX_DURATION: Duration = Duration::from_secs(5);
     let started = Instant::now();
     let mut stack = vec![root.to_path_buf()];
     let mut allocated = 0_u64;
@@ -161,7 +168,7 @@ fn scan_cache(root: &Path) -> Result<(u64, u64, String), String> {
     let mut visited = 0_u64;
     let mut hasher = blake3::Hasher::new();
     while let Some(path) = stack.pop() {
-        if visited >= MAX_ENTRIES || started.elapsed() >= MAX_DURATION {
+        if visited >= max_entries || started.elapsed() >= max_duration {
             return Err("onedrive-pressure-cache-scan-bounded".into());
         }
         visited += 1;
@@ -177,10 +184,18 @@ fn scan_cache(root: &Path) -> Result<(u64, u64, String), String> {
             hasher.update(&metadata.blocks().to_le_bytes());
             hasher.update(&metadata.mtime().to_le_bytes());
         } else if metadata.is_dir() {
-            let mut children = std::fs::read_dir(&path)
-                .map_err(|_| "onedrive-pressure-cache-directory-unreadable".to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| "onedrive-pressure-cache-entry-unavailable".to_string())?;
+            let mut children = Vec::new();
+            let entries = std::fs::read_dir(&path)
+                .map_err(|_| "onedrive-pressure-cache-directory-unreadable".to_string())?;
+            let remaining = max_entries.saturating_sub(visited);
+            for entry in entries {
+                if started.elapsed() >= max_duration || children.len() as u64 >= remaining {
+                    return Err("onedrive-pressure-cache-scan-bounded".into());
+                }
+                children.push(
+                    entry.map_err(|_| "onedrive-pressure-cache-entry-unavailable".to_string())?,
+                );
+            }
             children.sort_by_key(std::fs::DirEntry::file_name);
             stack.extend(children.into_iter().rev().map(|entry| entry.path()));
         }
@@ -268,6 +283,18 @@ mod tests {
         assert_eq!(
             assess(&current, None, None).state,
             OneDriveInternalPressureState::Unavailable
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn one_directory_cannot_bypass_the_entry_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a"), b"a").unwrap();
+        std::fs::write(temp.path().join("b"), b"b").unwrap();
+        assert_eq!(
+            scan_cache_with_limits(temp.path(), 2, Duration::from_secs(5)).unwrap_err(),
+            "onedrive-pressure-cache-scan-bounded"
         );
     }
 }
