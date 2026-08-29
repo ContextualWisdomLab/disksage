@@ -1208,3 +1208,9 @@ runner's private workspace temp root instead of weakening the shared production 
   independently confirms the storage inconsistency. DiskSage therefore records no prune or
   physical gain until an explicit native storage-repair plan preserves running-container and
   data-volume dependencies, rechecks integrity, and regenerates the orphan fingerprint.
+- That native plan subsequently fingerprinted 129 damaged layers and executed the non-forced
+  Podman repair. Fresh postcheck evidence shows 128 repaired and one dependent damaged layer
+  retained. Native guest trim then reduced the sparse raw-image allocation from 44,208,422,912
+  bytes to about 20.3 GiB; the bounded host observation increased APFS availability by
+  22,816,916 KiB. The remaining stopped container and its volumes stay preserved because neither
+  exact container removal nor non-forced repair can safely unlink its damaged writable layer.

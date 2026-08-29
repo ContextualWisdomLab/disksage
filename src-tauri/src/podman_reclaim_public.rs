@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 mod implementation;
 
 pub use implementation::{
-    probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
-    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
-    PodmanRecommendedActionKind, PodmanStoreEvidence, PodmanSystemDfCategoryEvidence,
-    PodmanSystemDfEvidence, PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE,
-    DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
+    execute_podman_storage_repair, plan_podman_storage_repair, probe_podman_reclaim,
+    GuestFilesystemEvidence, PodmanDanglingImagePruneExecution, PodmanMachineEvidence,
+    PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
+    PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStorageRepairExecution,
+    PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
+    PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
+    PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
@@ -220,7 +222,10 @@ fn candidate_set_sha256(candidates: &[ExactCandidate]) -> String {
     lower_hex(&hasher.finalize())
 }
 
-fn list_exact_candidates(podman_bin: &Path, requested_machine: &str) -> Result<Vec<ExactCandidate>, String> {
+fn list_exact_candidates(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<Vec<ExactCandidate>, String> {
     let output = run_text(
         podman_bin,
         &[
@@ -280,7 +285,9 @@ pub fn prune_dangling_images(
     let approved_candidates = list_exact_candidates(podman_bin, requested_machine)?;
     if approved_candidates.is_empty()
         || approved_candidates.len() > MAX_EXACT_DELETE_IDS
-        || approved_candidates.iter().any(|candidate| !candidate.tags.is_empty())
+        || approved_candidates
+            .iter()
+            .any(|candidate| !candidate.tags.is_empty())
     {
         return Err("podman-prune-tagged-empty-or-oversized-candidate-set".into());
     }
@@ -293,7 +300,9 @@ pub fn prune_dangling_images(
     let revalidated_candidates = list_exact_candidates(podman_bin, requested_machine)?;
     if revalidated_candidates != approved_candidates
         || candidate_set_sha256(&revalidated_candidates) != approved_sha
-        || revalidated_candidates.iter().any(|candidate| !candidate.tags.is_empty())
+        || revalidated_candidates
+            .iter()
+            .any(|candidate| !candidate.tags.is_empty())
     {
         return Err("podman-prune-candidate-set-changed".into());
     }
@@ -310,7 +319,11 @@ pub fn prune_dangling_images(
         "rm".to_string(),
         "--no-prune".to_string(),
     ];
-    remove_args.extend(revalidated_candidates.iter().map(|candidate| candidate.id.clone()));
+    remove_args.extend(
+        revalidated_candidates
+            .iter()
+            .map(|candidate| candidate.id.clone()),
+    );
     let remove_arg_refs = remove_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = run_bounded(
         podman_bin,

@@ -199,6 +199,15 @@ impl OrphanCategory {
             Self::Network => ["network", "rm"],
         }
     }
+
+    fn exact_delete_options(self) -> &'static [&'static str] {
+        match self {
+            // Candidates are freshly proven non-running. Force lets Podman unlink a stopped
+            // container whose writable layer is damaged; volume removal remains separately gated.
+            Self::Container => &["--force"],
+            _ => &[],
+        }
+    }
 }
 
 /// Per-category candidate evidence. Candidate identities are never rendered in reports;
@@ -725,6 +734,12 @@ fn redacted_exact_delete_command(
             .into_iter()
             .map(str::to_string),
     );
+    command.extend(
+        category
+            .exact_delete_options()
+            .iter()
+            .map(|value| (*value).to_string()),
+    );
     if has_candidates {
         command.push("<candidate-set>".to_string());
     }
@@ -980,8 +995,10 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                let candidate_ids: Vec<String> = candidates
+                    .iter()
+                    .map(|candidate| candidate.id.clone())
+                    .collect();
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1010,7 +1027,12 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 })?;
                 let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
-                    Some(summarize_candidates(category, total, &refs, Some(size_sum))?),
+                    Some(summarize_candidates(
+                        category,
+                        total,
+                        &refs,
+                        Some(size_sum),
+                    )?),
                     candidate_ids,
                 )
             }
@@ -1070,39 +1092,38 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         .as_deref()
                         .ok_or_else(|| "network-id-missing".to_string())
                         .and_then(|id| normalize_hex_id(id, "network"))?;
-                    let has_attached_containers = if target.kind
-                        == ContainerRuntimeKind::PodmanMachine
-                    {
-                        let filter = format!("network={network_id}");
-                        let mut membership_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        membership_args.extend([
-                            "container",
-                            "ps",
-                            "--all",
-                            "--filter",
-                            &filter,
-                            "--format",
-                            "json",
-                        ]);
-                        !split_json_envelopes(&command_text(
-                            &target.binary_path,
-                            &membership_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-membership",
-                        )?)?
-                        .is_empty()
-                    } else {
-                        let mut inspect_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        inspect_args.extend(["network", "inspect", &network_id]);
-                        network_has_attached_containers(&command_text(
-                            &target.binary_path,
-                            &inspect_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-inspect",
-                        )?)?
-                    };
+                    let has_attached_containers =
+                        if target.kind == ContainerRuntimeKind::PodmanMachine {
+                            let filter = format!("network={network_id}");
+                            let mut membership_args: Vec<&str> =
+                                prefix.iter().skip(1).map(String::as_str).collect();
+                            membership_args.extend([
+                                "container",
+                                "ps",
+                                "--all",
+                                "--filter",
+                                &filter,
+                                "--format",
+                                "json",
+                            ]);
+                            !split_json_envelopes(&command_text(
+                                &target.binary_path,
+                                &membership_args,
+                                ORPHAN_COMMAND_TIMEOUT,
+                                "orphan-network-membership",
+                            )?)?
+                            .is_empty()
+                        } else {
+                            let mut inspect_args: Vec<&str> =
+                                prefix.iter().skip(1).map(String::as_str).collect();
+                            inspect_args.extend(["network", "inspect", &network_id]);
+                            network_has_attached_containers(&command_text(
+                                &target.binary_path,
+                                &inspect_args,
+                                ORPHAN_COMMAND_TIMEOUT,
+                                "orphan-network-inspect",
+                            )?)?
+                        };
                     if has_attached_containers {
                         attached.push(record.name.clone());
                     }
@@ -1254,6 +1275,12 @@ pub fn execute_container_orphan_prune(
             .exact_delete_subcommand()
             .into_iter()
             .map(str::to_string),
+    );
+    owned_args.extend(
+        category
+            .exact_delete_options()
+            .iter()
+            .map(|value| (*value).to_string()),
     );
     owned_args.extend(plan.candidate_ids.iter().cloned());
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
@@ -1420,9 +1447,7 @@ mod tests {
 
     #[test]
     fn docker_container_plain_name_is_one_name() {
-        let output = format!(
-            "{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}"
-        );
+        let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}");
         assert_eq!(parse_container_records(&output).unwrap()[0].names, ["web"]);
     }
 
@@ -1687,8 +1712,7 @@ mod tests {
             "network-invalid-name"
         );
         assert_eq!(
-            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]")
-                .unwrap_err(),
+            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]").unwrap_err(),
             "network-invalid-name"
         );
     }
@@ -1769,6 +1793,10 @@ mod tests {
         assert_eq!(
             OrphanCategory::Container.exact_delete_subcommand(),
             ["container", "rm"]
+        );
+        assert_eq!(
+            OrphanCategory::Container.exact_delete_options(),
+            ["--force"]
         );
         assert_eq!(
             OrphanCategory::Image.exact_delete_subcommand(),
