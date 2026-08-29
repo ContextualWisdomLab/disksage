@@ -239,13 +239,16 @@ export interface RuntimeStoragePlan {
   executable_available: boolean;
   guest_running: boolean | null;
   guest_reachable: boolean | null;
+  running_container_count: number | null;
   trim_command: string[] | null;
+  stop_command: string[] | null;
   recovery_command: string[][] | null;
   host_compaction_supported: boolean;
   host_compaction_blockers: string[];
   observed_at_ms: number;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
+  stop_approval_phrase: string | null;
   recovery_approval_phrase: string | null;
   evidence_complete: boolean;
   issue: string | null;
@@ -284,6 +287,12 @@ export interface RuntimeStorageRecoveryExecution {
   rationale: string;
 }
 
+export interface RuntimeStorageStopExecution extends Omit<RuntimeStorageExecution, "schema_kind"> {
+  schema_kind: "disksage.runtime-storage-stop-execution";
+  running_container_count_before: number;
+  guest_running_after: boolean | null;
+}
+
 export const inspectRuntimeStorage = () =>
   invoke<RuntimeStoragePlan[]>("inspect_runtime_storage");
 
@@ -303,6 +312,14 @@ export const executeRuntimeStorageRecovery = (
   rationale: string,
 ) => invoke<RuntimeStorageRecoveryExecution>("execute_runtime_storage_recovery", {
   runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export const executeInactivePodmanMachineStop = (
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageStopExecution>("execute_inactive_podman_machine_stop", {
   confirmationPhrase,
   rationale,
 });

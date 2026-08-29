@@ -62,6 +62,7 @@ describe("api wrappers", () => {
       [() => api.inspectRuntimeStorage(), "inspect_runtime_storage"],
       [() => api.executeRuntimeStorageTrim("colima", "trim", "reviewed guest trim"), "execute_runtime_storage_trim", { runtime: "colima", confirmationPhrase: "trim", rationale: "reviewed guest trim" }],
       [() => api.executeRuntimeStorageRecovery("colima", "recover", "reviewed guest recovery"), "execute_runtime_storage_recovery", { runtime: "colima", confirmationPhrase: "recover", rationale: "reviewed guest recovery" }],
+      [() => api.executeInactivePodmanMachineStop("stop", "reviewed inactive machine"), "execute_inactive_podman_machine_stop", { confirmationPhrase: "stop", rationale: "reviewed inactive machine" }],
       [() => api.validateJudgeCalibration({ schema_version: 1, judgment_id: "a".repeat(64), categories: 2, model_labels: [0, 1], human_labels: [0, 1] }), "validate_judge_calibration", { evidence: { schema_version: 1, judgment_id: "a".repeat(64), categories: 2, model_labels: [0, 1], human_labels: [0, 1] } }],
       [() => api.executeBrewCleanup("a".repeat(64), "b".repeat(64), "DiskSage Homebrew cleanup 승인", "reviewed dry-run"), "execute_brew_cleanup", { planFingerprint: "a".repeat(64), judgmentId: "b".repeat(64), confirmationPhrase: "DiskSage Homebrew cleanup 승인", rationale: "reviewed dry-run" }],
       [() => api.getSettings(), "get_settings"],
