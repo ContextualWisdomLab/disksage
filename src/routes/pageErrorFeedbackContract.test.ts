@@ -36,12 +36,12 @@ describe("main scan and navigation failure feedback", () => {
     expect(openScope).toContain('console.error("folder navigation failed");');
     expect(jumpScope).toContain('console.error("folder navigation failed");');
 
-    expect(mountScope).toContain("디스크 루트 목록을 불러오지 못했습니다.");
-    expect(mountScope).toContain("스캔 결과를 불러오지 못했습니다.");
-    expect(mountScope).toContain("스캔 이벤트 연결을 준비하지 못했습니다.");
-    expect(scanScope).toContain("스캔을 시작하지 못했습니다.");
-    expect(openScope).toContain("폴더 내용을 불러오지 못했습니다.");
-    expect(jumpScope).toContain("폴더 내용을 불러오지 못했습니다.");
+    expect(mountScope).toContain("디스크 목록을 불러오지 못했습니다. DiskSage를 다시 열어 주세요.");
+    expect(mountScope).toContain("스캔 결과를 불러오지 못했습니다. 같은 폴더를 다시 스캔하세요.");
+    expect(mountScope).toContain("스캔을 준비하지 못했습니다. DiskSage를 다시 열어 주세요.");
+    expect(scanScope).toContain("스캔을 시작하지 못했습니다. 폴더를 다시 선택한 뒤 재시도하세요.");
+    expect(openScope).toContain("폴더 내용을 불러오지 못했습니다. 상위 폴더로 돌아가 다시 여세요.");
+    expect(jumpScope).toContain("폴더 내용을 불러오지 못했습니다. 상위 폴더로 돌아가 다시 여세요.");
   });
 
   it("clears stale feedback and invalidates navigation before issuing new requests", () => {

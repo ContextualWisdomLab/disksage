@@ -14,13 +14,17 @@ describe("canonical scan-entry accessibility surface", () => {
     const page = readSource("src/routes/+page.svelte");
 
     expect(page).toContain(
-      '<div class="entry-scroll" role="region" tabindex="0" aria-label="현재 폴더 항목 목록">',
+      '<a class="entry-focus" href="#current-folder-entries">폴더 항목 탐색 시작</a>',
+    );
+    expect(page).toContain(
+      '<div id="current-folder-entries" class="entry-scroll" role="region" tabindex="-1" aria-label="현재 폴더 항목 목록">',
     );
     expect(page).toContain('<ul class="entries">');
     expect(page).toContain("{#each node.entries as e}");
     expect(page).toContain('onclick={() => open(e.path)}');
     expect(page).toContain("{fmtBytes(e.size)}");
     expect(page).toContain(".entry-scroll:focus-visible");
+    expect(page).toContain(".entry-focus");
   });
 
   it("gives an empty scan result a visible next action instead of a blank list", () => {

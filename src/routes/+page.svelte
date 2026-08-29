@@ -26,7 +26,7 @@
       selectedRoot = roots[0] ?? "";
     } catch {
       console.error("disk root load failed");
-      operationError = "디스크 루트 목록을 불러오지 못했습니다.";
+      operationError = "디스크 목록을 불러오지 못했습니다. DiskSage를 다시 열어 주세요.";
     }
 
     try {
@@ -51,12 +51,12 @@
           node = null;
           top = [];
           console.error("post-scan result load failed");
-          operationError = "스캔 결과를 불러오지 못했습니다.";
+          operationError = "스캔 결과를 불러오지 못했습니다. 같은 폴더를 다시 스캔하세요.";
         }
       });
     } catch {
       console.error("scan event registration failed");
-      operationError = "스캔 이벤트 연결을 준비하지 못했습니다.";
+      operationError = "스캔을 준비하지 못했습니다. DiskSage를 다시 열어 주세요.";
     }
   });
 
@@ -71,7 +71,7 @@
     } catch {
       scanning = false;
       console.error("scan start failed");
-      operationError = "스캔을 시작하지 못했습니다.";
+      operationError = "스캔을 시작하지 못했습니다. 폴더를 다시 선택한 뒤 재시도하세요.";
     }
   }
 
@@ -86,7 +86,7 @@
     } catch {
       if (seq === navSeq) {
         console.error("folder navigation failed");
-        operationError = "폴더 내용을 불러오지 못했습니다.";
+        operationError = "폴더 내용을 불러오지 못했습니다. 상위 폴더로 돌아가 다시 여세요.";
       }
     }
   }
@@ -102,7 +102,7 @@
     } catch {
       if (seq === navSeq) {
         console.error("folder navigation failed");
-        operationError = "폴더 내용을 불러오지 못했습니다.";
+        operationError = "폴더 내용을 불러오지 못했습니다. 상위 폴더로 돌아가 다시 여세요.";
       }
     }
   }
@@ -139,7 +139,8 @@
       {/each}
     </nav>
     <Treemap {node} onOpen={open} />
-    <div class="entry-scroll" role="region" tabindex="0" aria-label="현재 폴더 항목 목록">
+    <a class="entry-focus" href="#current-folder-entries">폴더 항목 탐색 시작</a>
+    <div id="current-folder-entries" class="entry-scroll" role="region" tabindex="-1" aria-label="현재 폴더 항목 목록">
       {#if node.entries.length === 0}
         <p class="empty-entries" role="status">표시할 항목이 없습니다. 상위 폴더로 이동하거나 다른 폴더를 스캔하세요.</p>
       {:else}
@@ -183,6 +184,7 @@
   .crumb { background: none; border: none; color: #06c; cursor: pointer; padding: 0; }
   .entry-scroll { max-height: 40vh; overflow-y: auto; }
   .entry-scroll:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .entry-focus { display: inline-block; margin-block-end: 0.35rem; }
   .entries { list-style: none; padding: 0; margin: 0; }
   .entries li { display: flex; justify-content: space-between; padding: 2px 0; }
   .dir { background: none; border: none; cursor: pointer; font: inherit; padding: 0; }
