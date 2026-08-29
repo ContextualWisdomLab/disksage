@@ -89,7 +89,8 @@ fn run() -> Result<(), String> {
         let execution_failed = receipt.status_code != 0
             || receipt.execution_error.is_some()
             || receipt.output_truncated
-            || receipt.capacity_postcheck_error.is_some();
+            || receipt.capacity_postcheck_error.is_some()
+            || receipt.result_record_error.is_some();
         (serde_json::to_value(receipt), execution_failed)
     } else {
         if fingerprint.is_some()
