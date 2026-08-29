@@ -109,6 +109,59 @@ fn eligible_plan_serializes_every_execution_authority_value() {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
+fn execution_provisions_an_absent_journal_parent_after_valid_approval() {
+    let temp = tempfile::tempdir().unwrap();
+    marker_bound_target(&temp);
+    let path = isolated_tool_path(&temp, b"#!/bin/sh\nexit 1\n");
+
+    let plan_output = run_plan_with_tmp(temp.path(), Some(&path));
+    assert!(
+        plan_output.status.success(),
+        "planning failed: {}",
+        String::from_utf8_lossy(&plan_output.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&plan_output.stdout).unwrap();
+    let candidate = plan["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["artifact"]["kind"] == "target")
+        .expect("target candidate");
+    let fingerprint = candidate["candidate_fingerprint"].as_str().unwrap();
+    let phrase = candidate["exact_approval_phrase"].as_str().unwrap();
+    let journal = temp.path().join("evidence/audit/journal.jsonl");
+    assert!(!journal.parent().unwrap().exists());
+
+    let binary = env!("CARGO_BIN_EXE_disksage-temp-reclaim");
+    let output = Command::new(binary)
+        .env("TMPDIR", temp.path())
+        .env("PATH", &path)
+        .arg("--execute-fingerprint")
+        .arg(fingerprint)
+        .arg("--approved-by")
+        .arg("local:test-user")
+        .arg("--approval-phrase")
+        .arg(phrase)
+        .arg("--journal-path")
+        .arg(&journal)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "valid execution with a new journal parent failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(journal.is_file(), "execution must persist the journal it advertises");
+    assert!(
+        !temp.path().join("project/target").exists(),
+        "the approved fixture must have crossed the real reversible Trash boundary"
+    );
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
 fn exactly_sixty_four_candidates_remain_a_complete_eligible_plan() {
     let temp = tempfile::tempdir().unwrap();
     for index in 0..64 {
