@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod home_resolution;
+#[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;

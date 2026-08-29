@@ -38,4 +38,23 @@ fn userprofile_only_windows_environment_still_discovers_build_roots() {
     assert_eq!(report["candidate_count"], 1);
     assert_eq!(report["candidates"][0]["kind"], "target");
     assert_eq!(report["candidates"][0]["project"], "cargo-app");
+
+    let home_text = home.to_string_lossy();
+    let fallback = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))
+        .args(["--root", temp.path().to_str().expect("UTF-8 temp path")])
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("HOMEDRIVE", &home_text[..2])
+        .env("HOMEPATH", &home_text[2..])
+        .env("APPDATA", &appdata)
+        .output()
+        .expect("run development artifact inventory with drive/path fallback");
+    assert!(
+        fallback.status.success(),
+        "fallback inventory failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    let fallback_report: Value =
+        serde_json::from_slice(&fallback.stdout).expect("fallback inventory JSON");
+    assert_eq!(fallback_report["candidate_count"], 1);
 }

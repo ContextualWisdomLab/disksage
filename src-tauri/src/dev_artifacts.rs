@@ -87,8 +87,29 @@ fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
 }
 
 fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .map(PathBuf::from)?;
+    #[cfg(windows)]
+    let candidates = [
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+        crate::home_resolution::windows_home_drive_path(),
+    ];
+    #[cfg(not(windows))]
+    let candidates = [std::env::var_os("HOME").map(PathBuf::from), None];
+    let home = crate::home_resolution::select_absolute_home(candidates).ok()?;
+    if home
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&home).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let expected_identity = crate::safety::filesystem_object_id(&home).ok()?;
+    let home = std::fs::canonicalize(home).ok()?;
+    if crate::safety::filesystem_object_id(&home).ok()? != expected_identity {
+        return None;
+    }
     crate::cloud::discover_cloud_roots(&home)
         .into_iter()
         .map(|cloud_root| std::fs::canonicalize(cloud_root.path).ok())

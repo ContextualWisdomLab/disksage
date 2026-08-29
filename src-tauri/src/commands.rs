@@ -28,8 +28,7 @@ use crate::{
 };
 
 #[cfg(not(coverage))]
-#[path = "home_resolution.rs"]
-mod home_resolution;
+use crate::home_resolution;
 
 #[path = "copy_headroom.rs"]
 mod copy_headroom;
