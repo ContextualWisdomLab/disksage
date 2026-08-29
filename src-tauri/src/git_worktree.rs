@@ -559,6 +559,24 @@ fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHead
     Ok(closed_heads)
 }
 
+fn parse_open_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads, String> {
+    let records: Vec<GitHubPullRequestHead> =
+        serde_json::from_slice(bytes).map_err(|_| "github-open-pr-json-invalid".to_string())?;
+    records
+        .into_iter()
+        .filter(|record| record.state == "OPEN" && !record.is_cross_repository)
+        .map(|record| {
+            let oid = record.head_ref_oid.to_ascii_lowercase();
+            let branch_ref = format!("refs/heads/{}", record.head_ref_name);
+            validate_reference(&branch_ref)?;
+            if !is_oid(&oid) {
+                return Err("github-open-pr-head-invalid".to_string());
+            }
+            Ok((branch_ref, oid))
+        })
+        .collect()
+}
+
 fn parse_pull_request_search(bytes: &[u8], repository: &str) -> Result<Vec<(u64, bool)>, String> {
     let records: Vec<GitHubSearchPullRequest> = serde_json::from_slice(bytes)
         .map_err(|_| "github-pr-commit-search-json-invalid".to_string())?;
@@ -782,7 +800,7 @@ pub fn github_closed_pull_request_heads_with_options(
         .filter_map(|worktree| worktree.branch)
         .collect::<BTreeSet<_>>();
     let merged_queries = branches
-        .into_iter()
+        .iter()
         .map(|branch| {
             let head = branch
                 .strip_prefix("refs/heads/")
@@ -831,6 +849,41 @@ pub fn github_closed_pull_request_heads_with_options(
             accept_result(result)?;
         }
     }
+    let mut open_vetoes = ClosedPullRequestHeads::new();
+    for branch in branches {
+        let head = branch
+            .strip_prefix("refs/heads/")
+            .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
+        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+        if remaining_ms == 0 {
+            return Err("github-closed-pr-list-timeout".into());
+        }
+        let result = run_bounded_command(
+            "gh",
+            &[
+                OsString::from("pr"),
+                OsString::from("list"),
+                OsString::from("--state"),
+                OsString::from("open"),
+                OsString::from("--head"),
+                OsString::from(head),
+                OsString::from("--limit"),
+                OsString::from("10001"),
+                OsString::from("--json"),
+                OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+            ],
+            repository_root,
+            remaining_ms,
+        )?;
+        if result.timed_out || result.status_code != Some(0) {
+            return Err("github-closed-pr-list-failed".into());
+        }
+        if result.stdout_truncated || result.stderr_truncated {
+            return Err("github-closed-pr-list-output-truncated".into());
+        }
+        open_vetoes.extend(parse_open_pull_request_heads(&result.stdout)?);
+    }
+    heads.retain(|binding| !open_vetoes.contains(binding));
     Ok(heads)
 }
 

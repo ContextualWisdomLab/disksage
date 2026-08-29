@@ -1012,16 +1012,15 @@ pub async fn plan_stale_git_worktrees(
         } else {
             Default::default()
         };
-        let mut pull_request_commits = if include_closed_pull_requests
-            || stale_open_pull_request_cutoff_ms.is_some()
-        {
-            git_worktree::github_pull_request_commit_membership(
-                Path::new(&repository_root),
-                git_worktree::GitWorktreeAuditOptions::default(),
-            )?
-        } else {
-            Default::default()
-        };
+        let mut pull_request_commits =
+            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
+                git_worktree::github_pull_request_commit_membership(
+                    Path::new(&repository_root),
+                    git_worktree::GitWorktreeAuditOptions::default(),
+                )?
+            } else {
+                Default::default()
+            };
         if !include_closed_pull_requests {
             pull_request_commits.completed.clear();
         }
@@ -1089,16 +1088,15 @@ pub async fn remove_stale_git_worktrees(
         } else {
             Default::default()
         };
-        let mut pull_request_commits = if include_closed_pull_requests
-            || stale_open_pull_request_cutoff_ms.is_some()
-        {
-            git_worktree::github_pull_request_commit_membership(
-                Path::new(&repository_root),
-                options,
-            )?
-        } else {
-            Default::default()
-        };
+        let mut pull_request_commits =
+            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
+                git_worktree::github_pull_request_commit_membership(
+                    Path::new(&repository_root),
+                    options,
+                )?
+            } else {
+                Default::default()
+            };
         if !include_closed_pull_requests {
             pull_request_commits.completed.clear();
         }
