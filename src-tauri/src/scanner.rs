@@ -307,6 +307,28 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn macos_file_provider_storage_marker_is_scoped_to_container_layouts() {
+        let home = PathBuf::from("/Users/customer");
+        let roots = macos_provider_managed_roots_for_home(&home);
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Containers/com.example/Data/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(is_macos_provider_managed_path(
+            &home.join("Library/Group Containers/group.example/File Provider Storage/account/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            &home.join("Documents/File Provider Storage/customer-local/item"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            Path::new("/Volumes/Data/File Provider Storage/customer-local/item"),
+            &roots,
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn provider_root_alias_is_resolved_before_access_guidance() {
@@ -316,6 +338,22 @@ mod tests {
         fs::create_dir_all(&managed).unwrap();
         let selected = tmp.path().join("selected-cloud-root");
         std::os::unix::fs::symlink(&managed, &selected).unwrap();
+        let roots = macos_provider_managed_roots_for_home(&home);
+
+        assert!(scan_root_access_issue_with_roots(&selected, &roots).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_root_below_ancestor_alias_is_resolved_before_access_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let managed = home.join("Library/CloudStorage/account");
+        let managed_child = managed.join("nested");
+        fs::create_dir_all(&managed_child).unwrap();
+        let alias = tmp.path().join("cloud-alias");
+        std::os::unix::fs::symlink(&managed, &alias).unwrap();
+        let selected = alias.join("nested");
         let roots = macos_provider_managed_roots_for_home(&home);
 
         assert!(scan_root_access_issue_with_roots(&selected, &roots).is_some());
