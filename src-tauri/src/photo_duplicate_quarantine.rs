@@ -229,6 +229,48 @@ fn audit_authority_root(audit: &PhotoDuplicateAudit) -> Result<PathBuf, String> 
     Ok(common)
 }
 
+#[cfg(windows)]
+fn require_one_windows_authority(paths: &[PathBuf]) -> Result<(), String> {
+    use std::path::Component;
+
+    let mut authority: Option<String> = None;
+    for path in paths {
+        let Component::Prefix(prefix) = path
+            .components()
+            .next()
+            .ok_or_else(|| "photo-exact-audit-path-authority-unavailable".to_string())?
+        else {
+            return Err("photo-exact-audit-path-authority-unavailable".into());
+        };
+        let current = prefix.as_os_str().to_string_lossy().into_owned();
+        if authority
+            .as_deref()
+            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&current))
+        {
+            return Err("photo-exact-audit-select-one-drive-or-share".into());
+        }
+        authority.get_or_insert(current);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn require_one_unix_authority(paths: &[PathBuf]) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut device = None;
+    for path in paths {
+        let current = std::fs::symlink_metadata(path)
+            .map_err(|_| "photo-exact-audit-path-authority-unavailable".to_string())?
+            .dev();
+        if device.is_some_and(|expected| expected != current) {
+            return Err("photo-exact-audit-select-one-filesystem".into());
+        }
+        device.get_or_insert(current);
+    }
+    Ok(())
+}
+
 /// Re-audit every participant and delegate Trash, journal, and receipt handling to the shared engine.
 #[cfg(not(coverage))]
 pub fn execute_exact_photo_quarantine(
@@ -281,6 +323,10 @@ pub async fn audit_exact_photo_duplicates(
         .map_err(|_| "photo-exact-audit-clock-unavailable".to_string())?
         .as_millis() as u64;
     let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    #[cfg(windows)]
+    require_one_windows_authority(&paths)?;
+    #[cfg(unix)]
+    require_one_unix_authority(&paths)?;
     tauri::async_runtime::spawn_blocking(move || Ok(audit_photos(&paths, generated_at_ms)))
         .await
         .map_err(|_| "photo-exact-audit-worker-unavailable".to_string())?
@@ -425,5 +471,36 @@ mod tests {
             survivor_relative_path: "first.png".into(),
         };
         assert!(plan_exact_photo_quarantine(root.path(), &audit, &[selection]).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn direct_selection_requires_one_windows_drive_or_share() {
+        assert_eq!(
+            require_one_windows_authority(&[
+                PathBuf::from(r"C:\photos\same.jpg"),
+                PathBuf::from(r"D:\photos\same.jpg"),
+            ]),
+            Err("photo-exact-audit-select-one-drive-or-share".into())
+        );
+        assert_eq!(
+            require_one_windows_authority(&[
+                PathBuf::from(r"\\server\one\same.jpg"),
+                PathBuf::from(r"\\server\two\same.jpg"),
+            ]),
+            Err("photo-exact-audit-select-one-drive-or-share".into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_selection_requires_one_unix_filesystem() {
+        let root = tempfile::tempdir().unwrap();
+        let photo = root.path().join("photo.png");
+        std::fs::write(&photo, b"fixture").unwrap();
+        assert_eq!(
+            require_one_unix_authority(&[photo, PathBuf::from("/dev/null")]),
+            Err("photo-exact-audit-select-one-filesystem".into())
+        );
     }
 }
