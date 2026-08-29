@@ -58,7 +58,7 @@ fn merged_pull_request_query_is_scoped_to_registered_branch() {
     fs::write(
         &gh_path,
         format!(
-            "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *' --state merged --head merged-work '*) printf '%s' '[{{\"headRefName\":\"merged-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"state\":\"MERGED\"}}]' ;;\n  *) exit 64 ;;\nesac\n"
+            "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *' --state open '*) printf '[]' ;;\n  *' --state merged --head merged-work '*) printf '%s' '[{{\"headRefName\":\"merged-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"state\":\"MERGED\"}}]' ;;\n  *) exit 64 ;;\nesac\n"
         ),
     )
     .expect("write fake gh executable");
@@ -111,7 +111,7 @@ fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *) exit 64 ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *' --state open '*) printf '[]' ;;\n  *) exit 64 ;;\nesac\n",
     )
     .expect("write bounded fake gh executable");
     let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
@@ -173,6 +173,7 @@ fn merged_pull_request_lookup_keeps_many_branch_queries_inside_one_timeout_budge
 set -eu
 case " $* " in
   *' --state closed '*) printf '[]'; exit 0 ;;
+  *' --state open '*) sleep 0.20; printf '[]'; exit 0 ;;
   *' --state merged --head '*)
     branch=''
     previous=''
