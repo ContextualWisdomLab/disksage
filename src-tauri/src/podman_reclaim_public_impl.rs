@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 mod implementation;
 
 pub use implementation::{
-    probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
-    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
-    PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStorageRepairExecution,
-    PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
-    PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
-    PODMAN_RECLAIM_SCHEMA_KIND,
+    inspect_raw_image_evidence, probe_podman_reclaim, GuestFilesystemEvidence,
+    PodmanDanglingImagePruneExecution, PodmanMachineEvidence, PodmanReclaimAssessment,
+    PodmanReclaimPlan, PodmanRecommendedAction, PodmanRecommendedActionKind,
+    PodmanStorageCheckPlan, PodmanStorageRepairExecution, PodmanStoreEvidence,
+    PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
+    RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
@@ -102,15 +102,17 @@ fn run_bounded(
     label: &str,
 ) -> Result<BoundedOutput, String> {
     let mut command = Command::new(executable);
-    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
     let stdout = child
         .stdout
         .take()
@@ -182,6 +184,7 @@ fn run_mutation_bounded(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -189,9 +192,7 @@ fn run_mutation_bounded(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
 
     let Some(stdout) = child.stdout.take() else {
         terminate_mutation_process_tree(&mut child);
@@ -356,7 +357,15 @@ fn storage_repair_scope_fingerprint(machine: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"disksage.podman-machine-storage-repair-scope.v1\0");
     hash_frame(&mut digest, machine.as_bytes());
-    for token in ["podman", "--connection", machine, "system", "check", "--quick", "--repair"] {
+    for token in [
+        "podman",
+        "--connection",
+        machine,
+        "system",
+        "check",
+        "--quick",
+        "--repair",
+    ] {
         hash_frame(&mut digest, token.as_bytes());
     }
     lower_hex(&digest.finalize())
@@ -369,6 +378,28 @@ fn storage_check_complete(status_code: i32, output: &str, ids: &[String]) -> boo
         .find(|line| !line.trim().is_empty())
         .is_some_and(|line| line == "Error: damage detected in local storage");
     (status_code == 0 && ids.is_empty()) || (!ids.is_empty() && expected_damage_completion)
+}
+
+fn storage_repair_provider_issue(output: &BoundedOutput) -> Option<String> {
+    if output.status_code == 0 {
+        return None;
+    }
+    let provider_diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    let dependent_container = provider_diagnostic.lines().any(|line| {
+        line.contains("layer")
+            && line.contains("container")
+            && ["in use", "used by", "referenced by"]
+                .iter()
+                .any(|marker| line.contains(marker))
+    });
+    Some(
+        if dependent_container {
+            "podman-storage-repair-provider-unable-to-detach-damaged-container"
+        } else {
+            "podman-storage-repair-provider-refused"
+        }
+        .into(),
+    )
 }
 
 fn storage_check_evidence(
@@ -395,9 +426,8 @@ fn storage_check_evidence(
         damaged_layer_records: ids.len() as u64,
         candidate_set_sha256: fingerprint,
         evidence_complete: complete,
-        exact_approval_phrase: (complete && !ids.is_empty()).then(|| {
-            format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")
-        }),
+        exact_approval_phrase: (complete && !ids.is_empty())
+            .then(|| format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")),
         issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
     };
     Ok((plan, ids))
@@ -469,7 +499,7 @@ pub fn execute_podman_storage_repair(
         MUTATION_WAIT_STATUS_CODE => Some("podman-storage-repair-wait".into()),
         MUTATION_CAPTURE_STATUS_CODE => Some("podman-storage-repair-output-too-large".into()),
         MUTATION_UTF8_STATUS_CODE => Some("podman-storage-repair-output-not-utf8".into()),
-        _ => None,
+        _ => storage_repair_provider_issue(&output),
     };
 
     Ok(PodmanStorageRepairExecution {
@@ -488,8 +518,7 @@ pub fn execute_podman_storage_repair(
         status_code: output.status_code,
         command_attempted: true,
         execution_issue,
-        executed: output.status_code == 0
-            || (postcheck_complete && repaired_layer_records > 0),
+        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
@@ -700,6 +729,28 @@ mod mutation_runner_tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn provider_issue_requires_one_coherent_dependency_diagnostic_line() {
+        let separate_lines = BoundedOutput {
+            status_code: 1,
+            stdout: "damaged layer abc\ncontainer inventory follows".into(),
+            stderr: "resource is in use".into(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&separate_lines).as_deref(),
+            Some("podman-storage-repair-provider-refused")
+        );
+        let coherent = BoundedOutput {
+            status_code: 1,
+            stdout: "layer abc is used by container def".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&coherent).as_deref(),
+            Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+        );
+    }
+
+    #[test]
     fn timed_out_readonly_command_terminates_descendants_holding_output_pipes() {
         let temp = tempfile::tempdir().expect("temporary runtime directory");
         let fake = temp.path().join("readonly");
@@ -731,8 +782,13 @@ mod mutation_runner_tests {
         fs::set_permissions(&fake, permissions).unwrap();
 
         let started = Instant::now();
-        let output = run_bounded(&fake, &[], Duration::from_secs(1), "readonly-completed-fixture")
-            .expect("direct completion must not hang on inherited pipes");
+        let output = run_bounded(
+            &fake,
+            &[],
+            Duration::from_secs(1),
+            "readonly-completed-fixture",
+        )
+        .expect("direct completion must not hang on inherited pipes");
 
         assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));

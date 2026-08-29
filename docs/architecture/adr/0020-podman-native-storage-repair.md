@@ -23,6 +23,10 @@ there is no atomic Podman state precondition between that audit and `container r
 `container rm --force` is allowed to remove a container that restarted or became paused in that
 window. A damaged stopped container that cannot be removed normally therefore remains preserved
 for a new evidence cycle instead of turning stale state evidence into kill/remove authority.
+When Podman refuses repair because a damaged layer remains referenced by a container, the receipt
+records `podman-storage-repair-provider-unable-to-detach-damaged-container`. DiskSage does not
+retry, add `--force`, reset storage, or edit graph-driver files; the next action is a new
+container-lineage audit and an independently approved normal provider removal.
 
 ## Consequences
 
@@ -35,6 +39,8 @@ for a new evidence cycle instead of turning stale state evidence into kill/remov
   than being force-stopped or removed.
 - Remaining dependent corruption requires a new, narrower evidence contract; DiskSage does not
   mutate internal storage metadata.
+- Provider exit 125 with a container-referenced layer is distinguished from transport/runtime
+  failures without exposing layer or container identifiers in the public receipt.
 
 ## Rejected alternatives
 

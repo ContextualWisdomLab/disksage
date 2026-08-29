@@ -498,13 +498,32 @@ where
     Ok(())
 }
 
-pub fn trash_delete_if_identity(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashDeleteOutcome {
+    pub moved_to_trash: bool,
+    pub terminal_journal_error: Option<String>,
+}
+
+fn trash_delete_outcome(
+    mutation: Result<(), SafetyError>,
+    terminal_journal: Result<(), SafetyError>,
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    match mutation {
+        Ok(()) => Ok(TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: terminal_journal.err().map(|error| error.to_string()),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn trash_delete_if_identity_with_outcome(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<(), SafetyError> {
+) -> Result<TrashDeleteOutcome, SafetyError> {
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -588,8 +607,28 @@ pub fn trash_delete_if_identity(
         Ok(()) => "ok".into(),
         Err(error) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    let terminal_journal = journal_append(journal_path, &entry);
+    trash_delete_outcome(result, terminal_journal)
+}
+
+pub fn trash_delete_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    let outcome = trash_delete_if_identity_with_outcome(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )?;
+    if let Some(error) = outcome.terminal_journal_error {
+        return Err(SafetyError::Journal(error));
+    }
+    Ok(())
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -856,6 +895,17 @@ pub fn move_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_trash_preserves_moved_state_when_terminal_journal_fails() {
+        let outcome =
+            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into()))).unwrap();
+        assert!(outcome.moved_to_trash);
+        assert_eq!(
+            outcome.terminal_journal_error.as_deref(),
+            Some("저널 기록 실패: disk-full")
+        );
+    }
     use std::path::Path;
 
     #[test]

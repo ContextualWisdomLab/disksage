@@ -1115,7 +1115,7 @@ fn git_admin_metadata_blocker(
 fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| "git-worktree-admin-metadata-stat-failed".to_string())?;
-    let output = match crate::provider_sync::file_providerctl_status(&path.to_string_lossy()) {
+    let output = match crate::provider_sync::file_providerctl_status(path) {
         Ok(output) => output,
         Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
         Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
@@ -3705,6 +3705,7 @@ mod tests {
             is_excluded_from_sync: false,
             is_sync_paused: false,
             is_trashed: false,
+            is_keep_downloaded: false,
             capabilities: 0,
             allows_eviction: false,
             observed_bytes: 30,

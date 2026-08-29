@@ -543,6 +543,16 @@ pub fn execute_runtime_storage_trim(
     crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
 }
 
+/// Stops an idle Podman machine after a fresh native query proves no containers are running.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_inactive_podman_machine_stop(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageStopExecution, String> {
+    crate::runtime_storage::execute_inactive_stop(&confirmation_phrase, &rationale)
+}
+
 /// Restarts a runtime that reports running but cannot serve guest commands.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
