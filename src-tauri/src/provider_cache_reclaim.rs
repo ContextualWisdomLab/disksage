@@ -632,6 +632,18 @@ fn write_immutable_receipt(
     file.write_all(&body)
         .and_then(|()| file.sync_all())
         .map_err(|_| "provider-cache-receipt-write-failed")?;
+    let mut permissions = file
+        .metadata()
+        .map_err(|_| "provider-cache-receipt-metadata-failed")?
+        .permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "provider-cache-receipt-permissions-failed")?;
+    #[cfg(unix)]
+    fs::File::open(receipt_dir)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "provider-cache-receipt-directory-sync-failed")?;
     Ok(path)
 }
 
