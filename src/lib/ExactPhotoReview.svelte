@@ -1,7 +1,12 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+  import {
+    isPhotoPathWithinRoot,
+    quarantineApprovalReady,
+    selectionsForGroups,
+    syncPhotoCandidatePaths,
+  } from "./photoReviewState";
   import { open } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot, duplicateGroups }: { scannedRoot: string; duplicateGroups: api.DupeGroup[] } = $props();
@@ -15,11 +20,31 @@
   let status = $state("");
   let error = $state("");
   let selectedPaths: string[] = $state([]);
-  let initialized = false;
+  let manualSelectionRoot: string | null = $state(null);
+
+  const samePaths = (left: string[], right: string[]) =>
+    left.length === right.length && left.every((path, index) => path === right[index]);
+
+  function clearReviewState() {
+    audit = null;
+    plan = null;
+    receipt = null;
+    keepers = {};
+    approval = "";
+    rationale = "";
+  }
+
   $effect(() => {
-    if (!initialized) {
-      selectedPaths = duplicateGroups.flatMap((group) => group.paths);
-      initialized = true;
+    if (manualSelectionRoot !== null && manualSelectionRoot !== scannedRoot) {
+      manualSelectionRoot = null;
+    }
+    const source = manualSelectionRoot === null ? "scan" : "manual";
+    const nextPaths = syncPhotoCandidatePaths(duplicateGroups, selectedPaths, source);
+    if (!samePaths(nextPaths, selectedPaths)) {
+      selectedPaths = nextPaths;
+      clearReviewState();
+      status = "";
+      error = "";
     }
   });
 
@@ -50,8 +75,15 @@
   async function choosePhotos() {
     const chosen = await open({ multiple: true, directory: false, filters: [{ name: "사진", extensions: ["png"] }] });
     if (!chosen) return;
-    selectedPaths = Array.isArray(chosen) ? chosen : [chosen];
-    audit = null; plan = null; receipt = null;
+    const paths = Array.isArray(chosen) ? chosen : [chosen];
+    if (!paths.every((path) => isPhotoPathWithinRoot(scannedRoot, path))) {
+      error = "현재 검사한 폴더 안의 PNG만 직접 선택할 수 있습니다. 다른 위치의 사진은 해당 폴더를 먼저 검사하세요.";
+      return;
+    }
+    manualSelectionRoot = scannedRoot;
+    selectedPaths = paths;
+    clearReviewState();
+    error = "";
     status = `${selectedPaths.length}개 사진을 선택했습니다. 화질 검토를 시작하세요.`;
   }
 
