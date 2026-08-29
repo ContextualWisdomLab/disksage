@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Admit iCloud local-copy eviction from Apple Foundation's public, per-item ubiquitous metadata
+  only when the item is uploaded, current, idle, conflict-free, error-free, and not excluded from
+  sync. Upload/download errors remain explicit blockers; exact approval is invalidated by the new
+  evidence schema, and postchecks now require an uploaded cloud item, `notDownloaded` local state,
+  retained ubiquitous path, and reduced allocated bytes.
 - Inspect completed DiskSage-owned top-level shared-temporary artifacts through create-only
   lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
   atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
@@ -46,9 +51,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
 - Ship that generic batch planner as a checksummed, provenance-attested operational CLI on Linux,
   Windows, and macOS so installed release artifacts can reproduce the exact read-only plan.
+- Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
+  generate the native Foundation-backed plan without compiling source; Linux and Windows retain
+  only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
 
 ### Fixed
 
+- Retry transient iCloud metadata failures during the bounded post-eviction check instead of
+  misreporting temporary evidence unavailability as lost cloud identity.
 - Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
   item is beneath its discovered cloud root; sibling roots remain rejected component by component.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only

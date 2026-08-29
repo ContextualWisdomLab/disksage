@@ -225,7 +225,11 @@ fn validate_control_locations(
     Ok(())
 }
 
-fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
+fn select_root_for_binary<'a>(
+    roots: &'a [CloudRoot],
+    requested: &Path,
+    binary_name: &str,
+) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
         .filter(|root| cloud::cloud_root_path_matches(Path::new(&root.path), requested))
@@ -233,16 +237,25 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     match matches.as_slice() {
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
         [only]
-            if matches!(
-                only.provider,
-                CloudProvider::Icloud | CloudProvider::Onedrive
-            ) =>
+            if only.provider == CloudProvider::Icloud
+                || (binary_name == "disksage-cloud-local-eviction-batch"
+                    && only.provider == CloudProvider::Onedrive) =>
         {
             Ok(*only)
+        }
+        [only]
+            if binary_name == "disksage-icloud-local-eviction-batch"
+                && only.provider == CloudProvider::Onedrive =>
+        {
+            Err("icloud-named-cli-provider-unsupported".into())
         }
         [_] => Err("로컬 보관 해제를 지원하는 클라우드 루트가 필요함".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
+}
+
+fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
+    select_root_for_binary(roots, requested, env!("CARGO_BIN_NAME"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -591,6 +604,33 @@ mod tests {
     }
 
     #[test]
+    fn icloud_named_binary_rejects_onedrive_while_generic_binary_accepts_it() {
+        let root = CloudRoot {
+            id: "onedrive-personal".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: TEST_CLOUD_ROOT.into(),
+            readable: true,
+            access_issue: None,
+        };
+        let roots = [root];
+        let requested = Path::new(TEST_CLOUD_ROOT);
+
+        assert_eq!(
+            select_root_for_binary(&roots, requested, "disksage-icloud-local-eviction-batch")
+                .unwrap_err(),
+            "icloud-named-cli-provider-unsupported"
+        );
+        assert_eq!(
+            select_root_for_binary(&roots, requested, "disksage-cloud-local-eviction-batch")
+                .unwrap()
+                .provider,
+            CloudProvider::Onedrive
+        );
+    }
+
+    #[test]
     fn manifest_reader_is_bounded_and_accepts_extra_evidence_fields() {
         let temp = tempfile::tempdir().unwrap();
         let manifest = temp.path().join("manifest.json");
@@ -718,14 +758,19 @@ mod tests {
                     logical_bytes: 10,
                     allocated_bytes: 20,
                     filesystem_modified_ms: 1,
+                    filesystem_device_id: 1,
+                    filesystem_inode: 1,
                     observed_at_ms: 1,
                     icloud_state: IcloudLocalState {
                         observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
                         is_ubiquitous: true,
                         is_uploaded: true,
                         is_uploading: false,
+                        upload_error_present: false,
                         is_downloading: false,
+                        download_error_present: false,
                         downloading_status_current: true,
+                        downloading_status_not_downloaded: false,
                         has_unresolved_conflicts: false,
                         is_excluded_from_sync: false,
                         is_sync_paused: Some(false),
