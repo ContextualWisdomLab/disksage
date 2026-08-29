@@ -49,8 +49,8 @@ fn pull_request_membership_report_uses_v4_schema() {
     let report = audit_git_worktrees_with_pull_request_membership(
         &repository,
         &["refs/heads/main".into()],
-        &std::collections::BTreeMap::new(),
         &BTreeSet::new(),
+        &std::collections::BTreeMap::new(),
         &PullRequestCommitMembership::default(),
         None,
         GitWorktreeAuditOptions::default(),
