@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -347,11 +348,12 @@ pub struct ContainerOrphanPlan {
     pub runtime: RuntimeHealthEvidence,
     pub categories: Vec<OrphanCategoryPlan>,
     pub issues: Vec<String>,
+    pub receipt_directory_sha256: Option<String>,
 }
 
 /// Execution receipt for one approved prune. Mirrors the Podman dangling-image receipt
 /// shape so downstream consumers can treat both uniformly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerOrphanPruneExecution {
     pub schema_version: u32,
     pub runtime_display_name: String,
@@ -369,6 +371,105 @@ pub struct ContainerOrphanPruneExecution {
     /// Only a positive before/after available-space delta is reported; attribution-weak.
     pub observed_available_gain_bytes: Option<u64>,
     pub rationale: String,
+    pub receipt_sha256: Option<String>,
+    pub receipt_recorded: bool,
+    pub receipt_record_error: Option<String>,
+}
+
+fn private_receipt_directory_identity(path: &Path) -> Result<(PathBuf, String), String> {
+    if !path.is_absolute() {
+        return Err("orphan-receipt-directory-not-absolute".into());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("orphan-receipt-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("orphan-receipt-directory-not-private".into());
+        }
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"disksage.container-orphan-receipt-directory.v1\0");
+        hash_frame(
+            &mut hasher,
+            canonical.as_os_str().to_string_lossy().as_bytes(),
+        );
+        hash_frame(&mut hasher, &metadata.dev().to_be_bytes());
+        hash_frame(&mut hasher, &metadata.ino().to_be_bytes());
+        return Ok((canonical, lower_hex(&hasher.finalize())));
+    }
+    #[cfg(not(unix))]
+    {
+        Err("orphan-receipt-secure-mode-unsupported".into())
+    }
+}
+
+fn write_execution_receipt(
+    receipt_dir: &Path,
+    receipt: &ContainerOrphanPruneExecution,
+) -> Result<String, String> {
+    let (canonical, _) = private_receipt_directory_identity(receipt_dir)?;
+    let mut encoded = serde_json::to_vec_pretty(receipt)
+        .map_err(|_| "orphan-receipt-json-invalid".to_string())?;
+    if encoded.len() > 1024 * 1024 {
+        return Err("orphan-receipt-too-large".into());
+    }
+    let digest = lower_hex(&Sha256::digest(&encoded));
+    let path = canonical.join(format!(
+        "{}-{}-{}.json",
+        receipt.executed_at_ms,
+        receipt.category.as_str(),
+        receipt.candidate_set_sha256
+    ));
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o400);
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "orphan-receipt-create-failed".to_string())?;
+    if file
+        .write_all(&encoded)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err("orphan-receipt-write-failed".into());
+    }
+    encoded.fill(0);
+    if std::fs::File::open(&canonical)
+        .and_then(|dir| dir.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err("orphan-receipt-parent-sync-failed".into());
+    }
+    Ok(digest)
+}
+
+fn read_execution_receipt(
+    path: &Path,
+    expected_sha256: &str,
+) -> Result<ContainerOrphanPruneExecution, String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "orphan-receipt-unavailable".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024 {
+        return Err("orphan-receipt-unsafe".into());
+    }
+    let encoded = std::fs::read(path).map_err(|_| "orphan-receipt-read-failed".to_string())?;
+    if lower_hex(&Sha256::digest(&encoded)) != expected_sha256 {
+        return Err("orphan-receipt-digest-mismatch".into());
+    }
+    serde_json::from_slice(&encoded).map_err(|_| "orphan-receipt-json-invalid".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -969,11 +1070,16 @@ fn candidate_fingerprint(domain_tag: &str, ids: &[&str]) -> String {
     lower_hex(&hasher.finalize())
 }
 
-fn approval_phrase(category: OrphanCategory, candidate_set_sha256: &str) -> String {
+fn approval_phrase(
+    category: OrphanCategory,
+    candidate_set_sha256: &str,
+    receipt_directory_sha256: &str,
+) -> String {
     format!(
-        "DiskSage {} orphan prune 승인 {}",
+        "DiskSage {} orphan prune 승인 {} receipt {}",
         category.as_str(),
-        candidate_set_sha256
+        candidate_set_sha256,
+        receipt_directory_sha256
     )
 }
 
@@ -1201,7 +1307,11 @@ pub fn probe_runtime_health(target: &ContainerRuntimeTarget) -> RuntimeHealthEvi
     }
 }
 
-fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> OrphanCategoryPlan {
+fn audit_category(
+    target: &ContainerRuntimeTarget,
+    category: OrphanCategory,
+    receipt_directory_sha256: Option<&str>,
+) -> OrphanCategoryPlan {
     let build_issue_plan = |issue: String| OrphanCategoryPlan {
         category,
         evidence_complete: false,
@@ -1490,7 +1600,9 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 .as_ref()
                 .is_some_and(|item| item.candidate_records > 0);
             let approval_phrase = match (&evidence, has_candidates) {
-                (Some(item), true) => Some(approval_phrase(category, &item.candidate_set_sha256)),
+                (Some(item), true) => receipt_directory_sha256.map(|identity| {
+                    approval_phrase(category, &item.candidate_set_sha256, identity)
+                }),
                 _ => None,
             };
             OrphanCategoryPlan {
@@ -1511,8 +1623,14 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
     }
 }
 
-pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
+pub fn probe_container_orphans_with_receipt_dir(
+    target: &ContainerRuntimeTarget,
+    receipt_dir: &Path,
+) -> ContainerOrphanPlan {
     let started = Instant::now();
+    let receipt_identity = private_receipt_directory_identity(receipt_dir)
+        .ok()
+        .map(|(_, identity)| identity);
     let runtime = probe_runtime_health(target);
     let categories: Vec<OrphanCategoryPlan> = if runtime.healthy {
         [
@@ -1522,7 +1640,7 @@ pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrph
             OrphanCategory::Network,
         ]
         .into_iter()
-        .map(|category| audit_category(target, category))
+        .map(|category| audit_category(target, category, receipt_identity.as_deref()))
         .collect()
     } else {
         Vec::new()
@@ -1545,7 +1663,17 @@ pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrph
         runtime,
         categories,
         issues,
+        receipt_directory_sha256: receipt_identity,
     }
+}
+
+pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
+    let mut plan = probe_container_orphans_with_receipt_dir(target, Path::new("."));
+    plan.receipt_directory_sha256 = None;
+    for category in &mut plan.categories {
+        category.approval_phrase = None;
+    }
+    plan
 }
 
 fn host_available_bytes(observed_at_ms: u64) -> Option<u64> {
@@ -1568,6 +1696,7 @@ pub fn execute_container_orphan_prune(
     confirmation_phrase: &str,
     rationale: &str,
     executed_at_ms: u64,
+    receipt_dir: &Path,
 ) -> Result<ContainerOrphanPruneExecution, String> {
     if executed_at_ms == 0 {
         return Err("orphan-prune-time-invalid".into());
@@ -1580,7 +1709,8 @@ pub fn execute_container_orphan_prune(
         return Err("orphan-prune-rationale-invalid".into());
     }
     let prefix = target.command_prefix()?;
-    let plan = audit_category(target, category);
+    let (_, receipt_directory_sha256) = private_receipt_directory_identity(receipt_dir)?;
+    let plan = audit_category(target, category, Some(&receipt_directory_sha256));
     if !plan.evidence_complete {
         return Err(format!(
             "orphan-prune-evidence-incomplete:{}",
@@ -1599,7 +1729,11 @@ pub fn execute_container_orphan_prune(
     if plan.candidate_ids.len() != candidate_count {
         return Err("orphan-prune-candidate-set-internal-mismatch".into());
     }
-    let expected_phrase = approval_phrase(category, &evidence.candidate_set_sha256);
+    let expected_phrase = approval_phrase(
+        category,
+        &evidence.candidate_set_sha256,
+        &receipt_directory_sha256,
+    );
     if confirmation_phrase != expected_phrase {
         return Err("orphan-prune-confirmation-mismatch".into());
     }
@@ -1624,7 +1758,7 @@ pub fn execute_container_orphan_prune(
     let observed_available_gain_bytes = before_available_bytes
         .zip(after_available_bytes)
         .and_then(|(before, after)| after.checked_sub(before));
-    Ok(ContainerOrphanPruneExecution {
+    let mut receipt = ContainerOrphanPruneExecution {
         schema_version: CONTAINER_ORPHAN_SCHEMA_VERSION,
         runtime_display_name: target.display_name(),
         category,
@@ -1640,7 +1774,18 @@ pub fn execute_container_orphan_prune(
         after_available_bytes,
         observed_available_gain_bytes,
         rationale: rationale.to_string(),
-    })
+        receipt_sha256: None,
+        receipt_recorded: false,
+        receipt_record_error: None,
+    };
+    match write_execution_receipt(receipt_dir, &receipt) {
+        Ok(digest) => {
+            receipt.receipt_sha256 = Some(digest);
+            receipt.receipt_recorded = true;
+        }
+        Err(error) => receipt.receipt_record_error = Some(error),
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -2157,8 +2302,87 @@ mod tests {
 
     #[test]
     fn approval_phrases_embed_category_and_fingerprint() {
-        let phrase = approval_phrase(OrphanCategory::Volume, "abc123");
-        assert_eq!(phrase, "DiskSage volume orphan prune 승인 abc123");
+        let phrase = approval_phrase(OrphanCategory::Volume, "abc123", "dir456");
+        assert_eq!(
+            phrase,
+            "DiskSage volume orphan prune 승인 abc123 receipt dir456"
+        );
+    }
+
+    #[cfg(unix)]
+    fn test_execution(status_code: i32) -> ContainerOrphanPruneExecution {
+        ContainerOrphanPruneExecution {
+            schema_version: 1,
+            runtime_display_name: "runtime".into(),
+            category: OrphanCategory::Container,
+            candidate_set_sha256: "a".repeat(64),
+            command: vec!["container".into(), "rm".into(), "<candidate-set>".into()],
+            status_code,
+            stdout: String::new(),
+            stderr: (status_code != 0)
+                .then(|| INDETERMINATE_MUTATION_OUTCOME.to_string())
+                .unwrap_or_default(),
+            output_truncated: false,
+            executed: true,
+            executed_at_ms: 42,
+            before_available_bytes: None,
+            after_available_bytes: None,
+            observed_available_gain_bytes: None,
+            rationale: "reviewed exact candidates".into(),
+            receipt_sha256: None,
+            receipt_recorded: false,
+            receipt_record_error: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_receipt_rejects_duplicate_and_detects_tamper_and_symlink_directory() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = test_execution(0);
+        let digest = write_execution_receipt(dir.path(), &receipt).unwrap();
+        assert_eq!(
+            write_execution_receipt(dir.path(), &receipt).unwrap_err(),
+            "orphan-receipt-create-failed"
+        );
+        let path = dir.path().join(format!(
+            "42-container-{}.json",
+            receipt.candidate_set_sha256
+        ));
+        assert_eq!(read_execution_receipt(&path, &digest).unwrap(), receipt);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(
+            read_execution_receipt(&path, &digest).unwrap_err(),
+            "orphan-receipt-digest-mismatch"
+        );
+        let parent = tempfile::tempdir().unwrap();
+        let link = parent.path().join("receipts");
+        symlink(dir.path(), &link).unwrap();
+        assert_eq!(
+            private_receipt_directory_identity(&link).unwrap_err(),
+            "orphan-receipt-directory-unsafe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_partial_outcome_is_persisted_before_return() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = test_execution(-1);
+        let digest = write_execution_receipt(dir.path(), &receipt).unwrap();
+        let path = dir.path().join(format!(
+            "42-container-{}.json",
+            receipt.candidate_set_sha256
+        ));
+        let persisted = read_execution_receipt(&path, &digest).unwrap();
+        assert_eq!(persisted.status_code, -1);
+        assert_eq!(persisted.stderr, INDETERMINATE_MUTATION_OUTCOME);
+        assert!(persisted.executed);
     }
 
     #[cfg(unix)]

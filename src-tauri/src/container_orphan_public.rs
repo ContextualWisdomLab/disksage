@@ -111,9 +111,13 @@ mod tests {
             },
             categories: Vec::new(),
             issues: vec![format!("runtime-info-failed:{secret}")],
+            receipt_directory_sha256: None,
         };
         let sanitized = sanitize_plan(plan);
-        assert_eq!(sanitized.runtime.detail_issue.as_deref(), Some("runtime-info-failed"));
+        assert_eq!(
+            sanitized.runtime.detail_issue.as_deref(),
+            Some("runtime-info-failed")
+        );
         assert_eq!(sanitized.issues, vec!["runtime-info-failed"]);
         let json = serde_json::to_string(&sanitized).unwrap();
         assert!(!json.contains(secret));
@@ -164,11 +168,17 @@ mod tests {
             after_available_bytes: Some(1_200),
             observed_available_gain_bytes: Some(200),
             rationale: "Reviewed exact evidence.".into(),
+            receipt_sha256: None,
+            receipt_recorded: false,
+            receipt_record_error: Some("orphan-receipt-create-failed".into()),
         };
         let sanitized = sanitize_execution(execution);
         let json = serde_json::to_string(&sanitized).unwrap();
         assert_eq!(sanitized.runtime_display_name, "container-runtime");
-        assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
+        assert_eq!(
+            sanitized.command,
+            vec!["container", "rm", "<candidate-set>"]
+        );
         assert!(sanitized.stdout.is_empty());
         assert_eq!(sanitized.stderr, INDETERMINATE_PRUNE_OUTCOME);
         assert_eq!(sanitized.before_available_bytes, None);
@@ -182,6 +192,9 @@ mod tests {
     fn malformed_issue_tokens_fall_back_without_reflection() {
         assert_eq!(stable_issue("Bad Token:/secret"), FALLBACK_ISSUE);
         assert_eq!(stable_issue(""), FALLBACK_ISSUE);
-        assert_eq!(stable_issue("orphan-list-container-failed:/secret"), "orphan-list-container-failed");
+        assert_eq!(
+            stable_issue("orphan-list-container-failed:/secret"),
+            "orphan-list-container-failed"
+        );
     }
 }

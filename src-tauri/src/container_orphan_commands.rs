@@ -2,6 +2,26 @@ use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use tauri::Manager;
+
+fn container_receipt_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?
+        .join("container-orphan-receipts");
+    if !dir.exists() {
+        std::fs::create_dir(&dir)
+            .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "orphan-receipt-directory-permission-failed".to_string())?;
+        }
+    }
+    Ok(dir)
+}
 
 const MAX_DOCKER_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_DOCKER_CONTEXT_BYTES: usize = 128;
@@ -96,15 +116,22 @@ fn pin_docker_authority(
     match authority {
         DockerAmbientAuthority::Host(host) => Ok(DockerAmbientAuthority::Host(host.clone())),
         DockerAmbientAuthority::Context(context) => {
-            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, context)?;
-            Ok(DockerAmbientAuthority::PinnedContext { name: context.clone(), fingerprint })
+            let fingerprint =
+                container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, context)?;
+            Ok(DockerAmbientAuthority::PinnedContext {
+                name: context.clone(),
+                fingerprint,
+            })
         }
         DockerAmbientAuthority::Default => {
             let name = "default".to_string();
-            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, &name)?;
+            let fingerprint =
+                container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, &name)?;
             Ok(DockerAmbientAuthority::PinnedContext { name, fingerprint })
         }
-        DockerAmbientAuthority::PinnedContext { .. } => Err("docker-authority-already-pinned".into()),
+        DockerAmbientAuthority::PinnedContext { .. } => {
+            Err("docker-authority-already-pinned".into())
+        }
     }
 }
 
@@ -346,7 +373,8 @@ fn bind_docker_authority_plan(
 ) -> container_orphan_reclaim::ContainerOrphanPlan {
     for category in &mut plan.categories {
         if let Some(base_phrase) = category.approval_phrase.take() {
-            category.approval_phrase = Some(bind_docker_authority_approval(&base_phrase, authority));
+            category.approval_phrase =
+                Some(bind_docker_authority_approval(&base_phrase, authority));
         }
     }
     plan
@@ -359,7 +387,10 @@ fn bind_docker_authority_plan(
 /// Docker authority suppresses the ambient target fail-closed. This shipped IPC surface remains
 /// present under coverage.
 #[tauri::command(async)]
-pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
+pub fn inspect_container_orphans(
+    app: tauri::AppHandle,
+) -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
+    let receipt_dir = container_receipt_dir(&app).ok();
     let docker_authority = docker_ambient_authority();
     let pinned_docker_authority = docker_authority
         .as_ref()
@@ -373,9 +404,12 @@ pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrp
             } else {
                 target_for_kind(kind).ok()?
             };
-            let plan = container_orphan_public::sanitize_plan(
-                container_orphan_reclaim::probe_container_orphans(&target),
-            );
+            let plan = container_orphan_public::sanitize_plan(receipt_dir.as_ref().map_or_else(
+                || container_orphan_reclaim::probe_container_orphans(&target),
+                |dir| {
+                    container_orphan_reclaim::probe_container_orphans_with_receipt_dir(&target, dir)
+                },
+            ));
             if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
                 let authority = pinned_docker_authority.as_ref().ok()?;
                 Some(bind_docker_authority_plan(plan, authority))
@@ -393,6 +427,7 @@ pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrp
 /// remains present under coverage.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
+    app: tauri::AppHandle,
     runtime_kind: String,
     scope_name: Option<String>,
     category: String,
@@ -404,32 +439,36 @@ pub fn execute_container_orphan_prune(
     }
     let kind = parse_runtime_kind(&runtime_kind)?;
     let category = parse_category(&category)?;
-    let (target, docker_authority) = if kind
-        == container_orphan_reclaim::ContainerRuntimeKind::DockerNative
-    {
-        let ambient = docker_ambient_authority()
-            .map_err(|error| format!("orphan-prune-{error}"))?;
-        let pinned = pin_docker_authority(&docker_binary(), &ambient)
-            .map_err(|error| format!("orphan-prune-{error}"))?;
-        (pinned_docker_target(&pinned)?, Some(pinned))
-    } else {
-        (target_for_kind(kind)?, None)
-    };
+    let (target, docker_authority) =
+        if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+            let ambient =
+                docker_ambient_authority().map_err(|error| format!("orphan-prune-{error}"))?;
+            let pinned = pin_docker_authority(&docker_binary(), &ambient)
+                .map_err(|error| format!("orphan-prune-{error}"))?;
+            (pinned_docker_target(&pinned)?, Some(pinned))
+        } else {
+            (target_for_kind(kind)?, None)
+        };
     validate_requested_scope(&target, &scope_name)?;
-    let engine_confirmation = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-        unbind_docker_authority_approval(
-            &confirmation_phrase,
-            docker_authority.as_ref().ok_or("docker-authority-not-pinned")?,
-        )?
-    } else {
-        confirmation_phrase
-    };
+    let engine_confirmation =
+        if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+            unbind_docker_authority_approval(
+                &confirmation_phrase,
+                docker_authority
+                    .as_ref()
+                    .ok_or("docker-authority-not-pinned")?,
+            )?
+        } else {
+            confirmation_phrase
+        };
+    let receipt_dir = container_receipt_dir(&app)?;
     container_orphan_reclaim::execute_container_orphan_prune(
         &target,
         category,
         &engine_confirmation,
         &rationale,
         now_ms(),
+        &receipt_dir,
     )
     .map(container_orphan_public::sanitize_execution)
 }
@@ -440,8 +479,14 @@ mod tests {
 
     #[test]
     fn command_inputs_fail_closed_without_reflecting_untrusted_tokens() {
-        assert_eq!(parse_runtime_kind("secret-runtime").unwrap_err(), "unknown-runtime-kind");
-        assert_eq!(parse_category("secret-category").unwrap_err(), "unknown-orphan-category");
+        assert_eq!(
+            parse_runtime_kind("secret-runtime").unwrap_err(),
+            "unknown-runtime-kind"
+        );
+        assert_eq!(
+            parse_category("secret-category").unwrap_err(),
+            "unknown-orphan-category"
+        );
         assert!(!valid_rationale(""));
         assert!(!valid_rationale(" leading"));
         assert!(!valid_rationale("bad\nline"));
@@ -520,7 +565,9 @@ mod tests {
 
     #[test]
     fn invalid_explicit_docker_authority_must_not_fall_through_to_native_target() {
-        use container_orphan_reclaim::ContainerRuntimeKind::{DockerColimaContext, DockerNative, PodmanMachine};
+        use container_orphan_reclaim::ContainerRuntimeKind::{
+            DockerColimaContext, DockerNative, PodmanMachine,
+        };
 
         let invalid_context = resolve_docker_ambient_authority(
             DockerContextEnvironment::Invalid,
@@ -554,15 +601,22 @@ mod tests {
         assert_ne!(bound, bind_docker_authority_approval(base, &context));
         assert_ne!(bound, bind_docker_authority_approval(base, &default));
         assert!(!bound.contains("customer-a.sock"));
-        assert_eq!(unbind_docker_authority_approval(&bound, &host_a).unwrap(), base);
+        assert_eq!(
+            unbind_docker_authority_approval(&bound, &host_a).unwrap(),
+            base
+        );
         assert_eq!(
             unbind_docker_authority_approval(&bound, &host_b).unwrap_err(),
             "orphan-prune-docker-authority-mismatch"
         );
-        let target = pinned_docker_target(&pin_docker_authority(&docker_binary(), &host_a).unwrap())
-            .unwrap();
+        let target =
+            pinned_docker_target(&pin_docker_authority(&docker_binary(), &host_a).unwrap())
+                .unwrap();
         let prefix = target.command_prefix().unwrap();
-        assert_eq!(&prefix[prefix.len() - 2..], ["--host", "unix:///tmp/customer-a.sock"]);
+        assert_eq!(
+            &prefix[prefix.len() - 2..],
+            ["--host", "unix:///tmp/customer-a.sock"]
+        );
 
         let tls_context = DockerAmbientAuthority::PinnedContext {
             name: "customer-tls".to_string(),
@@ -602,7 +656,9 @@ mod tests {
             DockerContextEnvironment::Invalid
         );
         assert_eq!(
-            docker_context_environment(Some(OsString::from("x".repeat(MAX_DOCKER_CONTEXT_BYTES + 1)))),
+            docker_context_environment(Some(OsString::from(
+                "x".repeat(MAX_DOCKER_CONTEXT_BYTES + 1)
+            ))),
             DockerContextEnvironment::Invalid
         );
 
@@ -618,7 +674,10 @@ mod tests {
 
     #[test]
     fn docker_host_environment_is_bounded_and_fail_closed() {
-        assert_eq!(docker_host_environment(None), DockerHostEnvironment::AbsentOrEmpty);
+        assert_eq!(
+            docker_host_environment(None),
+            DockerHostEnvironment::AbsentOrEmpty
+        );
         assert_eq!(
             docker_host_environment(Some(OsString::new())),
             DockerHostEnvironment::AbsentOrEmpty

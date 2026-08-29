@@ -1,11 +1,11 @@
 use disksage_lib::container_orphan_public::sanitize_plan;
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
 };
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> [--scope NAME] [--bin PATH] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
+const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> --receipt-dir ABSOLUTE_PRIVATE_DIR [--scope NAME] [--bin PATH] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
 Builds orphan evidence for containers, images, volumes, and networks. Execution re-audits and removes only the exact approved candidate set.";
 
 fn next_utf8_argument(
@@ -40,6 +40,7 @@ fn run() -> Result<(), String> {
     let mut execute = None;
     let mut confirmation = None;
     let mut rationale = None;
+    let mut receipt_dir: Option<PathBuf> = None;
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -118,6 +119,12 @@ fn run() -> Result<(), String> {
                     "--rationale requires UTF-8 text",
                 )?)
             }
+            Some("--receipt-dir") if receipt_dir.is_none() => {
+                receipt_dir =
+                    Some(PathBuf::from(args.next().ok_or_else(|| {
+                        "--receipt-dir requires a path".to_string()
+                    })?))
+            }
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
             None => return Err(format!("non-UTF-8 argument\n{USAGE}")),
         }
@@ -154,6 +161,8 @@ fn run() -> Result<(), String> {
     });
     let target = ContainerRuntimeTarget::new(runtime, binary_path, scope)?;
     if let Some(category) = execute {
+        let receipt_dir =
+            receipt_dir.ok_or_else(|| format!("--execute requires --receipt-dir\n{USAGE}"))?;
         let confirmation =
             confirmation.ok_or_else(|| format!("--execute requires --confirm\n{USAGE}"))?;
         let rationale =
@@ -162,8 +171,14 @@ fn run() -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| "system time is before epoch".to_string())?
             .as_millis() as u64;
-        let result =
-            execute_container_orphan_prune(&target, category, &confirmation, &rationale, now_ms)?;
+        let result = execute_container_orphan_prune(
+            &target,
+            category,
+            &confirmation,
+            &rationale,
+            now_ms,
+            &receipt_dir,
+        )?;
         println!(
             "{}",
             if pretty {
@@ -180,7 +195,10 @@ fn run() -> Result<(), String> {
             "--confirm and --rationale require --execute\n{USAGE}"
         ));
     }
-    let mut plan = sanitize_plan(probe_container_orphans(&target));
+    let mut plan = sanitize_plan(receipt_dir.as_ref().map_or_else(
+        || disksage_lib::container_orphan_reclaim::probe_container_orphans(&target),
+        |dir| probe_container_orphans_with_receipt_dir(&target, dir),
+    ));
     if runtime == ContainerRuntimeKind::DockerNative {
         // Native Docker desktop approval is bound to the effective Docker authority by the Tauri
         // IPC boundary. This standalone CLI deliberately cannot reproduce that private authority

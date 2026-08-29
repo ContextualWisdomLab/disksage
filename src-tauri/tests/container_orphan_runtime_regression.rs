@@ -1,6 +1,7 @@
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
-    ContainerRuntimeTarget, OrphanCategory,
+    execute_container_orphan_prune, probe_container_orphans,
+    probe_container_orphans_with_receipt_dir, ContainerRuntimeKind, ContainerRuntimeTarget,
+    OrphanCategory,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,6 +36,13 @@ fn docker_target(runtime: &Path) -> ContainerRuntimeTarget {
 }
 
 #[cfg(unix)]
+fn private_receipt_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
+
+#[cfg(unix)]
 #[test]
 fn healthy_empty_docker_lists_are_complete_and_binary_is_not_repeated() {
     let (_temp, runtime) = fake_runtime(
@@ -63,12 +71,25 @@ esac
     );
 
     let plan = probe_container_orphans(&docker_target(&runtime));
-    assert!(plan.runtime.healthy, "runtime info must receive info as argv[1]");
-    assert!(plan.evidence_complete, "zero-record Docker listings are complete evidence");
+    assert!(
+        plan.runtime.healthy,
+        "runtime info must receive info as argv[1]"
+    );
+    assert!(
+        plan.evidence_complete,
+        "zero-record Docker listings are complete evidence"
+    );
     assert_eq!(plan.categories.len(), 4);
     for category in &plan.categories {
-        assert!(category.evidence_complete, "{:?}: {:?}", category.category, category.issue);
-        let evidence = category.evidence.as_ref().expect("complete category evidence");
+        assert!(
+            category.evidence_complete,
+            "{:?}: {:?}",
+            category.category, category.issue
+        );
+        let evidence = category
+            .evidence
+            .as_ref()
+            .expect("complete category evidence");
         assert_eq!(evidence.total_records, 0);
         assert_eq!(evidence.candidate_records, 0);
         assert!(category.approval_phrase.is_none());
@@ -126,7 +147,10 @@ esac
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
     assert_eq!(evidence.candidate_size_sum_bytes, Some(72_900_000));
-    assert!(image.approval_phrase.is_some());
+    assert!(
+        image.approval_phrase.is_none(),
+        "an unbound receipt directory must not publish mutation approval"
+    );
 }
 
 #[cfg(unix)]
@@ -195,7 +219,8 @@ esac
 "#
     ));
     let target = docker_target(&runtime);
-    let plan = probe_container_orphans(&target);
+    let receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipts.path());
     let container = plan
         .categories
         .iter()
@@ -212,6 +237,7 @@ esac
         phrase,
         "Remove the exact stopped-container candidate verified by DiskSage.",
         1,
+        receipts.path(),
     )
     .expect("exact candidate removal must succeed");
 
@@ -220,7 +246,10 @@ esac
     assert!(execution.stdout.contains(FULL_ID));
     assert!(!execution.command.iter().any(|part| part == "prune"));
     assert!(!execution.command.iter().any(|part| part == FULL_ID));
-    assert_eq!(execution.command.last().map(String::as_str), Some("<candidate-set>"));
+    assert_eq!(
+        execution.command.last().map(String::as_str),
+        Some("<candidate-set>")
+    );
 }
 
 #[cfg(unix)]
@@ -254,7 +283,8 @@ esac
 "#,
     );
     let target = docker_target(&runtime);
-    let plan = probe_container_orphans(&target);
+    let receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipts.path());
     let volume = plan
         .categories
         .iter()
@@ -270,6 +300,7 @@ esac
         volume.approval_phrase.as_deref().unwrap(),
         "Remove only the explicitly owned cache volume after fresh reinspection.",
         1,
+        receipts.path(),
     )
     .expect("owned volume removal must succeed");
     assert!(execution.executed);
@@ -311,7 +342,8 @@ esac
 #[test]
 fn non_utf8_cli_argument_prints_real_usage_not_a_literal_placeholder() {
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
-    let opaque = std::ffi::OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let opaque =
+        std::ffi::OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
     let output = Command::new(binary)
         .arg(opaque)
         .output()
@@ -365,11 +397,25 @@ fn singleton_cli_options_reject_duplicates_before_domain_work() {
             "--runtime may be supplied once",
         ),
         (
-            vec!["--runtime", "docker-colima-context", "--scope", "one", "--scope", "two"],
+            vec![
+                "--runtime",
+                "docker-colima-context",
+                "--scope",
+                "one",
+                "--scope",
+                "two",
+            ],
             "--scope may be supplied once",
         ),
         (
-            vec!["--runtime", "docker-native", "--bin", "first", "--bin", "second"],
+            vec![
+                "--runtime",
+                "docker-native",
+                "--bin",
+                "first",
+                "--bin",
+                "second",
+            ],
             "--bin may be supplied once",
         ),
         (
@@ -454,8 +500,8 @@ esac
 
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
-    let document: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("machine-readable container orphan evidence");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("machine-readable container orphan evidence");
     assert_eq!(document["runtime"]["healthy"], true);
     assert_eq!(document["evidence_complete"], true);
 }
