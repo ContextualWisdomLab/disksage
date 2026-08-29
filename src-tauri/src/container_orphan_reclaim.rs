@@ -1381,7 +1381,7 @@ pub fn execute_container_orphan_prune(
         stdout: output.stdout,
         stderr: output.stderr,
         output_truncated: false,
-        executed: true,
+        executed: output.status_code == 0,
         executed_at_ms,
         before_available_bytes,
         after_available_bytes,

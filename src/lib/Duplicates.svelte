@@ -4,6 +4,7 @@
   import { blocksDeletion } from "./dupeGuard";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
+  import ExactPhotoReview from "./ExactPhotoReview.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -131,6 +132,10 @@
         선택 중복 휴지통으로 (논리 {fmtBytes(reclaimable)})
       </button>
     </div>
+  {/if}
+
+  {#if groups.length > 0 && scannedRoot}
+    <ExactPhotoReview {scannedRoot} duplicateGroups={groups} />
   {/if}
 
   {#if results.length > 0}
