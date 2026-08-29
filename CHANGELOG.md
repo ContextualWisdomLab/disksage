@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Plan and execute uv's native `cache prune` without `--force`: bind the real executable and cache
+  directory, veto active or incomplete `lsof` evidence, require a fresh exact fingerprint, and
+  retain immutable approval/result records with filesystem-availability measurements.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.

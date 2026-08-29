@@ -1214,3 +1214,20 @@ runner's private workspace temp root instead of weakening the shared production 
   bytes to about 20.3 GiB; the bounded host observation increased APFS availability by
   22,816,916 KiB. The remaining stopped container and its volumes stay preserved because neither
   exact container removal nor non-forced repair can safely unlink its damaged writable layer.
+
+## 2026-08-29 native uv cache-prune boundary
+
+- Native discovery reports the uv cache at roughly 7.8 GB of allocated blocks. Multiple local tool
+  processes currently hold its lock or load cached environments, so the read-only plan emits
+  `cache-is-active` and no mutation authority. This live blocked state is a required reality test,
+  not reclaim evidence.
+- ADR-0021 adds an executable-identity-bound `uv cache prune` path. Execution requires a fresh exact
+  plan and explicit attribution, never passes `--force`, preserves uv's own lock race protection,
+  and writes immutable approval/result records with before/after filesystem capacity. Direct
+  deletion, full cache cleaning, and arbitrary age rules remain outside the feature.
+- The 300 GB goal remains open. This domain can contribute only the physical delta measured after a
+  future inactive native prune; its current logical or allocated size is not added to recovered
+  capacity.
+- Focused Rust verification regenerated 2.2 GiB of local build output. Native `cargo clean`
+  immediately returned 2,203,364 KiB of measured data-volume availability; this build cleanup is
+  recorded separately from the blocked uv cache and does not imply uv reclamation.

@@ -102,6 +102,8 @@ pub mod private_evidence;
 pub mod reclaim;
 pub mod semantic_catalog;
 pub mod volume_pressure;
+/// Native uv cache pruning with active-use veto and measured capacity receipts.
+pub mod uv_cache_reclaim;
 pub mod zotero_local;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
