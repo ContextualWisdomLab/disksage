@@ -311,9 +311,19 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
     if crate::cloud::metadata_is_dataless(&opened_metadata) {
         return Err("photo-audit-dataless-excluded".into());
     }
+    let decoder_limits = image::Limits::default();
+    let encoded_byte_limit = decoder_limits.max_alloc.unwrap_or(0);
+    if encoded_byte_limit == 0 || opened_metadata.len() > encoded_byte_limit {
+        return Err("photo-audit-encoded-input-too-large".into());
+    }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.by_ref()
+        .take(encoded_byte_limit.saturating_add(1))
+        .read_to_end(&mut bytes)
         .map_err(|_| "photo-audit-read-failed".to_string())?;
+    if bytes.len() as u64 > encoded_byte_limit {
+        return Err("photo-audit-encoded-input-too-large".into());
+    }
     let after_read = file
         .metadata()
         .map_err(|_| "photo-audit-post-read-stat-failed".to_string())?;
@@ -323,9 +333,10 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
         return Err("photo-audit-source-changed-during-read".into());
     }
     let content_blake3 = blake3::hash(&bytes).to_hex().to_string();
-    let reader = ImageReader::new(Cursor::new(&bytes))
+    let mut reader = ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
         .map_err(|_| "photo-audit-format-probe-failed".to_string())?;
+    reader.limits(decoder_limits);
     let format = reader
         .format()
         .filter(|format| format_name(*format) != "unsupported")
@@ -758,22 +769,28 @@ pub fn execute_photo_quarantine(
     let mut items = Vec::with_capacity(candidates.len());
     for member in candidates {
         let path = canonical_root.join(&member.relative_path);
-        let error = if active.contains(&path) {
-            Some("photo-quarantine-candidate-active".into())
+        let (moved_to_os_trash, error) = if active.contains(&path) {
+            (false, Some("photo-quarantine-candidate-active".into()))
         } else {
-            crate::safety::trash_delete_if_identity(
+            match crate::safety::trash_delete_if_identity_with_outcome(
                 &path,
                 &member.filesystem_object_id,
                 member.quality.encoded_bytes,
                 journal_path,
                 executed_at_ms,
-            )
-            .err()
-            .map(|_| "photo-quarantine-trash-failed".into())
+            ) {
+                Ok(outcome) => (
+                    outcome.moved_to_trash,
+                    outcome
+                        .terminal_journal_error
+                        .map(|_| "photo-quarantine-terminal-journal-failed".into()),
+                ),
+                Err(_) => (false, Some("photo-quarantine-trash-failed".into())),
+            }
         };
         items.push(PhotoQuarantineItemReceipt {
             member_fingerprint: member.member_fingerprint.clone(),
-            moved_to_os_trash: error.is_none(),
+            moved_to_os_trash,
             error,
         });
     }
@@ -897,5 +914,23 @@ mod tests {
         assert!(report.evidence_complete);
         assert_eq!(report.managed_library_excluded_count, 1);
         assert!(report.groups.is_empty());
+    }
+
+    #[test]
+    fn oversized_encoded_photo_is_rejected_before_allocation() {
+        let root = tempfile::tempdir().unwrap();
+        let oversized = root.path().join("oversized.png");
+        let limit = image::Limits::default().max_alloc.unwrap();
+        let file = File::create(&oversized).unwrap();
+        file.set_len(limit + 1).unwrap();
+        let report = collect_photo_similarity_audit(root.path(), 42, 100).unwrap();
+        assert!(!report.evidence_complete);
+        assert_eq!(
+            report
+                .issue_counts
+                .get("photo-audit-encoded-input-too-large"),
+            Some(&1)
+        );
+        assert_eq!(report.decoded_photo_count, 0);
     }
 }
