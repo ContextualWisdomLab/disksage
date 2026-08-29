@@ -6,13 +6,21 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 const MAX_PHOTO_PRIVATE_REPORT_BYTES: usize = 64 * 1024 * 1024;
+const EXECUTION_UNSUPPORTED: &str = "photo-audit-execution-unsupported-on-platform";
 
+#[cfg(not(windows))]
 const USAGE: &str = "Usage: disksage-photo-similarity-audit --root ABSOLUTE_PATH [--max-entries N] [--private-output PATH]\n\
        disksage-photo-similarity-audit --execute --root ABSOLUTE_PATH --private-report PATH \\\n+         --select GROUP_FINGERPRINT=RELATIVE_PATH [...] --approval EXACT_PHRASE \\
          --rationale TEXT --journal-path PATH\n\
 Groups non-identical photo candidates using exact DCT perceptual-hash and aspect-ratio evidence.\n\
 Managed Photos libraries are never entered. Execution requires one selected survivor per group and\n\
 moves only the remaining files to OS Trash; it never permanently deletes them.";
+
+#[cfg(windows)]
+const USAGE: &str = "Usage: disksage-photo-similarity-audit --root ABSOLUTE_PATH [--max-entries N] [--private-output PATH]\n\
+Groups non-identical photo candidates using exact DCT perceptual-hash and aspect-ratio evidence.\n\
+Managed Photos libraries are never entered. This Windows build is audit-only because active-use\n\
+proof for quarantine execution is not yet available.";
 
 #[derive(Debug)]
 struct Args {
@@ -112,7 +120,16 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, Str
                     "photo-audit-journal-path-missing",
                 )?));
             }
-            Some("--execute") if !execute => execute = true,
+            Some("--execute") if !execute => {
+                #[cfg(windows)]
+                {
+                    return Err(EXECUTION_UNSUPPORTED.into());
+                }
+                #[cfg(not(windows))]
+                {
+                    execute = true;
+                }
+            }
             Some("--help") | Some("-h") => return Err(USAGE.into()),
             _ => return Err("photo-audit-argument-invalid".into()),
         }
@@ -131,7 +148,7 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Args, Str
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
+    std::time::SystemTimeTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
@@ -295,6 +312,6 @@ mod tests {
             OsString::from(r"C:\photos"),
         ])
         .unwrap_err();
-        assert_eq!(error, "photo-audit-execution-unsupported-on-platform");
+        assert_eq!(error, EXECUTION_UNSUPPORTED);
     }
 }
