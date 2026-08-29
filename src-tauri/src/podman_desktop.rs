@@ -322,7 +322,7 @@ pub fn inspect_podman_reclaim() -> PodmanDesktopEvidence {
 mod tests {
     use super::*;
     use crate::podman_reclaim::{
-        GuestFilesystemEvidence, PodmanMachineEvidence, PodmanReclaimAssessment,
+        GuestFilesystemEvidence, PodmanHostCompactionPlan, PodmanMachineEvidence, PodmanReclaimAssessment,
         PodmanRecommendedAction, PodmanStoreEvidence, PodmanSystemDfCategoryEvidence,
         PodmanSystemDfEvidence, PodmanUnusedImageEvidence, RawImageEvidence,
         PODMAN_RECLAIM_SCHEMA_KIND,
@@ -356,6 +356,7 @@ mod tests {
                 logical_bytes: 900,
                 allocated_bytes: Some(700),
                 identity_sha256: Some("d".repeat(64)),
+                freshness_sha256: Some("e".repeat(64)),
             }),
             guest_filesystem: Some(GuestFilesystemEvidence {
                 total_bytes: 800,
@@ -386,6 +387,20 @@ mod tests {
                 candidate_set_sha256: "a".repeat(64),
             }),
             dangling_prune_approval_phrase: None,
+            host_compaction: PodmanHostCompactionPlan {
+                supported: false,
+                machine_identity_sha256: Some("f".repeat(64)),
+                backing_file_identity_sha256: Some("d".repeat(64)),
+                backing_file_freshness_sha256: Some("e".repeat(64)),
+                active_container_count: Some(1),
+                stop_command: None,
+                compaction_command: None,
+                exact_approval_phrase: None,
+                rollback_policy: "require-runtime-native-rollback-before-execution",
+                restart_policy: "restore-observed-running-state-after-success-or-rollback",
+                blockers: vec!["active-container-count-must-be-zero".to_string()],
+                execution_performed: false,
+            },
             assessment: PodmanReclaimAssessment {
                 physically_reclaimable_bytes: None,
                 podman_reported_reclaimable_bytes: Some(300),
