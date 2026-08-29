@@ -5,7 +5,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn permanent_artifact_cleanup_rejects_content_added_during_active_use_probe() {
+fn permanent_artifact_cleanup_rejects_same_size_rewrite_during_active_use_probe() {
     let temp = tempfile::tempdir().expect("temporary development-artifact fixture");
     let root = temp.path().join("workspace");
     let project = root.join("app");
@@ -25,13 +25,14 @@ fn permanent_artifact_cleanup_rejects_content_added_during_active_use_probe() {
         r#"#!/bin/sh
 if [ ! -e "$DISKSAGE_TEST_MUTATION_MARKER" ]; then
   : > "$DISKSAGE_TEST_MUTATION_MARKER"
-  printf 'late-write' > "$DISKSAGE_TEST_ARTIFACT/late.bin"
+  printf 'changed!' > "$DISKSAGE_TEST_ARTIFACT/original.bin"
 fi
 exit 0
 "#,
     )
     .expect("write fake lsof");
-    fs::set_permissions(&fake_lsof, fs::Permissions::from_mode(0o755)).expect("make fake lsof executable");
+    fs::set_permissions(&fake_lsof, fs::Permissions::from_mode(0o755))
+        .expect("make fake lsof executable");
 
     let old_path = std::env::var_os("PATH");
     let old_artifact = std::env::var_os("DISKSAGE_TEST_ARTIFACT");
@@ -64,11 +65,11 @@ exit 0
     assert_eq!(results.len(), 1);
     assert!(
         !results[0].ok,
-        "a write that arrives during active-use probing must invalidate irreversible authority"
+        "an unreviewed same-size rewrite during active-use probing must invalidate irreversible authority"
     );
     assert!(artifact.exists(), "changed generated tree must remain in place");
     assert_eq!(
-        fs::read(artifact.join("late.bin")).expect("late write must survive rejected cleanup"),
-        b"late-write"
+        fs::read(artifact.join("original.bin")).expect("late rewrite must survive rejected cleanup"),
+        b"changed!"
     );
 }
