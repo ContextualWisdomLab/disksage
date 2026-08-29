@@ -275,7 +275,8 @@ where
             if !complete {
                 break 'outer;
             }
-            if candidates.len() >= MAX_CANDIDATES {
+            if candidates.len() > MAX_CANDIDATES {
+                candidates.pop();
                 complete = false;
                 break 'outer;
             }
