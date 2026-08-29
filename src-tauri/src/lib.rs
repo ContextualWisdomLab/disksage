@@ -78,6 +78,8 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
+pub mod git_worktree_github_evidence;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
 pub mod git_clone_reclaim;
 pub mod maven_cache;
