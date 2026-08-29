@@ -319,12 +319,35 @@ pub(crate) fn clean_cache_contents_inner(
     now_ms: u64,
     permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
+    clean_cache_contents_inner_for_id(
+        bases,
+        dir,
+        requested_targets,
+        journal_path,
+        now_ms,
+        permanent_directories,
+        None,
+    )
+}
+
+fn clean_cache_contents_inner_for_id(
+    bases: &rules::BaseDirs,
+    dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    journal_path: &Path,
+    now_ms: u64,
+    permanent_directories: bool,
+    cache_id: Option<&str>,
+) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
-    let mut current = rules::cache_targets(dir)?;
+    let mut current = match cache_id {
+        Some(cache_id) => automatic_cache_targets(cache_id, dir)?,
+        None => rules::cache_targets(dir)?,
+    };
     sort_targets(&mut current);
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
@@ -403,13 +426,14 @@ pub(crate) fn clean_regenerable_caches_inner(
             match automatic_cache_targets(&candidate.id, &path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
-                    clean_cache_contents_inner(
+                    clean_cache_contents_inner_for_id(
                         bases,
                         &path,
                         &targets,
                         journal_path,
                         now_ms,
                         false,
+                        Some(&candidate.id),
                     )
                     .unwrap_or_else(|error| {
                         vec![CleanResult {
@@ -691,6 +715,38 @@ mod tests {
         let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("cursor-updater"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn automatic_app_support_cleanup_preserves_unrelated_sibling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = bases.home.join("Library/Application Support/Caches");
+        let updater = root.join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let unrelated = root.join("unrelated-cache");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
+        let targets = automatic_cache_targets("macos-app-support-cache", &root).unwrap();
+
+        let results = clean_cache_contents_inner_for_id(
+            &bases,
+            &root,
+            &targets,
+            &tmp.path().join("journal.jsonl"),
+            1,
+            false,
+            Some("macos-app-support-cache"),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok);
+        assert!(!updater.exists());
+        assert_eq!(fs::read(unrelated.join("cache.bin")).unwrap(), b"keep");
     }
 
     #[cfg(unix)]
