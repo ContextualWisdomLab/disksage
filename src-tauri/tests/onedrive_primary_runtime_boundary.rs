@@ -23,6 +23,10 @@ fn onedrive_helper_does_not_force_a_quit_when_the_primary_app_is_stopped() {
     assert!(unpin.contains("collect_provider_primary_runtime"));
     assert!(unpin.contains("if primary_runtime_observed {\n        request_quit(\"OneDrive\")?;\n    }"));
 
+    // A fully closed primary app is already in the state required by OneDrive `/unpin`.
+    // Requiring the broad helper-aware observation here would incorrectly reject that safe state.
+    assert!(!unpin.contains("require_runtime_observation(CloudProvider::Onedrive, 0)"));
+
     let runtime_source = include_str!("../src/provider_client_runtime.rs");
     let primary_observer = runtime_source
         .split_once("pub(crate) fn collect_provider_primary_runtime")
