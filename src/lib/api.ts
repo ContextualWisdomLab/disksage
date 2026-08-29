@@ -32,6 +32,12 @@ export interface CacheCandidate {
   bytes: number;
   exists: boolean;
 }
+export interface CacheTarget {
+  path: string;
+  bytes: number;
+  modified_ms: number;
+  object_id: string;
+}
 export interface DevArtifact {
   path: string;
   kind: string;
@@ -49,6 +55,71 @@ export interface CleanResult {
   ok: boolean;
   error: string;
 }
+
+export interface OrphanRelationEvidence {
+  subject: string;
+  predicate: string;
+  object: string;
+  source: string;
+}
+export interface OrphanCandidate {
+  candidate_id: string;
+  kind: string;
+  bundle_id: string | null;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  object_id: string;
+  metadata_fingerprint: string;
+  ontology_class: string;
+  confidence: string;
+  active_use_evidence_complete: boolean;
+  active_use: boolean;
+  relations: OrphanRelationEvidence[];
+  review_reasons: string[];
+  auto_trash_eligible: boolean;
+}
+export interface OrphanPlan {
+  schema_kind: "disksage.orphan-plan/v1";
+  schema_version: number;
+  generated_at_ms: number;
+  plan_fingerprint: string;
+  candidate_count: number;
+  candidate_bytes: number;
+  scan_complete: boolean;
+  candidates: OrphanCandidate[];
+  notices: string[];
+  local_paths_included: false;
+  mutation_performed: false;
+  exact_approval_phrase: string;
+}
+export interface OrphanCleanupRequest {
+  candidate_id: string;
+  metadata_fingerprint: string;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  object_id: string;
+}
+export interface OrphanCleanupItemResult {
+  candidate_id: string;
+  bytes: number;
+  attempted: boolean;
+  moved_to_trash: boolean;
+  error: string | null;
+}
+export interface OrphanCleanupResult {
+  schema_kind: "disksage.orphan-cleanup-result/v1";
+  schema_version: number;
+  plan_fingerprint: string;
+  requested_count: number;
+  moved_count: number;
+  filesystem_mutation_executed: boolean;
+  items: OrphanCleanupItemResult[];
+  notices: string[];
+}
 export interface JournalEntry {
   ts_ms: number;
   op: string;
@@ -63,6 +134,12 @@ export interface DupeGroup {
 }
 
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
+export const cleanRegenerableCaches = () =>
+  invoke<CleanResult[]>("clean_regenerable_caches");
+export const listCacheTargets = (dir: string) =>
+  invoke<CacheTarget[]>("list_cache_targets", { dir });
+export const cleanCacheContents = (dir: string, targets: CacheTarget[]) =>
+  invoke<CleanResult[]>("clean_cache_contents", { dir, targets });
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
@@ -74,6 +151,83 @@ export const recentOperations = (limit = 20) =>
   invoke<JournalEntry[]>("recent_operations", { limit });
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
+export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
+export const cleanOrphanCandidates = (
+  planFingerprint: string,
+  requests: OrphanCleanupRequest[],
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<OrphanCleanupResult>("clean_orphan_candidates", {
+  planFingerprint,
+  requests,
+  confirmationPhrase,
+  rationale,
+});
+
+export interface PodmanReclaimPlan {
+  schema_kind: "disksage.podman-reclaim-plan";
+  schema_version: number;
+  platform: string;
+  evidence_complete: boolean;
+  elapsed_ms: number;
+  machine: { name: string; state: string; configured_disk_bytes: number | null } | null;
+  guest_filesystem: { total_bytes: number; used_bytes: number; available_bytes: number } | null;
+  system_df: {
+    images: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+    containers: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+    local_volumes: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+  } | null;
+  unused_images: {
+    total_records: number;
+    referenced_records: number;
+    unused_records: number;
+    unused_untagged_records: number;
+    unused_tagged_records: number;
+    candidate_record_size_sum: number;
+    candidate_set_sha256: string;
+  } | null;
+  dangling_prune_approval_phrase: string | null;
+  assessment: {
+    physically_reclaimable_bytes: number | null;
+    podman_reported_reclaimable_bytes: number | null;
+    raw_allocated_minus_guest_used_bytes: number | null;
+    status: string;
+    reason_codes: string[];
+    recommended_actions: Array<{
+      kind: string;
+      requires_human_approval: boolean;
+      rationale: string;
+    }>;
+  };
+  issues: string[];
+}
+
+export const inspectPodmanReclaim = () =>
+  invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
+
+export interface PodmanDanglingImagePruneExecution {
+  schema_version: number;
+  candidate_set_sha256: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  before_available_bytes: number | null;
+  after_available_bytes: number | null;
+  observed_available_gain_bytes: number | null;
+  rationale: string;
+}
+
+export const executePodmanDanglingImagePrune = (
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<PodmanDanglingImagePruneExecution>("execute_podman_dangling_image_prune", {
+  confirmationPhrase,
+  rationale,
+});
 
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
@@ -115,10 +269,42 @@ export interface MovePlan {
   src: string;
   dst: string;
   class_id: string;
+  source_size?: number | null;
+  source_mtime_ms?: number | null;
+  lineage?: {
+    production_time_ms?: number | null;
+    production_time_source?: string | null;
+    production_time_confidence?: string | null;
+    lineage_fingerprint: string;
+  };
 }
 
 export const planOrganize = (root: string) =>
   invoke<MovePlan[]>("plan_organize", { root });
+
+export interface OrganizationLineageItem {
+  lineage_fingerprint: string;
+  source_size: number;
+  source_mtime_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: "high" | "medium" | "low" | "unknown";
+  ontology_class: string;
+  destination_relation: "targetFolder";
+  action: "move";
+}
+
+export interface OrganizationLineageBatch {
+  schema: "disksage.organization-lineage-batch";
+  version: 1;
+  generated_at_ms: number;
+  complete: true;
+  batch_fingerprint_sha256: string;
+  items: OrganizationLineageItem[];
+}
+
+export const exportOrganizationLineage = (plans: MovePlan[]) =>
+  invoke<OrganizationLineageBatch>("export_organization_lineage", { plans });
 
 export interface RuleMatch {
   ext: string | null;
@@ -178,6 +364,30 @@ export interface BrewCleanupJudgment {
   model_name: string;
   judged_at_ms: number;
   exact_approval_phrase: string;
+  calibration?: JudgeCalibrationResult;
+}
+
+export interface JudgeCalibrationEvidence {
+  schema_version: number;
+  judgment_id: string;
+  categories: number;
+  model_labels: number[];
+  human_labels: number[];
+  human_baseline_a?: number[];
+  human_baseline_b?: number[];
+  subgroup?: number[];
+}
+
+export interface JudgeCalibrationResult {
+  schema_version: number;
+  engine: string;
+  judgment_id: string;
+  categories: number;
+  sample_count: number;
+  passed: boolean;
+  gates: Array<{ name: string; value: number; threshold: number; pass: boolean }>;
+  exact_agreement: number;
+  adjacent_agreement: number;
 }
 
 export interface BrewCleanupExecution {
@@ -197,6 +407,8 @@ export interface BrewCleanupExecution {
 
 export const planBrewCleanup = () => invoke<BrewCleanupPlan>("plan_brew_cleanup");
 export const judgeBrewCleanup = () => invoke<BrewCleanupJudgment>("judge_brew_cleanup");
+export const validateJudgeCalibration = (evidence: JudgeCalibrationEvidence) =>
+  invoke<JudgeCalibrationResult>("validate_judge_calibration", { evidence });
 export const executeBrewCleanup = (
   planFingerprint: string,
   judgmentId: string,
@@ -226,7 +438,8 @@ export type ArchiveKind =
   | "dataset"
   | "backup"
   | "creative"
-  | "incomplete-download";
+  | "incomplete-download"
+  | "sensitive-config";
 
 export interface CloudRoot {
   id: string;
@@ -561,6 +774,103 @@ export interface CloudPlanReport {
   potentially_reclaimable_bytes: number;
   exact_duplicates: ExactDuplicateSummary;
   capacity?: CloudCapacityAssessment;
+  local_volume?: LocalVolumeSnapshot;
+  pre_copy_evidence?: PreCopyEvidenceCohort;
+  notices: string[];
+}
+
+export interface PreCopyEvidenceObservation {
+  stream: string;
+  observed_at_ms: number;
+  evidence_complete: boolean;
+  fingerprint: string;
+}
+
+export interface PreCopyEvidenceCohort {
+  schema_version: number;
+  observed_at_ms: number;
+  observations: PreCopyEvidenceObservation[];
+  complete: boolean;
+  blockers: string[];
+  cohort_fingerprint: string;
+}
+
+/** Native File Provider copies need the candidate plus a safety reserve for staging. */
+export const LOCAL_COPY_RESERVE_BYTES = 1024 * 1024 * 1024;
+
+export function localCopyHasHeadroom(
+  localVolume: LocalVolumeSnapshot | undefined,
+  candidateBytes: number,
+): boolean {
+  if (!localVolume || !Number.isSafeInteger(candidateBytes) || candidateBytes < 0) return false;
+  if (candidateBytes > Number.MAX_SAFE_INTEGER - LOCAL_COPY_RESERVE_BYTES) return false;
+  return localVolume.available_bytes >= candidateBytes + LOCAL_COPY_RESERVE_BYTES;
+}
+
+export type LocalVolumePressure = "normal" | "elevated" | "high" | "critical";
+
+export interface LocalVolumeSnapshot {
+  schema_version: number;
+  observed_at_ms: number;
+  total_bytes: number;
+  free_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+  available_basis_points: number;
+  allocation_granularity_bytes: number;
+  pressure: LocalVolumePressure;
+  evidence_kind: string;
+  limitations: string[];
+  evidence_fingerprint: string;
+}
+
+export interface IcloudSyncHealthReport {
+  observed_at_ms: number;
+  evidence_complete: boolean;
+  managed_database_allocated_bytes?: number;
+  upload_queue: {
+    scheduled_waiting_count: number;
+    scheduled_active_count: number;
+    blocked_on_sync_up_count: number;
+    out_of_quota_count: number;
+    item_error_count: number;
+  };
+  file_provider_activity?: {
+    command_succeeded: boolean;
+    timed_out: boolean;
+    output_truncated: boolean;
+    no_progress_fetch_count: number;
+    no_progress_create_count: number;
+    materialization_failure_count: number;
+    staged_item_missing_count: number;
+    sync_excluded_filename_count: number;
+    sync_excluded_root_count: number;
+    active_upload_count: number;
+    active_download_count: number;
+    active_upload_progress_millionths?: number | null;
+    active_download_progress_millionths?: number | null;
+    notices: string[];
+  } | null;
+  sync_backlog_present: boolean;
+  new_copy_admission_state: "clear" | "blocked";
+  new_copy_admission_blockers: string[];
+  blockers: string[];
+  notices: string[];
+  local_eviction_authorized: boolean;
+}
+
+export type ProviderGlobalSyncState = "clear" | "pending" | "error" | "unavailable";
+
+export interface ProviderGlobalSyncReport {
+  schema_version: number;
+  provider: Exclude<CloudProvider, "icloud">;
+  evidence_kind: string;
+  evidence_complete: boolean;
+  state: ProviderGlobalSyncState;
+  upload_progress_present: boolean;
+  download_progress_present: boolean;
+  pending_indexable_count: number | null;
+  blockers: string[];
   notices: string[];
 }
 
@@ -605,6 +915,21 @@ export function cloudCapacityAllowsCopy(
 ): boolean {
   return assessment?.can_fit === true
     && assessment.snapshot.evidence_kind !== "unavailable";
+}
+
+/** Personal native-client mode permits copy-only when the desktop sync app is running. */
+export function cloudNativeClientCopyAllowed(
+  assessment: CloudCapacityAssessment | null | undefined,
+  root: Pick<CloudRoot, "provider" | "account_scope"> | null | undefined,
+  notices: readonly string[],
+): boolean {
+  return root?.account_scope === "personal"
+    && root.provider !== "icloud"
+    && notices.includes("provider-client-runtime-observed")
+    && notices.includes("native-client-copy-capacity-unverified")
+    && assessment?.can_fit === null
+    && assessment.snapshot.evidence_kind === "unavailable"
+    && assessment.snapshot.unavailable_reason === "provider-oauth-connection-missing";
 }
 
 export interface ExactDuplicateSummary {
@@ -698,11 +1023,34 @@ export interface CloudLineageSnapshot {
 
 export interface CloudCopyOutput {
   action: "copy-only" | "adopt-existing-copy";
+  goal_state: CloudOffloadGoalState;
+  goal_status: string | null;
   receipt: CloudCopyReceipt;
   receipt_path: string;
+  adr_path: string | null;
+  goal_path: string | null;
+  projection_warnings: string[];
+  provider_object_id: string | null;
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
+export type ProviderSyncState =
+  | "complete"
+  | "pending-upload"
+  | "not-ubiquitous"
+  | "not-local-current"
+  | "uploading"
+  | "excluded-from-sync"
+  | "sync-paused"
+  | "remote-unavailable"
+  | "content-mismatch"
+  | "unknown";
+export type CloudOffloadGoalState =
+  | "copy-verified"
+  | "pending-provider-sync"
+  | "provider-sync-confirmed"
+  | "eviction-ready"
+  | "source-evicted";
 export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
 
 export interface RemoteContentProof {
@@ -724,6 +1072,7 @@ export interface ProviderSyncEvidence {
   kind: SyncEvidenceKind;
   evidence_id: string;
   sync_complete: boolean;
+  sync_state?: ProviderSyncState;
   remote_content: RemoteContentProof | null;
 }
 
@@ -756,12 +1105,44 @@ export interface LocalEvictionPermit {
 }
 
 export interface CloudAttestationOutput {
+  goal_state: CloudOffloadGoalState;
+  goal_status: "active" | "blocked" | "completed" | null;
   evidence: ProviderSyncEvidence;
   assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
+  adr_path: string | null;
+  goal_path: string | null;
+  projection_warnings: string[];
   permit: LocalEvictionPermit | null;
   blockers: string[];
+}
+
+export interface CloudReceiptReconciliationEntry {
+  receipt_id: string | null;
+  provider: CloudProvider | null;
+  goal_status: "active" | "blocked" | "completed" | null;
+  goal_state: CloudOffloadGoalState | null;
+  provider_sync_state: ProviderSyncState | null;
+  eviction_permit: boolean;
+  blockers: string[];
+  error: string | null;
+}
+
+export interface CloudReceiptReconciliationOutput {
+  schema_version: number;
+  observed_at_ms: number;
+  receipts_seen: number;
+  attested_count: number;
+  pending_count: number;
+  eviction_ready_count: number;
+  error_count: number;
+  provider_evidence_written: number;
+  unprocessed_count: number;
+  incomplete_reconciliation: boolean;
+  entries: CloudReceiptReconciliationEntry[];
+  cloud_write_executed: false;
+  source_eviction_authorized: false;
 }
 
 export interface ActiveUseEvidence {
@@ -803,10 +1184,14 @@ export interface CloudEvictionResult {
 
 export interface CloudSourceEvictionOutput {
   action: "attest-approve-and-trash-verified-cloud-source";
+  goal_state: "source-evicted";
   attestation: CloudAttestationOutput;
   approval: CloudSourceEvictionApproval;
   approval_path: string;
   eviction: CloudEvictionResult;
+  adr_path: string | null;
+  goal_path: string | null;
+  projection_warnings: string[];
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
@@ -851,10 +1236,29 @@ export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
 export const verifyCloudProviderCapacity = (cloudRoot: string) =>
   invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
+export const inspectIcloudNewCopyAdmission = () =>
+  invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
+export const cancelFinderCopy = () => invoke<void>("cancel_finder_copy");
+export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
+  invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
+export interface ProviderRecoveryOutput {
+  schema_version: number;
+  provider: Exclude<CloudProvider, "icloud">;
+  action: string;
+  pre_runtime_observed: boolean;
+  quit_requested: boolean;
+  launch_requested: boolean;
+  post_runtime_observed: boolean | null;
+  blockers: string[];
+  cloud_write_executed: boolean;
+  source_eviction_executed: boolean;
+}
+export const recoverCloudProviderClient = (cloudRoot: string) =>
+  invoke<ProviderRecoveryOutput>("recover_cloud_provider_client", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
-export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
-  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId });
+export const connectCloudProvider = (cloudRoot: string, clientId: string, writeAccess = false) =>
+  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId, writeAccess });
 export const disconnectCloudProvider = (cloudRoot: string) =>
   invoke<void>("disconnect_cloud_provider", { cloudRoot });
 export const planCloudArchive = (
@@ -910,6 +1314,29 @@ export const copyCloudCandidate = (
   minAgeDays,
   limit,
 });
+export const copyCloudCandidateViaProviderApi = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  exactConfirmationPhrase: string,
+  approvalRationale: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("copy_cloud_candidate_via_provider_api", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  exactConfirmationPhrase,
+  approvalRationale,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+/** Request cancellation of the single in-flight native copy operation. */
+export const cancelCloudCopy = (metadataFingerprint: string) => invoke<void>("cancel_cloud_copy", {
+  metadataFingerprint,
+});
 export const adoptExistingCloudCandidate = (
   root: string,
   cloudRoot: string,
@@ -944,6 +1371,8 @@ export const attestCloudCopy = (
   receiptId,
   objectId,
 });
+export const reconcileCloudReceipts = () =>
+  invoke<CloudReceiptReconciliationOutput>("reconcile_cloud_receipts");
 export const trashVerifiedCloudSource = (
   receiptId: string,
   confirmationReceiptId: string,

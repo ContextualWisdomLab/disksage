@@ -19,6 +19,9 @@ QuickXor over both files. It issues an immutable receipt only when all three dig
 match and neither file changed during verification. Reading a File Provider placeholder may hydrate
 it; a failed or incomplete download therefore blocks receipt creation rather than weakening proof.
 Neither source nor destination is removed or replaced, including when receipt persistence fails.
+Because adoption only hashes an existing destination, it does not require the 1 GiB local staging
+reserve used by a new native File Provider copy; this keeps recovery possible when the source volume
+is already under pressure.
 
 ## Receipt lineage
 

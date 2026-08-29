@@ -34,6 +34,12 @@
 
   function approvalGuidance(): string {
     if (!judgment || judgment.verdict !== "safe") return "";
+    if (!judgment.calibration || judgment.calibration.judgment_id !== judgment.judgment_id) {
+      return "이 정확한 LLM 판정에 연결된 fast-mlsirm calibration이 필요합니다.";
+    }
+    if (!judgment.calibration.passed) {
+      return "fast-mlsirm Judge calibration이 통과하지 않아 실행할 수 없습니다.";
+    }
     if (confirmationPhrase.trim() !== judgment.exact_approval_phrase) {
       return "승인 문구가 일치하지 않습니다.";
     }
@@ -46,6 +52,9 @@
   function executionReady(): boolean {
     return judgment !== null
       && judgment.verdict === "safe"
+      && judgment.calibration !== undefined
+      && judgment.calibration.judgment_id === judgment.judgment_id
+      && judgment.calibration.passed
       && confirmationPhrase.trim() === judgment.exact_approval_phrase
       && rationale.trim().length > 0
       && !executing
@@ -101,6 +110,14 @@
       <p class="muted">{report.reason || "모델이 설명을 반환하지 않았습니다."}</p>
       <p class="fingerprint">계획 지문: {report.plan_fingerprint}</p>
       <p class="fingerprint">실행 예정: brew cleanup --prune-prefix</p>
+      {#if report.calibration}
+        <p class:success={report.calibration.passed} class:warning={!report.calibration.passed}>
+          Judge calibration ({report.calibration.engine}): {report.calibration.passed ? "통과" : "실패"}
+          · 표본 {report.calibration.sample_count}개 · 일치율 {Math.round(report.calibration.exact_agreement * 100)}%
+        </p>
+      {:else}
+        <p class="muted">fast-mlsirm calibration 증거가 없어 독립적인 사람 승인 문구가 계속 필요합니다.</p>
+      {/if}
       <pre>{report.plan.dry_run_output || "dry-run에서 정리 대상이 보고되지 않았습니다."}</pre>
 
       {#if judgment && judgment.verdict === "safe" && !execution}

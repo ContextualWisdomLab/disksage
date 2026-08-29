@@ -935,6 +935,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "native-test-evidence".into(),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: None,
         };
         let evidence_record = create_sync_evidence_record(&evidence).unwrap();

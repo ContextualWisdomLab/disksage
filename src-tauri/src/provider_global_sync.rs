@@ -8,8 +8,12 @@
 use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
 
-const MAX_DUMP_BYTES: u64 = 512 * 1024;
+// macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
+// room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
+const MAX_DUMP_BYTES: u64 = 32 * 1024 * 1024;
 const PROBE_TIMEOUT_MS: u64 = 20_000;
+const PROBE_TIMEOUT_MARKER: &str = "provider-global-sync-probe-timeout: yes";
+const PROBE_TIMEOUT_NOTICE: &str = "provider-global-sync-probe-timeout";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -75,8 +79,35 @@ fn parse_pending_indexable_count(line: &str) -> Option<u64> {
         .ok()
 }
 
+fn has_reconciliation_backlog(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line.strip_prefix("+ ").unwrap_or(line);
+    let Some(rest) = line.strip_prefix("reconciliation (") else {
+        return false;
+    };
+    let Some((count, _)) = rest.split_once(" entries") else {
+        return false;
+    };
+    count
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .is_some_and(|count| count > 0)
+}
+
 fn probe_output_is_truncated(bytes_len: usize) -> bool {
     bytes_len as u64 > MAX_DUMP_BYTES
+}
+
+fn contains_bounded_numeric_marker(text: &str, prefix: &str, number: &str) -> bool {
+    text.match_indices(prefix).any(|(index, _)| {
+        let remainder = &text[index + prefix.len()..];
+        remainder.starts_with(number)
+            && remainder
+                .as_bytes()
+                .get(number.len())
+                .map_or(true, |next| !next.is_ascii_digit())
+    })
 }
 
 /// Parse only aggregate queue markers from one provider-filtered File Provider dump.
@@ -89,16 +120,33 @@ pub fn parse_dump(
     if !output.contains(identifier) || !output.contains("sync engine state:") {
         return Err("provider-global-sync-dump-incomplete".into());
     }
+    let probe_timed_out = output.lines().any(|line| {
+        line.trim()
+            .strip_prefix("+ ")
+            .unwrap_or_else(|| line.trim())
+            == PROBE_TIMEOUT_MARKER
+    });
 
     let mut upload_progress_present = false;
     let mut download_progress_present = false;
     let mut pending_indexable_count = None;
     let mut needs_indexing = false;
+    let mut reconciliation_pending = false;
     let mut has_error = false;
+    let mut has_filename_too_long = false;
+    let mut has_temporarily_disconnected = false;
+    let mut has_server_unreachable = false;
+    let mut has_local_disk_full = false;
+    let mut has_item_not_found = false;
+    let mut hidden_default_domain = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
         let marker = trimmed.strip_prefix("+ ").unwrap_or(trimmed).trim();
+        let marker_lower = marker.to_ascii_lowercase();
+        if marker.starts_with("domain: ") {
+            hidden_default_domain = marker.contains("(default)") && marker.contains("(hidden)");
+        }
         upload_progress_present |= line_has_active_progress(marker, "upload progress:");
         download_progress_present |= line_has_active_progress(marker, "download progress:");
         if let Some(count) = parse_pending_indexable_count(marker) {
@@ -108,8 +156,31 @@ pub fn parse_dump(
         if marker == "needs-indexing: yes" || marker == "indexing: yes" {
             needs_indexing = true;
         }
-        if marker.contains("temporarily disconnected")
-            || marker.contains("user-disabled")
+        reconciliation_pending |= has_reconciliation_backlog(marker);
+        has_filename_too_long |= marker.contains("POSIX 63")
+            || marker.contains("파일 이름이 너무 깁니다")
+            || marker_lower.contains("filename too long");
+        has_temporarily_disconnected |= marker_lower.contains("temporarily disconnected");
+        has_server_unreachable |= marker_lower.contains("serverunreachable")
+            || marker_lower.contains("server unreachable")
+            || marker_lower.contains("code=-1004");
+        has_item_not_found |= marker_lower.contains("code=-1005")
+            || marker_lower.contains("itemnotfound")
+            || marker.contains("파일이 존재하지 않습니다");
+        has_local_disk_full |= contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
+            || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
+            || marker_lower.contains("enospc")
+            || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
+            || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
+            || contains_bounded_numeric_marker(&marker_lower, "osstatus ", "-34")
+            || marker_lower.contains("no space left on device")
+            || marker_lower.contains("disk full");
+        if has_filename_too_long
+            || has_temporarily_disconnected
+            || has_server_unreachable
+            || has_local_disk_full
+            || has_item_not_found
+            || (marker.contains("user-disabled") && !hidden_default_domain)
             || marker.contains("can't dump the extension")
             || marker.contains("Error Domain=")
             || (marker.contains("error:'") && !marker.contains("error:'<nil>'"))
@@ -128,8 +199,11 @@ pub fn parse_dump(
     let pending = upload_progress_present
         || download_progress_present
         || needs_indexing
-        || pending_indexable_count.is_some_and(|count| count > 0);
-    let state = if has_error {
+        || pending_indexable_count.is_some_and(|count| count > 0)
+        || reconciliation_pending;
+    let state = if probe_timed_out {
+        ProviderGlobalSyncState::Unavailable
+    } else if has_error {
         ProviderGlobalSyncState::Error
     } else if pending {
         ProviderGlobalSyncState::Pending
@@ -143,66 +217,147 @@ pub fn parse_dump(
     if needs_indexing || pending_indexable_count.is_some_and(|count| count > 0) {
         blockers.push("provider-global-sync-indexing-pending".into());
     }
+    if reconciliation_pending {
+        blockers.push("provider-global-sync-reconciliation-pending".into());
+    }
+    if has_filename_too_long {
+        blockers.push("provider-global-sync-filename-too-long".into());
+    }
+    if has_temporarily_disconnected {
+        blockers.push("provider-global-sync-temporarily-disconnected".into());
+    }
+    if has_server_unreachable {
+        blockers.push("provider-global-sync-server-unreachable".into());
+    }
+    if has_local_disk_full {
+        blockers.push("provider-global-sync-local-disk-full".into());
+    }
+    if has_item_not_found {
+        blockers.push("provider-global-sync-item-not-found".into());
+    }
     if has_error {
         blockers.push("provider-global-sync-error".into());
+    }
+    if probe_timed_out {
+        blockers.push(PROBE_TIMEOUT_NOTICE.into());
+    }
+    let mut notices = vec![
+        "provider-global-sync-dump-read-only".into(),
+        "provider-global-sync-user-paths-not-retained".into(),
+    ];
+    if probe_timed_out {
+        notices.push(PROBE_TIMEOUT_NOTICE.into());
     }
     Ok(ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider,
         evidence_kind: "fileproviderctl-global-dump".into(),
-        evidence_complete: true,
+        evidence_complete: !probe_timed_out,
         state,
         upload_progress_present,
         download_progress_present,
         pending_indexable_count,
         blockers,
-        notices: vec![
-            "provider-global-sync-dump-read-only".into(),
-            "provider-global-sync-user-paths-not-retained".into(),
-        ],
+        notices,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn partial_dump_after_timeout(bytes: Vec<u8>, identifier: &str) -> Option<String> {
+    if probe_output_is_truncated(bytes.len()) {
+        return None;
+    }
+    let mut output = String::from_utf8(bytes).ok()?;
+    if !output.contains(identifier) || !output.contains("sync engine state:") {
+        return None;
+    }
+    output.push_str("\n+ ");
+    output.push_str(PROBE_TIMEOUT_MARKER);
+    output.push('\n');
+    Some(output)
 }
 
 #[cfg(target_os = "macos")]
 fn run_dump(provider: CloudProvider) -> Result<String, String> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
     let identifier = provider_identifier(provider)
         .ok_or_else(|| "provider-global-sync-icloud-specialized".to_string())?;
-    let mut child = Command::new("/usr/bin/fileproviderctl")
+    let mut command = Command::new("/usr/bin/fileproviderctl");
+    command
         .args(["dump", identifier, "-l"])
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider helpers can outlive the command leader and retain stdout. Keep the
+    // entire probe in a private group so timeout cleanup can close the pipe and join it.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "provider-global-sync-probe-unavailable".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
     let Some(stdout) = child.stdout.take() else {
+        kill_group();
         let _ = child.kill();
         let _ = child.wait();
         return Err("provider-global-sync-probe-stdout-unavailable".into());
     };
-    let reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take(MAX_DUMP_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-            .map_err(|_| "provider-global-sync-probe-read-failed".to_string())
+    let reader = thread::spawn(move || -> Result<Vec<u8>, String> {
+        let max_bytes = MAX_DUMP_BYTES as usize + 1;
+        let mut stdout = stdout;
+        let mut bytes = Vec::with_capacity(64 * 1024);
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = stdout
+                .read(&mut buffer)
+                .map_err(|_| "provider-global-sync-probe-read-failed".to_string())?;
+            if read == 0 {
+                break;
+            }
+            let remaining = max_bytes.saturating_sub(bytes.len());
+            if remaining > 0 {
+                bytes.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
+        }
+        Ok(bytes)
     });
     let deadline = Instant::now() + Duration::from_millis(PROBE_TIMEOUT_MS);
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => {
+                kill_group();
+                break status;
+            }
             Ok(None) if Instant::now() >= deadline => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = reader.join();
+                let partial = reader.join().ok().and_then(Result::ok);
+                if let Some(output) =
+                    partial.and_then(|bytes| partial_dump_after_timeout(bytes, identifier))
+                {
+                    return Ok(output);
+                }
                 return Err("provider-global-sync-probe-timeout".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
@@ -240,11 +395,39 @@ pub fn inspect_new_copy_admission(
     ))
 }
 
+fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
+    report.schema_version == PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        && report.evidence_kind == "fileproviderctl-global-dump"
+        && provider_identifier(report.provider).is_some()
+}
+
+fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
+    report.upload_progress_present
+        || report.download_progress_present
+        || report
+            .pending_indexable_count
+            .is_some_and(|count| count > 0)
+}
+
+fn report_is_authoritative_clear(report: &ProviderGlobalSyncReport) -> bool {
+    report_identity_is_valid(report)
+        && report.evidence_complete
+        && report.state == ProviderGlobalSyncState::Clear
+        && report.blockers.is_empty()
+        && !report_has_pending_aggregate_evidence(report)
+}
+
 pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(), String> {
+    if !report_identity_is_valid(report)
+        || (report.state == ProviderGlobalSyncState::Clear
+            && report_has_pending_aggregate_evidence(report))
+    {
+        return Err("provider-global-sync-evidence-invalid".into());
+    }
     if !report.evidence_complete {
         return Err("provider-global-sync-evidence-incomplete".into());
     }
-    if report.state == ProviderGlobalSyncState::Clear && report.blockers.is_empty() {
+    if report_is_authoritative_clear(report) {
         Ok(())
     } else if report.blockers.is_empty() {
         Err(format!("provider-global-sync-{}", report.state.as_str()))
@@ -253,32 +436,35 @@ pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(
     }
 }
 
+fn is_stable_provider_blocker(notice: &str) -> bool {
+    notice.len() <= 128
+        && notice.starts_with("provider-global-sync-")
+        && notice
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 pub fn attach_new_copy_admission_notice(
     notices: &mut Vec<String>,
     report: Option<&ProviderGlobalSyncReport>,
 ) {
-    notices.retain(|notice| {
-        !matches!(
-            notice.as_str(),
-            "provider-global-sync-clear"
-                | "provider-global-sync-blocked"
-                | "provider-global-sync-evidence-unavailable"
-        )
-    });
-    notices.push(
-        match report {
-            Some(report)
-                if report.evidence_complete
-                    && report.state == ProviderGlobalSyncState::Clear
-                    && report.blockers.is_empty() =>
-            {
-                "provider-global-sync-clear"
-            }
-            Some(_) => "provider-global-sync-blocked",
-            None => "provider-global-sync-evidence-unavailable",
-        }
-        .into(),
-    );
+    notices.retain(|notice| !notice.starts_with("provider-global-sync-"));
+    let admission_notice = match report {
+        Some(report) if report_is_authoritative_clear(report) => "provider-global-sync-clear",
+        Some(_) => "provider-global-sync-blocked",
+        None => "provider-global-sync-evidence-unavailable",
+    }
+    .to_string();
+    notices.push(admission_notice);
+    if let Some(report) = report {
+        notices.extend(
+            report
+                .blockers
+                .iter()
+                .filter(|blocker| is_stable_provider_blocker(blocker))
+                .cloned(),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +497,32 @@ sync engine state:
       i:227487 create-item: error:'NSError: POSIX 63 "filename too long"'
 "#;
 
+    const RECONCILIATION_BACKLOG_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+sync engine state:
+    + scheduling state: running
+    + reconciliation (277399 entries):
+"#;
+
+    const HIDDEN_DEFAULT_USER_DISABLED_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+domain: (default) (hidden)
+  + (user-disabled)
+domain: personal
+sync engine state:
+    + pending-indexable-count: 0
+    + scheduling state: idle
+"#;
+
+    const ACTIVE_USER_DISABLED_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+domain: personal
+  + (user-disabled)
+sync engine state:
+    + pending-indexable-count: 0
+    + scheduling state: idle
+"#;
+
     #[test]
     fn quiet_dump_is_clear_without_retaining_paths() {
         let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
@@ -318,6 +530,27 @@ sync engine state:
         assert!(report.evidence_complete);
         assert!(report.blockers.is_empty());
         assert!(require_new_copy_admission(&report).is_ok());
+    }
+
+    #[test]
+    fn forged_report_identity_cannot_authorize_new_copy() {
+        let baseline = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+
+        let mut schema_drift = baseline.clone();
+        schema_drift.schema_version = schema_drift.schema_version.saturating_add(1);
+
+        let mut evidence_kind_drift = baseline.clone();
+        evidence_kind_drift.evidence_kind = "forged-global-sync-evidence".into();
+
+        let mut provider_drift = baseline;
+        provider_drift.provider = CloudProvider::Icloud;
+
+        for report in [schema_drift, evidence_kind_drift, provider_drift] {
+            assert_eq!(
+                require_new_copy_admission(&report).unwrap_err(),
+                "provider-global-sync-evidence-invalid"
+            );
+        }
     }
 
     #[test]
@@ -338,6 +571,38 @@ sync engine state:
         assert!(report
             .blockers
             .contains(&"provider-global-sync-error".into()));
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-filename-too-long".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn reconciliation_backlog_blocks_without_transfer_markers() {
+        let report = parse_dump(CloudProvider::Onedrive, RECONCILIATION_BACKLOG_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Pending);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-reconciliation-pending".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn hidden_default_domain_user_disabled_marker_is_not_global_error() {
+        let report =
+            parse_dump(CloudProvider::Onedrive, HIDDEN_DEFAULT_USER_DISABLED_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Clear);
+        assert!(report.blockers.is_empty());
+        assert!(require_new_copy_admission(&report).is_ok());
+    }
+
+    #[test]
+    fn active_domain_user_disabled_marker_still_blocks() {
+        let report = parse_dump(CloudProvider::Onedrive, ACTIVE_USER_DISABLED_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-error".into()));
         assert!(require_new_copy_admission(&report).is_err());
     }
 
@@ -346,13 +611,111 @@ sync engine state:
         let dump = "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n";
         let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
         assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-temporarily-disconnected".into()));
         assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn server_unreachable_error_is_classified_without_retaining_provider_paths() {
+        let dump = "com.google.drivefs.fpext\nsync engine state:\n NSFileProviderErrorDomain Code=-1004 server unreachable\n";
+        let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-server-unreachable".into()));
+        assert!(report
+            .notices
+            .iter()
+            .all(|notice| !notice.contains("server unreachable")));
+    }
+
+    #[test]
+    fn item_not_found_error_is_classified_without_retaining_provider_paths() {
+        let dump = "com.google.drivefs.fpext\nsync engine state:\n error:'NSFileProviderErrorDomain Code=-1005 itemNotFound'\n";
+        let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-item-not-found".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn local_disk_full_error_is_classified_without_retaining_provider_paths() {
+        let dump =
+            "com.microsoft.OneDrive.FileProvider\nsync engine state:\n error:'NSError: ODResult_Errno 28'\n";
+        let report = parse_dump(CloudProvider::Onedrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-local-disk-full".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn common_posix_disk_full_markers_are_classified() {
+        for marker in [
+            "NSError: POSIX Code=28",
+            "write failed: ENOSPC",
+            "OSStatus -34 (disk full)",
+        ] {
+            let dump = format!("com.google.drivefs.fpext\nsync engine state:\n error:'{marker}'\n");
+            let report = parse_dump(CloudProvider::GoogleDrive, &dump).unwrap();
+            assert!(report
+                .blockers
+                .contains(&"provider-global-sync-local-disk-full".into()));
+        }
+    }
+
+    #[test]
+    fn admission_notice_exposes_stable_blockers_without_paths() {
+        let report = parse_dump(
+            CloudProvider::GoogleDrive,
+            "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n",
+        )
+        .unwrap();
+        let mut notices = vec![
+            "dry-run-only".into(),
+            "provider-global-sync-old/path".into(),
+        ];
+        attach_new_copy_admission_notice(&mut notices, Some(&report));
+        assert!(notices.contains(&"provider-global-sync-blocked".into()));
+        assert!(notices.contains(&"provider-global-sync-temporarily-disconnected".into()));
+        assert!(notices.iter().all(|notice| !notice.contains('/')));
+
+        attach_new_copy_admission_notice(&mut notices, Some(&report));
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|notice| notice.as_str() == "provider-global-sync-temporarily-disconnected")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn bounded_probe_rejects_output_beyond_limit() {
         assert!(!probe_output_is_truncated(MAX_DUMP_BYTES as usize));
         assert!(probe_output_is_truncated(MAX_DUMP_BYTES as usize + 1));
+    }
+
+    #[test]
+    fn timed_out_partial_dump_is_incomplete_and_fails_closed() {
+        let report = parse_dump(
+            CloudProvider::Onedrive,
+            &format!("{QUIET_DUMP}\n+ {PROBE_TIMEOUT_MARKER}\n"),
+        )
+        .unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Unavailable);
+        assert!(!report.evidence_complete);
+        assert!(report.blockers.contains(&PROBE_TIMEOUT_NOTICE.into()));
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            "provider-global-sync-evidence-incomplete"
+        );
+        assert!(report.notices.contains(&PROBE_TIMEOUT_NOTICE.into()));
     }
 
     #[test]
