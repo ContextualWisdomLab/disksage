@@ -1,5 +1,7 @@
 use disksage_lib::git_worktree::GitWorktreeActiveUseEvidence;
-use disksage_lib::parallels_disk_reclaim::{plan_with_runner, ParallelsCommandRunner};
+use disksage_lib::parallels_disk_reclaim::{
+    plan_with_runner, validate_cli_argument_tokens, ParallelsCommandRunner,
+};
 use std::path::Path;
 
 struct FakeRunner {
@@ -153,6 +155,31 @@ fn plan_fingerprint_changes_when_active_use_evidence_changes() {
         inactive_plan.plan_fingerprint, active_plan.plan_fingerprint,
         "the plan identity must bind the active-use evidence that changes its blockers"
     );
+}
+
+#[test]
+fn cli_argument_contract_rejects_unknown_tokens() {
+    let args = [
+        "--prlctl",
+        "/Applications/Parallels Desktop.app/Contents/MacOS/prlctl",
+        "--disk-tool",
+        "/Applications/Parallels Desktop.app/Contents/MacOS/prl_disk_tool",
+        "--vm-id",
+        "vm-123",
+        "--bundle",
+        "/Users/example/Work Windows.pvm",
+        "--disk",
+        "/Users/example/Work Windows.pvm/Work Windows-0.hdd",
+        "--bundel",
+        "typo",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+
+    let error = validate_cli_argument_tokens(&args).unwrap_err();
+
+    assert_eq!(error, "지원하지 않는 인자가 있습니다: --bundel");
 }
 
 #[cfg(unix)]
