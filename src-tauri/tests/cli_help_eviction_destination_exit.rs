@@ -33,7 +33,7 @@ const BINARIES: [(&str, &str, &str, Option<&str>); 5] = [
         "disksage-cloud-local-inventory",
         "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]",
         "알 수 없는 인자",
-        None,
+        Some("cloud-local-inventory-invalid-utf8-argument"),
     ),
 ];
 
