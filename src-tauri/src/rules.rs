@@ -595,21 +595,28 @@ pub(crate) fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+fn update_manifest_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
-        hasher.update(name.as_bytes());
+        update_manifest_bytes(hasher, name.as_bytes());
     }
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
+        let mut bytes = Vec::new();
         for unit in name.encode_wide() {
-            hasher.update(&unit.to_le_bytes());
+            bytes.extend_from_slice(&unit.to_le_bytes());
         }
+        update_manifest_bytes(hasher, &bytes);
     }
     #[cfg(not(any(unix, windows)))]
-    hasher.update(name.to_string_lossy().as_bytes());
+    update_manifest_bytes(hasher, name.to_string_lossy().as_bytes());
 }
 
 fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(), String> {
@@ -635,7 +642,7 @@ fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(),
     hasher.update(&modified_ms(&metadata).to_le_bytes());
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
-    hasher.update(object_id.as_bytes());
+    update_manifest_bytes(hasher, object_id.as_bytes());
     if is_symlink {
         let destination = std::fs::read_link(path)
             .map_err(|_| "cache-target-manifest-symlink-unavailable".to_string())?;
