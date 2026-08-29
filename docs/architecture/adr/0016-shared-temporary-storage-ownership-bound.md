@@ -1,6 +1,6 @@
 # ADR-0016: Bound shared temporary storage cleanup to ownership evidence
 
-**Status:** Accepted  
+**Status:** Accepted (amended)
 **Date:** 2026-08-28
 
 ## Context
@@ -26,6 +26,15 @@ The shared root itself, foreign/system-owned trees, linked objects, and incomple
 remain protected. The candidate's displayed bytes are the sum of the ownership-qualified children,
 not an estimate for the whole shared directory. No age threshold or quality heuristic is used.
 
+For permanent physical reclaim, ownership alone is insufficient. DiskSage supports only a
+top-level directory sealed by its producer with a create-only, read-only completion record bound to
+the directory object. Planning additionally rejects any link, socket, lock/PID file, Git worktree
+marker, database marker/file, or current process reference. Approval binds the complete tree
+fingerprint and allocated byte count. Execution repeats the plan within five minutes, deletes only
+the same object through the existing identity journal, verifies absence, measures native filesystem
+available bytes before and after, and creates a read-only receipt. The shared root is never an
+execution target.
+
 ## Consequences
 
 - `/tmp`/`/private/tmp` space is visible as a separate reclaim domain and can be reclaimed through
@@ -34,13 +43,17 @@ not an estimate for the whole shared directory. No age threshold or quality heur
   large or old.
 - Ownership traversal adds bounded inspection work; over-limit or unreadable trees remain visible
   only as unresolved shared temporary space.
+- A DiskSage producer can make its completed temporary output eligible for permanent reclaim without
+  relying on age. Unsealed or changed output remains ineligible.
 
 ## Alternatives rejected
 
 - **Expose only the process temporary directory:** hides the incident's shared temporary bytes.
 - **Allow every child under `/tmp`:** grants a shared system directory deletion authority.
 - **Delete by age or filename:** uses a heuristic without proving ownership or active use.
-- **Permanently delete temporary entries:** bypasses the existing reversible, journaled Trash path.
+- **Permanently delete arbitrary temporary entries:** rejected. Permanent reclaim is limited to a
+  producer-sealed completion lifecycle, fresh exact fingerprint approval, identity journal, and
+  immutable receipt.
 
 ## References
 
