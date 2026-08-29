@@ -1,12 +1,15 @@
 //! Evidence-bound auditing and removal of explicitly regenerable cache roots.
 
 use serde::{Deserialize, Serialize};
+use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_ENTRIES: u64 = 200_000;
+const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +137,7 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
+    let mut hashed_content_bytes = 0_u64;
     let mut locks = Vec::new();
     let mut hasher = blake3::Hasher::new();
     while let Some(current) = stack.pop() {
@@ -145,14 +149,54 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         if metadata.file_type().is_symlink() {
             return Err("generated-cache-symlink-rejected".into());
         }
+        if !metadata.is_dir() && !metadata.is_file() {
+            return Err("generated-cache-special-file-rejected".into());
+        }
         entries += 1;
         bytes = bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        let relative = current
+            .strip_prefix(path)
+            .map_err(|_| "generated-cache-relative-path-failed")?;
+        hasher.update(&(relative.as_os_str().as_bytes().len() as u64).to_le_bytes());
+        hasher.update(relative.as_os_str().as_bytes());
+        hasher.update(if metadata.is_dir() {
+            b"directory"
+        } else {
+            b"file"
+        });
+        hasher.update(&metadata.dev().to_le_bytes());
+        hasher.update(&metadata.ino().to_le_bytes());
+        hasher.update(&metadata.mode().to_le_bytes());
+        hasher.update(&metadata.uid().to_le_bytes());
+        hasher.update(&metadata.gid().to_le_bytes());
         hasher.update(&metadata.len().to_le_bytes());
         hasher.update(&metadata.mtime().to_le_bytes());
+        hasher.update(&metadata.mtime_nsec().to_le_bytes());
+        hasher.update(&metadata.ctime().to_le_bytes());
+        hasher.update(&metadata.ctime_nsec().to_le_bytes());
         if current.file_name().is_some_and(|name| name == ".lock") {
             locks.push(current.to_string_lossy().into_owned());
         }
-        if metadata.is_dir() {
+        if metadata.is_file() {
+            hashed_content_bytes = hashed_content_bytes
+                .checked_add(metadata.len())
+                .ok_or("generated-cache-content-bound-exceeded")?;
+            if hashed_content_bytes > MAX_HASHED_CONTENT_BYTES {
+                return Err("generated-cache-content-bound-exceeded".into());
+            }
+            let mut file = std::fs::File::open(&current)
+                .map_err(|_| "generated-cache-file-unreadable".to_string())?;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = file
+                    .read(&mut buffer)
+                    .map_err(|_| "generated-cache-file-unreadable".to_string())?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+        } else {
             let mut children = std::fs::read_dir(&current)
                 .map_err(|_| "generated-cache-directory-unreadable".to_string())?
                 .collect::<Result<Vec<_>, _>>()
@@ -193,9 +237,7 @@ pub fn plan_with_evidence(
         blockers.push("tool-lock-present".into());
     }
     if matches!(contract, RegenerationContract::TemporaryGitWorkspace)
-        && (activity.git_worktree_registered
-            || activity.git_dirty
-            || activity.git_common_dir.is_some())
+        && (activity.git_worktree_registered || activity.git_dirty)
     {
         blockers.push("git-workspace-retained".into());
     }
@@ -347,6 +389,8 @@ fn validate_execution(
     if approval.plan_fingerprint != plan.plan_fingerprint
         || fresh.plan_fingerprint != plan.plan_fingerprint
         || !fresh.blockers.is_empty()
+        || fresh.observed_at_ms < approval.approved_at_ms
+        || fresh.observed_at_ms > attempted_at_ms
         || attempted_at_ms < approval.approved_at_ms
         || attempted_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
     {
@@ -528,8 +572,9 @@ mod tests {
         )
         .unwrap();
         let receipt_path = temp.path().join("receipt.json");
+        let fresh = plan_with_evidence(&root, home, inactive(), 2).unwrap();
         let receipt =
-            execute_and_record(&plan, &approval, &plan, 3, &receipt_path, |_| Ok(())).unwrap();
+            execute_and_record(&plan, &approval, &fresh, 3, &receipt_path, |_| Ok(())).unwrap();
         assert!(receipt.removed);
         assert!(!receipt.provider_data_mutated);
         let journal = std::fs::read_to_string(&receipt_path).unwrap();
@@ -539,7 +584,9 @@ mod tests {
         assert_eq!(pending.state, "pending");
         let terminal: GeneratedCacheReceipt = serde_json::from_str(events[1]).unwrap();
         assert!(terminal.removed);
-        assert!(execute_and_record(&plan, &approval, &plan, 4, &receipt_path, |_| Ok(())).is_err());
+        assert!(
+            execute_and_record(&plan, &approval, &fresh, 4, &receipt_path, |_| Ok(())).is_err()
+        );
     }
 
     #[test]
@@ -558,5 +605,58 @@ mod tests {
         let receipt_path = temp.path().join("receipt.jsonl");
         assert!(execute_and_record(&plan, &approval, &plan, 3, &receipt_path, |_| Ok(())).is_err());
         assert!(!receipt_path.exists());
+    }
+
+    #[test]
+    fn fresh_observation_must_follow_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
+        let approval = approve(
+            &plan,
+            &plan.exact_approval_phrase,
+            "human:test",
+            "verified regeneration source",
+            2,
+        )
+        .unwrap();
+        assert!(execute_with(&plan, &approval, &plan, 3, |_| Ok(())).is_err());
+        let fresh = plan_with_evidence(&root, home, inactive(), 2).unwrap();
+        assert!(execute_with(&plan, &approval, &fresh, 3, |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn manifest_detects_content_rename_and_root_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("model.bin");
+        std::fs::write(&file, b"aaaa").unwrap();
+        let original_times = std::fs::metadata(&file).unwrap();
+        let first = plan_with_evidence(&root, home, inactive(), 1).unwrap();
+        std::fs::write(&file, b"bbbb").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(original_times.accessed().unwrap())
+                    .set_modified(original_times.modified().unwrap()),
+            )
+            .unwrap();
+        let rewritten = plan_with_evidence(&root, home, inactive(), 2).unwrap();
+        assert_ne!(first.plan_fingerprint, rewritten.plan_fingerprint);
+        std::fs::rename(&file, root.join("renamed.bin")).unwrap();
+        let renamed = plan_with_evidence(&root, home, inactive(), 3).unwrap();
+        assert_ne!(rewritten.plan_fingerprint, renamed.plan_fingerprint);
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("renamed.bin"), b"bbbb").unwrap();
+        let replaced = plan_with_evidence(&root, home, inactive(), 4).unwrap();
+        assert_ne!(renamed.plan_fingerprint, replaced.plan_fingerprint);
     }
 }

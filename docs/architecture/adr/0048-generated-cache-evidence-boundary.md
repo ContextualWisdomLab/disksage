@@ -15,6 +15,9 @@ machines are outside this deletion boundary.
 The default result is a dry-run plan, exposed through `disksage-generated-cache-reclaim`.
 Execution requires an unchanged content-and-activity fingerprint, the exact approval phrase,
 reviewer attribution and rationale, bounded work, and a create-only mode-0600 JSON Lines journal.
+The fingerprint binds relative names, entry type, filesystem identity, precise timestamps and
+ownership metadata, and bounded file content. Execution accepts only a matching re-observation
+collected after approval and no later than the attempt.
 The journal durably records a complete `pending` event before mutation and appends a terminal
 receipt afterward. A journal ending in `pending` requires reconciliation, a new observation, and a
 new approval; it is never automatic retry authority. Provider data mutation remains false in every

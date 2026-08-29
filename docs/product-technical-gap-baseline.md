@@ -1166,7 +1166,8 @@ hard deny boundary for cloud providers, Photos, Podman/Colima, and Parallels. Pl
 default. The headless customer workflow now exposes read-only planning and an explicit execution
 mode. Removal requires an unchanged fingerprint, exact attributed approval, and a create-only
 private JSON Lines journal whose parseable pending event is durable before mutation. An incomplete
-journal cannot authorize a retry. Temporary Git workspaces are always routed to DiskSage's
+journal cannot authorize a retry. The manifest binds names, identities, precise metadata, and file
+content, and a matching re-observation must follow approval. Temporary Git workspaces are always routed to DiskSage's
 specialized Git/shared-temp workflow and are never removed by the generic cache executor. The
 remaining product gap is the graphical cleanup surface: it must translate each evidence code into
 the customer's next safe action without exposing internal implementation boundaries.
