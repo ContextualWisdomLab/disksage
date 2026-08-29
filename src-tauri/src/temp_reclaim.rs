@@ -21,6 +21,7 @@ pub struct TempReclaimCandidate {
     pub active_use: GitWorktreeActiveUseEvidence,
     pub candidate_fingerprint: String,
     pub eligible_for_approval: bool,
+    pub exact_approval_phrase: Option<String>,
     pub blockers: Vec<String>,
     pub permanent_delete_available: bool,
     pub next_action: String,
@@ -75,13 +76,14 @@ fn candidate_fingerprint(root: &Path, artifact: &DevArtifact) -> String {
     )
 }
 
+fn approval_phrase_for_fingerprint(candidate_fingerprint: &str) -> String {
+    format!("MOVE GENERATED TEMP ARTIFACT {candidate_fingerprint} TO TRASH")
+}
+
 pub fn approval_phrase(candidate: &TempReclaimCandidate) -> Option<String> {
-    candidate.eligible_for_approval.then(|| {
-        format!(
-            "MOVE GENERATED TEMP ARTIFACT {} TO TRASH",
-            candidate.candidate_fingerprint
-        )
-    })
+    candidate
+        .eligible_for_approval
+        .then(|| approval_phrase_for_fingerprint(&candidate.candidate_fingerprint))
 }
 
 fn native_temp_root() -> Result<PathBuf, String> {
@@ -119,6 +121,16 @@ fn forbidden_candidate(path: &Path) -> bool {
         || text.contains("/Library/Mobile Documents/")
         || text.contains(".photoslibrary/")
         || text.ends_with(".photoslibrary")
+}
+
+/// Native temporary-root cleanup intentionally accepts only development artifact kinds whose
+/// normal inspector requires an adjacent project marker. Marker-free cache names remain useful in
+/// ordinary development scans but are insufficient authority inside a shared temporary root.
+fn marker_bound_temp_artifact(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("node_modules" | "target" | ".venv" | "venv")
+    )
 }
 
 fn plan_with_active<F>(
@@ -193,13 +205,22 @@ where
                 continue;
             }
             let path = entry.path();
+            if !marker_bound_temp_artifact(&path) {
+                unavailable += 1;
+                continue;
+            }
             let Some(artifact) = inspect_artifact(&path, observed_at_ms) else {
                 unavailable += 1;
                 continue;
             };
-            let canonical = path
-                .canonicalize()
-                .map_err(|_| "temporary-candidate-canonicalize-failed".to_string())?;
+            let canonical = match path.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) => {
+                    unavailable += 1;
+                    complete = false;
+                    continue;
+                }
+            };
             if canonical.parent() != Some(project_root.as_path()) || forbidden_candidate(&canonical)
             {
                 unavailable += 1;
@@ -217,11 +238,14 @@ where
             }
             let fingerprint = candidate_fingerprint(&root, &artifact);
             let eligible = blockers.is_empty();
+            let exact_approval_phrase =
+                eligible.then(|| approval_phrase_for_fingerprint(&fingerprint));
             candidates.push(TempReclaimCandidate {
                 artifact,
                 active_use: use_evidence,
                 candidate_fingerprint: fingerprint,
                 eligible_for_approval: eligible,
+                exact_approval_phrase,
                 blockers,
                 permanent_delete_available: false,
                 next_action: if eligible {
@@ -241,6 +265,7 @@ where
     if !complete {
         for candidate in &mut candidates {
             candidate.eligible_for_approval = false;
+            candidate.exact_approval_phrase = None;
             if !candidate
                 .blockers
                 .iter()
@@ -279,10 +304,18 @@ where
 }
 
 pub fn plan_native_temp_reclaim(observed_at_ms: u64) -> Result<TempReclaimPlan, String> {
-    let root = native_temp_root()?;
-    plan_with_active(&root, observed_at_ms, |path| {
-        crate::git_worktree::active_use_evidence(path, 30_000, 256, true)
-    })
+    #[cfg(not(unix))]
+    {
+        let _ = observed_at_ms;
+        return Err("temporary-reclaim-platform-unsupported".into());
+    }
+    #[cfg(unix)]
+    {
+        let root = native_temp_root()?;
+        plan_with_active(&root, observed_at_ms, |path| {
+            crate::git_worktree::active_use_evidence(path, 30_000, 256, true)
+        })
+    }
 }
 
 pub fn execute_candidate(
@@ -356,6 +389,10 @@ mod tests {
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].artifact.kind, "target");
         assert!(plan.candidates[0].eligible_for_approval);
+        assert_eq!(
+            plan.candidates[0].exact_approval_phrase,
+            approval_phrase(&plan.candidates[0])
+        );
         assert!(!plan.permanent_delete_available);
         assert!(plan.unavailable_entries > 0);
     }
