@@ -140,6 +140,9 @@ fn run_bounded(
             }
         }
     };
+    // A successful direct child may still leave descendants holding inherited capture pipes.
+    // Terminate the private group before joining readers so completion remains truly bounded.
+    terminate_readonly_process_tree(&mut child);
     let stdout = stdout_reader
         .join()
         .map_err(|_| format!("{label}-stdout-reader-panicked"))?
@@ -712,6 +715,23 @@ mod mutation_runner_tests {
         .expect_err("the process-group timeout must fail closed");
 
         assert_eq!(error, "readonly-timeout-fixture-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn completed_readonly_command_terminates_descendants_holding_output_pipes() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("readonly-completed");
+        fs::write(&fake, "#!/bin/sh\nsleep 5 &\nexit 0\n").expect("write read-only fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let started = Instant::now();
+        let output = run_bounded(&fake, &[], Duration::from_secs(1), "readonly-completed-fixture")
+            .expect("direct completion must not hang on inherited pipes");
+
+        assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
