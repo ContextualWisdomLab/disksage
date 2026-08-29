@@ -50,11 +50,12 @@ authoritative, and no merge is claimed from queued or stale status.
   `9d32f490a4d35cd6361f71f2896d56ad4162915fa463bd92035dc4366978c8c7`. The exact artifact
   replanned the first 128 currently eligible allocation-descending candidates: 128 planned, zero
   unavailable, and 65,168,486,400 locally allocated bytes.
-- The current read-only batch fingerprint is
+- The read-only batch fingerprint produced at that exact head was
   `2afd8101c27b4f8446af4a6aaefee09b4e211f7896f16cd5835d0b95570f69a7`. It supersedes every
-  earlier plan fingerprint. No path was revealed and no Finder selection, eviction, or other
-  mutation occurred. Execution remains blocked until that exact fingerprint is supplied twice with
-  human attribution, rationale, and a private immutable-record directory.
+  earlier plan fingerprint, but PR #296 subsequently advanced to `d530f5ce`; therefore this plan is
+  now historical evidence and cannot authorize execution. No path was revealed and no Finder
+  selection, eviction, or other mutation occurred. A new exact-head artifact and plan must be
+  generated before any human approval is requested.
 
 ## Architecture and decision linkage
 
