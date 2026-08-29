@@ -1598,6 +1598,7 @@ mod tests {
             pending_indexable_count: Some(2),
             blockers: vec!["provider-global-sync-transfer-active".into()],
             notices: vec!["provider-global-sync-dump-read-only".into()],
+            probe_receipt: None,
         };
         let blocked = export_naruon_cloud_copy_readiness_with_global_sync(
             &report,

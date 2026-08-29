@@ -48,6 +48,34 @@ pub struct ProviderGlobalSyncReport {
     pub pending_indexable_count: Option<u64>,
     pub blockers: Vec<String>,
     pub notices: Vec<String>,
+    /// Present when the native probe cannot produce decision-grade evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_receipt: Option<ProviderProbeReceipt>,
+}
+
+/// Path-free, bounded evidence explaining why a native probe cannot authorize a mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderProbeReceipt {
+    pub schema_kind: String,
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub outcome: ProviderProbeOutcome,
+    pub keep_local: bool,
+    pub next_action: ProviderProbeNextAction,
+    pub audit_reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderProbeOutcome {
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderProbeNextAction {
+    KeepLocalAndRescan,
 }
 
 pub const PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION: u32 = 1;
@@ -259,7 +287,39 @@ pub fn parse_dump(
         pending_indexable_count,
         blockers,
         notices,
+        probe_receipt: None,
     })
+}
+
+fn inconclusive_probe_report(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+    reason: &str,
+) -> ProviderGlobalSyncReport {
+    ProviderGlobalSyncReport {
+        schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
+        provider,
+        evidence_kind: "fileproviderctl-global-dump".into(),
+        evidence_complete: false,
+        state: ProviderGlobalSyncState::Unavailable,
+        upload_progress_present: false,
+        download_progress_present: false,
+        pending_indexable_count: None,
+        blockers: vec![reason.into()],
+        notices: vec![
+            "provider-global-sync-dump-read-only".into(),
+            "provider-global-sync-user-paths-not-retained".into(),
+        ],
+        probe_receipt: Some(ProviderProbeReceipt {
+            schema_kind: "disksage.provider-probe-receipt".into(),
+            schema_version: 1,
+            observed_at_ms,
+            outcome: ProviderProbeOutcome::Inconclusive,
+            keep_local: true,
+            next_action: ProviderProbeNextAction::KeepLocalAndRescan,
+            audit_reason_codes: vec![reason.into()],
+        }),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -381,7 +441,24 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
 pub fn inspect_new_copy_admission(
     provider: CloudProvider,
 ) -> Result<ProviderGlobalSyncReport, String> {
-    let output = run_dump(provider)?;
+    let output = match run_dump(provider) {
+        Ok(output) => output,
+        Err(error) if error == "provider-global-sync-probe-timeout" => {
+            return Ok(inconclusive_probe_report(
+                provider,
+                crate::cloud::system_now_ms(),
+                "provider-global-sync-probe-timeout",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    if output.trim().is_empty() {
+        return Ok(inconclusive_probe_report(
+            provider,
+            crate::cloud::system_now_ms(),
+            "provider-global-sync-probe-empty-output",
+        ));
+    }
     parse_dump(provider, &output)
 }
 
@@ -716,6 +793,31 @@ sync engine state:
             "provider-global-sync-evidence-incomplete"
         );
         assert!(report.notices.contains(&PROBE_TIMEOUT_NOTICE.into()));
+    }
+
+    #[test]
+    fn empty_or_timed_out_probe_has_bounded_keep_local_receipt() {
+        for reason in [
+            "provider-global-sync-probe-empty-output",
+            "provider-global-sync-probe-timeout",
+        ] {
+            let report = inconclusive_probe_report(CloudProvider::Onedrive, 42, reason);
+            assert_eq!(report.state, ProviderGlobalSyncState::Unavailable);
+            assert!(!report.evidence_complete);
+            assert_eq!(report.blockers, vec![reason]);
+            let receipt = report.probe_receipt.unwrap();
+            assert_eq!(receipt.observed_at_ms, 42);
+            assert_eq!(receipt.outcome, ProviderProbeOutcome::Inconclusive);
+            assert!(receipt.keep_local);
+            assert_eq!(
+                receipt.next_action,
+                ProviderProbeNextAction::KeepLocalAndRescan
+            );
+            assert_eq!(receipt.audit_reason_codes, vec![reason]);
+            let encoded = serde_json::to_string(&receipt).unwrap();
+            assert!(!encoded.contains('/'));
+            assert!(encoded.len() < 1_024);
+        }
     }
 
     #[test]

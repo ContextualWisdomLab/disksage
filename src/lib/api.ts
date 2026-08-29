@@ -872,6 +872,15 @@ export interface ProviderGlobalSyncReport {
   pending_indexable_count: number | null;
   blockers: string[];
   notices: string[];
+  probe_receipt?: {
+    schema_kind: string;
+    schema_version: number;
+    observed_at_ms: number;
+    outcome: "inconclusive";
+    keep_local: true;
+    next_action: "keep-local-and-rescan";
+    audit_reason_codes: string[];
+  };
 }
 
 export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
