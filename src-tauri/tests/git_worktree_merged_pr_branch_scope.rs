@@ -173,7 +173,7 @@ fn merged_pull_request_lookup_keeps_many_branch_queries_inside_one_timeout_budge
 set -eu
 case " $* " in
   *' --state closed '*) printf '[]'; exit 0 ;;
-  *' --state open '*) printf '[]'; exit 0 ;;
+  *' --state open '*) sleep 0.20; printf '[]'; exit 0 ;;
   *' --state merged --head '*)
     branch=''
     previous=''

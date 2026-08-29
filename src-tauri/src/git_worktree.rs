@@ -6,7 +6,7 @@
 //! it is neither locked nor prunable, and no active CWD or open-file consumer is observed. The
 //! resulting approval phrase is evidence, not execution.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -822,8 +822,8 @@ pub fn github_closed_pull_request_heads_with_options(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    const MERGED_QUERY_CONCURRENCY: usize = 8;
-    for query_chunk in merged_queries.chunks(MERGED_QUERY_CONCURRENCY) {
+    const PR_QUERY_CONCURRENCY: usize = 8;
+    for query_chunk in merged_queries.chunks(PR_QUERY_CONCURRENCY) {
         let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
         if remaining_ms == 0 {
             return Err("github-closed-pr-list-timeout".into());
@@ -852,17 +852,13 @@ pub fn github_closed_pull_request_heads_with_options(
         }
     }
     let mut open_vetoes = ClosedPullRequestHeads::new();
-    for branch in branches {
-        let head = branch
-            .strip_prefix("refs/heads/")
-            .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
-        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
-        if remaining_ms == 0 {
-            return Err("github-closed-pr-list-timeout".into());
-        }
-        let result = run_bounded_command(
-            "gh",
-            &[
+    let open_queries = branches
+        .iter()
+        .map(|branch| {
+            let head = branch
+                .strip_prefix("refs/heads/")
+                .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
+            Ok::<_, String>(vec![
                 OsString::from("pr"),
                 OsString::from("list"),
                 OsString::from("--state"),
@@ -873,17 +869,42 @@ pub fn github_closed_pull_request_heads_with_options(
                 OsString::from("10001"),
                 OsString::from("--json"),
                 OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-            ],
-            repository_root,
-            remaining_ms,
-        )?;
-        if result.timed_out || result.status_code != Some(0) {
-            return Err("github-closed-pr-list-failed".into());
+            ])
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    for query_chunk in open_queries.chunks(PR_QUERY_CONCURRENCY) {
+        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+        if remaining_ms == 0 {
+            return Err("github-closed-pr-list-timeout".into());
         }
-        if result.stdout_truncated || result.stderr_truncated {
-            return Err("github-closed-pr-list-output-truncated".into());
+        let results = thread::scope(|scope| {
+            let workers = query_chunk
+                .iter()
+                .map(|args| {
+                    scope.spawn(move || {
+                        run_bounded_command("gh", args, repository_root, remaining_ms)
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .map_err(|_| "github-closed-pr-list-worker-failed".to_string())
+                        .and_then(|result| result)
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        for result in results {
+            if result.timed_out || result.status_code != Some(0) {
+                return Err("github-closed-pr-list-failed".into());
+            }
+            if result.stdout_truncated || result.stderr_truncated {
+                return Err("github-closed-pr-list-output-truncated".into());
+            }
+            open_vetoes.extend(parse_open_pull_request_heads(&result.stdout)?);
         }
-        open_vetoes.extend(parse_open_pull_request_heads(&result.stdout)?);
     }
     heads.retain(|binding| !open_vetoes.contains(binding));
     Ok(heads)
@@ -1010,7 +1031,11 @@ pub fn github_pull_request_commit_membership(
             }
         }
     }
-    for (head, (number, open)) in discovered {
+    let mut pull_requests = BTreeMap::<(u64, bool), BTreeSet<String>>::new();
+    for (head, pull_request) in discovered {
+        pull_requests.entry(pull_request).or_default().insert(head);
+    }
+    for ((number, open), heads) in pull_requests {
         let commits = run(
             &[
                 OsString::from("api"),
@@ -1023,11 +1048,13 @@ pub fn github_pull_request_commit_membership(
             ],
             "github-pr-commits",
         )?;
-        if pull_request_contains_commit(&commits.stdout, &head)? {
-            if open {
-                membership.open.insert(head.clone());
-            } else {
-                membership.completed.insert(head.clone());
+        for head in heads {
+            if pull_request_contains_commit(&commits.stdout, &head)? {
+                if open {
+                    membership.open.insert(head);
+                } else {
+                    membership.completed.insert(head);
+                }
             }
         }
     }
@@ -1450,7 +1477,7 @@ fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
         Some(false) => blockers.push("worktree-dirty".into()),
         None => blockers.push("git-status-evidence-incomplete".into()),
     }
-    if input.open_pull_request_commit {
+    if input.open_pull_request_commit && !input.stale_open_pull_request_head {
         blockers.push("open-pull-request-commit".into());
     }
     match (
@@ -2413,7 +2440,7 @@ fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), Str
                         && !entry.closed_pull_request_head
                         && !entry.completed_pull_request_commit
                         && !entry.stale_open_pull_request_head)
-                    || entry.open_pull_request_commit
+                    || (entry.open_pull_request_commit && !entry.stale_open_pull_request_head)
                     || entry.head_is_retained_tip
                     || entry.actor_cwd_inside != Some(false)
                     || !entry.size.evidence_complete
