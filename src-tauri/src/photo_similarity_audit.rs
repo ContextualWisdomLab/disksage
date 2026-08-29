@@ -8,7 +8,8 @@
 use image::imageops::FilterType;
 use image::{ColorType, ImageFormat, ImageReader};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::Metadata;
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 
 pub const PHOTO_SIMILARITY_AUDIT_VERSION: u32 = 1;
@@ -191,7 +192,10 @@ fn format_name(format: ImageFormat) -> &'static str {
 fn lossless_encoding(format: ImageFormat) -> Option<bool> {
     match format {
         ImageFormat::Jpeg => Some(false),
-        ImageFormat::Png | ImageFormat::Tiff => Some(true),
+        ImageFormat::Png => Some(true),
+        // TIFF is a container and can carry JPEG-compressed (lossy) image data. Without parsing
+        // its compression tag, preservation is unknown and must not influence a survivor.
+        ImageFormat::Tiff => None,
         ImageFormat::WebP => None,
         _ => None,
     }
@@ -253,22 +257,28 @@ fn dct_perceptual_hash(image: &image::DynamicImage) -> String {
     format!("{bits:016x}")
 }
 
-fn stable_content_blake3(path: &Path, metadata: &Metadata) -> Result<String, String> {
-    let before_modified = system_time_ms(metadata.modified());
-    let mut file = std::fs::File::open(path).map_err(|_| "photo-audit-open-failed".to_string())?;
-    let mut hasher = blake3::Hasher::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|_| "photo-audit-read-failed".to_string())?;
-    let after = file
-        .metadata()
-        .map_err(|_| "photo-audit-post-read-stat-failed".to_string())?;
-    if metadata.len() != after.len()
-        || before_modified != system_time_ms(after.modified())
-        || crate::safety::object_id_from_metadata(metadata)
-            != crate::safety::object_id_from_metadata(&after)
+fn open_photo_nonhydrating(path: &Path) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
     {
-        return Err("photo-audit-source-changed".into());
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
     }
-    Ok(hasher.finalize().to_hex().to_string())
+    options
+        .open(path)
+        .map_err(|_| "photo-audit-nonhydrating-open-failed".to_string())
+}
+
+fn encoded_bits_per_sample(bytes: &[u8], format: ImageFormat, decoded: ColorType) -> u8 {
+    if format == ImageFormat::Png
+        && bytes.len() >= 25
+        && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        && &bytes[12..16] == b"IHDR"
+    {
+        return bytes[24];
+    }
+    bits_per_sample(decoded)
 }
 
 fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
@@ -289,11 +299,31 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
         .to_str()
         .ok_or_else(|| "photo-audit-path-non-unicode".to_string())?
         .replace('\\', "/");
-    let object_id = crate::safety::object_id_from_metadata(metadata)
-        .ok_or_else(|| "photo-audit-object-identity-unavailable".to_string())?;
-    let content_blake3 = stable_content_blake3(path, metadata)?;
-    let reader = ImageReader::open(path)
-        .map_err(|_| "photo-audit-image-open-failed".to_string())?
+    let object_id = crate::safety::filesystem_object_id(path)
+        .map_err(|_| "photo-audit-object-identity-unavailable".to_string())?;
+    let mut file = open_photo_nonhydrating(path)?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|_| "photo-audit-opened-file-stat-failed".to_string())?;
+    if !metadata_unchanged(metadata, &opened_metadata) {
+        return Err("photo-audit-source-changed-before-read".into());
+    }
+    if crate::cloud::metadata_is_dataless(&opened_metadata) {
+        return Err("photo-audit-dataless-excluded".into());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|_| "photo-audit-read-failed".to_string())?;
+    let after_read = file
+        .metadata()
+        .map_err(|_| "photo-audit-post-read-stat-failed".to_string())?;
+    if !metadata_unchanged(&opened_metadata, &after_read)
+        || crate::cloud::metadata_is_dataless(&after_read)
+    {
+        return Err("photo-audit-source-changed-during-read".into());
+    }
+    let content_blake3 = blake3::hash(&bytes).to_hex().to_string();
+    let reader = ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
         .map_err(|_| "photo-audit-format-probe-failed".to_string())?;
     let format = reader
@@ -303,11 +333,11 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
     let image = reader
         .decode()
         .map_err(|_| "photo-audit-image-decode-failed".to_string())?;
-    let after_decode = std::fs::symlink_metadata(path)
+    let after_decode = file
+        .metadata()
         .map_err(|_| "photo-audit-post-decode-stat-failed".to_string())?;
-    if after_decode.file_type().is_symlink()
-        || !after_decode.is_file()
-        || !metadata_unchanged(metadata, &after_decode)
+    if !metadata_unchanged(&after_read, &after_decode)
+        || crate::cloud::metadata_is_dataless(&after_decode)
     {
         return Err("photo-audit-source-changed-during-decode".into());
     }
@@ -322,7 +352,7 @@ fn decode_photo(root: &Path, path: &Path, metadata: &Metadata) -> Result<Decoded
         width_pixels: width,
         height_pixels: height,
         pixel_count: u64::from(width).saturating_mul(u64::from(height)),
-        bits_per_sample: bits_per_sample(image.color()),
+        bits_per_sample: encoded_bits_per_sample(&bytes, format, image.color()),
         encoded_format: format_name(format).into(),
         lossless_encoding: lossless_encoding(format),
         encoded_bytes: metadata.len(),
@@ -539,12 +569,11 @@ pub fn collect_photo_similarity_audit(
                 continue;
             }
         };
-        if crate::cloud::metadata_is_dataless(&metadata) {
-            dataless_photo_excluded_count += 1;
-            continue;
-        }
         match decode_photo(&canonical_root, entry.path(), &metadata) {
             Ok(photo) => decoded.push(photo),
+            Err(issue) if issue == "photo-audit-dataless-excluded" => {
+                dataless_photo_excluded_count += 1;
+            }
             Err(issue) => {
                 evidence_complete = false;
                 increment_issue(&mut issues, &issue);
@@ -554,15 +583,14 @@ pub fn collect_photo_similarity_audit(
     let decoded_photo_count = decoded.len();
     let mut groups = perceptual_groups(decoded)
         .into_iter()
-        .filter(|members| {
-            members.len() >= 2
-                && members
-                    .iter()
-                    .map(|member| member.content_blake3.as_str())
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    >= 2
+        .map(|members| {
+            let mut seen_content = BTreeSet::new();
+            members
+                .into_iter()
+                .filter(|member| seen_content.insert(member.content_blake3.clone()))
+                .collect::<Vec<_>>()
         })
+        .filter(|members| members.len() >= 2)
         .map(group_from_members)
         .collect::<Vec<_>>();
     groups.sort_by(|left, right| left.group_fingerprint.cmp(&right.group_fingerprint));

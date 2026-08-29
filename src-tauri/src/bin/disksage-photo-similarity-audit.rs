@@ -142,10 +142,19 @@ fn read_private_report(path: &PathBuf) -> Result<PhotoSimilarityAuditReport, Str
     {
         return Err("photo-audit-private-report-unsafe".into());
     }
-    serde_json::from_slice(
-        &std::fs::read(path).map_err(|_| "photo-audit-private-report-read-failed".to_string())?,
-    )
-    .map_err(|_| "photo-audit-private-report-invalid".to_string())
+    let bytes =
+        std::fs::read(path).map_err(|_| "photo-audit-private-report-read-failed".to_string())?;
+    let report: PhotoSimilarityAuditReport = serde_json::from_slice(&bytes)
+        .map_err(|_| "photo-audit-private-report-invalid".to_string())?;
+    if report.groups.len() > disksage_lib::photo_similarity_audit::MAX_ENTRIES
+        || report
+            .groups
+            .iter()
+            .any(|group| group.members.len() > disksage_lib::photo_similarity_audit::MAX_ENTRIES)
+    {
+        return Err("photo-audit-private-report-structure-too-large".into());
+    }
+    Ok(report)
 }
 
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Value, String> {
@@ -196,12 +205,22 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<serde_json::Valu
         if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
             return Err("photo-audit-private-output-parent-unsafe".into());
         }
-        std::fs::write(
-            path,
-            serde_json::to_vec_pretty(&report)
-                .map_err(|_| "photo-audit-private-output-serialize-failed".to_string())?,
-        )
-        .map_err(|_| "photo-audit-private-output-write-failed".to_string())?;
+        let bytes = serde_json::to_vec_pretty(&report)
+            .map_err(|_| "photo-audit-private-output-serialize-failed".to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options
+            .open(path)
+            .map_err(|_| "photo-audit-private-output-write-failed".to_string())?;
+        use std::io::Write;
+        output
+            .write_all(&bytes)
+            .map_err(|_| "photo-audit-private-output-write-failed".to_string())?;
     }
     Ok(serde_json::json!({
         "schema_version": report.schema_version,
