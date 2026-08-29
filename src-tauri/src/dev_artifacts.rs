@@ -507,6 +507,25 @@ fn clean_artifacts_with_disposition(
                 };
             }
 
+            // Bind the irreversible request before active-use probing. The probe itself is an
+            // external process boundary; a write arriving while it runs must make the safety
+            // boundary's immediately-before-staging comparison fail closed.
+            let permanent_target = if permanent {
+                match crate::rules::cache_target(Path::new(&request.path)) {
+                    Ok(target) => Some(target),
+                    Err(_) => {
+                        return DevArtifactCleanResult {
+                            path: request.path.clone(),
+                            ok: false,
+                            error: "development artifact manifest is incomplete; rescan before cleanup"
+                                .into(),
+                        };
+                    }
+                }
+            } else {
+                None
+            };
+
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&request.path),
                 artifact_active_use_timeout_ms(permanent),
@@ -533,18 +552,20 @@ fn clean_artifacts_with_disposition(
             }
 
             let mutation = if permanent {
-                let modified_ms = std::fs::symlink_metadata(&request.path)
-                    .map(|metadata| crate::rules::modified_ms(&metadata))
-                    .unwrap_or(0);
-                let manifest_fingerprint = crate::rules::cache_target(Path::new(&request.path))
-                    .map(|target| target.manifest_fingerprint)
-                    .unwrap_or_default();
+                let Some(target) = permanent_target else {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact manifest is unavailable; rescan before cleanup"
+                            .into(),
+                    };
+                };
                 crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
-                    &request.object_id,
-                    request.bytes,
-                    modified_ms,
-                    &manifest_fingerprint,
+                    &target.object_id,
+                    target.bytes,
+                    target.modified_ms,
+                    &target.manifest_fingerprint,
                     journal_path,
                     now_ms,
                 )
