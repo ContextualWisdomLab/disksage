@@ -292,7 +292,7 @@ pub(crate) fn clean_cache_contents_inner(
                 };
             }
             let path = Path::new(&target.path);
-            let result = if permanent_directories {
+            if permanent_directories {
                 if !std::fs::symlink_metadata(path)
                     .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
                 {
@@ -302,7 +302,7 @@ pub(crate) fn clean_cache_contents_inner(
                         error: "permanent-cache-target-type-unsupported".into(),
                     };
                 }
-                safety::permanent_delete_dir_if_identity(
+                return match safety::permanent_delete_dir_if_identity(
                     path,
                     &target.object_id,
                     target.bytes,
@@ -310,21 +310,35 @@ pub(crate) fn clean_cache_contents_inner(
                     &target.manifest_fingerprint,
                     journal_path,
                     now_ms,
-                )
-            } else {
-                safety::trash_delete_if_identity(
-                    path,
-                    &target.object_id,
-                    target.bytes,
-                    journal_path,
-                    now_ms,
-                )
-            };
-            match result {
-                Ok(()) => CleanResult {
+                ) {
+                    Ok(()) => CleanResult {
+                        path: target.path,
+                        ok: true,
+                        error: String::new(),
+                    },
+                    Err(error) => CleanResult {
+                        path: target.path,
+                        ok: false,
+                        error: error.to_string(),
+                    },
+                };
+            }
+            match safety::trash_delete_if_identity_with_outcome(
+                path,
+                &target.object_id,
+                target.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(outcome) if outcome.moved_to_trash => CleanResult {
                     path: target.path,
                     ok: true,
-                    error: String::new(),
+                    error: safety::trash_delete_outcome_warning(&outcome).unwrap_or_default(),
+                },
+                Ok(_) => CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: "trash move did not complete; rescan before cleanup".into(),
                 },
                 Err(error) => CleanResult {
                     path: target.path,

@@ -138,7 +138,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   calls consume one shared timeout budget rather than multiplying the configured wait per branch.
 - Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
   library selected as the scan root. External files remain auditable without interpreting Photos'
-  private databases and derivatives as independent duplicate-delete candidates.
+  private databases and derivatives as independent duplicate-delete candidates. Reclaim also
+  canonicalizes every approved member immediately before mutation and fails closed if a replaced
+  parent symlink redirects it outside the audited root or into a managed Photos library.
+- Stage each verified duplicate by filesystem identity before permanent removal, restoring rather
+  than deleting a pathname replacement that races the approved audit; receipts distinguish active
+  skips from failed removals and retain stable failure reasons.
+- Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
+  removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
+  each pull-request lookup.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution
@@ -150,6 +158,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
   by converting the human-readable listing with a unit heuristic; missing or mismatched identity
   evidence keeps the category blocked.
+- Pin Docker-native approval and execution to the same resolved daemon endpoint so mutable context
+  configuration cannot redirect an approved deletion.
+- Preserve an indeterminate mutation receipt after a started exact-delete command exits non-zero,
+  times out, or loses capture evidence; the UI directs customers to refresh instead of reporting
+  the partially applied operation as untouched.
 - Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
   current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
   Trash targets; the shared root and other-user/system-owned objects remain protected.
@@ -157,6 +170,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
   unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is
   rewritten by this feature.
+- Run bounded runtime trim and recovery waits on Tauri's blocking pool so long guest maintenance
+  cannot occupy asynchronous command workers.
+- Preserve Docker context TLS credentials by executing through the explicitly pinned context while
+  binding approval to the complete inspected context definition.
+- Surface an approved duplicate at a deterministic sibling recovery name when its original path is
+  concurrently occupied, and report preservation or rollback failure explicitly.
 - Detect a running but unreachable Podman/Colima guest, offer a separate exact-phrase-approved
   runtime-native stop/start recovery, and re-check reachability before enabling trim. Trim receipts
   now include bounded before/after host-volume evidence for the measured available-space change.

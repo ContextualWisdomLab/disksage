@@ -597,7 +597,7 @@ fn clean_artifacts_with_disposition(
                 };
             }
 
-            let mutation = if permanent {
+            if permanent {
                 let Some(target) = permanent_target else {
                     return DevArtifactCleanResult {
                         path: request.path.clone(),
@@ -606,7 +606,7 @@ fn clean_artifacts_with_disposition(
                             .into(),
                     };
                 };
-                crate::safety::permanent_delete_dir_if_identity(
+                return match crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
                     &target.object_id,
                     target.bytes,
@@ -614,21 +614,36 @@ fn clean_artifacts_with_disposition(
                     &target.manifest_fingerprint,
                     journal_path,
                     now_ms,
-                )
-            } else {
-                crate::safety::trash_delete_if_identity(
-                    Path::new(&request.path),
-                    &request.object_id,
-                    request.bytes,
-                    journal_path,
-                    now_ms,
-                )
-            };
-            match mutation {
-                Ok(()) => DevArtifactCleanResult {
+                ) {
+                    Ok(()) => DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: true,
+                        error: String::new(),
+                    },
+                    Err(error) => DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: error.to_string(),
+                    },
+                };
+            }
+            match crate::safety::trash_delete_if_identity_with_outcome(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(outcome) if outcome.moved_to_trash => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: true,
-                    error: String::new(),
+                    error: crate::safety::trash_delete_outcome_warning(&outcome)
+                        .unwrap_or_default(),
+                },
+                Ok(_) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "trash move did not complete; rescan before cleanup".into(),
                 },
                 Err(error) => DevArtifactCleanResult {
                     path: request.path.clone(),
