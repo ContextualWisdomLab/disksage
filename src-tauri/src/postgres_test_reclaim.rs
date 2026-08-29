@@ -838,9 +838,25 @@ pub fn execute_with_runner(
         ],
         COMMAND_TIMEOUT,
     );
-    let shutdown_completed = shutdown.as_ref().is_ok_and(|output| {
+    let shutdown_requested = shutdown.as_ref().is_ok_and(|output| {
         output.status == 0 && output.executable_identity == approved_plan.pg_ctl_identity
-    }) && !runner.pid_is_alive(approved_plan.postmaster_pid);
+    });
+    let stopped_status = shutdown_requested.then(|| {
+        runner.run(
+            &request.pg_ctl_path,
+            &[
+                "-D".into(),
+                approved_plan.data_directory.clone(),
+                "status".into(),
+            ],
+            COMMAND_TIMEOUT,
+        )
+    });
+    let shutdown_completed = stopped_status.is_some_and(|status| {
+        status.is_ok_and(|output| {
+            output.status != 0 && output.executable_identity == approved_plan.pg_ctl_identity
+        }) && !data_directory.join("postmaster.pid").exists()
+    });
     let stopped_content_identity = shutdown_completed
         .then(|| directory_contents(data_directory).map(|(_, identity)| identity))
         .transpose()
@@ -919,6 +935,7 @@ mod tests {
 
     struct FakeRunner {
         alive: Cell<bool>,
+        pid_reused_after_stop: Cell<bool>,
         databases: RefCell<String>,
         clients: RefCell<String>,
         data_directory: PathBuf,
@@ -952,8 +969,12 @@ mod tests {
             }
             if args.last().map(String::as_str) == Some("status") {
                 return Ok(CommandOutput {
-                    status: 0,
-                    stdout: "server is running (PID: 42)\n".into(),
+                    status: if self.alive.get() { 0 } else { 3 },
+                    stdout: if self.alive.get() {
+                        "server is running (PID: 42)\n".into()
+                    } else {
+                        "no server running\n".into()
+                    },
                     stderr: String::new(),
                     executable_identity: executable_identity.clone(),
                 });
@@ -975,7 +996,7 @@ mod tests {
         }
 
         fn pid_is_alive(&self, _pid: u32) -> bool {
-            self.alive.get()
+            self.alive.get() || self.pid_reused_after_stop.get()
         }
 
         fn event_time_ms(&self) -> u64 {
@@ -1018,6 +1039,7 @@ mod tests {
         };
         let runner = FakeRunner {
             alive: Cell::new(true),
+            pid_reused_after_stop: Cell::new(false),
             databases: RefCell::new("suite_test\n".into()),
             clients: RefCell::new("0\n".into()),
             data_directory: data,
@@ -1183,5 +1205,31 @@ mod tests {
         assert!(runner.alive.get());
         assert!(request.data_directory.exists());
         assert_eq!(std::fs::read_dir(records).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn reused_numeric_pid_does_not_substitute_for_native_cluster_status() {
+        let (temp, request, runner) = fixture();
+        runner.pid_reused_after_stop.set(true);
+        let plan = plan_with_runner(&request, &runner, 7).unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let records = temp.path().join("records");
+        std::fs::create_dir(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let evidence = execute_with_runner(
+            &request,
+            &plan,
+            &plan.exact_approval_phrase,
+            &records,
+            source.path(),
+            &runner,
+            7,
+        )
+        .unwrap();
+
+        assert!(runner.pid_is_alive(plan.postmaster_pid));
+        assert!(evidence.outcome.shutdown_completed);
+        assert!(evidence.outcome.completed);
     }
 }
