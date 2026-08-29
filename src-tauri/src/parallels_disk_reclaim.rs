@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const TREE_ALLOCATION_BUDGET: Duration = Duration::from_secs(5);
 const MAX_ENTRIES: usize = 100_000;
 
 pub trait ParallelsCommandRunner {
@@ -99,13 +100,25 @@ fn identity(_path: &Path, metadata: &std::fs::Metadata) -> String {
 }
 
 fn tree_allocation(root: &Path) -> Result<(u64, u64), String> {
+    tree_allocation_with_limits(root, MAX_ENTRIES, TREE_ALLOCATION_BUDGET)
+}
+
+fn tree_allocation_with_limits(
+    root: &Path,
+    max_entries: usize,
+    time_budget: Duration,
+) -> Result<(u64, u64), String> {
+    let started = Instant::now();
     let mut stack = vec![root.to_path_buf()];
     let mut logical = 0_u64;
     let mut physical = 0_u64;
     let mut visited = 0_usize;
     while let Some(path) = stack.pop() {
+        if started.elapsed() >= time_budget {
+            return Err("parallels-disk-scan-timeout".into());
+        }
         visited += 1;
-        if visited > MAX_ENTRIES {
+        if visited > max_entries {
             return Err("parallels-disk-entry-limit".into());
         }
         let metadata = std::fs::symlink_metadata(&path)
