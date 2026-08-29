@@ -32,7 +32,8 @@ fn usage() -> String {
         "usage: disksage-incomplete-download-materialization --root ABSOLUTE_PATH \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
          [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
-         [--private-output ABSOLUTE_NEW_FILE.json]"
+         [--private-output ABSOLUTE_NEW_FILE.json]\n\
+         다음 단계: 생성된 계획을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다."
     )
 }
 

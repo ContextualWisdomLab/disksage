@@ -13,17 +13,17 @@ const MATERIALIZE_SOURCE: &str =
 const BINARIES: [(&str, &str, &str); 3] = [
     (
         "disksage-incomplete-download-materialization",
-        "usage: disksage-incomplete-download-materialization --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
+        "usage: disksage-incomplete-download-materialization --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]\n다음 단계: 생성된 계획을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다.",
         "incomplete-download-materialization-unknown-argument",
     ),
     (
         "disksage-incomplete-download-recovery",
-        "usage: disksage-incomplete-download-recovery --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
+        "usage: disksage-incomplete-download-recovery --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]\n다음 단계: 생성된 복구 계획을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다.",
         "incomplete-download-recovery-unknown-argument",
     ),
     (
         "disksage-incomplete-download-materialize",
-        "usage: disksage-incomplete-download-materialize --source-root ABSOLUTE_PATH --destination-plan ABSOLUTE_PRIVATE_PLAN.json --confirm-plan-fingerprint HEX64 --receipt-dir ABSOLUTE_PRIVATE_DIRECTORY --approved-by human:ID --rationale TEXT --execute (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650]",
+        "usage: disksage-incomplete-download-materialize --source-root ABSOLUTE_PATH --destination-plan ABSOLUTE_PRIVATE_PLAN.json --confirm-plan-fingerprint HEX64 --receipt-dir ABSOLUTE_PRIVATE_DIRECTORY --approved-by human:ID --rationale TEXT --execute (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650]\n다음 단계: 계획 지문과 용량 증거를 검토한 뒤 승인 정보와 --execute를 제공하세요.",
         "incomplete-download-materialize-unknown-argument",
     ),
 ];
@@ -32,9 +32,12 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(cargo);
-    command
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["build", "--locked", "--features", "cloud-cli"]);
+    command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+        "build",
+        "--locked",
+        "--features",
+        "cloud-cli",
+    ]);
     for (binary, _, _) in BINARIES {
         command.args(["--bin", binary]);
     }
@@ -249,7 +252,8 @@ fn assert_native_non_utf8_paths_reach_domain_boundaries(binaries: &[PathBuf]) {
         .expect("materialization execution CLI must launch with a native plan path");
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).expect("materialization diagnostic must be UTF-8");
+    let stderr =
+        String::from_utf8(output.stderr).expect("materialization diagnostic must be UTF-8");
     assert!(
         stderr.contains("materialization-execution-destination-plan-unavailable"),
         "native plan path must reach bounded file admission instead of argument decoding: {stderr}"
@@ -270,7 +274,8 @@ fn assert_read_only_duplicate_limit_is_bounded(binary: &Path, flag: &str) {
         .expect("read-only incomplete-download CLI must launch for duplicate-limit validation");
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
+    let stderr =
+        String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
     assert!(
         stderr.contains(&format!("{flag}는 한 번만 지정할 수 있음")),
         "duplicate bounded limit must fail before domain work: {stderr}"
@@ -304,7 +309,8 @@ fn assert_materialize_duplicate_limit_is_bounded(binary: &Path, flag: &str) {
         .expect("materialize CLI must launch for duplicate-limit validation");
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
+    let stderr =
+        String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
     assert!(
         stderr.contains(&format!("{flag}는 한 번만 지정할 수 있음")),
         "duplicate bounded limit must fail before plan or filesystem admission: {stderr}"
@@ -314,9 +320,15 @@ fn assert_materialize_duplicate_limit_is_bounded(binary: &Path, flag: &str) {
 #[test]
 fn incomplete_download_coverage_contract_keeps_shipped_entrypoints_real() {
     for (name, source) in [
-        ("disksage-incomplete-download-materialization", MATERIALIZATION_SOURCE),
+        (
+            "disksage-incomplete-download-materialization",
+            MATERIALIZATION_SOURCE,
+        ),
         ("disksage-incomplete-download-recovery", RECOVERY_SOURCE),
-        ("disksage-incomplete-download-materialize", MATERIALIZE_SOURCE),
+        (
+            "disksage-incomplete-download-materialize",
+            MATERIALIZE_SOURCE,
+        ),
     ] {
         assert!(
             !source.contains("#[cfg(coverage)]\nfn main()"),
