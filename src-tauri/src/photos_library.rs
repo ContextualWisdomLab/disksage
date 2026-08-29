@@ -123,8 +123,10 @@ fn prepare_receipt_file_with(
     append: impl FnOnce(&mut std::fs::File) -> Result<(), String>,
 ) -> Result<std::fs::File, String> {
     if let Err(error) = append(&mut file) {
-        drop(file);
+        // Keep the create-new handle alive until its pathname is unlinked. Closing first would
+        // let a concurrent retry create the deterministic path and have this attempt remove it.
         let _ = std::fs::remove_file(path);
+        drop(file);
         return Err(error);
     }
     Ok(file)
@@ -627,6 +629,11 @@ mod tests {
             .unwrap();
         let error = prepare_receipt_file_with(file, &path, |file| {
             file.write_all(b"partial").unwrap();
+            assert!(OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .is_err());
             Err("photos-receipt-sync-failed".into())
         })
         .unwrap_err();
