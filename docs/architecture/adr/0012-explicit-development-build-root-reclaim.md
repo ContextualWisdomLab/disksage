@@ -41,3 +41,13 @@ with no allocated blocks are not presented as reclaim opportunities.
 The product incident recovered about 6.7 GiB by removing an inactive Cargo build root. The tiny
 regression fixture reproduces its marker, lockfile, generated-root, allocation, and approval shape
 without allocating gigabytes or touching a live workspace.
+
+On Windows, the bounded active-use observation registers the complete candidate file inventory in
+one Restart Manager session and obtains affected process identities with `RmGetList`; an incomplete
+inventory, API failure, timeout, or truncated process list blocks cleanup (Microsoft, 2024a, 2024b).
+
+Microsoft. (2024a, February 22). *RmRegisterResources function (restartmanager.h)*. Microsoft Learn.
+https://learn.microsoft.com/windows/win32/api/restartmanager/nf-restartmanager-rmregisterresources
+
+Microsoft. (2024b). *RmGetList function (restartmanager.h)*. Microsoft Learn.
+https://learn.microsoft.com/windows/win32/api/restartmanager/nf-restartmanager-rmgetlist
