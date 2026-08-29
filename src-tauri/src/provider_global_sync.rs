@@ -14,6 +14,8 @@ const MAX_DUMP_BYTES: u64 = 32 * 1024 * 1024;
 const PROBE_TIMEOUT_MS: u64 = 20_000;
 const PROBE_TIMEOUT_MARKER: &str = "provider-global-sync-probe-timeout: yes";
 const PROBE_TIMEOUT_NOTICE: &str = "provider-global-sync-probe-timeout";
+const PROBE_RECEIPT_SCHEMA_KIND: &str = "disksage.provider-probe-receipt";
+const PROBE_RECEIPT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -136,6 +138,61 @@ fn contains_bounded_numeric_marker(text: &str, prefix: &str, number: &str) -> bo
                 .get(number.len())
                 .map_or(true, |next| !next.is_ascii_digit())
     })
+}
+
+fn probe_reason_code_is_valid(reason: &str) -> bool {
+    !reason.is_empty()
+        && reason.len() <= 128
+        && reason.starts_with("provider-global-sync-")
+        && reason
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn inconclusive_probe_receipt(observed_at_ms: u64, reason: &str) -> ProviderProbeReceipt {
+    ProviderProbeReceipt {
+        schema_kind: PROBE_RECEIPT_SCHEMA_KIND.into(),
+        schema_version: PROBE_RECEIPT_SCHEMA_VERSION,
+        observed_at_ms,
+        outcome: ProviderProbeOutcome::Inconclusive,
+        keep_local: true,
+        next_action: ProviderProbeNextAction::KeepLocalAndRescan,
+        audit_reason_codes: vec![reason.into()],
+    }
+}
+
+fn probe_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
+    let Some(receipt) = report.probe_receipt.as_ref() else {
+        return true;
+    };
+    !report.evidence_complete
+        && report.state == ProviderGlobalSyncState::Unavailable
+        && receipt.schema_kind == PROBE_RECEIPT_SCHEMA_KIND
+        && receipt.schema_version == PROBE_RECEIPT_SCHEMA_VERSION
+        && receipt.observed_at_ms > 0
+        && receipt.outcome == ProviderProbeOutcome::Inconclusive
+        && receipt.keep_local
+        && receipt.next_action == ProviderProbeNextAction::KeepLocalAndRescan
+        && !receipt.audit_reason_codes.is_empty()
+        && receipt.audit_reason_codes.len() <= 16
+        && receipt.audit_reason_codes.iter().all(|reason| {
+            probe_reason_code_is_valid(reason) && report.blockers.iter().any(|blocker| blocker == reason)
+        })
+}
+
+/// Validate the bounded identity and receipt relationship of one provider report.
+///
+/// This deliberately does not require complete evidence: callers that only need to transport a
+/// blocked/inconclusive report can validate its shape without accidentally authorizing a copy.
+pub fn validate_report_evidence(report: &ProviderGlobalSyncReport) -> Result<(), String> {
+    if report.schema_version != PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        || report.evidence_kind != "fileproviderctl-global-dump"
+        || provider_identifier(report.provider).is_none()
+        || !probe_receipt_is_consistent(report)
+    {
+        return Err("provider-global-sync-evidence-invalid".into());
+    }
+    Ok(())
 }
 
 /// Parse only aggregate queue markers from one provider-filtered File Provider dump.
@@ -287,7 +344,9 @@ pub fn parse_dump(
         pending_indexable_count,
         blockers,
         notices,
-        probe_receipt: None,
+        probe_receipt: probe_timed_out.then(|| {
+            inconclusive_probe_receipt(crate::cloud::system_now_ms(), PROBE_TIMEOUT_NOTICE)
+        }),
     })
 }
 
@@ -310,15 +369,7 @@ fn inconclusive_probe_report(
             "provider-global-sync-dump-read-only".into(),
             "provider-global-sync-user-paths-not-retained".into(),
         ],
-        probe_receipt: Some(ProviderProbeReceipt {
-            schema_kind: "disksage.provider-probe-receipt".into(),
-            schema_version: 1,
-            observed_at_ms,
-            outcome: ProviderProbeOutcome::Inconclusive,
-            keep_local: true,
-            next_action: ProviderProbeNextAction::KeepLocalAndRescan,
-            audit_reason_codes: vec![reason.into()],
-        }),
+        probe_receipt: Some(inconclusive_probe_receipt(observed_at_ms, reason)),
     }
 }
 
@@ -473,9 +524,7 @@ pub fn inspect_new_copy_admission(
 }
 
 fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
-    report.schema_version == PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
-        && report.evidence_kind == "fileproviderctl-global-dump"
-        && provider_identifier(report.provider).is_some()
+    validate_report_evidence(report).is_ok()
 }
 
 fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
@@ -488,6 +537,7 @@ fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> b
 
 fn report_is_authoritative_clear(report: &ProviderGlobalSyncReport) -> bool {
     report_identity_is_valid(report)
+        && report.probe_receipt.is_none()
         && report.evidence_complete
         && report.state == ProviderGlobalSyncState::Clear
         && report.blockers.is_empty()
@@ -793,6 +843,10 @@ sync engine state:
             "provider-global-sync-evidence-incomplete"
         );
         assert!(report.notices.contains(&PROBE_TIMEOUT_NOTICE.into()));
+        let receipt = report.probe_receipt.expect("partial timeout must carry its receipt");
+        assert_eq!(receipt.outcome, ProviderProbeOutcome::Inconclusive);
+        assert!(receipt.keep_local);
+        assert_eq!(receipt.audit_reason_codes, vec![PROBE_TIMEOUT_NOTICE]);
     }
 
     #[test]
@@ -818,6 +872,16 @@ sync engine state:
             assert!(!encoded.contains('/'));
             assert!(encoded.len() < 1_024);
         }
+    }
+
+    #[test]
+    fn contradictory_clear_receipt_is_invalid() {
+        let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        report.probe_receipt = Some(inconclusive_probe_receipt(42, PROBE_TIMEOUT_NOTICE));
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            "provider-global-sync-evidence-invalid"
+        );
     }
 
     #[test]
