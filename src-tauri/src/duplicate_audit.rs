@@ -558,9 +558,8 @@ fn preserve_staged_candidate(
         .file_name()
         .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?
         .to_string_lossy();
-    let recovery = original.with_file_name(format!(
-        "{file_name}.disksage-recovery-{staging_token}"
-    ));
+    let recovery =
+        original.with_file_name(format!("{file_name}.disksage-recovery-{staging_token}"));
     if std::fs::symlink_metadata(&recovery).is_ok() {
         return Err("duplicate-reclaim-recovery-location-occupied".into());
     }
@@ -569,7 +568,7 @@ fn preserve_staged_candidate(
     Err("duplicate-reclaim-recovery-preserved".into())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(coverage)))]
 fn remove_if_storage_identity(
     path: &Path,
     expected_storage_identity: &str,
@@ -611,7 +610,9 @@ fn remove_if_storage_identity(
     if !staged_matches {
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
-        return recovery.and(Err("duplicate-reclaim-candidate-changed-during-staging".into()));
+        return recovery.and(Err(
+            "duplicate-reclaim-candidate-changed-during-staging".into()
+        ));
     }
     let staged_observation = FileObservation {
         path: staged.clone(),
@@ -641,6 +642,17 @@ fn remove_if_storage_identity(
     }
     let _ = std::fs::remove_dir(&staging_dir);
     Ok(())
+}
+
+#[cfg(any(not(unix), coverage))]
+fn remove_if_storage_identity(
+    _path: &Path,
+    _expected_storage_identity: &str,
+    _expected_logical_bytes: u64,
+    _expected_content_digests: &ContentDigests,
+    _staging_token: u64,
+) -> Result<(), String> {
+    Err("duplicate-reclaim-permanent-delete-unsupported-platform".into())
 }
 
 fn removal_failure_code(error: &str) -> String {
@@ -1497,8 +1509,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             error.as_str(),
-            "duplicate-reclaim-candidate-changed"
-                | "duplicate-reclaim-candidate-content-changed"
+            "duplicate-reclaim-candidate-changed" | "duplicate-reclaim-candidate-content-changed"
         ));
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
         assert_eq!(

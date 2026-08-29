@@ -129,10 +129,7 @@ fn validate_control_locations(
         record_dir,
         "onedrive-finder-verification-record-dir-unavailable",
     )?;
-    let receipt = canonical_existing(
-        receipt,
-        "onedrive-finder-verification-receipt-unavailable",
-    )?;
+    let receipt = canonical_existing(receipt, "onedrive-finder-verification-receipt-unavailable")?;
     if record_dir.starts_with(&cloud_root) || receipt.starts_with(&cloud_root) {
         return Err("onedrive-finder-verification-control-data-overlaps-cloud".into());
     }
@@ -187,9 +184,7 @@ struct VerificationOutput {
     customer_next_action: String,
 }
 
-fn redact_verification(
-    result: OnedriveFinderAssistanceVerification,
-) -> VerificationOutput {
+fn redact_verification(result: OnedriveFinderAssistanceVerification) -> VerificationOutput {
     VerificationOutput {
         action: "verify-onedrive-finder-free-up-space",
         mutation_executed: false,
@@ -210,9 +205,8 @@ fn redact_verification(
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
-        serde_json::to_string_pretty(value).map_err(|_| {
-            "onedrive-finder-verification-output-serialize-failed".to_string()
-        })?
+        serde_json::to_string_pretty(value)
+            .map_err(|_| { "onedrive-finder-verification-output-serialize-failed".to_string() })?
     );
     Ok(())
 }
@@ -222,11 +216,7 @@ fn run() -> Result<(), String> {
     let args = parse_args_os(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_onedrive_root(&roots, &args.cloud_root)?.clone();
-    validate_control_locations(
-        Path::new(&root.path),
-        &args.receipt,
-        &args.record_dir,
-    )?;
+    validate_control_locations(Path::new(&root.path), &args.receipt, &args.record_dir)?;
     let receipt = read_receipt(&args.receipt)?;
     let verification = verify_onedrive_finder_assistance(
         &root,
@@ -275,6 +265,7 @@ mod tests {
             receipt_id: "a".repeat(64),
             batch_fingerprint: "b".repeat(64),
             approval_id: "c".repeat(64),
+            approval_evidence_sha256: "f".repeat(64),
             requested_at_ms: 1,
             selected_count: 1,
             total_allocated_bytes_before: 4096,
@@ -309,8 +300,9 @@ mod tests {
 
     #[test]
     fn parser_rejects_partial_relative_and_duplicate_contracts() {
-        assert!(parse_args_os(&[OsString::from("--cloud-root"), OsString::from(CLOUD_ROOT)])
-            .is_err());
+        assert!(
+            parse_args_os(&[OsString::from("--cloud-root"), OsString::from(CLOUD_ROOT)]).is_err()
+        );
         assert!(parse_args_os(&[
             OsString::from("--cloud-root"),
             OsString::from("relative"),
@@ -377,8 +369,11 @@ mod tests {
         );
 
         let oversized = records.join("oversized.finder-assistance.json");
-        std::fs::write(&oversized, vec![b'x'; usize::try_from(MAX_RECEIPT_BYTES).unwrap() + 1])
-            .unwrap();
+        std::fs::write(
+            &oversized,
+            vec![b'x'; usize::try_from(MAX_RECEIPT_BYTES).unwrap() + 1],
+        )
+        .unwrap();
         assert_eq!(
             read_receipt(&oversized).unwrap_err(),
             "onedrive-finder-verification-receipt-size-invalid"
