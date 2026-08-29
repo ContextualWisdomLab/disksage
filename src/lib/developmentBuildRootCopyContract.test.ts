@@ -12,4 +12,13 @@ describe("development build-root customer copy", () => {
     expect(component).not.toContain("atomic staging");
     expect(component).not.toContain("object_id");
   });
+
+  it("uses the selection-bound review and typed confirmation path", () => {
+    const component = readFileSync(resolve(process.cwd(), "src/lib/Cleanup.svelte"), "utf8");
+
+    expect(component).toContain("devArtifactApi.reviewDevArtifacts");
+    expect(component).toContain("devArtifactApi.cleanDevArtifactsBound");
+    expect(component).toContain("bind:value={devArtifactConfirmationPhrase}");
+    expect(component).not.toContain("api.cleanDevArtifacts(");
+  });
 });
