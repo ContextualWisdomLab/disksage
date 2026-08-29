@@ -652,6 +652,17 @@ impl CacheManifestBudget {
 }
 
 pub(crate) fn cache_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    cache_metadata_fingerprint_inner(metadata, true)
+}
+
+fn cache_root_directory_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    cache_metadata_fingerprint_inner(metadata, false)
+}
+
+fn cache_metadata_fingerprint_inner(
+    metadata: &std::fs::Metadata,
+    include_unix_ctime: bool,
+) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-cache-metadata-v1\0");
     hasher.update(&metadata.len().to_le_bytes());
@@ -661,8 +672,10 @@ pub(crate) fn cache_metadata_fingerprint(metadata: &std::fs::Metadata) -> String
         use std::os::unix::fs::MetadataExt;
         hasher.update(&metadata.dev().to_le_bytes());
         hasher.update(&metadata.ino().to_le_bytes());
-        hasher.update(&metadata.ctime().to_le_bytes());
-        hasher.update(&metadata.ctime_nsec().to_le_bytes());
+        if include_unix_ctime {
+            hasher.update(&metadata.ctime().to_le_bytes());
+            hasher.update(&metadata.ctime_nsec().to_le_bytes());
+        }
         hasher.update(&metadata.blocks().to_le_bytes());
         hasher.update(&metadata.mode().to_le_bytes());
         hasher.update(&metadata.nlink().to_le_bytes());
@@ -681,6 +694,7 @@ fn update_cache_manifest(
     path: &Path,
     hasher: &mut blake3::Hasher,
     budget: &mut CacheManifestBudget,
+    root_entry: bool,
 ) -> Result<(), String> {
     budget.consume_entry()?;
     let metadata = std::fs::symlink_metadata(path)
@@ -701,7 +715,11 @@ fn update_cache_manifest(
         0
     };
     hasher.update(&[entry_kind]);
-    let metadata_fingerprint = cache_metadata_fingerprint(&metadata);
+    let metadata_fingerprint = if root_entry && metadata.is_dir() {
+        cache_root_directory_metadata_fingerprint(&metadata)
+    } else {
+        cache_metadata_fingerprint(&metadata)
+    };
     update_manifest_bytes(hasher, metadata_fingerprint.as_bytes());
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
@@ -747,7 +765,7 @@ fn update_cache_manifest(
             }
         });
         for child in &children {
-            update_cache_manifest(&child, hasher, budget)?;
+            update_cache_manifest(&child, hasher, budget, false)?;
         }
         let mut refreshed_names = Vec::new();
         for entry in std::fs::read_dir(path)
@@ -770,7 +788,11 @@ fn update_cache_manifest(
         if refreshed_names != child_names
             || !refreshed.is_dir()
             || refreshed.file_type().is_symlink()
-            || cache_metadata_fingerprint(&refreshed) != metadata_fingerprint
+            || (if root_entry {
+                cache_root_directory_metadata_fingerprint(&refreshed)
+            } else {
+                cache_metadata_fingerprint(&refreshed)
+            }) != metadata_fingerprint
             || refreshed_object_id != object_id
         {
             return Err("cache-target-manifest-directory-changed-during-read".into());
@@ -784,7 +806,7 @@ fn cache_manifest_fingerprint_with_budget(
     budget: &mut CacheManifestBudget,
 ) -> Result<String, String> {
     let mut hasher = blake3::Hasher::new();
-    update_cache_manifest(path, &mut hasher, budget)?;
+    update_cache_manifest(path, &mut hasher, budget, true)?;
     Ok(hasher.finalize().to_hex().to_string())
 }
 
@@ -1061,7 +1083,7 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut budget = CacheManifestBudget::new(1);
 
-        let error = update_cache_manifest(&root, &mut hasher, &mut budget)
+        let error = update_cache_manifest(&root, &mut hasher, &mut budget, true)
             .expect_err("manifest traversal must stop when its entry budget is exhausted");
 
         assert_eq!(error, "cache-target-manifest-entry-limit-exceeded");
@@ -1077,7 +1099,7 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut budget = CacheManifestBudget::new(2);
 
-        let error = update_cache_manifest(&root, &mut hasher, &mut budget)
+        let error = update_cache_manifest(&root, &mut hasher, &mut budget, true)
             .expect_err("enumeration must reject the child that exceeds the remaining budget");
 
         assert_eq!(error, "cache-target-manifest-entry-limit-exceeded");
@@ -1091,7 +1113,7 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut budget = CacheManifestBudget::new(1);
 
-        update_cache_manifest(&file, &mut hasher, &mut budget)
+        update_cache_manifest(&file, &mut hasher, &mut budget, true)
             .expect("metadata manifest must not read file content");
     }
 
