@@ -151,3 +151,72 @@ fn open_cached_payload_blocks_native_prune_without_global_lock() {
         "an open cache payload must veto native prune authority: {plan}"
     );
 }
+
+#[test]
+fn postcheck_failure_after_prune_still_emits_auditable_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = temp.path().join("cache");
+    let records = temp.path().join("records");
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir(&records).unwrap();
+    fs::set_permissions(&records, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(cache.join("payload.whl"), b"cached").unwrap();
+
+    let uv = temp.path().join("uv");
+    fs::write(
+        &uv,
+        format!(
+            "#!/bin/sh\nset -eu\nif [ \"${{1:-}}\" = '--version' ]; then printf 'uv 0.8.0\\n'; exit 0; fi\nif [ \"${{1:-}}\" = 'cache' ] && [ \"${{2:-}}\" = 'dir' ]; then printf '%s\\n' '{}'; exit 0; fi\nif [ \"${{1:-}}\" = 'cache' ] && [ \"${{2:-}}\" = 'prune' ]; then rm -rf '{}'; printf 'pruned\\n'; exit 0; fi\nexit 64\n",
+            cache.display(),
+            cache.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&uv, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_disksage-uv-cache-reclaim");
+    let plan_output = Command::new(binary)
+        .args(["--uv-bin"])
+        .arg(&uv)
+        .output()
+        .unwrap();
+    assert!(plan_output.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&plan_output.stdout).unwrap();
+    let fingerprint = plan["plan_fingerprint"].as_str().unwrap();
+    let phrase = plan["exact_approval_phrase"].as_str().unwrap();
+
+    let output = Command::new(binary)
+        .arg("--uv-bin")
+        .arg(&uv)
+        .arg("--execute")
+        .arg("--approved-plan-fingerprint")
+        .arg(fingerprint)
+        .arg("--confirm")
+        .arg(phrase)
+        .arg("--approved-by")
+        .arg("human:test")
+        .arg("--rationale")
+        .arg("preserve mutation evidence when capacity postcheck fails")
+        .arg("--record-dir")
+        .arg(&records)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "incomplete postcheck must be fail-closed to automation"
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("a mutation attempt must still emit its receipt");
+    assert_eq!(receipt["status_code"], 0);
+    assert_eq!(receipt["stdout"], "pruned\n");
+    assert!(receipt["filesystem_available_after_bytes"].is_null());
+    assert!(receipt["filesystem_available_delta_bytes"].is_null());
+    assert_eq!(
+        receipt["capacity_postcheck_error"],
+        "uv-cache-reclaim-filesystem-capacity-unavailable"
+    );
+    let result_path = receipt["result_record_path"].as_str().unwrap();
+    assert!(PathBuf::from(result_path).is_file());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("uv-cache-reclaim-command-failed"));
+}
