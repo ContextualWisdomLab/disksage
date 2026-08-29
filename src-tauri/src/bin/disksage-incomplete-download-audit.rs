@@ -19,7 +19,8 @@ fn usage() -> String {
         "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
          [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
-         [--private-output ABSOLUTE_NEW_FILE.json]"
+         [--private-output ABSOLUTE_NEW_FILE.json]\n\
+         다음 단계: 불완전 항목과 근거 시각을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다."
     )
 }
 

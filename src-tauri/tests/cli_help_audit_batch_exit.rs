@@ -4,8 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const MULTIPART_AUDIT_SOURCE: &str =
-    include_str!("../src/bin/disksage-multipart-archive-audit.rs");
+const MULTIPART_AUDIT_SOURCE: &str = include_str!("../src/bin/disksage-multipart-archive-audit.rs");
 const INCOMPLETE_AUDIT_SOURCE: &str =
     include_str!("../src/bin/disksage-incomplete-download-audit.rs");
 const UNKNOWN_ARGUMENT: &str = "알 수 없는 인자";
@@ -157,7 +156,10 @@ fn assert_duplicate_option_is_bounded(binary: &Path, extra_args: &[&str]) {
         "duplicate-option failure must not emit a successful audit summary"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "duplicate-option failure must remain visible"
+    );
 }
 
 #[cfg(unix)]
@@ -176,7 +178,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         Some(2),
         "invalid non-UTF-8 input must use the ordinary bounded argument-error exit"
     );
-    assert!(output.stdout.is_empty(), "invalid non-UTF-8 input must not emit successful output");
+    assert!(
+        output.stdout.is_empty(),
+        "invalid non-UTF-8 input must not emit successful output"
+    );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
     assert!(stderr.contains(UNKNOWN_ARGUMENT));
     assert!(
@@ -190,9 +195,9 @@ fn assert_native_non_utf8_root_reaches_audit(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
 
     let parent = tempfile::tempdir().expect("native-path parent fixture must be created");
-    let root = parent
-        .path()
-        .join(OsString::from_vec(vec![b'a', b'u', b'd', b'i', b't', b'-', 0xff]));
+    let root = parent.path().join(OsString::from_vec(vec![
+        b'a', b'u', b'd', b'i', b't', b'-', 0xff,
+    ]));
     std::fs::create_dir(&root).expect("native non-UTF-8 audit root must be created");
 
     let output = Command::new(binary)
@@ -214,14 +219,20 @@ fn assert_native_non_utf8_root_reaches_audit(binary: &Path) {
     );
     let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("successful native-path audit must emit machine-readable JSON");
-    assert!(summary.is_object(), "audit success output must remain a JSON object");
+    assert!(
+        summary.is_object(),
+        "audit success output must remain a JSON object"
+    );
 }
 
 #[test]
 fn audit_coverage_contract_keeps_shipped_entrypoints_real() {
     for (name, source) in [
         ("disksage-multipart-archive-audit", MULTIPART_AUDIT_SOURCE),
-        ("disksage-incomplete-download-audit", INCOMPLETE_AUDIT_SOURCE),
+        (
+            "disksage-incomplete-download-audit",
+            INCOMPLETE_AUDIT_SOURCE,
+        ),
     ] {
         assert!(
             !source.contains("#[cfg(coverage)]\nfn main()"),
@@ -247,11 +258,11 @@ fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
     for (binary, expected_usage) in [
         (
             multipart_archive_audit.as_path(),
-            "usage: disksage-multipart-archive-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--private-output ABSOLUTE_NEW_FILE.json]",
+            "usage: disksage-multipart-archive-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--private-output ABSOLUTE_NEW_FILE.json]\n다음 단계: 누락되거나 중복된 분할 조각을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다.",
         ),
         (
             incomplete_download_audit.as_path(),
-            "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
+            "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]\n다음 단계: 불완전 항목과 근거 시각을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다.",
         ),
     ] {
         assert_help_success(binary, "--help", expected_usage);

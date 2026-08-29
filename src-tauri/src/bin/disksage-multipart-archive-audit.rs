@@ -16,7 +16,8 @@ fn usage() -> String {
     format!(
         "usage: disksage-multipart-archive-audit --root ABSOLUTE_PATH \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
-         [--private-output ABSOLUTE_NEW_FILE.json]"
+         [--private-output ABSOLUTE_NEW_FILE.json]\n\
+         다음 단계: 누락되거나 중복된 분할 조각을 검토하세요. 이 명령은 파일을 이동하거나 삭제하지 않습니다."
     )
 }
 
