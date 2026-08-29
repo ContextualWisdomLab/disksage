@@ -639,19 +639,23 @@ pub fn trash_delete_if_identity(
     completed_trash_move(outcome)
 }
 
-/// Preserve the mutation result for legacy callers that expose only success or failure.
+/// Preserve truthful mutation and audit status for legacy callers that expose only one result.
 ///
 /// Callers that can publish post-mutation warnings use `trash_delete_if_identity_with_outcome`.
-/// A terminal journal or empty staging-directory cleanup failure cannot retroactively make a
-/// completed OS Trash move false.
+/// A terminal journal failure must reach legacy callers even though the completed OS Trash move
+/// remains represented by the outcome-aware API. Empty staging-directory cleanup is advisory.
 fn completed_trash_move(outcome: TrashDeleteOutcome) -> Result<(), SafetyError> {
-    if outcome.moved_to_trash {
-        Ok(())
-    } else {
-        Err(SafetyError::Trash(
+    if !outcome.moved_to_trash {
+        return Err(SafetyError::Trash(
             "trash move did not complete; rescan before cleanup".into(),
-        ))
+        ));
     }
+    if let Some(error) = outcome.terminal_journal_error {
+        return Err(SafetyError::Journal(format!(
+            "trash move completed but its terminal audit record failed: {error}"
+        )));
+    }
+    Ok(())
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -932,21 +936,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_result_does_not_relabel_completed_move_as_failure() {
-        for outcome in [
-            TrashDeleteOutcome {
-                moved_to_trash: true,
-                terminal_journal_error: Some("journal failed".into()),
-                staging_cleanup_error: None,
-            },
-            TrashDeleteOutcome {
-                moved_to_trash: true,
-                terminal_journal_error: None,
-                staging_cleanup_error: Some("staging cleanup failed".into()),
-            },
-        ] {
-            assert!(completed_trash_move(outcome).is_ok());
-        }
+    fn legacy_result_propagates_terminal_audit_failure_after_completed_move() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: Some("journal device full".into()),
+            staging_cleanup_error: None,
+        };
+
+        let error = completed_trash_move(outcome).unwrap_err();
+        assert!(matches!(error, SafetyError::Journal(message) if message.contains("journal device full")));
+    }
+
+    #[test]
+    fn legacy_result_keeps_completed_move_success_when_only_empty_staging_cleanup_fails() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: None,
+            staging_cleanup_error: Some("staging cleanup failed".into()),
+        };
+
+        assert!(completed_trash_move(outcome).is_ok());
     }
 
     #[test]
