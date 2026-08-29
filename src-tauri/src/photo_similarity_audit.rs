@@ -814,7 +814,7 @@ where
     }
 }
 
-/// Re-audit exact bytes and identities, then move only non-survivors to OS Trash with receipts.
+/// Re-audit similarity evidence, then use the shared identity-bound quarantine boundary.
 #[cfg(not(coverage))]
 pub fn execute_photo_quarantine(
     source_root: &Path,
@@ -825,6 +825,39 @@ pub fn execute_photo_quarantine(
     journal_path: &Path,
     executed_at_ms: u64,
 ) -> Result<PhotoQuarantineReceipt, String> {
+    let fresh =
+        collect_photo_similarity_audit(source_root, executed_at_ms, reviewed_report.max_entries)?;
+    execute_photo_quarantine_from_fresh_report(
+        source_root,
+        reviewed_report,
+        &fresh,
+        plan,
+        approval_phrase,
+        rationale,
+        journal_path,
+        executed_at_ms,
+    )
+}
+
+/// Apply the shared quarantine boundary to a caller-specific freshly reconstructed report.
+#[cfg(not(coverage))]
+pub(crate) fn execute_photo_quarantine_from_fresh_report(
+    source_root: &Path,
+    reviewed_report: &PhotoSimilarityAuditReport,
+    fresh_report: &PhotoSimilarityAuditReport,
+    plan: &PhotoQuarantinePlan,
+    approval_phrase: &str,
+    rationale: &str,
+    journal_path: &Path,
+    executed_at_ms: u64,
+) -> Result<PhotoQuarantineReceipt, String> {
+    let canonical_source_root = std::fs::canonicalize(source_root)
+        .map_err(|_| "photo-quarantine-source-root-unavailable".to_string())?;
+    if Path::new(&reviewed_report.source_root) != canonical_source_root
+        || Path::new(&fresh_report.source_root) != canonical_source_root
+    {
+        return Err("photo-quarantine-source-root-changed".into());
+    }
     if rationale.trim() != rationale || rationale.is_empty() || rationale.chars().count() > 1_000 {
         return Err("photo-quarantine-rationale-invalid".into());
     }
@@ -834,8 +867,7 @@ pub fn execute_photo_quarantine(
     if !quarantine_plan_matches_report(reviewed_report, plan) {
         return Err("photo-quarantine-plan-integrity-invalid".into());
     }
-    let fresh =
-        collect_photo_similarity_audit(source_root, executed_at_ms, reviewed_report.max_entries)?;
+    let fresh = fresh_report.clone();
     if fresh.audit_fingerprint != reviewed_report.audit_fingerprint {
         return Err("photo-quarantine-source-changed".into());
     }

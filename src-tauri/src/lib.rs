@@ -47,7 +47,6 @@ pub mod git_clone_reclaim;
 pub mod git_worktree;
 /// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
 pub mod git_worktree_github_evidence;
-pub mod photo_duplicate;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
@@ -78,6 +77,8 @@ pub mod organization_lineage;
 mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod photo_duplicate;
+pub mod photo_duplicate_quarantine;
 pub mod photo_similarity_audit;
 /// Privacy-safe desktop projection of read-only Podman reclaim evidence.
 pub mod podman_desktop;
@@ -145,6 +146,8 @@ pub fn run() {
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
+            photo_duplicate_quarantine::plan_exact_photo_duplicate_quarantine,
+            photo_duplicate_quarantine::execute_exact_photo_duplicate_quarantine,
             commands::get_ontology,
             commands::disk_inventory,
             commands::ontology_coherence,

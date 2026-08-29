@@ -11,18 +11,19 @@ const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 const MAX_NORMALIZED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EvidenceState {
     Available,
     Unavailable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PhotoEvidence {
     pub path: String,
     pub object_id: String,
     pub bytes: u64,
+    pub filesystem_modified_ms: u64,
     pub blake3: String,
     pub decoded_pixel_digest: String,
     pub width: u32,
@@ -37,7 +38,7 @@ pub struct PhotoEvidence {
     pub blockers: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExactPhotoGroup {
     pub content_digest: String,
     pub grouping_basis: String,
@@ -47,10 +48,11 @@ pub struct ExactPhotoGroup {
     pub execution_available: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PhotoDuplicateAudit {
     pub schema_kind: String,
     pub generated_at_ms: u64,
+    pub audit_fingerprint: String,
     pub exact_groups: Vec<ExactPhotoGroup>,
     pub inspected_input_count: u64,
     pub rejected_input_counts: std::collections::BTreeMap<String, u64>,
@@ -295,6 +297,12 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
         path: path.to_string_lossy().into_owned(),
         object_id: identity,
         bytes: metadata.len(),
+        filesystem_modified_ms: metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or_default(),
         blake3,
         decoded_pixel_digest,
         width,
@@ -330,7 +338,7 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
             Err(reason) => *rejected_input_counts.entry(reason).or_default() += 1,
         }
     }
-    let exact_groups = by_digest
+    let exact_groups: Vec<ExactPhotoGroup> = by_digest
         .into_iter()
         .filter_map(|(content_digest, mut members)| {
             members.sort_by(|left, right| left.path.cmp(&right.path));
@@ -352,9 +360,21 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
             })
         })
         .collect();
+    let mut fingerprint = blake3::Hasher::new();
+    fingerprint.update(b"disksage.photo-duplicate-audit.v1\0");
+    fingerprint.update(&generated_at_ms.to_le_bytes());
+    for group in &exact_groups {
+        fingerprint.update(group.content_digest.as_bytes());
+        for member in &group.members {
+            fingerprint.update(member.object_id.as_bytes());
+            fingerprint.update(member.blake3.as_bytes());
+            fingerprint.update(member.path.as_bytes());
+        }
+    }
     PhotoDuplicateAudit {
         schema_kind: "disksage.photo-duplicate-audit.v1".into(),
         generated_at_ms,
+        audit_fingerprint: fingerprint.finalize().to_hex().to_string(),
         exact_groups,
         inspected_input_count,
         evidence_complete: rejected_input_counts.is_empty(),
