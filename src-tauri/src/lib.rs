@@ -89,6 +89,10 @@ pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+/// Privacy-safe desktop projection of read-only Podman reclaim evidence.
+pub mod podman_desktop;
+/// Distinct IPC registration for the privacy-safe Podman evidence contract.
+pub mod podman_desktop_bridge;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
@@ -154,6 +158,7 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
+            podman_desktop_bridge::inspect_podman_desktop_evidence,
             commands::execute_podman_dangling_image_prune,
             commands::inspect_runtime_storage,
             commands::execute_runtime_storage_trim,

@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Port the privacy-safe Podman desktop evidence projection into the runtime-orphan stack. The
+  customer screen now uses a dedicated read-only IPC schema, keeps every capacity domain optional
+  and separate, and no longer renders the detailed internal Podman reclaim plan.
 - Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
   squash-merged and detached intermediate commits can be classified without ancestry or branch
   guesses; any exact membership in an open PR takes precedence and preserves the worktree.
