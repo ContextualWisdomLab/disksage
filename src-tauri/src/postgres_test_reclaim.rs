@@ -858,7 +858,7 @@ pub fn execute_with_runner(
     });
     let shutdown_completed = stopped_status.is_some_and(|status| {
         status.is_ok_and(|output| {
-            output.status != 0 && output.executable_identity == approved_plan.pg_ctl_identity
+            output.status == 3 && output.executable_identity == approved_plan.pg_ctl_identity
         }) && !data_directory.join("postmaster.pid").exists()
     });
     let stopped_content_identity = shutdown_completed
@@ -940,6 +940,7 @@ mod tests {
     struct FakeRunner {
         alive: Cell<bool>,
         pid_reused_after_stop: Cell<bool>,
+        stopped_status_code: Cell<i32>,
         databases: RefCell<String>,
         clients: RefCell<String>,
         data_directory: PathBuf,
@@ -973,7 +974,11 @@ mod tests {
             }
             if args.last().map(String::as_str) == Some("status") {
                 return Ok(CommandOutput {
-                    status: if self.alive.get() { 0 } else { 3 },
+                    status: if self.alive.get() {
+                        0
+                    } else {
+                        self.stopped_status_code.get()
+                    },
                     stdout: if self.alive.get() {
                         "server is running (PID: 42)\n".into()
                     } else {
@@ -1044,6 +1049,7 @@ mod tests {
         let runner = FakeRunner {
             alive: Cell::new(true),
             pid_reused_after_stop: Cell::new(false),
+            stopped_status_code: Cell::new(3),
             databases: RefCell::new("suite_test\n".into()),
             clients: RefCell::new("0\n".into()),
             data_directory: data,
@@ -1260,5 +1266,35 @@ mod tests {
         assert!(runner.pid_is_alive(plan.postmaster_pid));
         assert!(evidence.outcome.shutdown_completed);
         assert!(evidence.outcome.completed);
+    }
+
+    #[test]
+    fn native_status_error_keeps_the_stopped_directory() {
+        let (temp, request, runner) = fixture();
+        runner.stopped_status_code.set(1);
+        let plan = plan_with_runner(&request, &runner, 7).unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let records = temp.path().join("records");
+        std::fs::create_dir(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let evidence = execute_with_runner(
+            &request,
+            &plan,
+            &plan.exact_approval_phrase,
+            &records,
+            source.path(),
+            &runner,
+            7,
+        )
+        .unwrap();
+
+        assert!(!evidence.outcome.shutdown_completed);
+        assert!(!evidence.outcome.directory_removed);
+        assert_eq!(
+            evidence.outcome.reason_code,
+            "postgres-shutdown-not-confirmed"
+        );
+        assert!(request.data_directory.exists());
     }
 }
