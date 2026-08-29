@@ -17,6 +17,19 @@ const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_US
 // longer operational timeout instead of silently weakening the active-use gate.
 const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_after_find_artifacts_snapshot_hook(hook: impl FnOnce() + 'static) {
+    AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
     pub path: String,
@@ -433,6 +446,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     );
 
     found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    #[cfg(test)]
+    AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
     found
 }
 
@@ -744,6 +763,33 @@ mod tests {
         assert!(
             !journal.exists(),
             "stale identity must not create a journal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_cleanup_rejects_same_size_rewrite_after_review_validation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        let payload = artifact.join("payload.bin");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let journal = tmp.path().join("journal.jsonl");
+        let rewrite_path = payload.clone();
+        set_after_find_artifacts_snapshot_hook(move || {
+            fs::write(&rewrite_path, vec![1u8; 256]).expect("rewrite reviewed payload");
+        });
+
+        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            !results[0].ok,
+            "a same-size rewrite after review validation must invalidate irreversible authority"
+        );
+        assert!(artifact.exists(), "unreviewed artifact contents must remain in place");
+        assert_eq!(
+            fs::read(payload).expect("rewritten payload must survive rejected deletion"),
+            vec![1u8; 256]
         );
     }
 
