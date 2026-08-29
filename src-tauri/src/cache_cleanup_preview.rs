@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+const MAX_PREVIEW_TARGETS: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogCacheTargetPreview {
@@ -33,6 +35,9 @@ pub fn preview_catalog_cache_headless(
         Err(_) => return Err("cache-target-metadata-unavailable".into()),
     }
     let targets = crate::rules::cache_targets(&root)?;
+    if targets.len() > MAX_PREVIEW_TARGETS {
+        return Err("cache-preview-target-limit-exceeded".into());
+    }
 
     Ok(targets
         .into_iter()
