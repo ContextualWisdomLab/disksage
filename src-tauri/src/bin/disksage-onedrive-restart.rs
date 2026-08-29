@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
 const MAX_PLAN_BYTES: u64 = 128 * 1024;
+#[cfg(not(coverage))]
+const USAGE: &str = "usage: disksage-onedrive-restart --plan ABSOLUTE_PRESSURE_JSON --confirm EXACT_PHRASE --reviewed-by PERSON --rationale REASON --record ABSOLUTE_NEW_JSON";
 
 #[cfg(not(coverage))]
 #[derive(serde::Deserialize)]
@@ -59,7 +61,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--plan" | "--confirm" | "--reviewed-by" | "--rationale" | "--record" => {
                 return Err("onedrive-restart-duplicate-argument".into())
             }
-            "--help" | "-h" => return Err("usage: disksage-onedrive-restart --plan ABSOLUTE_PRESSURE_JSON --confirm EXACT_PHRASE --reviewed-by PERSON --rationale REASON --record ABSOLUTE_NEW_JSON".into()),
+            "--help" | "-h" => return Err(USAGE.into()),
             _ => return Err("onedrive-restart-unknown-argument".into()),
         }
         index += 1;
@@ -100,12 +102,7 @@ fn read_plan(
 }
 
 #[cfg(not(coverage))]
-fn write_receipt(
-    path: &Path,
-    receipt: &disksage_lib::onedrive_internal_pressure::OneDriveRestartReceipt,
-) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(receipt)
-        .map_err(|_| "onedrive-restart-receipt-encode-failed".to_string())?;
+fn reserve_receipt(path: &Path) -> Result<std::fs::File, String> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -113,9 +110,21 @@ fn write_receipt(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
+    let file = options
         .open(path)
         .map_err(|_| "onedrive-restart-receipt-create-failed".to_string())?;
+    file.sync_all()
+        .map_err(|_| "onedrive-restart-receipt-reserve-failed".to_string())?;
+    Ok(file)
+}
+
+#[cfg(not(coverage))]
+fn write_receipt(
+    mut file: std::fs::File,
+    receipt: &disksage_lib::onedrive_internal_pressure::OneDriveRestartReceipt,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(receipt)
+        .map_err(|_| "onedrive-restart-receipt-encode-failed".to_string())?;
     file.write_all(&bytes)
         .and_then(|_| file.sync_all())
         .map_err(|_| "onedrive-restart-receipt-write-failed".to_string())
@@ -139,6 +148,8 @@ fn run(args: &[String]) -> Result<(), String> {
         .ok_or("home-directory-unavailable")?;
     let fresh = pressure::collect(&home, disksage_lib::cloud::system_now_ms())?;
     let identity = disksage_lib::provider_recovery::fixed_onedrive_executable_identity()?;
+    // Reserve the create-only private destination before any provider process is touched.
+    let receipt_file = reserve_receipt(&args.record)?;
     let receipt = pressure::execute_restart_with(
         &plan,
         &approval,
@@ -154,7 +165,7 @@ fn run(args: &[String]) -> Result<(), String> {
             (recovery, after)
         },
     )?;
-    write_receipt(&args.record, &receipt)?;
+    write_receipt(receipt_file, &receipt)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&receipt)
@@ -170,7 +181,12 @@ fn run(_args: &[String]) -> Result<(), String> {
 
 #[cfg(not(coverage))]
 fn main() {
-    if let Err(error) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h") {
+        println!("{USAGE}");
+        return;
+    }
+    if let Err(error) = run(&args) {
         eprintln!("{error}");
         std::process::exit(2);
     }
@@ -210,5 +226,17 @@ mod tests {
             parse_args(&duplicate).err().as_deref(),
             Some("onedrive-restart-duplicate-argument")
         );
+    }
+
+    #[test]
+    fn receipt_reservation_never_replaces_an_existing_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let record = directory.path().join("receipt.json");
+        std::fs::write(&record, b"existing").unwrap();
+        assert_eq!(
+            reserve_receipt(&record).err().as_deref(),
+            Some("onedrive-restart-receipt-create-failed")
+        );
+        assert_eq!(std::fs::read(&record).unwrap(), b"existing");
     }
 }

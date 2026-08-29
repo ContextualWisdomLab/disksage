@@ -334,7 +334,8 @@ pub fn assess(
         next_action: next_action.into(),
         provider_internal_mutation_authorized: false,
         provider_restart_authorized: false,
-        restart_rescan_ready: stalled
+        restart_rescan_ready: evidence_complete
+            && stalled
             && current.provider_reported_local_disk_full
             && !current.provider_global_activity_present,
     }
