@@ -846,4 +846,16 @@ wait
         assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
+
+    #[test]
+    fn shared_storage_repair_parser_owns_candidate_identity() {
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        let ids = damaged_layer_ids(&format!(
+            "Damaged layer {second}:\nDamaged layer {first}:\nDamaged layer {second}:"
+        ))
+        .unwrap();
+        assert_eq!(ids, vec![first, second]);
+        assert_eq!(storage_check_fingerprint(&ids).len(), 64);
+    }
 }
