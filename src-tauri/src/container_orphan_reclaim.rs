@@ -381,6 +381,21 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
     Ok(records)
 }
 
+/// Returns whether the runtime's native container inspection reports any storage mount.
+/// Missing, malformed, or multiple records are not evidence that a stopped container is
+/// storage-free and therefore fail closed.
+fn container_has_storage_mounts(output: &str) -> Result<bool, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("container-storage-lineage-record-count-invalid".to_string());
+    }
+    records[0]
+        .get("Mounts")
+        .and_then(Value::as_array)
+        .map(|mounts| !mounts.is_empty())
+        .ok_or_else(|| "container-storage-lineage-mounts-unavailable".to_string())
+}
+
 /// Containers are orphan candidates only when fully stopped: `exited`, `created`, `dead`,
 /// or Podman's documented `stopped`. Known pre-start/transitional states are preserved; only
 /// unrecognized states fail the category closed.
@@ -980,8 +995,21 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                let mut candidate_ids = Vec::with_capacity(candidates.len());
+                for candidate in candidates {
+                    let mut inspect_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
+                    inspect_args.extend(["container", "inspect", &candidate.id]);
+                    let inspect_output = command_text(
+                        &target.binary_path,
+                        &inspect_args,
+                        ORPHAN_COMMAND_TIMEOUT,
+                        "orphan-container-storage-lineage",
+                    )?;
+                    if !container_has_storage_mounts(&inspect_output)? {
+                        candidate_ids.push(candidate.id.clone());
+                    }
+                }
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1471,6 +1499,24 @@ mod tests {
         assert_eq!(
             parse_container_records(&output).unwrap_err(),
             "container-names-invalid"
+        );
+    }
+
+    #[test]
+    fn stopped_container_storage_lineage_requires_one_native_mounts_array() {
+        assert!(!container_has_storage_mounts(r#"[{"Mounts":[]}]"#).unwrap());
+        assert!(container_has_storage_mounts(
+            r#"[{"Mounts":[{"Type":"volume","Name":"database_data","Destination":"/var/lib/postgresql"}]}]"#
+        )
+        .unwrap());
+        assert_eq!(
+            container_has_storage_mounts(r#"[{"Id":"container-without-mount-evidence"}]"#)
+                .unwrap_err(),
+            "container-storage-lineage-mounts-unavailable"
+        );
+        assert_eq!(
+            container_has_storage_mounts(r#"[{"Mounts":[]},{"Mounts":[]}]"#).unwrap_err(),
+            "container-storage-lineage-record-count-invalid"
         );
     }
 

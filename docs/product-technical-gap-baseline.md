@@ -1112,6 +1112,24 @@ runner's private workspace temp root instead of weakening the shared production 
   evidence and explicit survivor confirmation, and active Podman/Colima resources remain outside
   prune authority.
 
+### Podman stopped-container storage-lineage correction
+
+- Native Podman inventory found exited container `78822b0e…` referencing anonymous volume
+  `7bb98515…`. Native inspection of the container fails because its overlay metadata is damaged,
+  while the volume contains PostgreSQL data and occupies 114,216 KiB. The same PostgreSQL image
+  is also referenced by another exited container and a running container. Data necessity is
+  therefore unresolved: DiskSage removed neither the container, volume, nor image, and actual
+  reclaim from this set is zero bytes.
+- The generic stopped-container contract previously classified lifecycle state without requiring
+  storage lineage. It now admits a stopped container only when fresh native inspection proves an
+  empty `Mounts` array. Mounted containers are preserved; failed or malformed inspection blocks
+  the whole category before approval, so it cannot indirectly turn attached data into a dangling
+  volume candidate.
+- Guest `fstrim` remains a separate exact-phrase operation. Its receipt compares host APFS
+  allocation before and after the native guest trim rather than equating guest logical free space
+  with physical recovery. Colima remains unavailable on this host and its missing executable is
+  reported as an unavailable runtime, not as reclaim authority.
+
 ## 2026-08-29 OneDrive native local-eviction boundary
 
 - The selected OneDrive root is a registered macOS File Provider domain. A bounded native status
