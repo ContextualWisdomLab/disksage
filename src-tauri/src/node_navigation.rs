@@ -68,8 +68,17 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
     // macOS canonicalizes `/var` to `/private/var`; keep scanner keys and UI paths in
     // the original namespace while reading entries through the verified canonical path.
     let display_path = res.root.join(relative);
-    let view_size = scanned_directory_size(res, &display_path, &canonical_path)
-        .ok_or_else(|| NOT_IN_SCAN.to_string())?;
+    let view_size = match scanned_directory_size(res, &display_path, &canonical_path) {
+        Some(size) => size,
+        None if res.cancelled && display_path == res.root => {
+            return Ok(NodeView {
+                path: path.to_string_lossy().into_owned(),
+                size: 0,
+                entries: Vec::new(),
+            });
+        }
+        None => return Err(NOT_IN_SCAN.into()),
+    };
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())? {
         let Ok(entry) = entry else { continue };
