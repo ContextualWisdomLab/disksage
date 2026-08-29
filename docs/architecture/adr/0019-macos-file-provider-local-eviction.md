@@ -46,6 +46,26 @@ incomplete evidence, native request failure, and unchanged post-action allocatio
 uses the same bounded batch fingerprint, per-item re-plan, immutable checkpoint, and stop-on-first-
 failure contract as iCloud without weakening either provider's native execution boundary.
 
+## Amendment: public iCloud per-item evidence (2026-08-29)
+
+iCloud eligibility no longer depends on the undocumented `fileproviderctl evaluate` output.
+DiskSage uses Foundation URL resource values and requires, for the exact item, ubiquitous identity,
+`isUploaded=true`, downloading status `current`, no active upload/download, no upload/download
+error, no unresolved conflict, and no sync exclusion. `isUploaded=false` remains
+`provider-sync-incomplete` and cannot produce an eviction permit. These fields, allocation,
+filesystem metadata, path, and active-use evidence are bound into version 3 of the plan fingerprint.
+
+Execution remains separately approved and uses Foundation's public
+`FileManager.evictUbiquitousItem(at:)`, which removes only the local copy and leaves the iCloud item
+present. A successful request is not success evidence by itself: the postcheck must retain the
+ubiquitous path, confirm the item is still uploaded, observe downloading status `notDownloaded`,
+and measure lower local allocation. A read-only metadata snapshot at 2026-08-29 15:53 +0900
+observed 71 locally allocated items of at least 10 MiB (3,587,207,168 bytes); 61 items
+(2,955,091,968 bytes) met the public per-item sync contract, while 10 reported
+`NSUbiquitousFileUbiquityServerNotAvailable` and remained blocked. The eligible cohort grew during
+the observation loop, so these aggregate observations are fixture evidence, not an executable plan
+or approval.
+
 ## Rejected alternatives
 
 - Calling the iCloud ubiquitous-item API for OneDrive: the ownership contract is wrong.
@@ -69,6 +89,15 @@ https://developer.apple.com/documentation/fileprovider/nsfileprovidercustomactio
 
 Apple Inc. (2026). *activateFileViewerSelecting(_:)*. Apple Developer Documentation.
 https://developer.apple.com/documentation/appkit/nsworkspace/activatefileviewerselecting(_:)
+
+Apple Inc. (2026). *evictUbiquitousItem(at:)*. Apple Developer Documentation.
+https://developer.apple.com/documentation/foundation/filemanager/evictubiquitousitem(at:)
+
+Apple Inc. (2026). *ubiquitousItemIsUploadedKey*. Apple Developer Documentation.
+https://developer.apple.com/documentation/foundation/urlresourcekey/ubiquitousitemisuploadedkey
+
+Apple Inc. (2026). *URLUbiquitousItemDownloadingStatus*. Apple Developer Documentation.
+https://developer.apple.com/documentation/foundation/urlubiquitousitemdownloadingstatus
 
 Microsoft. (2026). *Deploy and configure OneDrive on macOS*. Microsoft Learn.
 https://learn.microsoft.com/en-us/sharepoint/files-on-demand-mac
