@@ -82,6 +82,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Preserve a failed Podman native storage-repair attempt as an explicit provider refusal when a
+  damaged layer remains container-referenced; DiskSage now directs a new lineage/removal evidence
+  cycle instead of retrying, forcing repair, or touching graph-driver storage.
+
 - Make the release-packaged cloud-local inventory producer return help on stdout with exit status
   zero, while mixed help/runtime arguments remain a bounded failure.
 - Retry transient iCloud metadata failures during the bounded post-eviction check instead of
