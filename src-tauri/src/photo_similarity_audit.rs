@@ -475,6 +475,11 @@ fn phash_distance(left: &str, right: &str) -> u32 {
     (left ^ right).count_ones()
 }
 
+fn verified_similarity_edge(left: &PhotoSimilarityMember, right: &PhotoSimilarityMember) -> bool {
+    left.aspect_ratio == right.aspect_ratio
+        && phash_distance(&left.perceptual_hash, &right.perceptual_hash) <= PHASH_HAMMING_THRESHOLD
+}
+
 fn perceptual_groups(decoded: Vec<DecodedPhoto>) -> Vec<Vec<PhotoSimilarityMember>> {
     let mut by_ratio: BTreeMap<String, Vec<PhotoSimilarityMember>> = BTreeMap::new();
     for photo in decoded {
@@ -498,14 +503,17 @@ fn perceptual_groups(decoded: Vec<DecodedPhoto>) -> Vec<Vec<PhotoSimilarityMembe
         // if a measured photo corpus makes this bounded audit too slow.
         for left in 0..members.len() {
             for right in left + 1..members.len() {
-                if phash_distance(
-                    &members[left].perceptual_hash,
-                    &members[right].perceptual_hash,
-                ) <= PHASH_HAMMING_THRESHOLD
-                {
+                if verified_similarity_edge(&members[left], &members[right]) {
                     let left_root = root(&mut parent, left);
                     let right_root = root(&mut parent, right);
-                    parent[right_root] = left_root;
+                    if left_root != right_root {
+                        let (keep, merge) = if left_root < right_root {
+                            (left_root, right_root)
+                        } else {
+                            (right_root, left_root)
+                        };
+                        parent[merge] = keep;
+                    }
                 }
             }
         }
@@ -906,6 +914,49 @@ mod tests {
         )
         .unwrap();
         assert!(!quarantine_plan_matches_report(&report, &forged));
+    }
+
+    #[test]
+    fn verified_similarity_edges_form_one_transitive_component() {
+        let member = |path: &str, hash: u64, pixels: u64| DecodedPhoto {
+            member: PhotoSimilarityMember {
+                member_fingerprint: blake3::hash(path.as_bytes()).to_hex().to_string(),
+                relative_path: path.into(),
+                content_blake3: blake3::hash(format!("content-{path}").as_bytes())
+                    .to_hex()
+                    .to_string(),
+                perceptual_hash: format!("{hash:016x}"),
+                aspect_ratio: "4:3".into(),
+                quality: PhotoQualityEvidence {
+                    width_pixels: pixels as u32,
+                    height_pixels: 1,
+                    pixel_count: pixels,
+                    bits_per_sample: 8,
+                    encoded_format: "png".into(),
+                    lossless_encoding: Some(true),
+                    encoded_bytes: pixels,
+                },
+                filesystem_modified_ms: 1,
+                filesystem_object_id: format!("object-{path}"),
+            },
+        };
+        let a = 0_u64;
+        let b = (1_u64 << PHASH_HAMMING_THRESHOLD) - 1;
+        let c = b | (((1_u64 << PHASH_HAMMING_THRESHOLD) - 1) << PHASH_HAMMING_THRESHOLD);
+        assert_eq!((a ^ b).count_ones(), PHASH_HAMMING_THRESHOLD);
+        assert_eq!((b ^ c).count_ones(), PHASH_HAMMING_THRESHOLD);
+        assert!((a ^ c).count_ones() > PHASH_HAMMING_THRESHOLD);
+
+        let components = perceptual_groups(vec![
+            member("a.png", a, 300),
+            member("b.png", b, 200),
+            member("c.png", c, 100),
+        ]);
+        assert_eq!(components.len(), 1);
+        let group = group_from_members(components.into_iter().next().unwrap());
+        assert_eq!(group.members.len(), 3);
+        assert_eq!(group.pareto_dominant_survivor.as_deref(), Some("a.png"));
+        assert_eq!(group.max_pairwise_hamming_distance, 44);
     }
 
     #[test]
