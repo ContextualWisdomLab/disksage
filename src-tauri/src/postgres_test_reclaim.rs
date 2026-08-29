@@ -158,6 +158,13 @@ pub trait PostgresCommandRunner {
     ) -> Result<CommandOutput, String>;
     /// Returns whether the exact planned PID still exists.
     fn pid_is_alive(&self, pid: u32) -> bool;
+    /// Returns the wall-clock time at the event boundary being journaled.
+    fn event_time_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or_default()
+    }
 }
 
 /// Production identity-checked native process runner.
@@ -793,12 +800,16 @@ pub fn execute_with_runner(
         .parent()
         .ok_or_else(|| "postgres-data-directory-parent-missing".to_string())?;
     let free_before = free_bytes(volume_root)?;
+    let pending_written_at_ms = runner.event_time_ms();
+    if pending_written_at_ms == 0 {
+        return Err("postgres-event-clock-invalid".into());
+    }
     let pending_value = PostgresTestClusterPendingJournal {
         schema_version: SCHEMA_VERSION,
         operation_id: operation_id.clone(),
         plan: approved_plan.clone(),
         approved_phrase: exact_approval_phrase.into(),
-        written_at_ms: now_ms,
+        written_at_ms: pending_written_at_ms,
         state: "pending".into(),
     };
     let pending_path =
@@ -868,6 +879,7 @@ pub fn execute_with_runner(
     } else {
         "postgres-data-directory-removal-failed"
     };
+    let completed_at_ms = runner.event_time_ms().max(pending_written_at_ms);
     let outcome = PostgresTestClusterResult {
         schema_version: SCHEMA_VERSION,
         operation_id: operation_id.clone(),
@@ -879,7 +891,7 @@ pub fn execute_with_runner(
         free_bytes_before: free_before,
         free_bytes_after: free_after,
         physically_reclaimed_bytes: free_after.map(|after| after.saturating_sub(free_before)),
-        completed_at_ms: now_ms,
+        completed_at_ms,
     };
     let result_path = record_directory.join(format!("postgres-reclaim-{operation_id}-result.json"));
     let result = crate::private_evidence::write_private_json_create_new(
@@ -905,6 +917,7 @@ mod tests {
         databases: RefCell<String>,
         clients: RefCell<String>,
         data_directory: PathBuf,
+        event_time_ms: Cell<u64>,
     }
 
     impl PostgresCommandRunner for FakeRunner {
@@ -959,6 +972,12 @@ mod tests {
         fn pid_is_alive(&self, _pid: u32) -> bool {
             self.alive.get()
         }
+
+        fn event_time_ms(&self) -> u64 {
+            let value = self.event_time_ms.get();
+            self.event_time_ms.set(value + 1);
+            value
+        }
     }
 
     fn fixture() -> (tempfile::TempDir, PostgresTestClusterRequest, FakeRunner) {
@@ -997,6 +1016,7 @@ mod tests {
             databases: RefCell::new("suite_test\n".into()),
             clients: RefCell::new("0\n".into()),
             data_directory: data,
+            event_time_ms: Cell::new(8),
         };
         (temp, request, runner)
     }
@@ -1091,9 +1111,22 @@ mod tests {
         )
         .unwrap();
         assert!(evidence.outcome.completed);
+        assert_eq!(evidence.outcome.completed_at_ms, 9);
         assert!(!request.data_directory.exists());
         assert!(evidence.pending.written && evidence.result.written);
-        assert_eq!(std::fs::read_dir(records).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(&records).unwrap().count(), 2);
+        let pending: PostgresTestClusterPendingJournal = std::fs::read_dir(&records)
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("-pending.json")
+            })
+            .map(|entry| serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap())
+            .unwrap();
+        assert_eq!(pending.written_at_ms, 8);
     }
 
     #[test]
