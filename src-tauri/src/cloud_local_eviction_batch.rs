@@ -680,7 +680,7 @@ fn finder_receipt_id(receipt: &OnedriveFinderAssistanceReceipt) -> String {
 fn approval_evidence_sha256(approval: &IcloudLocalEvictionBatchApproval) -> Result<String, String> {
     let bytes = serde_json::to_vec(approval)
         .map_err(|_| "onedrive-finder-assistance-approval-invalid".to_string())?;
-    Ok(blake3::hash(&bytes).to_hex().to_string())
+    Ok(crate::content_digest::digest_bytes(&bytes).sha256)
 }
 
 fn authenticate_finder_approval(
@@ -1442,6 +1442,22 @@ mod tests {
         assert_eq!(plan.planned_count, 1);
         assert!(plan.eligible_after_human_approval);
         validate_batch_plan(&onedrive_root, &plan).unwrap();
+    }
+
+    #[test]
+    fn finder_approval_evidence_uses_sha256_contract() {
+        let approval = IcloudLocalEvictionBatchApproval {
+            version: 1,
+            approval_id: "id".into(),
+            batch_fingerprint: "batch".into(),
+            approved_at_ms: 42,
+            approved_by: "human:test".into(),
+            rationale: "reviewed".into(),
+        };
+        assert_eq!(
+            approval_evidence_sha256(&approval).unwrap(),
+            "e6630a97a648e9dacd6c77f7f810e41317d7d759b9fc93461277822c4851cd4b"
+        );
     }
 
     #[test]
