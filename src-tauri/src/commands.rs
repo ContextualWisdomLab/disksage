@@ -3849,16 +3849,26 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
                 "uv-cache" => bases.local_data.join("uv"),
-                "node-cache" => bases.local_data.join("node"),
+                "node-cache" => bases.local_data.join("node/corepack"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
                 "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
                 "superset-code-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
                 "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
+                "macos-app-support-cache" => {
+                    bases.home.join("Library/Application Support/Caches")
+                }
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
-            fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
+            if id == "macos-app-support-cache" {
+                let pending = path.join("hyosungitxmessenger-updater/pending");
+                fs::create_dir_all(&pending).unwrap();
+                fs::write(pending.join("update-info.json"), b"{}").unwrap();
+                fs::write(pending.join("update.zip"), b"regenerable").unwrap();
+            } else {
+                fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
+            }
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
         assert_eq!(results.len(), crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS.len());
