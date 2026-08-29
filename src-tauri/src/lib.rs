@@ -78,6 +78,8 @@ pub mod organization_lineage;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
+/// Explicit-allowlist, dry-run-first PostgreSQL test-cluster reclamation.
+pub mod postgres_test_reclaim;
 pub mod provider_api_client;
 pub mod provider_api_write;
 pub mod provider_capacity;

@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a dry-run-first PostgreSQL test-cluster reclaim CLI that requires an exact operator-provided
+  database allowlist, proves zero external clients through bounded native `psql`, revalidates the
+  complete structural and executable identity at execution, uses bounded `pg_ctl` shutdown, writes
+  private pending/result journals, and reports only the measured post-delete filesystem delta.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
