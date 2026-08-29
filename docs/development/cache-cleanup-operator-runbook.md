@@ -49,3 +49,14 @@ each target's active-use evidence, atomically stages the unchanged filesystem ob
 recursive active-use probe on that exact staged object. Incomplete or active evidence restores the
 directory to its original path and deletes nothing. Gradle cleanup never targets project sources,
 Maven local artifacts, Gradle configuration, or an arbitrary path.
+
+Gradle daemon output logs use a separate irreversible authority from catalog cache cleanup. First
+inspect the bounded candidate list without `--execute`:
+
+`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --gradle-daemon-logs`
+
+Permanent removal requires all three explicit switches: `--execute`, `--gradle-daemon-logs`, and
+`--confirm-permanent-gradle-daemon-logs`. The command admits only direct `daemon-<PID>.out.log`
+files whose PID is no longer live, whose open-file check is clear, and whose filesystem identity is
+unchanged immediately before and after atomic staging. It journals each attempt and does not remove
+Gradle registry files, locks, project content, or other cache entries.

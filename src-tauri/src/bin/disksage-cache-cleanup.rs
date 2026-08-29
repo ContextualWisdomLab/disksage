@@ -13,11 +13,12 @@ use disksage_lib::gradle_daemon_logs::{execute_gradle_daemon_logs, plan_gradle_d
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--cache-id ID [--permanent-cache] | --npx-only | --gradle-daemon-logs | --purge-proven-cache-trash] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--cache-id ID [--permanent-cache] | --npx-only | --gradle-daemon-logs [--confirm-permanent-gradle-daemon-logs] | --purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
 inactive regenerable cache children to OS Trash. --npx-only limits that reversible operation to\n\
-inactive npx environments. --gradle-daemon-logs permanently removes only inactive daemon logs\n\
-after PID and open-file checks. --purge-proven-cache-trash permanently removes only structurally\n\
+inactive npx environments. Executing --gradle-daemon-logs permanently removes only inactive daemon\n\
+logs after PID and open-file checks and requires --confirm-permanent-gradle-daemon-logs.\n\
+--purge-proven-cache-trash permanently removes only structurally\n\
 proven cache directories already in OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,6 +28,7 @@ struct Args {
     cache_id: Option<String>,
     permanent_cache: bool,
     gradle_daemon_logs: bool,
+    confirm_permanent_gradle_daemon_logs: bool,
     purge_proven_cache_trash: bool,
     journal_path: PathBuf,
 }
@@ -81,6 +83,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     let mut cache_id = None;
     let mut permanent_cache = false;
     let mut gradle_daemon_logs = false;
+    let mut confirm_permanent_gradle_daemon_logs = false;
     let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
@@ -100,6 +103,9 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             }
             Some("--permanent-cache") => permanent_cache = true,
             Some("--gradle-daemon-logs") => gradle_daemon_logs = true,
+            Some("--confirm-permanent-gradle-daemon-logs") => {
+                confirm_permanent_gradle_daemon_logs = true
+            }
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
@@ -126,6 +132,11 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     if permanent_cache && cache_id.is_none() {
         return Err("--permanent-cache requires --cache-id".into());
     }
+    if confirm_permanent_gradle_daemon_logs != (execute && gradle_daemon_logs) {
+        return Err(
+            "executing --gradle-daemon-logs requires --confirm-permanent-gradle-daemon-logs".into(),
+        );
+    }
     // `--permanent-cache` is an explicit opt-in rather than a parser-level disable. The parser
     // only admits it with a named cache; the library remains responsible for the irreversible
     // allowlist plus manifest and active-use revalidation at the mutation boundary.
@@ -135,6 +146,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
         cache_id,
         permanent_cache,
         gradle_daemon_logs,
+        confirm_permanent_gradle_daemon_logs,
         purge_proven_cache_trash,
         journal_path,
     }))
@@ -156,6 +168,7 @@ fn execution_receipt(args: &Args, results: serde_json::Value) -> serde_json::Val
         "cache_id": args.cache_id.as_deref(),
         "permanent_cache": args.permanent_cache,
         "gradle_daemon_logs": args.gradle_daemon_logs,
+        "permanent_gradle_daemon_logs_confirmed": args.confirm_permanent_gradle_daemon_logs,
         "results": results
     })
 }
@@ -196,6 +209,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "cache_id": args.cache_id,
                 "permanent_cache": args.permanent_cache,
                 "gradle_daemon_logs": args.gradle_daemon_logs,
+                "permanent_gradle_daemon_logs_confirmed": args.confirm_permanent_gradle_daemon_logs,
                 "cache_targets": cache_targets,
                 "proven_cache_trash": cache_trash,
                 "notice": "review the listed targets, then pass --execute to reclaim them"
@@ -349,6 +363,30 @@ mod tests {
     }
 
     #[test]
+    fn permanent_gradle_daemon_log_execution_requires_its_own_confirmation() {
+        let missing_confirmation = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--gradle-daemon-logs"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            missing_confirmation,
+            "executing --gradle-daemon-logs requires --confirm-permanent-gradle-daemon-logs"
+        );
+        assert!(parse_args([OsString::from("--confirm-permanent-gradle-daemon-logs")]).is_err());
+
+        let args = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--gradle-daemon-logs"),
+            OsString::from("--confirm-permanent-gradle-daemon-logs"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(args.gradle_daemon_logs);
+        assert!(args.confirm_permanent_gradle_daemon_logs);
+    }
+
+    #[test]
     fn execution_receipt_preserves_selected_cache_mode() {
         let args = Args {
             execute: true,
@@ -356,6 +394,7 @@ mod tests {
             cache_id: Some("gradle-cache".into()),
             permanent_cache: false,
             gradle_daemon_logs: false,
+            confirm_permanent_gradle_daemon_logs: false,
             purge_proven_cache_trash: false,
             journal_path: PathBuf::from("/tmp/disksage-journal.jsonl"),
         };
