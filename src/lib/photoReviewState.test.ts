@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { duplicateCandidateFingerprint, duplicateCandidatePaths, quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+import {
+  quarantineApprovalReady,
+  selectionsForGroups,
+  syncPhotoCandidatePaths,
+} from "./photoReviewState";
 import type { ExactPhotoGroup, PhotoQuarantinePlan } from "./api";
 
 const group = (digest: string): ExactPhotoGroup => ({
@@ -9,12 +13,6 @@ const group = (digest: string): ExactPhotoGroup => ({
 const plan = { exact_approval_phrase: "DiskSage 승인 exact", plan_fingerprint: "p" } as PhotoQuarantinePlan;
 
 describe("photo review interaction state", () => {
-  it("replaces obsolete candidates when a repeated scan returns different paths", () => {
-    const first = [{ paths: ["/scan/a.png", "/scan/b.png"] }];
-    const repeated = [{ paths: ["/scan/c.png", "/scan/d.png"] }];
-    expect(duplicateCandidatePaths(repeated)).toEqual(["/scan/c.png", "/scan/d.png"]);
-    expect(duplicateCandidateFingerprint(repeated)).not.toBe(duplicateCandidateFingerprint(first));
-  });
   it("blocks a plan until every ambiguous group has a keeper", () => {
     expect(selectionsForGroups([group("a"), group("b")], { a: "keep-a.png" })).toBeNull();
     expect(selectionsForGroups([group("a"), group("b")], { a: "keep-a.png", b: "keep-b.png" }))
@@ -30,4 +28,16 @@ describe("photo review interaction state", () => {
     expect(quarantineApprovalReady(plan, "DiskSage 승인 exact", "  ")).toBe(false);
     expect(quarantineApprovalReady(plan, "DiskSage 승인 exact", "사본 검토 완료")).toBe(true);
   });
+
+  it("refreshes scan-owned candidates after a rescan but preserves an explicit manual set", () => {
+    const first = [{ paths: ["/scan/a.png", "/scan/b.png"] }];
+    const second = [{ paths: ["/scan/c.png", "/scan/d.png"] }];
+
+    expect(syncPhotoCandidatePaths(first, [], "scan")).toEqual(["/scan/a.png", "/scan/b.png"]);
+    expect(syncPhotoCandidatePaths(second, ["/scan/a.png", "/scan/b.png"], "scan"))
+      .toEqual(["/scan/c.png", "/scan/d.png"]);
+    expect(syncPhotoCandidatePaths(second, ["/scan/manual-1.png", "/scan/manual-2.png"], "manual"))
+      .toEqual(["/scan/manual-1.png", "/scan/manual-2.png"]);
+  });
+
 });

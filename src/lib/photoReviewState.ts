@@ -1,10 +1,6 @@
 import type { ExactPhotoGroup, PhotoQuarantinePlan, PhotoQuarantineSelection } from "./api";
 
-export const duplicateCandidatePaths = (groups: { paths: string[] }[]): string[] =>
-  groups.flatMap((group) => group.paths);
-
-export const duplicateCandidateFingerprint = (groups: { paths: string[] }[]): string =>
-  JSON.stringify(duplicateCandidatePaths(groups));
+export type PhotoCandidateSource = "scan" | "manual";
 
 export const selectionsForGroups = (
   groups: ExactPhotoGroup[],
@@ -21,3 +17,11 @@ export const quarantineApprovalReady = (
   typedPhrase: string,
   rationale: string,
 ): boolean => Boolean(plan && typedPhrase === plan.exact_approval_phrase && rationale.trim());
+
+export const syncPhotoCandidatePaths = (
+  groups: Array<{ paths: string[] }>,
+  currentPaths: string[],
+  source: PhotoCandidateSource,
+): string[] => source === "manual"
+  ? [...currentPaths]
+  : groups.flatMap((group) => group.paths);

@@ -1,7 +1,11 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { duplicateCandidateFingerprint, duplicateCandidatePaths, quarantineApprovalReady, selectionsForGroups } from "./photoReviewState";
+  import {
+    quarantineApprovalReady,
+    selectionsForGroups,
+    syncPhotoCandidatePaths,
+  } from "./photoReviewState";
   import { open } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot, duplicateGroups }: { scannedRoot: string; duplicateGroups: api.DupeGroup[] } = $props();
@@ -15,16 +19,31 @@
   let status = $state("");
   let error = $state("");
   let selectedPaths: string[] = $state([]);
-  let reviewedCandidateFingerprint = "";
+  let manualSelectionRoot: string | null = $state(null);
+
+  const samePaths = (left: string[], right: string[]) =>
+    left.length === right.length && left.every((path, index) => path === right[index]);
+
+  function clearReviewState() {
+    audit = null;
+    plan = null;
+    receipt = null;
+    keepers = {};
+    approval = "";
+    rationale = "";
+  }
+
   $effect(() => {
-    const fingerprint = duplicateCandidateFingerprint(duplicateGroups);
-    if (fingerprint !== reviewedCandidateFingerprint) {
-      reviewedCandidateFingerprint = fingerprint;
-      selectedPaths = duplicateCandidatePaths(duplicateGroups);
-      audit = null; plan = null; receipt = null; keepers = {}; approval = ""; rationale = ""; error = "";
-      status = selectedPaths.length
-        ? "새 검사 결과를 불러왔습니다. 사진 화질을 다시 검토하세요."
-        : "";
+    if (manualSelectionRoot !== null && manualSelectionRoot !== scannedRoot) {
+      manualSelectionRoot = null;
+    }
+    const source = manualSelectionRoot === null ? "scan" : "manual";
+    const nextPaths = syncPhotoCandidatePaths(duplicateGroups, selectedPaths, source);
+    if (!samePaths(nextPaths, selectedPaths)) {
+      selectedPaths = nextPaths;
+      clearReviewState();
+      status = "";
+      error = "";
     }
   });
 
@@ -55,8 +74,11 @@
   async function choosePhotos() {
     const chosen = await open({ multiple: true, directory: false, filters: [{ name: "사진", extensions: ["png"] }] });
     if (!chosen) return;
-    selectedPaths = Array.isArray(chosen) ? chosen : [chosen];
-    audit = null; plan = null; receipt = null;
+    const paths = Array.isArray(chosen) ? chosen : [chosen];
+    manualSelectionRoot = scannedRoot;
+    selectedPaths = paths;
+    clearReviewState();
+    error = "";
     status = `${selectedPaths.length}개 사진을 선택했습니다. 화질 검토를 시작하세요.`;
   }
 
