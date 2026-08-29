@@ -87,7 +87,8 @@ fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
 }
 
 fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)?;
     crate::cloud::discover_cloud_roots(&home)
         .into_iter()
         .map(|cloud_root| std::fs::canonicalize(cloud_root.path).ok())
@@ -125,7 +126,9 @@ fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
                 .any(|name| path.join(name).is_file())
         }
         ".venv" | "venv" => {
-            path.join("pyproject.toml").is_file()
+            ["pyproject.toml", "requirements.txt", "setup.py"]
+                .iter()
+                .any(|name| path.join(name).is_file())
                 && ["uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"]
                     .iter()
                     .any(|name| path.join(name).is_file())
@@ -505,7 +508,6 @@ mod tests {
         .unwrap();
         project(tmp.path(), "cli", "Cargo.toml", "target");
         fs::write(tmp.path().join("cli/Cargo.lock"), b"version = 4").unwrap();
-        // 마커 없는 가짜 — 탐지되면 안 됨
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
 
@@ -514,23 +516,18 @@ mod tests {
         let kinds: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"node_modules"));
         assert!(kinds.contains(&"target"));
-        assert!(
-            !found.iter().any(|a| a.path.contains("random")),
-            "마커 없는 아티팩트는 제외"
-        );
+        assert!(!found.iter().any(|a| a.path.contains("random")));
         let nm = found.iter().find(|a| a.kind == "node_modules").unwrap();
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
-        assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+        assert_eq!(nm.age_days, 0);
     }
 
     #[test]
     fn requires_a_recognized_lockfile() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "repo", "package.json", "node_modules");
-
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
         assert!(found.is_empty());
     }
 
@@ -539,7 +536,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
         fs::write(tmp.path().join("fresh/package-lock.json"), b"{}").unwrap();
-        // 방금 만든 항목도 잠금 파일과 할당 증거가 있으면 표시한다. 나이는 정보일 뿐이다.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -553,11 +549,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let nm = project(tmp.path(), "app", "package.json", "node_modules");
         fs::write(tmp.path().join("app/yarn.lock"), b"lock").unwrap();
-        // node_modules 내부의 중첩 node_modules — 별도 항목이면 안 됨
         let nested = nm.join("dep").join("node_modules");
         fs::create_dir_all(&nested).unwrap();
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
-
         assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
     }
 
@@ -580,40 +574,22 @@ mod tests {
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(
-            !journal.exists(),
-            "stale identity must not create a journal"
-        );
+        assert!(!journal.exists());
     }
 
     #[test]
     fn classifies_manual_cargo_node_and_venv_reclaim_without_age_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "cargo-6_7-gib-incident", "Cargo.toml", "target");
-        fs::write(
-            tmp.path().join("cargo-6_7-gib-incident/Cargo.lock"),
-            b"version = 4",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("cargo-6_7-gib-incident/Cargo.lock"), b"version = 4").unwrap();
         project(tmp.path(), "node-app", "package.json", "node_modules");
-        fs::write(
-            tmp.path().join("node-app/pnpm-lock.yaml"),
-            b"lockfileVersion: 9",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("node-app/pnpm-lock.yaml"), b"lockfileVersion: 9").unwrap();
         project(tmp.path(), "python-app", "pyproject.toml", ".venv");
         fs::write(tmp.path().join("python-app/uv.lock"), b"version = 1").unwrap();
 
         let found = find_artifacts(tmp.path(), u64::MAX, u64::MAX);
-
-        assert_eq!(
-            found.len(),
-            3,
-            "age threshold never decides generated-root eligibility"
-        );
-        assert!(found
-            .iter()
-            .all(|item| item.scan_complete && item.allocated_bytes > 0));
+        assert_eq!(found.len(), 3);
+        assert!(found.iter().all(|item| item.scan_complete && item.allocated_bytes > 0));
         assert!(found.iter().any(|item| item.kind == "target"));
         assert!(found.iter().any(|item| item.kind == "node_modules"));
         assert!(found.iter().any(|item| item.kind == ".venv"));
@@ -625,16 +601,7 @@ mod tests {
         let artifact = project(tmp.path(), "app", "package.json", "node_modules");
         fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
         let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        let result = clean_artifacts(
-            &candidates,
-            tmp.path(),
-            0,
-            &tmp.path().join("journal.jsonl"),
-            1,
-            false,
-        );
-
+        let result = clean_artifacts(&candidates, tmp.path(), 0, &tmp.path().join("journal.jsonl"), 1, false);
         assert!(!result[0].ok);
         assert!(artifact.exists());
     }
@@ -644,36 +611,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("Library/CloudStorage/provider/repository");
         fs::create_dir_all(project.join("target")).unwrap();
-        fs::write(
-            project.join("Cargo.toml"),
-            b"[package]\nname='fixture'\nversion='0.1.0'",
-        )
-        .unwrap();
+        fs::write(project.join("Cargo.toml"), b"[package]\nname='fixture'\nversion='0.1.0'").unwrap();
         fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
         fs::write(project.join("target/output.bin"), b"generated").unwrap();
-
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert!(
-            found.is_empty(),
-            "nested File Provider roots must be pruned before candidate planning"
-        );
+        assert!(found.is_empty());
     }
 
     #[cfg(unix)]
     #[test]
     fn staged_validation_restores_artifact_with_retained_writer() {
         use std::fs::OpenOptions;
-
         let tmp = tempfile::tempdir().unwrap();
         let artifact = project(tmp.path(), "app", "package.json", "node_modules");
         fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
         let request = find_artifacts(tmp.path(), 0, u64::MAX).remove(0);
-        let _writer = OpenOptions::new()
-            .write(true)
-            .open(artifact.join("payload.bin"))
-            .unwrap();
-
+        let _writer = OpenOptions::new().write(true).open(artifact.join("payload.bin")).unwrap();
         let result = crate::safety::trash_delete_if_identity_and_validate(
             &artifact,
             &request.object_id,
@@ -682,15 +635,8 @@ mod tests {
             1,
             |staged| validate_staged_artifact(staged, &request),
         );
-
-        assert!(
-            result.is_err(),
-            "a retained writer must prevent Trash handoff"
-        );
-        assert!(
-            artifact.exists(),
-            "failed validation must restore the artifact"
-        );
+        assert!(result.is_err());
+        assert!(artifact.exists());
         assert!(artifact.join("payload.bin").exists());
     }
 }
