@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
