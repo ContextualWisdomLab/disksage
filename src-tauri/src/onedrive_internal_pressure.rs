@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "macos", not(coverage)))]
 use std::time::{Duration, Instant};
 
-pub const ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION: u32 = 1;
+pub const ONEDRIVE_INTERNAL_PRESSURE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -30,6 +30,15 @@ pub struct OneDriveInternalPressureObservation {
     pub provider_cache_allocated_bytes: u64,
     pub provider_cache_file_count: u64,
     pub provider_cache_fingerprint: String,
+    /// Allocated bytes in OneDrive's transient work area. This is evidence, never reclaim authority.
+    #[serde(default)]
+    pub provider_temp_allocated_bytes: u64,
+    /// Number of regular files in OneDrive's transient work area.
+    #[serde(default)]
+    pub provider_temp_file_count: u64,
+    /// Path-free transient-work fingerprint used only to compare complete observations.
+    #[serde(default)]
+    pub provider_temp_fingerprint: String,
     pub cache_scan_complete: bool,
     pub active_reader_writer_count: u64,
     pub active_use_evidence_complete: bool,
@@ -45,11 +54,15 @@ pub struct OneDriveInternalPressureReport {
     pub observed_at_ms: u64,
     pub provider_cache_allocated_bytes: u64,
     pub provider_cache_file_count: u64,
+    pub provider_temp_allocated_bytes: u64,
+    pub provider_temp_file_count: u64,
     pub evidence_complete: bool,
     pub blockers: Vec<String>,
     pub next_action: String,
     pub provider_internal_mutation_authorized: bool,
     pub provider_restart_authorized: bool,
+    /// True only when a person should quit, reopen, and rescan OneDrive through its supported UI.
+    pub restart_rescan_ready: bool,
 }
 
 /// Assess aggregate provider-cache pressure without inventing an age or size threshold.
@@ -73,15 +86,27 @@ pub fn assess(
                     .saturating_sub(previous.observed_at_ms)
                     >= deadline
                 && current.provider_cache_fingerprint == previous.provider_cache_fingerprint
-                && current.global_sync_state == ProviderGlobalSyncState::Pending
-                && previous.global_sync_state == ProviderGlobalSyncState::Pending
+                && current.provider_temp_fingerprint == previous.provider_temp_fingerprint
+                && current.active_reader_writer_count == 0
+                && previous.active_reader_writer_count == 0
+                && ((current.global_sync_state == ProviderGlobalSyncState::Pending
+                    && previous.global_sync_state == ProviderGlobalSyncState::Pending)
+                    || (current.provider_reported_local_disk_full
+                        && previous.provider_reported_local_disk_full
+                        && current.global_sync_state == ProviderGlobalSyncState::Error
+                        && previous.global_sync_state == ProviderGlobalSyncState::Error))
         });
     let state = if !evidence_complete
         || current.global_sync_state == ProviderGlobalSyncState::Unavailable
     {
         OneDriveInternalPressureState::Unavailable
+    } else if stalled && current.provider_reported_local_disk_full {
+        OneDriveInternalPressureState::ProviderSyncStalled
     } else if current.provider_reported_local_disk_full
-        && current.provider_cache_allocated_bytes > 0
+        && current
+            .provider_cache_allocated_bytes
+            .saturating_add(current.provider_temp_allocated_bytes)
+            > 0
     {
         OneDriveInternalPressureState::InternalPressure
     } else if stalled {
@@ -104,7 +129,11 @@ pub fn assess(
         ),
         OneDriveInternalPressureState::ProviderSyncStalled => (
             "provider-sync-stalled",
-            "OneDrive 상태 화면에서 오류를 해결한 뒤 다시 확인하세요.",
+            if current.provider_reported_local_disk_full {
+                "OneDrive 메뉴에서 동기화를 일시 중지하고 종료한 다음 다시 열어 DiskSage에서 재검사하세요. 임시 데이터는 직접 지우지 마세요."
+            } else {
+                "OneDrive 상태 화면에서 오류를 해결한 뒤 다시 확인하세요."
+            },
         ),
         OneDriveInternalPressureState::InternalPressure => (
             "provider-internal-pressure",
@@ -121,11 +150,14 @@ pub fn assess(
         observed_at_ms: current.observed_at_ms,
         provider_cache_allocated_bytes: current.provider_cache_allocated_bytes,
         provider_cache_file_count: current.provider_cache_file_count,
+        provider_temp_allocated_bytes: current.provider_temp_allocated_bytes,
+        provider_temp_file_count: current.provider_temp_file_count,
         evidence_complete,
         blockers: vec![blocker.into(), "provider-internal-delete-forbidden".into()],
         next_action: next_action.into(),
         provider_internal_mutation_authorized: false,
         provider_restart_authorized: false,
+        restart_rescan_ready: stalled && current.provider_reported_local_disk_full,
     }
 }
 
@@ -147,6 +179,20 @@ fn provider_cache_root(home: &Path) -> Result<PathBuf, String> {
         return Err("onedrive-pressure-cache-root-invalid".into());
     }
     Ok(root)
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn provider_temp_root(home: &Path) -> Result<Option<PathBuf>, String> {
+    let root = home.join("Library/Application Support/OneDrive/tmp");
+    let metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("onedrive-pressure-temp-unavailable".into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("onedrive-pressure-temp-root-invalid".into());
+    }
+    Ok(Some(root))
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -219,6 +265,21 @@ pub fn collect(
     let root = provider_cache_root(home)?;
     let (allocated, files, fingerprint) = scan_cache(&root)?;
     let active = crate::git_worktree::active_use_evidence(&root, 5_000, 64, true);
+    let temp_root = provider_temp_root(home)?;
+    let (temp_allocated, temp_files, temp_fingerprint, temp_active_count, temp_active_complete) =
+        if let Some(temp_root) = temp_root {
+            let (allocated, files, fingerprint) = scan_cache(&temp_root)?;
+            let active = crate::git_worktree::active_use_evidence(&temp_root, 5_000, 64, true);
+            (
+                allocated,
+                files,
+                fingerprint,
+                active.observed_pids.len() as u64,
+                active.evidence_complete,
+            )
+        } else {
+            (0, 0, String::new(), 0, true)
+        };
     let global = crate::provider_global_sync::inspect_new_copy_admission(
         crate::cloud::CloudProvider::Onedrive,
     )?;
@@ -227,9 +288,13 @@ pub fn collect(
         provider_cache_allocated_bytes: allocated,
         provider_cache_file_count: files,
         provider_cache_fingerprint: fingerprint,
+        provider_temp_allocated_bytes: temp_allocated,
+        provider_temp_file_count: temp_files,
+        provider_temp_fingerprint: temp_fingerprint,
         cache_scan_complete: true,
-        active_reader_writer_count: active.observed_pids.len() as u64,
-        active_use_evidence_complete: active.evidence_complete,
+        active_reader_writer_count: (active.observed_pids.len() as u64)
+            .saturating_add(temp_active_count),
+        active_use_evidence_complete: active.evidence_complete && temp_active_complete,
         global_sync_state: global.state,
         provider_reported_local_disk_full: global
             .blockers
@@ -248,6 +313,9 @@ mod tests {
             provider_cache_allocated_bytes: 13 * 1024 * 1024 * 1024,
             provider_cache_file_count: 10,
             provider_cache_fingerprint: "a".repeat(64),
+            provider_temp_allocated_bytes: 17 * 1024 * 1024 * 1024,
+            provider_temp_file_count: 3,
+            provider_temp_fingerprint: "b".repeat(64),
             cache_scan_complete: true,
             active_reader_writer_count: 0,
             active_use_evidence_complete: true,
@@ -281,6 +349,27 @@ mod tests {
         );
         assert!(!report.provider_internal_mutation_authorized);
         assert!(!report.provider_restart_authorized);
+        assert!(!report.restart_rescan_ready);
+    }
+
+    #[test]
+    fn supported_restart_rescan_requires_two_quiescent_stalled_disk_full_observations() {
+        let mut previous = observation(1_000);
+        previous.provider_reported_local_disk_full = true;
+        previous.global_sync_state = ProviderGlobalSyncState::Error;
+        let mut current = observation(2_000);
+        current.provider_reported_local_disk_full = true;
+        current.global_sync_state = ProviderGlobalSyncState::Error;
+        let report = assess(&current, Some(&previous), Some(1_000));
+        assert_eq!(
+            report.state,
+            OneDriveInternalPressureState::ProviderSyncStalled
+        );
+        assert!(report.restart_rescan_ready);
+        assert!(!report.provider_restart_authorized);
+
+        current.provider_temp_fingerprint = "changed".into();
+        assert!(!assess(&current, Some(&previous), Some(1_000)).restart_rescan_ready);
     }
 
     #[test]

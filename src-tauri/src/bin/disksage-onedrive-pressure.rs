@@ -4,7 +4,7 @@
 const MAX_PREVIOUS_OBSERVATION_BYTES: u64 = 64 * 1024;
 
 #[cfg(not(coverage))]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct OneDrivePressureOutput {
     observation: disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureObservation,
@@ -16,8 +16,14 @@ struct OneDrivePressureOutput {
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum PreviousObservationFile {
-    Envelope(OneDrivePressureOutput),
+    Envelope(PreviousObservationEnvelope),
     Bare(disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureObservation),
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Deserialize)]
+struct PreviousObservationEnvelope {
+    observation: disksage_lib::onedrive_internal_pressure::OneDriveInternalPressureObservation,
 }
 
 #[cfg(not(coverage))]
@@ -132,6 +138,9 @@ mod tests {
             provider_cache_allocated_bytes: 20,
             provider_cache_file_count: 1,
             provider_cache_fingerprint: "a".repeat(64),
+            provider_temp_allocated_bytes: 30,
+            provider_temp_file_count: 2,
+            provider_temp_fingerprint: "b".repeat(64),
             cache_scan_complete: true,
             active_reader_writer_count: 0,
             active_use_evidence_complete: true,
@@ -146,16 +155,19 @@ mod tests {
         let encoded = serde_json::to_vec(&OneDrivePressureOutput {
             observation: expected.clone(),
             report: OneDriveInternalPressureReport {
-                schema_version: 1,
+                schema_version: 2,
                 state: OneDriveInternalPressureState::ProviderBusy,
                 observed_at_ms: 10,
                 provider_cache_allocated_bytes: 20,
                 provider_cache_file_count: 1,
+                provider_temp_allocated_bytes: 30,
+                provider_temp_file_count: 2,
                 evidence_complete: true,
                 blockers: vec!["provider-reader-writer-or-sync-active".into()],
                 next_action: "다시 확인하세요.".into(),
                 provider_internal_mutation_authorized: false,
                 provider_restart_authorized: false,
+                restart_rescan_ready: false,
             },
             mutation_executed: false,
         })
