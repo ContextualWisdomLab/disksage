@@ -278,8 +278,6 @@ export interface RuntimeStorageExecution {
   runtime: RuntimeStorageKind;
   command: string[];
   status_code: number;
-  stdout: string;
-  stderr: string;
   output_truncated: boolean;
   executed: boolean;
   executed_at_ms: number;
