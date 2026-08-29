@@ -1176,6 +1176,16 @@ runner's private workspace temp root instead of weakening the shared production 
   complete its bounded graceful quit, so no item was evicted. A physical-space receipt from the
   live provider remains open; the 300 GB goal is not
   claimed complete.
+- A later live batch found five uploaded, current, idle, provider-evictable Mplus videos totaling
+  11,397,992,448 allocated bytes. Their NFC manifest spelling initially failed against the NFD
+  File Provider root; the shared containment boundary now accepts only component-wise canonical
+  equivalents and still rejects sibling roots. After that fix all five received exact item
+  authority, but OneDrive's signed `/unpin` process reported `Failed operation=2` with native
+  status `-2` for the first item while returning process status zero. DiskSage detected the failure,
+  recorded the attempted batch, halted before item two, and reclaimed zero bytes. Replacing the
+  obsolete vendor command with Apple's current File Provider eviction API is therefore a P0 gap;
+  the approved cloud items remain intact and locally materialized until that native path passes
+  post-allocation verification.
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
 

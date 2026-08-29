@@ -22,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
 - Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
 - Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
+- Repair inconsistent Podman storage through an explicitly machine-scoped, non-forced native
+  command and retain attempted-operation receipts plus bounded postcheck evidence after failures.
 - Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
   Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
   environment trees without recursively scanning them, and the
@@ -40,6 +42,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
   and post-allocation verification contract to OneDrive Files On-Demand. The generic
   `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+
+### Fixed
+
+- Match canonically equivalent macOS Unicode spellings when proving that a selected File Provider
+  item is beneath its discovered cloud root; sibling roots remain rejected component by component.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
   a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
   outcome; the default remains reversible OS Trash.
