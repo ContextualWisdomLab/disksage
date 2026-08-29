@@ -23,7 +23,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v3";
+pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v4";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
@@ -2287,7 +2287,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
 
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-        version: 3,
+        version: 4,
         repository_root: repository_root.to_string_lossy().into_owned(),
         common_dir: common_dir_string,
         generated_at_ms,
@@ -2366,7 +2366,7 @@ fn exact_removal_approval_phrase(
 
 fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
     if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
-        || report.version != 3
+        || report.version != 4
         || report.filesystem_mutation_executed
         || !Path::new(&report.repository_root).is_absolute()
         || !Path::new(&report.common_dir).is_absolute()
@@ -3206,7 +3206,7 @@ mod tests {
             removal_plan_fingerprint(&common_dir, &authority_fingerprint, &entries);
         GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 3,
+            version: 4,
             repository_root: "/tmp/repository".into(),
             common_dir,
             generated_at_ms: 10,
@@ -3680,7 +3680,7 @@ mod tests {
     fn public_summary_redacts_local_identity_and_denies_execution_claims() {
         let report = GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 3,
+            version: 4,
             repository_root: "/private/repo".into(),
             common_dir: "/private/repo/.git".into(),
             generated_at_ms: 1,
