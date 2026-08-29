@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn sparse_large_cache_target_is_inventoried_without_content_reads() {
-    const LARGE_LOGICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024 + 1;
+fn cache_targets_fail_closed_before_reading_beyond_manifest_byte_budget() {
+    const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
     let temp = tempfile::tempdir().expect("create isolated cache manifest fixture");
     let cache_root = temp.path().join("pip");
@@ -16,7 +16,7 @@ fn sparse_large_cache_target_is_inventoried_without_content_reads() {
         .write(true)
         .open(&oversized)
         .expect("create sparse oversized cache target");
-    file.set_len(LARGE_LOGICAL_BYTES)
+    file.set_len(MAX_MANIFEST_BYTES + 1)
         .expect("extend sparse cache target without allocating its logical size");
     drop(file);
 
@@ -29,14 +29,14 @@ fn sparse_large_cache_target_is_inventoried_without_content_reads() {
     let environment_name = "XDG_CACHE_HOME";
     let old_environment = std::env::var_os(environment_name);
     unsafe { std::env::set_var(environment_name, temp.path()) };
-    let targets =
-        disksage_lib::cache_cleanup::list_cache_targets(cache_root.to_string_lossy().into_owned())
-            .expect("metadata-only manifest must not open unreadable sparse file content");
+    let error = disksage_lib::cache_cleanup::list_cache_targets(
+        cache_root.to_string_lossy().into_owned(),
+    )
+        .expect_err("oversized manifest input must fail closed before file content is opened");
     match old_environment {
         Some(value) => unsafe { std::env::set_var(environment_name, value) },
         None => unsafe { std::env::remove_var(environment_name) },
     }
 
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].bytes, LARGE_LOGICAL_BYTES);
+    assert_eq!(error, "cache-target-manifest-byte-limit-exceeded");
 }

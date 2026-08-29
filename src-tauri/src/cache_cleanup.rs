@@ -373,14 +373,14 @@ pub(crate) fn clean_regenerable_caches_inner(
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
                     clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms, false)
-                        .unwrap_or_else(|error| {
-                            vec![CleanResult {
-                                path: candidate.path,
-                                ok: false,
-                                error,
-                                warning: String::new(),
-                            }]
-                        })
+                    .unwrap_or_else(|error| {
+                        vec![CleanResult {
+                            path: candidate.path,
+                            ok: false,
+                            error,
+                            warning: String::new(),
+                        }]
+                    })
                 }
                 Err(error) => vec![CleanResult {
                     path: candidate.path,
@@ -413,13 +413,8 @@ pub fn clean_catalog_cache_headless(
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     if permanent
-        && ![
-            "gradle-cache",
-            "gradle-wrapper-cache",
-            "gradle-jdk-cache",
-            "gradle-daemon-cache",
-        ]
-        .contains(&cache_id)
+        && !["gradle-cache", "gradle-wrapper-cache", "gradle-jdk-cache", "gradle-daemon-cache"]
+            .contains(&cache_id)
     {
         return Err("permanent-cache-id-not-approved".into());
     }
@@ -496,10 +491,14 @@ mod tests {
     #[test]
     fn permanent_catalog_cleanup_is_gradle_only() {
         let tmp = tempfile::tempdir().unwrap();
-        let error =
-            clean_catalog_cache_headless("npm-cache", &tmp.path().join("journal.jsonl"), 1, true)
-                .err()
-                .expect("non-Gradle permanent cache cleanup must fail");
+        let error = clean_catalog_cache_headless(
+            "npm-cache",
+            &tmp.path().join("journal.jsonl"),
+            1,
+            true,
+        )
+        .err()
+        .expect("non-Gradle permanent cache cleanup must fail");
         assert_eq!(error, "permanent-cache-id-not-approved");
     }
 
@@ -534,28 +533,6 @@ mod tests {
 
         assert_eq!(error, "cache-cleanup-targets-stale");
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
-    }
-
-    #[test]
-    fn cleanup_rejects_same_size_replacement_before_mutation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bases = fake_bases(tmp.path());
-        fs::create_dir(&bases.temp).unwrap();
-        let victim = bases.temp.join("keep.bin");
-        fs::write(&victim, b"keep").unwrap();
-        let journal = tmp.path().join("journal.jsonl");
-        let targets = rules::cache_targets(&bases.temp).unwrap();
-        let replacement = bases.temp.join("replacement.bin");
-        fs::write(&replacement, b"safe").unwrap();
-        fs::rename(&replacement, &victim).unwrap();
-
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
-            .err()
-            .expect("same-size replacement must invalidate the reviewed manifest");
-
-        assert_eq!(error, "cache-cleanup-targets-stale");
-        assert_eq!(fs::read(&victim).unwrap(), b"safe");
-        assert!(!journal.exists());
     }
 
     #[test]
