@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
 use disksage_lib::shared_temp_reclaim::{
-    approve_shared_temp_reclaim, execute_shared_temp_reclaim, plan_shared_temp_reclaim,
-    seal_completed_temp_artifact,
+    execute_shared_temp_reclaim, plan_shared_temp_reclaim, seal_completed_temp_artifact,
+    SharedTempReclaimApproval, SHARED_TEMP_RECLAIM_VERSION,
 };
 
 #[test]
@@ -18,15 +18,17 @@ fn permanent_shared_temp_reclaim_stays_fail_closed_until_object_bound() {
     std::fs::write(artifact.path().join("result.bin"), vec![1_u8; 16 * 1024]).unwrap();
     seal_completed_temp_artifact(artifact.path(), "disksage:test", 10).unwrap();
     let plan = plan_shared_temp_reclaim(artifact.path(), 11).unwrap();
-    assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
-    let approval = approve_shared_temp_reclaim(
-        &plan,
-        plan.exact_approval_phrase.as_deref().unwrap(),
-        12,
-        "human:test",
-        "producer completion verified",
-    )
-    .unwrap();
+    assert!(!plan.eligible_after_human_approval, "{:?}", plan.blockers);
+    assert!(plan.exact_approval_phrase.is_none());
+    let approval = SharedTempReclaimApproval {
+        version: SHARED_TEMP_RECLAIM_VERSION,
+        approval_id: "forged".into(),
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        exact_approval_phrase: "forged".into(),
+        approved_at_ms: 12,
+        approved_by: "human:forged".into(),
+        rationale: "must not grant mutation authority".into(),
+    };
 
     let artifact_path = artifact.keep();
     let private = tempfile::tempdir().unwrap();
