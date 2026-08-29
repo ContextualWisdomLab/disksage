@@ -92,6 +92,10 @@ name = "disksage-git-clone-reclaim"
 path = "src/bin/disksage-git-clone-reclaim.rs"
 
 [[bin]]
+name = "disksage-git-checkout-lease"
+path = "src/bin/disksage-git-checkout-lease.rs"
+
+[[bin]]
 name = "disksage-git-worktree-remove"
 path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
