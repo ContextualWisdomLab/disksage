@@ -155,6 +155,13 @@ fn scan_cache(root: &Path) -> Result<(u64, u64, String), String> {
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
+fn remaining_entry_budget(max_entries: u64, visited: u64, queued: usize) -> u64 {
+    max_entries
+        .saturating_sub(visited)
+        .saturating_sub(u64::try_from(queued).unwrap_or(u64::MAX))
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
 fn scan_cache_with_limits(
     root: &Path,
     max_entries: u64,
@@ -187,7 +194,7 @@ fn scan_cache_with_limits(
             let mut children = Vec::new();
             let entries = std::fs::read_dir(&path)
                 .map_err(|_| "onedrive-pressure-cache-directory-unreadable".to_string())?;
-            let remaining = max_entries.saturating_sub(visited);
+            let remaining = remaining_entry_budget(max_entries, visited, stack.len());
             for entry in entries {
                 if started.elapsed() >= max_duration || children.len() as u64 >= remaining {
                     return Err("onedrive-pressure-cache-scan-bounded".into());
