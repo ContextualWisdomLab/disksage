@@ -265,37 +265,12 @@ pub fn plan_uv_cache_reclaim(
         .paths
         .first()
         .ok_or_else(|| "uv-cache-reclaim-cache-evidence-missing".to_string())?;
-    let lock_path = cache_path.join(".lock");
-    let active_use = match std::fs::symlink_metadata(&lock_path) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            crate::git_worktree::active_use_evidence(
-                &lock_path,
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
-                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-                false,
-            )
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            GitWorktreeActiveUseEvidence {
-                method: "uv-global-lock-absent".into(),
-                assessed: true,
-                evidence_complete: true,
-                active: false,
-                observed_pids: Vec::new(),
-                results_truncated: false,
-                error: None,
-            }
-        }
-        _ => GitWorktreeActiveUseEvidence {
-            method: "uv-global-lock-file".into(),
-            assessed: true,
-            evidence_complete: false,
-            active: false,
-            observed_pids: Vec::new(),
-            results_truncated: false,
-            error: Some("uv-global-lock-object-unsafe".into()),
-        },
-    };
+    let active_use = crate::git_worktree::active_use_evidence(
+        &cache_path,
+        crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+        crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+        true,
+    );
     let mut blockers = Vec::new();
     if cache.skipped > 0 {
         blockers.push("cache-inventory-incomplete".into());
