@@ -502,19 +502,40 @@ where
 pub struct TrashDeleteOutcome {
     pub moved_to_trash: bool,
     pub terminal_journal_error: Option<String>,
+    pub staging_cleanup_error: Option<String>,
+}
+
+/// Return post-mutation warnings without rewriting a completed Trash move as a failed mutation.
+pub fn trash_delete_outcome_warning(outcome: &TrashDeleteOutcome) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(error) = &outcome.terminal_journal_error {
+        warnings.push(format!("trash move completed but terminal audit record failed: {error}"));
+    }
+    if let Some(error) = &outcome.staging_cleanup_error {
+        warnings.push(error.clone());
+    }
+    (!warnings.is_empty()).then(|| warnings.join("; "))
 }
 
 fn trash_delete_outcome(
     mutation: Result<(), SafetyError>,
     terminal_journal: Result<(), SafetyError>,
+    staging_cleanup_error: Option<String>,
 ) -> Result<TrashDeleteOutcome, SafetyError> {
     match mutation {
         Ok(()) => Ok(TrashDeleteOutcome {
             moved_to_trash: true,
             terminal_journal_error: terminal_journal.err().map(|error| error.to_string()),
+            staging_cleanup_error,
         }),
         Err(error) => Err(error),
     }
+}
+
+fn cleanup_empty_staging_dir(staging_dir: &Path) -> Option<String> {
+    std::fs::remove_dir(staging_dir)
+        .err()
+        .map(|error| format!("staging directory cleanup failed: {error}"))
 }
 
 pub fn trash_delete_if_identity_with_outcome(
@@ -565,6 +586,7 @@ pub fn trash_delete_if_identity_with_outcome(
         return Err(error);
     }
 
+    let mut staging_cleanup_error = None;
     let result = (|| -> Result<(), SafetyError> {
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
@@ -601,6 +623,7 @@ pub fn trash_delete_if_identity_with_outcome(
                 }
             };
         }
+        staging_cleanup_error = cleanup_empty_staging_dir(&staging_dir);
         Ok(())
     })();
     entry.outcome = match &result {
@@ -608,7 +631,7 @@ pub fn trash_delete_if_identity_with_outcome(
         Err(error) => format!("error:{error}"),
     };
     let terminal_journal = journal_append(journal_path, &entry);
-    trash_delete_outcome(result, terminal_journal)
+    trash_delete_outcome(result, terminal_journal, staging_cleanup_error)
 }
 
 pub fn trash_delete_if_identity(
@@ -625,8 +648,24 @@ pub fn trash_delete_if_identity(
         journal_path,
         now_ms,
     )?;
+    completed_trash_move(outcome)
+}
+
+/// Preserve truthful mutation and audit status for legacy callers that expose only one result.
+///
+/// Callers that can publish post-mutation warnings use `trash_delete_if_identity_with_outcome`.
+/// A terminal journal failure must reach legacy callers even though the completed OS Trash move
+/// remains represented by the outcome-aware API. Empty staging-directory cleanup is advisory.
+fn completed_trash_move(outcome: TrashDeleteOutcome) -> Result<(), SafetyError> {
+    if !outcome.moved_to_trash {
+        return Err(SafetyError::Trash(
+            "trash move did not complete; rescan before cleanup".into(),
+        ));
+    }
     if let Some(error) = outcome.terminal_journal_error {
-        return Err(SafetyError::Journal(error));
+        return Err(SafetyError::Journal(format!(
+            "trash move completed but its terminal audit record failed: {error}"
+        )));
     }
     Ok(())
 }
@@ -899,12 +938,48 @@ mod tests {
     #[test]
     fn successful_trash_preserves_moved_state_when_terminal_journal_fails() {
         let outcome =
-            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into()))).unwrap();
+            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into())), None)
+                .unwrap();
         assert!(outcome.moved_to_trash);
         assert_eq!(
             outcome.terminal_journal_error.as_deref(),
             Some("저널 기록 실패: disk-full")
         );
+        let warning = trash_delete_outcome_warning(&outcome).unwrap();
+        assert!(warning.contains("terminal audit record failed"));
+        assert!(warning.contains("disk-full"));
+    }
+
+    #[test]
+    fn legacy_result_propagates_terminal_audit_failure_after_completed_move() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: Some("journal device full".into()),
+            staging_cleanup_error: None,
+        };
+
+        let error = completed_trash_move(outcome).unwrap_err();
+        assert!(matches!(error, SafetyError::Journal(message) if message.contains("journal device full")));
+    }
+
+    #[test]
+    fn legacy_result_keeps_completed_move_success_when_only_empty_staging_cleanup_fails() {
+        let outcome = TrashDeleteOutcome {
+            moved_to_trash: true,
+            terminal_journal_error: None,
+            staging_cleanup_error: Some("staging cleanup failed".into()),
+        };
+
+        assert!(completed_trash_move(outcome).is_ok());
+    }
+
+    #[test]
+    fn successful_trash_removes_its_empty_private_staging_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join(".disksage-trash-staging");
+        std::fs::create_dir(&staging).unwrap();
+        assert_eq!(cleanup_empty_staging_dir(&staging), None);
+        assert!(!staging.exists());
     }
     use std::path::Path;
 

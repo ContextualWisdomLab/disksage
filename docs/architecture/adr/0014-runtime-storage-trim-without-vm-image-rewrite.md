@@ -4,6 +4,9 @@
 **Date**: 2026-08-28  
 **Scope**: `src-tauri/src/runtime_storage.rs`, Tauri commands, headless CLI, Cleanup screen
 
+The desktop dispatches bounded trim and recovery subprocess waits through Tauri's blocking-task
+pool so a slow guest operation cannot occupy an asynchronous command worker.
+
 ## Context
 
 The host can be full even when Podman or Colima reports reclaimable logical bytes. A VM-backed

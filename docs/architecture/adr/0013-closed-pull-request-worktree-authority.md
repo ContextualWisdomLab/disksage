@@ -1,6 +1,6 @@
 # ADR-0013: Bind closed pull-request worktree cleanup to forge evidence
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-27
 
 ## Context

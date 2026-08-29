@@ -284,20 +284,6 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-fn raw_image_identity_error(
-    before: &crate::podman_reclaim::RawImageEvidence,
-    after: &crate::podman_reclaim::RawImageEvidence,
-) -> Option<&'static str> {
-    if before.path != after.path {
-        return Some("runtime-storage-image-changed");
-    }
-    match (&before.identity_sha256, &after.identity_sha256) {
-        (Some(before_identity), Some(after_identity)) if before_identity == after_identity => None,
-        (Some(_), Some(_)) => Some("runtime-storage-image-changed"),
-        _ => Some("runtime-storage-image-identity-unavailable"),
-    }
-}
-
 fn trim_command(runtime: RuntimeStorageKind) -> Vec<String> {
     match runtime {
         RuntimeStorageKind::PodmanMachine => vec![
@@ -465,17 +451,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
         guest_reachable,
         running_container_count,
         trim_command: ready.then(|| trim_command(runtime)),
-        stop_command: (runtime == RuntimeStorageKind::PodmanMachine
-            && ready
-            && running_container_count == Some(0))
-        .then(|| {
-            vec![
-                "podman".into(),
-                "machine".into(),
-                "stop".into(),
-                "podman-machine-default".into(),
-            ]
-        }),
+        // Do not advertise an action that cannot be authorized atomically. The count probe and
+        // a later stop are separate Podman operations, so a container may start between them.
+        stop_command: None,
         recovery_command,
         host_compaction_supported: false,
         host_compaction_blockers: vec![
@@ -491,10 +469,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                 fingerprint
             )
         }),
-        stop_approval_phrase: (runtime == RuntimeStorageKind::PodmanMachine
-            && ready
-            && running_container_count == Some(0))
-        .then(|| format!("DiskSage podman-machine 비활성 정지 승인 {fingerprint}")),
+        // A count probe and a later stop are not one atomic runtime operation. Until Podman
+        // exposes a conditional stop boundary, automatic stop authority remains unavailable.
+        stop_approval_phrase: None,
         recovery_approval_phrase: recovery_ready.then(|| {
             format!(
                 "DiskSage {} 연결 복구 승인 {}",
@@ -526,87 +503,8 @@ pub fn execute_inactive_stop(
     {
         return Err("runtime-storage-rationale-invalid".into());
     }
-    let runtime = RuntimeStorageKind::PodmanMachine;
-    let plan = inspect_runtime(runtime, now_ms());
-    let expected = plan
-        .stop_approval_phrase
-        .as_deref()
-        .ok_or("runtime-storage-stop-not-ready")?;
-    if confirmation_phrase != expected {
-        return Err("runtime-storage-confirmation-mismatch".into());
-    }
-    let running_container_count_before = plan
-        .running_container_count
-        .ok_or("runtime-storage-container-count-unavailable")?;
-    let home =
-        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
-    let before = home
-        .as_deref()
-        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
-        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
-    let image_before = crate::podman_reclaim::inspect_raw_image_evidence(
-        &fixed_binary(runtime),
-        crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
-        COMMAND_TIMEOUT,
-    );
-    let args = ["machine", "stop", "podman-machine-default"];
-    let output = run_bounded_with_timeout(&fixed_binary(runtime), &args, RECOVERY_TIMEOUT)?;
-    let live = inspect_runtime(runtime, now_ms());
-    let after = home
-        .as_deref()
-        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
-        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
-    let image_after = crate::podman_reclaim::inspect_raw_image_evidence(
-        &fixed_binary(runtime),
-        crate::podman_reclaim::DEFAULT_PODMAN_MACHINE,
-        COMMAND_TIMEOUT,
-    );
-    let (volume_comparison, volume_evidence_error) = match (before, after) {
-        (Ok(before), Ok(after)) => crate::volume_pressure::compare_snapshots(&before, &after, None)
-            .map(|comparison| (Some(comparison), None))
-            .unwrap_or_else(|error| (None, Some(error))),
-        (Err(error), _) | (_, Err(error)) => (None, Some(error)),
-    };
-    let (image_before_bytes, image_after_bytes, image_reclaimed, image_error) =
-        match (image_before, image_after) {
-            (Ok(before), Ok(after)) => match raw_image_identity_error(&before, &after) {
-                None => {
-                    let before = before.allocated_bytes;
-                    let after = after.allocated_bytes;
-                    (
-                        before,
-                        after,
-                        before
-                            .zip(after)
-                            .map(|(before, after)| before.saturating_sub(after)),
-                        None,
-                    )
-                }
-                Some(error) => (None, None, None, Some(error.into())),
-            },
-            (Err(error), _) | (_, Err(error)) => (None, None, None, Some(error)),
-        };
-    Ok(RuntimeStorageStopExecution {
-        schema_kind: "disksage.runtime-storage-stop-execution",
-        schema_version: SCHEMA_VERSION,
-        runtime,
-        command: plan.stop_command.unwrap_or_default(),
-        status_code: output.0,
-        stdout: output.1,
-        stderr: output.2,
-        output_truncated: output.3,
-        running_container_count_before,
-        guest_running_after: live.guest_running,
-        executed: output.0 == 0 && live.guest_running == Some(false),
-        executed_at_ms: now_ms(),
-        rationale: rationale.into(),
-        volume_comparison,
-        volume_evidence_error,
-        runtime_image_allocated_bytes_before: image_before_bytes,
-        runtime_image_allocated_bytes_after: image_after_bytes,
-        runtime_image_reclaimed_bytes: image_reclaimed,
-        runtime_image_evidence_error: image_error,
-    })
+    let _ = confirmation_phrase;
+    Err("runtime-storage-conditional-stop-unavailable".into())
 }
 
 /// Restart a runtime only when it reports running but its guest is unreachable.
@@ -672,6 +570,37 @@ pub fn inspect() -> Vec<RuntimeStoragePlan> {
     .into_iter()
     .map(|runtime| inspect_runtime(runtime, observed_at_ms))
     .collect()
+}
+
+fn compare_runtime_image_evidence(
+    before: crate::podman_reclaim::RawImageEvidence,
+    after: crate::podman_reclaim::RawImageEvidence,
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<String>) {
+    if before.path != after.path
+        || before.identity_sha256.is_none()
+        || before.identity_sha256 != after.identity_sha256
+    {
+        return (
+            None,
+            None,
+            None,
+            Some("runtime-storage-image-changed".into()),
+        );
+    }
+    let before_bytes = before.allocated_bytes;
+    let after_bytes = after.allocated_bytes;
+    match before_bytes.zip(after_bytes) {
+        Some((before, after)) if before >= after => {
+            (Some(before), Some(after), Some(before - after), None)
+        }
+        Some((before, after)) => (
+            Some(before),
+            Some(after),
+            None,
+            Some("runtime-storage-image-allocation-increased".into()),
+        ),
+        None => (before_bytes, after_bytes, None, None),
+    }
 }
 
 /// Run guest `fstrim` only after the exact, fresh plan phrase has been approved.
@@ -749,21 +678,7 @@ pub fn execute_trim(
         runtime_image_reclaimed_bytes,
         runtime_image_evidence_error,
     ) = match (image_before, image_after) {
-        (Some(Ok(before)), Some(Ok(after))) => match raw_image_identity_error(&before, &after) {
-            None => {
-                let before = before.allocated_bytes;
-                let after = after.allocated_bytes;
-                (
-                    before,
-                    after,
-                    before
-                        .zip(after)
-                        .map(|(before, after)| before.saturating_sub(after)),
-                    None,
-                )
-            }
-            Some(error) => (None, None, None, Some(error.into())),
-        },
+        (Some(Ok(before)), Some(Ok(after))) => compare_runtime_image_evidence(before, after),
         (Some(Err(error)), _) | (_, Some(Err(error))) => (None, None, None, Some(error)),
         (None, None) => (None, None, None, None),
         _ => (
@@ -877,30 +792,45 @@ mod tests {
     }
 
     #[test]
-    fn changed_or_missing_backing_file_identity_is_not_comparable() {
-        let evidence = |identity: Option<&str>| crate::podman_reclaim::RawImageEvidence {
-            path: "/tmp/podman.raw".into(),
-            logical_bytes: 1024,
-            allocated_bytes: Some(512),
-            identity_sha256: identity.map(str::to_owned),
-            freshness_sha256: Some("freshness".into()),
-        };
-        assert_eq!(raw_image_identity_error(&evidence(Some("a")), &evidence(Some("a"))), None);
-        assert_eq!(
-            raw_image_identity_error(&evidence(Some("a")), &evidence(Some("b"))),
-            Some("runtime-storage-image-changed")
-        );
-        assert_eq!(
-            raw_image_identity_error(&evidence(None), &evidence(None)),
-            Some("runtime-storage-image-identity-unavailable")
-        );
-    }
-
-    #[test]
     fn trim_rejects_control_characters_before_runtime_probe() {
         assert_eq!(
             execute_trim(RuntimeStorageKind::Colima, "", "operator\u{0007}note").unwrap_err(),
             "runtime-storage-rationale-invalid"
+        );
+    }
+
+    #[test]
+    fn inactive_stop_is_unavailable_without_an_atomic_runtime_boundary() {
+        let plan = inspect_runtime(RuntimeStorageKind::PodmanMachine, 42);
+        assert!(plan.stop_command.is_none());
+        assert!(plan.stop_approval_phrase.is_none());
+        assert_eq!(
+            execute_inactive_stop("any", "customer requested stop").unwrap_err(),
+            "runtime-storage-conditional-stop-unavailable"
+        );
+    }
+
+    #[test]
+    fn image_comparison_rejects_replacement_and_allocation_growth() {
+        let evidence = |identity: &str, bytes| crate::podman_reclaim::RawImageEvidence {
+            path: "/tmp/machine.raw".into(),
+            logical_bytes: 100,
+            allocated_bytes: Some(bytes),
+            identity_sha256: Some(identity.into()),
+            freshness_sha256: None,
+        };
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 80), evidence("b", 40)).3,
+            Some("runtime-storage-image-changed".into())
+        );
+        assert_eq!(
+            compare_runtime_image_evidence(evidence("a", 40), evidence("a", 80)),
+            (
+                Some(40),
+                Some(80),
+                None,
+                Some("runtime-storage-image-allocation-increased".into())
+            )
         );
     }
 }

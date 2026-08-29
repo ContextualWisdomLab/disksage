@@ -475,6 +475,11 @@ fn phash_distance(left: &str, right: &str) -> u32 {
     (left ^ right).count_ones()
 }
 
+fn verified_similarity_edge(left: &PhotoSimilarityMember, right: &PhotoSimilarityMember) -> bool {
+    left.aspect_ratio == right.aspect_ratio
+        && phash_distance(&left.perceptual_hash, &right.perceptual_hash) <= PHASH_HAMMING_THRESHOLD
+}
+
 fn perceptual_groups(decoded: Vec<DecodedPhoto>) -> Vec<Vec<PhotoSimilarityMember>> {
     let mut by_ratio: BTreeMap<String, Vec<PhotoSimilarityMember>> = BTreeMap::new();
     for photo in decoded {
@@ -498,14 +503,17 @@ fn perceptual_groups(decoded: Vec<DecodedPhoto>) -> Vec<Vec<PhotoSimilarityMembe
         // if a measured photo corpus makes this bounded audit too slow.
         for left in 0..members.len() {
             for right in left + 1..members.len() {
-                if phash_distance(
-                    &members[left].perceptual_hash,
-                    &members[right].perceptual_hash,
-                ) <= PHASH_HAMMING_THRESHOLD
-                {
+                if verified_similarity_edge(&members[left], &members[right]) {
                     let left_root = root(&mut parent, left);
                     let right_root = root(&mut parent, right);
-                    parent[right_root] = left_root;
+                    if left_root != right_root {
+                        let (keep, merge) = if left_root < right_root {
+                            (left_root, right_root)
+                        } else {
+                            (right_root, left_root)
+                        };
+                        parent[merge] = keep;
+                    }
                 }
             }
         }
@@ -718,6 +726,37 @@ fn quarantine_plan_matches_report(
     plan_photo_quarantine(report, &plan.selections).as_ref() == Ok(plan)
 }
 
+fn quarantine_candidates_fail_fast<F>(
+    canonical_root: &Path,
+    candidates: &[&PhotoSimilarityMember],
+    active: &std::collections::BTreeSet<std::path::PathBuf>,
+    mut trash: F,
+) -> Vec<PhotoQuarantineItemReceipt>
+where
+    F: FnMut(&Path, &PhotoSimilarityMember) -> (bool, Option<String>),
+{
+    let mut halted = false;
+    candidates
+        .iter()
+        .map(|member| {
+            let path = canonical_root.join(&member.relative_path);
+            let (moved_to_os_trash, error) = if halted {
+                (false, Some("photo-quarantine-skipped-after-failure".into()))
+            } else if active.contains(&path) {
+                (false, Some("photo-quarantine-candidate-active".into()))
+            } else {
+                trash(&path, member)
+            };
+            halted |= error.is_some();
+            PhotoQuarantineItemReceipt {
+                member_fingerprint: member.member_fingerprint.clone(),
+                moved_to_os_trash,
+                error,
+            }
+        })
+        .collect()
+}
+
 /// Re-audit exact bytes and identities, then move only non-survivors to OS Trash with receipts.
 #[cfg(not(coverage))]
 pub fn execute_photo_quarantine(
@@ -773,14 +812,10 @@ pub fn execute_photo_quarantine(
         .map(|member| canonical_root.join(&member.relative_path))
         .collect::<Vec<_>>();
     let active = crate::duplicate_audit::active_duplicate_candidates(&candidate_paths)?;
-    let mut items = Vec::with_capacity(candidates.len());
-    for member in candidates {
-        let path = canonical_root.join(&member.relative_path);
-        let (moved_to_os_trash, error) = if active.contains(&path) {
-            (false, Some("photo-quarantine-candidate-active".into()))
-        } else {
+    let items =
+        quarantine_candidates_fail_fast(canonical_root, &candidates, &active, |path, member| {
             match crate::safety::trash_delete_if_identity_with_outcome(
-                &path,
+                path,
                 &member.filesystem_object_id,
                 member.quality.encoded_bytes,
                 journal_path,
@@ -790,17 +825,16 @@ pub fn execute_photo_quarantine(
                     outcome.moved_to_trash,
                     outcome
                         .terminal_journal_error
-                        .map(|_| "photo-quarantine-terminal-journal-failed".into()),
+                        .map(|_| "photo-quarantine-terminal-journal-failed".into())
+                        .or_else(|| {
+                            outcome
+                                .staging_cleanup_error
+                                .map(|_| "photo-quarantine-staging-cleanup-failed".into())
+                        }),
                 ),
                 Err(_) => (false, Some("photo-quarantine-trash-failed".into())),
             }
-        };
-        items.push(PhotoQuarantineItemReceipt {
-            member_fingerprint: member.member_fingerprint.clone(),
-            moved_to_os_trash,
-            error,
         });
-    }
     let (moved_file_count, failed_file_count) = quarantine_receipt_counts(&items);
     Ok(PhotoQuarantineReceipt {
         schema_version: PHOTO_SIMILARITY_AUDIT_VERSION,
@@ -909,6 +943,49 @@ mod tests {
     }
 
     #[test]
+    fn verified_similarity_edges_form_one_transitive_component() {
+        let member = |path: &str, hash: u64, pixels: u64| DecodedPhoto {
+            member: PhotoSimilarityMember {
+                member_fingerprint: blake3::hash(path.as_bytes()).to_hex().to_string(),
+                relative_path: path.into(),
+                content_blake3: blake3::hash(format!("content-{path}").as_bytes())
+                    .to_hex()
+                    .to_string(),
+                perceptual_hash: format!("{hash:016x}"),
+                aspect_ratio: "4:3".into(),
+                quality: PhotoQualityEvidence {
+                    width_pixels: pixels as u32,
+                    height_pixels: 1,
+                    pixel_count: pixels,
+                    bits_per_sample: 8,
+                    encoded_format: "png".into(),
+                    lossless_encoding: Some(true),
+                    encoded_bytes: pixels,
+                },
+                filesystem_modified_ms: 1,
+                filesystem_object_id: format!("object-{path}"),
+            },
+        };
+        let a = 0_u64;
+        let b = (1_u64 << PHASH_HAMMING_THRESHOLD) - 1;
+        let c = b | (((1_u64 << PHASH_HAMMING_THRESHOLD) - 1) << PHASH_HAMMING_THRESHOLD);
+        assert_eq!((a ^ b).count_ones(), PHASH_HAMMING_THRESHOLD);
+        assert_eq!((b ^ c).count_ones(), PHASH_HAMMING_THRESHOLD);
+        assert!((a ^ c).count_ones() > PHASH_HAMMING_THRESHOLD);
+
+        let components = perceptual_groups(vec![
+            member("a.png", a, 300),
+            member("b.png", b, 200),
+            member("c.png", c, 100),
+        ]);
+        assert_eq!(components.len(), 1);
+        let group = group_from_members(components.into_iter().next().unwrap());
+        assert_eq!(group.members.len(), 3);
+        assert_eq!(group.pareto_dominant_survivor.as_deref(), Some("a.png"));
+        assert_eq!(group.max_pairwise_hamming_distance, 44);
+    }
+
+    #[test]
     fn excludes_managed_photo_library_and_exact_byte_duplicates() {
         let root = tempfile::tempdir().unwrap();
         let managed = root.path().join("Photos Library.photoslibrary");
@@ -949,5 +1026,47 @@ mod tests {
             error: Some("photo-quarantine-terminal-journal-failed".into()),
         }];
         assert_eq!(quarantine_receipt_counts(&items), (1, 1));
+    }
+
+    #[test]
+    fn quarantine_stops_invoking_trash_after_first_failure() {
+        let member = |name: &str| PhotoSimilarityMember {
+            member_fingerprint: blake3::hash(name.as_bytes()).to_hex().to_string(),
+            relative_path: name.into(),
+            content_blake3: "a".repeat(64),
+            perceptual_hash: "0".repeat(16),
+            aspect_ratio: "1:1".into(),
+            quality: PhotoQualityEvidence {
+                width_pixels: 1,
+                height_pixels: 1,
+                pixel_count: 1,
+                bits_per_sample: 8,
+                encoded_format: "png".into(),
+                lossless_encoding: Some(true),
+                encoded_bytes: 1,
+            },
+            filesystem_modified_ms: 1,
+            filesystem_object_id: format!("object-{name}"),
+        };
+        let candidates = [member("one.png"), member("two.png"), member("three.png")];
+        let candidate_refs = candidates.iter().collect::<Vec<_>>();
+        let mut calls = 0;
+        let receipts = quarantine_candidates_fail_fast(
+            Path::new("/photos"),
+            &candidate_refs,
+            &BTreeSet::new(),
+            |_, _| {
+                calls += 1;
+                (false, Some("photo-quarantine-trash-failed".into()))
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(
+            receipts[0].error.as_deref(),
+            Some("photo-quarantine-trash-failed")
+        );
+        assert!(receipts[1..]
+            .iter()
+            .all(|item| item.error.as_deref() == Some("photo-quarantine-skipped-after-failure")));
     }
 }

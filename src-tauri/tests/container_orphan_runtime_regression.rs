@@ -175,7 +175,7 @@ case "${{1:-}}" in
       printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
       exit 0
     fi
-    if [ "${{2:-}}" = "inspect" ] && [ "${{3:-}}" = "{FULL_ID}" ]; then
+    if [ "${{2:-}}" = "inspect" ] && [ "${{3:-}}" = "--format" ] && [ "${{5:-}}" = "{FULL_ID}" ]; then
       printf '%s\n' '[{{"Id":"{FULL_ID}","Mounts":[]}}]'
       exit 0
     fi

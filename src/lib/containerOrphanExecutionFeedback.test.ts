@@ -31,7 +31,7 @@ describe("containerOrphanExecutionStatus", () => {
   it("does not call a non-zero exact-delete receipt a clean failure when partial mutation is possible", () => {
     const message = containerOrphanExecutionStatus(receipt({
       status_code: 1,
-      executed: false,
+      executed: true,
       stderr: "container-orphan-prune-outcome-indeterminate",
     }));
 

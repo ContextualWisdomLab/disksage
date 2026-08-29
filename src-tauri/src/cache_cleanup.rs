@@ -275,17 +275,22 @@ pub(crate) fn clean_cache_contents_inner(
                     error: error.into(),
                 };
             }
-            match safety::trash_delete_if_identity(
+            match safety::trash_delete_if_identity_with_outcome(
                 Path::new(&target.path),
                 &target.object_id,
                 target.bytes,
                 journal_path,
                 now_ms,
             ) {
-                Ok(()) => CleanResult {
+                Ok(outcome) if outcome.moved_to_trash => CleanResult {
                     path: target.path,
                     ok: true,
-                    error: String::new(),
+                    error: safety::trash_delete_outcome_warning(&outcome).unwrap_or_default(),
+                },
+                Ok(_) => CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: "trash move did not complete; rescan before cleanup".into(),
                 },
                 Err(error) => CleanResult {
                     path: target.path,

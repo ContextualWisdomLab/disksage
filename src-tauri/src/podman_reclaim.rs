@@ -17,7 +17,6 @@ const CRITICAL_GUEST_AVAILABLE_BYTES: u64 = 2 * GIB;
 const MATERIAL_ALLOCATION_GAP_BYTES: u64 = 512 * 1_048_576;
 const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
 const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
-const PODMAN_STORAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PodmanMachineEvidence {
@@ -197,131 +196,6 @@ pub struct PodmanStorageRepairExecution {
     pub postcheck_complete: bool,
     pub executed_at_ms: u64,
     pub rationale: String,
-}
-
-fn damaged_layer_ids(output: &str) -> Result<Vec<String>, String> {
-    let mut ids = output
-        .lines()
-        .filter_map(|line| line.strip_prefix("Damaged layer "))
-        .filter_map(|line| line.strip_suffix(':'))
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>();
-    if ids
-        .iter()
-        .any(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
-    {
-        return Err("podman-storage-check-invalid-layer-id".into());
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
-}
-
-fn storage_check_fingerprint(ids: &[String]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"disksage.podman-storage-check.v1\0");
-    for id in ids {
-        digest.update(id.as_bytes());
-        digest.update([0]);
-    }
-    lower_hex(&digest.finalize())
-}
-
-fn storage_check_complete(status_code: i32, output: &str, ids: &[String]) -> bool {
-    let expected_damage_completion = output
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(|line| line == "Error: damage detected in local storage");
-    (status_code == 0 && ids.is_empty()) || (!ids.is_empty() && expected_damage_completion)
-}
-
-pub fn plan_podman_storage_repair(
-    podman_bin: &Path,
-    machine: &str,
-) -> Result<PodmanStorageCheckPlan, String> {
-    if !valid_machine_name(machine) {
-        return Err("unsafe-requested-machine-name".into());
-    }
-    let output = command_capture(
-        podman_bin,
-        &["--connection", machine, "system", "check", "--quick"],
-        PODMAN_STORAGE_CHECK_TIMEOUT,
-        "podman-storage-check",
-    )?;
-    let combined = format!("{}\n{}", output.stdout, output.stderr);
-    let ids = damaged_layer_ids(&combined)?;
-    let fingerprint = storage_check_fingerprint(&ids);
-    let complete = storage_check_complete(output.status_code, &combined, &ids);
-    Ok(PodmanStorageCheckPlan {
-        schema_version: 1,
-        machine: machine.to_string(),
-        damaged_layer_records: ids.len() as u64,
-        candidate_set_sha256: fingerprint.clone(),
-        evidence_complete: complete,
-        exact_approval_phrase: (complete && !ids.is_empty())
-            .then(|| format!("DiskSage Podman storage repair 승인 {fingerprint}")),
-        issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
-    })
-}
-
-/// Ask Podman's native checker to remove only damaged objects that are not in use. `--force` is
-/// intentionally absent so running-container and dependent-image state remains fail-closed.
-pub fn execute_podman_storage_repair(
-    podman_bin: &Path,
-    machine: &str,
-    confirmation_phrase: &str,
-    rationale: &str,
-    executed_at_ms: u64,
-) -> Result<PodmanStorageRepairExecution, String> {
-    if executed_at_ms == 0 || rationale.trim().is_empty() || rationale != rationale.trim() {
-        return Err("podman-storage-repair-request-invalid".into());
-    }
-    let plan = plan_podman_storage_repair(podman_bin, machine)?;
-    if !plan.evidence_complete || plan.damaged_layer_records == 0 {
-        return Err("podman-storage-repair-not-required".into());
-    }
-    if plan.exact_approval_phrase.as_deref() != Some(confirmation_phrase) {
-        return Err("podman-storage-repair-confirmation-mismatch".into());
-    }
-    let output = command_capture(
-        podman_bin,
-        &[
-            "--connection",
-            machine,
-            "system",
-            "check",
-            "--quick",
-            "--repair",
-        ],
-        PODMAN_STORAGE_CHECK_TIMEOUT,
-        "podman-storage-repair",
-    )?;
-    let postcheck = plan_podman_storage_repair(podman_bin, machine)?;
-    let repaired_layer_records = plan
-        .damaged_layer_records
-        .saturating_sub(postcheck.damaged_layer_records);
-    Ok(PodmanStorageRepairExecution {
-        schema_version: 1,
-        machine: machine.to_string(),
-        candidate_set_sha256: plan.candidate_set_sha256,
-        command: vec![
-            "podman".into(),
-            "system".into(),
-            "check".into(),
-            "--quick".into(),
-            "--repair".into(),
-        ],
-        status_code: output.status_code,
-        command_attempted: true,
-        execution_issue: None,
-        executed: output.status_code == 0 || repaired_layer_records > 0,
-        repaired_layer_records,
-        remaining_damaged_layer_records: postcheck.damaged_layer_records,
-        postcheck_complete: postcheck.evidence_complete,
-        executed_at_ms,
-        rationale: rationale.to_string(),
-    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -811,11 +685,18 @@ fn command_capture(
     timeout: Duration,
     label: &str,
 ) -> Result<CommandCapture, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("{label}-spawn:{error}"))?;
     let stdout = child
@@ -834,16 +715,14 @@ fn command_capture(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-wait:{error}"));
@@ -851,6 +730,9 @@ fn command_capture(
         }
     };
 
+    // A completed CLI may leave descendants holding inherited pipes. Its private process group
+    // can be terminated without touching the long-lived Podman VM process.
+    terminate_readonly_process_tree(&mut child);
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
@@ -862,6 +744,15 @@ fn command_capture(
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
         output_truncated: false,
     })
+}
+
+fn terminate_readonly_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn command_text(
@@ -1284,43 +1175,6 @@ pub fn probe_podman_reclaim(
 mod tests {
     use super::*;
 
-    #[test]
-    fn storage_check_fingerprint_is_order_independent_and_rejects_bad_ids() {
-        let first = "a".repeat(64);
-        let second = "b".repeat(64);
-        let left =
-            damaged_layer_ids(&format!("Damaged layer {second}:\nDamaged layer {first}:")).unwrap();
-        let right =
-            damaged_layer_ids(&format!("Damaged layer {first}:\nDamaged layer {second}:")).unwrap();
-        assert_eq!(
-            storage_check_fingerprint(&left),
-            storage_check_fingerprint(&right)
-        );
-        assert_eq!(left, vec!["a".repeat(64), "b".repeat(64)]);
-        assert_eq!(
-            damaged_layer_ids("Damaged layer not-a-layer:").unwrap_err(),
-            "podman-storage-check-invalid-layer-id"
-        );
-    }
-
-    #[test]
-    fn damaged_line_followed_by_fatal_error_is_incomplete() {
-        let ids = vec!["a".repeat(64)];
-        assert!(!storage_check_complete(
-            125,
-            &format!("Damaged layer {}:\nfatal transport error", ids[0]),
-            &ids,
-        ));
-        assert!(storage_check_complete(
-            125,
-            &format!(
-                "Damaged layer {}:\nError: damage detected in local storage",
-                ids[0]
-            ),
-            &ids,
-        ));
-    }
-
     const INSPECT: &str = r#"[{"ConfigDir":{"Path":"/tmp/podman"},"Name":"podman-machine-default","State":"running","Resources":{"DiskSize":100}}]"#;
     const INFO: &str = r#"{"store":{"graphRoot":"/var/home/core/.local/share/containers/storage","graphRootAllocated":106769133568,"graphRootUsed":36028432384,"imageStore":{"number":35},"containerStore":{"number":9,"running":0,"stopped":9}}}"#;
     const SYSTEM_DF: &str = r#"[{"Type":"Images","Total":46,"Active":39,"RawSize":18998832893,"RawReclaimable":14203017596},{"Type":"Containers","Total":9,"Active":0,"RawSize":96085,"RawReclaimable":96085},{"Type":"Local Volumes","Total":69,"Active":7,"RawSize":3107287618,"RawReclaimable":2889662821}]"#;
@@ -1616,6 +1470,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "slow-probe-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_probe_closes_inherited_descendant_pipes() {
+        let started = Instant::now();
+        let output = command_text(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 10 & printf complete"],
+            Duration::from_secs(2),
+            "descendant-pipe-probe",
+        )
+        .unwrap();
+        assert_eq!(output, "complete");
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

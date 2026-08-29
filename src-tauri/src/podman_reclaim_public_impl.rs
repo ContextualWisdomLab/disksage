@@ -384,6 +384,9 @@ fn storage_repair_provider_issue(output: &BoundedOutput) -> Option<String> {
     if output.status_code == 0 {
         return None;
     }
+    if output.status_code != 125 {
+        return Some("podman-storage-repair-provider-exit-status-unexpected".into());
+    }
     let provider_diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
     let dependent_container = provider_diagnostic.lines().any(|line| {
         line.contains("layer")
@@ -499,6 +502,7 @@ pub fn execute_podman_storage_repair(
         MUTATION_WAIT_STATUS_CODE => Some("podman-storage-repair-wait".into()),
         MUTATION_CAPTURE_STATUS_CODE => Some("podman-storage-repair-output-too-large".into()),
         MUTATION_UTF8_STATUS_CODE => Some("podman-storage-repair-output-not-utf8".into()),
+        0 if !postcheck_complete => Some("podman-storage-repair-postcheck-incomplete".into()),
         _ => storage_repair_provider_issue(&output),
     };
 
@@ -518,7 +522,7 @@ pub fn execute_podman_storage_repair(
         status_code: output.status_code,
         command_attempted: true,
         execution_issue,
-        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
+        executed: output.status_code == 0 && postcheck_complete,
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
@@ -731,7 +735,7 @@ mod mutation_runner_tests {
     #[test]
     fn provider_issue_requires_one_coherent_dependency_diagnostic_line() {
         let separate_lines = BoundedOutput {
-            status_code: 1,
+            status_code: 125,
             stdout: "damaged layer abc\ncontainer inventory follows".into(),
             stderr: "resource is in use".into(),
         };
@@ -740,13 +744,22 @@ mod mutation_runner_tests {
             Some("podman-storage-repair-provider-refused")
         );
         let coherent = BoundedOutput {
-            status_code: 1,
+            status_code: 125,
             stdout: "layer abc is used by container def".into(),
             stderr: String::new(),
         };
         assert_eq!(
             storage_repair_provider_issue(&coherent).as_deref(),
             Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+        );
+        let untrusted = BoundedOutput {
+            status_code: 1,
+            stdout: "layer abc is used by container def".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&untrusted).as_deref(),
+            Some("podman-storage-repair-provider-exit-status-unexpected")
         );
     }
 
@@ -845,5 +858,17 @@ wait
 
         assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn shared_storage_repair_parser_owns_candidate_identity() {
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        let ids = damaged_layer_ids(&format!(
+            "Damaged layer {second}:\nDamaged layer {first}:\nDamaged layer {second}:"
+        ))
+        .unwrap();
+        assert_eq!(ids, vec![first, second]);
+        assert_eq!(storage_check_fingerprint(&ids).len(), 64);
     }
 }
