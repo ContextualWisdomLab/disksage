@@ -15,6 +15,7 @@ use crate::cloud_local_eviction::{
     write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
     IcloudLocalEvictionResult,
 };
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -691,6 +692,30 @@ fn finder_verification_id(value: &OnedriveFinderAssistanceVerification) -> Strin
     hasher.finalize().to_hex().to_string()
 }
 
+fn write_or_verify_immutable_record<T: Serialize>(
+    record_dir: &Path,
+    filename: &str,
+    value: &T,
+) -> Result<PathBuf, String> {
+    match write_immutable_record(record_dir, filename, value) {
+        Ok(path) => Ok(path),
+        Err(write_error) => {
+            let path = record_dir.join(filename);
+            let metadata = std::fs::symlink_metadata(&path).map_err(|_| write_error.clone())?;
+            let mut expected = serde_json::to_vec_pretty(value).map_err(|_| write_error.clone())?;
+            expected.push(b'\n');
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() != expected.len() as u64
+                || std::fs::read(&path).map_err(|_| write_error.clone())? != expected
+            {
+                return Err(write_error);
+            }
+            Ok(path)
+        }
+    }
+}
+
 fn prepare_onedrive_finder_assistance_with<P, F>(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
@@ -710,7 +735,7 @@ where
     }
     validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
     let live = preflight_with(root, plan, requested_at_ms, &mut planner)?;
-    write_immutable_record(
+    write_or_verify_immutable_record(
         record_dir,
         &format!("{}.batch-approval.json", approval.approval_id),
         approval,
@@ -719,7 +744,6 @@ where
         .iter()
         .map(|item| PathBuf::from(&item.path))
         .collect::<Vec<_>>();
-    reveal(&paths)?;
     let items = live
         .iter()
         .map(|item| {
@@ -755,11 +779,12 @@ where
                 .into(),
     };
     receipt.receipt_id = finder_receipt_id(&receipt);
-    write_immutable_record(
+    write_or_verify_immutable_record(
         record_dir,
         &format!("{}.finder-assistance.json", receipt.receipt_id),
         &receipt,
     )?;
+    reveal(&paths)?;
     Ok(receipt)
 }
 
@@ -1376,6 +1401,20 @@ mod tests {
         )
         .unwrap();
         let records = tempfile::tempdir().unwrap();
+        assert_eq!(
+            prepare_onedrive_finder_assistance_with(
+                &onedrive_root,
+                &plan,
+                &approval,
+                &plan.batch_fingerprint,
+                records.path(),
+                22,
+                |_, _, _| Ok(item.clone()),
+                |_| Err("onedrive-finder-selection-failed".into()),
+            )
+            .unwrap_err(),
+            "onedrive-finder-selection-failed"
+        );
         let selected = std::cell::RefCell::new(Vec::new());
         let receipt = prepare_onedrive_finder_assistance_with(
             &onedrive_root,

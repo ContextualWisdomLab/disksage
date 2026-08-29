@@ -423,8 +423,11 @@ mod tests {
             customer_next_action: "Local space release verified".into(),
         });
         let encoded = serde_json::to_string(&output).unwrap();
-        assert!(!encoded.contains("path"));
+        let value = serde_json::from_str::<serde_json::Value>(&encoded).unwrap();
+        let object = value.as_object().unwrap();
+        assert!(object.keys().all(|key| key != "path" && key != "paths"));
         assert!(!encoded.contains(CLOUD_ROOT));
+        assert_eq!(object["individual_paths_redacted"], true);
         assert!(encoded.contains("verification_complete"));
     }
 }
