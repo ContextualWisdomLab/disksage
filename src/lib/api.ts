@@ -54,6 +54,7 @@ export interface CleanResult {
   path: string;
   ok: boolean;
   error: string;
+  warning: string;
 }
 
 export interface OrphanRelationEvidence {
@@ -109,6 +110,7 @@ export interface OrphanCleanupItemResult {
   attempted: boolean;
   moved_to_trash: boolean;
   error: string | null;
+  warning: string | null;
 }
 export interface OrphanCleanupResult {
   schema_kind: "disksage.orphan-cleanup-result/v1";
