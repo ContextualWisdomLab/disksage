@@ -692,6 +692,28 @@ mod mutation_runner_tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn timed_out_readonly_command_terminates_descendants_holding_output_pipes() {
+        let temp = tempfile::tempdir().expect("temporary runtime directory");
+        let fake = temp.path().join("readonly");
+        fs::write(&fake, "#!/bin/sh\nsleep 5 &\nwait\n").expect("write read-only fixture");
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let started = Instant::now();
+        let error = run_bounded(
+            &fake,
+            &[],
+            Duration::from_millis(50),
+            "readonly-timeout-fixture",
+        )
+        .expect_err("the process-group timeout must fail closed");
+
+        assert_eq!(error, "readonly-timeout-fixture-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn timed_out_spawned_mutation_returns_failure_output_instead_of_erasing_execution() {
         let temp = tempfile::tempdir().expect("temporary runtime directory");
         let fake = temp.path().join("mutation");
