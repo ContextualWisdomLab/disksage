@@ -67,6 +67,8 @@ pub struct CacheTarget {
 }
 
 const MAX_CACHE_TARGETS: usize = 4_096;
+const MAX_CACHE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_CACHE_MANIFEST_ENTRIES: usize = 100_000;
 
 fn is_disksage_trash_staging(path: &Path) -> bool {
     path.file_name()
@@ -619,7 +621,15 @@ fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
     update_manifest_bytes(hasher, name.to_string_lossy().as_bytes());
 }
 
-fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(), String> {
+fn update_cache_manifest(
+    path: &Path,
+    hasher: &mut blake3::Hasher,
+    remaining_entries: &mut usize,
+) -> Result<(), String> {
+    if *remaining_entries == 0 {
+        return Err("cache-target-manifest-entry-limit-exceeded".into());
+    }
+    *remaining_entries -= 1;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "cache-target-manifest-metadata-unavailable".to_string())?;
     let is_symlink = metadata.file_type().is_symlink();
@@ -672,7 +682,7 @@ fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(),
             .collect::<Result<Vec<_>, _>>()?;
         children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
         for child in children {
-            update_cache_manifest(&child, hasher)?;
+            update_cache_manifest(&child, hasher, remaining_entries)?;
         }
     }
     Ok(())
@@ -680,7 +690,8 @@ fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(),
 
 fn cache_manifest_fingerprint(path: &Path) -> Result<String, String> {
     let mut hasher = blake3::Hasher::new();
-    update_cache_manifest(path, &mut hasher)?;
+    let mut remaining_entries = MAX_CACHE_MANIFEST_ENTRIES;
+    update_cache_manifest(path, &mut hasher, &mut remaining_entries)?;
     Ok(hasher.finalize().to_hex().to_string())
 }
 
@@ -698,6 +709,9 @@ pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
     } else {
         metadata.len()
     };
+    if bytes > MAX_CACHE_MANIFEST_BYTES {
+        return Err("cache-target-manifest-byte-limit-exceeded".into());
+    }
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
     let manifest_fingerprint = cache_manifest_fingerprint(path)?;
@@ -736,12 +750,21 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
         return Err("cache-target-limit-exceeded".into());
     }
     let mut targets = Vec::with_capacity(paths.len());
+    let mut manifest_bytes = 0u64;
     for path in paths {
         if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
         match cache_target(&path) {
-            Ok(target) => targets.push(target),
+            Ok(target) => {
+                manifest_bytes = manifest_bytes
+                    .checked_add(target.bytes)
+                    .ok_or_else(|| "cache-target-manifest-byte-limit-exceeded".to_string())?;
+                if manifest_bytes > MAX_CACHE_MANIFEST_BYTES {
+                    return Err("cache-target-manifest-byte-limit-exceeded".into());
+                }
+                targets.push(target);
+            }
             Err(error) if error == "cache-target-type-unsupported" => continue,
             Err(error) => return Err(error),
         }
@@ -937,6 +960,21 @@ mod tests {
                 .bytes,
             4
         );
+    }
+
+    #[test]
+    fn cache_manifest_entry_budget_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("one.bin"), b"one").unwrap();
+        let mut hasher = blake3::Hasher::new();
+        let mut remaining_entries = 1;
+
+        let error = update_cache_manifest(&root, &mut hasher, &mut remaining_entries)
+            .expect_err("manifest traversal must stop when its entry budget is exhausted");
+
+        assert_eq!(error, "cache-target-manifest-entry-limit-exceeded");
     }
 
     #[test]
