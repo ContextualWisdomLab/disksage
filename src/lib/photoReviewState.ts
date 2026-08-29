@@ -25,3 +25,20 @@ export const syncPhotoCandidatePaths = (
 ): string[] => source === "manual"
   ? [...currentPaths]
   : groups.flatMap((group) => group.paths);
+
+const manualAuthorityRoot = (path: string): string | null => {
+  const normalized = path.replaceAll("\\", "/");
+  const drive = normalized.match(/^([A-Za-z]:)(?:\/|$)/);
+  if (drive) return drive[1].toLowerCase();
+  if (normalized.startsWith("//")) {
+    const parts = normalized.slice(2).split("/").filter(Boolean);
+    return parts.length >= 2 ? `//${parts[0].toLowerCase()}/${parts[1].toLowerCase()}` : null;
+  }
+  return normalized.startsWith("/") ? "/" : null;
+};
+
+export const manualPhotoSelectionCompatible = (paths: string[]): boolean => {
+  if (paths.length === 0) return false;
+  const root = manualAuthorityRoot(paths[0]);
+  return root !== null && paths.every((path) => manualAuthorityRoot(path) === root);
+};

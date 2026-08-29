@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import {
+    manualPhotoSelectionCompatible,
     quarantineApprovalReady,
     selectionsForGroups,
     syncPhotoCandidatePaths,
@@ -75,6 +76,10 @@
     const chosen = await open({ multiple: true, directory: false, filters: [{ name: "사진", extensions: ["png"] }] });
     if (!chosen) return;
     const paths = Array.isArray(chosen) ? chosen : [chosen];
+    if (!manualPhotoSelectionCompatible(paths)) {
+      error = "한 번에 같은 디스크나 네트워크 공유에 있는 PNG만 선택하세요. 다른 위치는 따로 검토하세요.";
+      return;
+    }
     manualSelectionRoot = scannedRoot;
     selectedPaths = paths;
     clearReviewState();
