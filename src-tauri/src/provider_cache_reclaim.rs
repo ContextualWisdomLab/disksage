@@ -11,7 +11,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -77,6 +76,7 @@ pub struct ProviderCacheCleanupItemResult {
     pub path: String,
     pub completed: bool,
     pub error: Option<String>,
+    pub audit_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -250,21 +250,36 @@ fn plist_version(path: &Path) -> Option<String> {
 }
 
 fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, String> {
-    let version = Command::new(podman_bin)
-        .arg("--version")
-        .output()
-        .map_err(|_| "podman-recreation-version-unavailable")?;
-    if !version.status.success() {
-        return Err("podman-recreation-version-failed".into());
+    let version = crate::podman_reclaim::command_text(
+        podman_bin,
+        &["--version"],
+        crate::podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+        "podman-recreation-version",
+    )
+    .map_err(|error| {
+        if error.starts_with("podman-recreation-version-failed:") {
+            "podman-recreation-version-failed"
+        } else {
+            "podman-recreation-version-unavailable"
+        }
+    })?;
+    if version.trim().is_empty() {
+        return Err("podman-recreation-version-invalid".into());
     }
-    let inspect = Command::new(podman_bin)
-        .args(["machine", "inspect", machine])
-        .output()
-        .map_err(|_| "podman-recreation-machine-inspect-unavailable")?;
-    if !inspect.status.success() {
-        return Err("podman-recreation-machine-missing".into());
-    }
-    let value: serde_json::Value = serde_json::from_slice(&inspect.stdout)
+    let inspect = crate::podman_reclaim::command_text(
+        podman_bin,
+        &["machine", "inspect", machine],
+        crate::podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+        "podman-recreation-machine-inspect",
+    )
+    .map_err(|error| {
+        if error.starts_with("podman-recreation-machine-inspect-failed:") {
+            "podman-recreation-machine-missing"
+        } else {
+            "podman-recreation-machine-inspect-unavailable"
+        }
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&inspect)
         .map_err(|_| "podman-recreation-machine-inspect-invalid")?;
     let record = value
         .as_array()
@@ -286,8 +301,6 @@ fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, 
     if name != Some(machine) || !image_path.as_ref().is_some_and(|path| path.is_file()) {
         return Err("podman-recreation-active-image-unconfirmed".into());
     }
-    let version =
-        String::from_utf8(version.stdout).map_err(|_| "podman-recreation-version-invalid")?;
     Ok(format!(
         "{}|{}|{}|{}",
         podman_bin.display(),
@@ -446,6 +459,7 @@ fn write_immutable_receipt(
     requested: &[ProviderCacheCleanupRequest],
     rationale: &str,
     mode: ProviderCacheCleanupMode,
+    approval_phrase: &str,
     executed_at_ms: u64,
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(receipt_dir).map_err(|_| "provider-cache-receipt-directory-failed")?;
@@ -467,7 +481,7 @@ fn write_immutable_receipt(
         "schema_kind": "disksage.provider-cache-cleanup-receipt",
         "schema_version": SCHEMA_VERSION,
         "plan_fingerprint": plan.plan_fingerprint,
-        "exact_approval_phrase": plan.exact_approval_phrase,
+        "approval_phrase": approval_phrase,
         "requested": requested,
         "rationale": rationale,
         "authorized_at_ms": executed_at_ms,
@@ -495,7 +509,7 @@ fn permanently_purge_exact(
     candidate: &ProviderCacheCandidate,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let path = Path::new(&candidate.path);
     if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(&candidate.object_id) {
         return Err("provider-cache-object-identity-changed".into());
@@ -533,8 +547,17 @@ fn permanently_purge_exact(
         .map_err(|_| "provider-cache-permanent-delete-failed".to_string())
     };
     journal.outcome = if result.is_ok() { "ok" } else { "error" }.into();
-    crate::safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
-    result
+    finish_purge_result(
+        result,
+        crate::safety::journal_append(journal_path, &journal).map_err(|error| error.to_string()),
+    )
+}
+
+fn finish_purge_result(
+    deletion: Result<(), String>,
+    audit: Result<(), String>,
+) -> Result<Option<String>, String> {
+    deletion.map(|()| audit.err())
 }
 
 /// Re-plan and permanently remove only explicitly approved, exact regenerable caches.
@@ -590,13 +613,14 @@ pub fn execute(
         requested,
         rationale,
         mode,
+        confirmation_phrase,
         executed_at_ms,
     )?;
     let mut items = Vec::with_capacity(selected.len());
     for candidate in selected {
         let active =
             crate::cloud_local_eviction::observe_path_active_use(Path::new(&candidate.path));
-        let outcome = if active_use_safe(&active) {
+        let (outcome, audit_error) = if active_use_safe(&active) {
             match mode {
                 ProviderCacheCleanupMode::Trash => crate::safety::trash_delete_if_identity(
                     Path::new(&candidate.path),
@@ -605,18 +629,21 @@ pub fn execute(
                     journal_path,
                     executed_at_ms,
                 )
-                .map_err(|error| error.to_string()),
+                .map_err(|error| error.to_string())
+                .map(|()| None),
                 ProviderCacheCleanupMode::PermanentPurge => {
                     permanently_purge_exact(&candidate, journal_path, executed_at_ms)
                 }
             }
         } else {
             Err("provider-cache-active-use-or-evidence-gap".into())
-        };
+        }
+        .map_or_else(|error| (Err(error), None), |audit_error| (Ok(()), audit_error));
         items.push(ProviderCacheCleanupItemResult {
             path: candidate.path,
             completed: outcome.is_ok(),
             error: outcome.err(),
+            audit_error,
         });
     }
     let completed_count = items.iter().filter(|item| item.completed).count();
@@ -704,6 +731,51 @@ mod tests {
         )
         .unwrap();
         assert_ne!(first.evidence_fingerprint, second.evidence_fingerprint);
+    }
+
+    #[test]
+    fn completed_purge_surfaces_post_delete_audit_failure_separately() {
+        assert_eq!(
+            finish_purge_result(Ok(()), Err("journal-full".into())),
+            Ok(Some("journal-full".into()))
+        );
+        assert_eq!(
+            finish_purge_result(Err("delete-failed".into()), Ok(())),
+            Err("delete-failed".into())
+        );
+    }
+
+    #[test]
+    fn receipt_records_the_approval_for_the_selected_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = ProviderCacheReclaimPlan {
+            schema_version: SCHEMA_VERSION,
+            platform: "test".into(),
+            observed_at_ms: 1,
+            installed_edge_version: None,
+            podman_machine_present: false,
+            podman_recreation_source: None,
+            evidence_complete: true,
+            candidates: Vec::new(),
+            issues: Vec::new(),
+            plan_fingerprint: "fingerprint".into(),
+            exact_approval_phrase: Some("permanent phrase".into()),
+            trash_approval_phrase: Some("trash phrase".into()),
+        };
+        let path = write_immutable_receipt(
+            temp.path(),
+            &plan,
+            &[],
+            "verified cache",
+            ProviderCacheCleanupMode::Trash,
+            "trash phrase",
+            1,
+        )
+        .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["approval_phrase"], "trash phrase");
+        assert!(value.get("exact_approval_phrase").is_none());
     }
 
     #[cfg(unix)]

@@ -583,7 +583,7 @@ fn command_capture(
     })
 }
 
-fn command_text(
+pub(crate) fn command_text(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
