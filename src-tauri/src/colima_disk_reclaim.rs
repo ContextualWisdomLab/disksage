@@ -183,7 +183,6 @@ fn fingerprint(plan: &ColimaDiskReclaimPlan) -> String {
         &plan.active_workload_evidence_complete.to_string(),
     );
     frame(&mut hash, &format!("{:?}", plan.active_workloads_present));
-    frame(&mut hash, &plan.observed_at_ms.to_string());
     hash.finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -351,10 +350,25 @@ mod tests {
         permissions.set_mode(0o700);
         std::fs::set_permissions(&bin, permissions).unwrap();
 
-        let plan = plan_with_runner(&NativeColimaRunner, &bin, &home, "work", 100).unwrap();
-        assert_eq!(plan.vm_type, "qemu");
-        assert_eq!(plan.runtime_state, "Stopped");
-        assert!(!plan.execution_available);
+        let reviewed = plan_with_runner(&NativeColimaRunner, &bin, &home, "work", 100).unwrap();
+        assert_eq!(reviewed.vm_type, "qemu");
+        assert_eq!(reviewed.runtime_state, "Stopped");
+        assert!(!reviewed.execution_available);
+
+        // A later CLI invocation re-observes the provider. The evidence fingerprint remains
+        // reviewable when the bound profile, runtime, allocation, and disk identity are unchanged.
+        let live = plan_with_runner(&NativeColimaRunner, &bin, &home, "work", 200).unwrap();
+        assert_eq!(live.plan_fingerprint, reviewed.plan_fingerprint);
+        let approval = ColimaDiskReclaimApproval {
+            plan_fingerprint: reviewed.plan_fingerprint,
+            exact_approval_phrase: reviewed.exact_approval_phrase,
+            approved_at_ms: 200,
+            approved_by: "human:operator".into(),
+            rationale: "reviewed the exact stopped profile and backing disk".into(),
+        };
+        let receipt = execute_unavailable(&live, &approval, 200).unwrap();
+        assert!(!receipt.executed);
+        assert_eq!(receipt.outcome, "native-stopped-compaction-unavailable");
     }
 
     #[test]
