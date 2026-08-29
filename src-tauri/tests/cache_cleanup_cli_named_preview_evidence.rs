@@ -72,3 +72,40 @@ fn named_cache_dry_run_publishes_target_manifest_and_active_use_evidence() {
 
     fs::remove_dir_all(root).expect("remove fixture");
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn named_app_support_preview_and_execution_preserve_unrelated_siblings() {
+    let root = unique_temp_dir();
+    let home = root.join("home");
+    let cache_root = home.join("Library/Application Support/Caches");
+    let updater = cache_root.join("cursor-updater/pending");
+    let unrelated = cache_root.join("unrelated-cache");
+    fs::create_dir_all(&updater).unwrap();
+    fs::create_dir_all(&unrelated).unwrap();
+    fs::write(updater.join("update-info.json"), b"{}").unwrap();
+    fs::write(updater.join("update.zip"), b"archive").unwrap();
+    fs::write(unrelated.join("keep.bin"), b"keep").unwrap();
+    let journal = root.join("evidence/journal.jsonl");
+
+    let preview = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .args(["--cache-id", "macos-app-support-cache"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{}", String::from_utf8_lossy(&preview.stderr));
+    let preview: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["cache_targets"].as_array().unwrap().len(), 1);
+    assert!(preview["cache_targets"][0]["path"].as_str().unwrap().ends_with("cursor-updater"));
+
+    let execution = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .args(["--execute", "--cache-id", "macos-app-support-cache", "--journal-path"])
+        .arg(&journal)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(execution.status.success(), "{}", String::from_utf8_lossy(&execution.stderr));
+    assert!(!cache_root.join("cursor-updater").exists());
+    assert_eq!(fs::read(unrelated.join("keep.bin")).unwrap(), b"keep");
+    fs::remove_dir_all(root).unwrap();
+}

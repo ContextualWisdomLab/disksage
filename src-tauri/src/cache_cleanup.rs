@@ -296,7 +296,7 @@ fn active_use_blocker(
     }
 }
 
-fn automatic_cache_targets(
+pub(crate) fn catalog_cache_targets(
     cache_id: &str,
     path: &Path,
 ) -> Result<Vec<rules::CacheTarget>, String> {
@@ -351,7 +351,7 @@ fn clean_cache_contents_inner_for_id(
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
     let mut current = match cache_id {
-        Some(cache_id) => automatic_cache_targets(cache_id, dir)?,
+        Some(cache_id) => catalog_cache_targets(cache_id, dir)?,
         None => rules::cache_targets(dir)?,
     };
     sort_targets(&mut current);
@@ -452,7 +452,7 @@ pub(crate) fn clean_regenerable_caches_inner(
         })
         .flat_map(|candidate| {
             let path = std::path::PathBuf::from(&candidate.path);
-            match automatic_cache_targets(&candidate.id, &path) {
+            match catalog_cache_targets(&candidate.id, &path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
                     clean_cache_contents_inner_for_id(
@@ -509,8 +509,16 @@ pub fn clean_catalog_cache_headless(
     }
     let path = rules::cache_catalog_path(&bases, cache_id)
         .ok_or_else(|| "cache-id-not-catalogued".to_string())?;
-    let targets = rules::cache_targets(&path)?;
-    clean_cache_contents_inner(&bases, &path, &targets, journal_path, now_ms, permanent)
+    let targets = catalog_cache_targets(cache_id, &path)?;
+    clean_cache_contents_inner_for_id(
+        &bases,
+        &path,
+        &targets,
+        journal_path,
+        now_ms,
+        permanent,
+        Some(cache_id),
+    )
 }
 
 /// Move only inactive, unchanged npx environments to OS Trash. Package downloads are regenerable
@@ -741,7 +749,7 @@ mod tests {
         fs::create_dir(&unrelated).unwrap();
         fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
 
-        let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+        let targets = catalog_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("cursor-updater"));
     }
@@ -760,7 +768,7 @@ mod tests {
         fs::create_dir(&unrelated).unwrap();
         fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let targets = automatic_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+        let targets = catalog_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
 
         fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(targets.len(), 1);
@@ -780,7 +788,7 @@ mod tests {
         let unrelated = root.join("unrelated-cache");
         fs::create_dir(&unrelated).unwrap();
         fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
-        let targets = automatic_cache_targets("macos-app-support-cache", &root).unwrap();
+        let targets = catalog_cache_targets("macos-app-support-cache", &root).unwrap();
 
         let results = clean_cache_contents_inner_for_id(
             &bases,

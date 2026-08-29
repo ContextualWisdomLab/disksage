@@ -90,7 +90,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             Some("--npx-only") => npx_only = true,
             Some("--cache-id") => {
                 if cache_id.is_some() {
-                    return Err("--cache-id may be provided once".into());
+                    return Err("--cache-id may be supplied only once".into());
                 }
                 cache_id = Some(
                     args.next()

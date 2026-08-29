@@ -34,7 +34,7 @@ pub fn preview_catalog_cache_headless(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(_) => return Err("cache-target-metadata-unavailable".into()),
     }
-    let targets = crate::rules::cache_targets(&root)?;
+    let targets = crate::cache_cleanup::catalog_cache_targets(cache_id, &root)?;
     if targets.len() > MAX_PREVIEW_TARGETS {
         return Err("cache-preview-target-limit-exceeded".into());
     }
