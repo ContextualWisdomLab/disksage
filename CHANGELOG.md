@@ -66,7 +66,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   calls consume one shared timeout budget rather than multiplying the configured wait per branch.
 - Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
   library selected as the scan root. External files remain auditable without interpreting Photos'
-  private databases and derivatives as independent duplicate-delete candidates.
+  private databases and derivatives as independent duplicate-delete candidates. Reclaim also
+  canonicalizes every approved member immediately before mutation and fails closed if a replaced
+  parent symlink redirects it outside the audited root or into a managed Photos library.
+- Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
+  removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
+  each pull-request lookup.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution

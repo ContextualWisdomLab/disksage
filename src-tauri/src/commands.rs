@@ -21,6 +21,7 @@ use crate::dev_artifacts;
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
+    git_worktree_github_evidence,
     icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
@@ -995,43 +996,21 @@ pub async fn plan_stale_git_worktrees(
     stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let closed_heads = if include_closed_pull_requests {
-            git_worktree::github_closed_pull_request_heads(
-                Path::new(&repository_root),
-                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            git_worktree::github_stale_open_pull_request_heads(
-                Path::new(&repository_root),
-                cutoff_ms,
-                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                git_worktree::github_pull_request_commit_membership(
-                    Path::new(&repository_root),
-                    git_worktree::GitWorktreeAuditOptions::default(),
-                )?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            git_worktree::GitWorktreeAuditOptions::default(),
+            options,
             cloud::system_now_ms(),
         )
     })
@@ -1071,41 +1050,18 @@ pub async fn remove_stale_git_worktrees(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let closed_heads = if include_closed_pull_requests {
-            git_worktree::github_closed_pull_request_heads(
-                Path::new(&repository_root),
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            git_worktree::github_stale_open_pull_request_heads(
-                Path::new(&repository_root),
-                cutoff_ms,
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                git_worktree::github_pull_request_commit_membership(
-                    Path::new(&repository_root),
-                    options,
-                )?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),

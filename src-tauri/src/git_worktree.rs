@@ -2770,35 +2770,18 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
         .map(|binding| binding.reference_ref.clone())
         .collect();
     let audit_live = |observed_at_ms| {
-        let closed_heads = if include_closed_pull_requests {
-            github_closed_pull_request_heads_with_options(&repository_root, options)?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            github_stale_open_pull_request_heads(
-                &repository_root,
-                cutoff_ms,
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                github_pull_request_commit_membership(&repository_root, options)?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let evidence = crate::git_worktree_github_evidence::collect(
+            &repository_root,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         audit_git_worktrees_with_pull_request_membership(
             &repository_root,
             &reference_names,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             observed_at_ms,
