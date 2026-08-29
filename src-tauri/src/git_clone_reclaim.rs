@@ -691,6 +691,18 @@ fn has_bounded_standalone_git_directory(repository_root: &Path, common_dir: &Pat
         && std::fs::canonicalize(git_entry).ok().as_deref() == Some(common_dir)
 }
 
+/// Conservatively recognize a checked-out branch as the provider-observed default branch.
+///
+/// The evidence reference has the form `refs/remotes/<remote>/<branch>`. Remote names are not a
+/// safe delimiter because Git permits `/` in them, so splitting at an arbitrary slash can erase a
+/// branch prefix such as `release/2026`. Requiring the complete local branch as the reference
+/// suffix preserves exact slash-containing names; any ambiguous suffix match protects the clone.
+fn default_branch_reference_protects(reference: &str, local_branch: &str) -> bool {
+    reference
+        .strip_prefix("refs/remotes/")
+        .is_some_and(|remote_reference| remote_reference.ends_with(&format!("/{local_branch}")))
+}
+
 /// Validate the append-only journal destination before the source clone can be moved.
 ///
 /// The journal is part of the rollback contract. It must live outside the clone being moved,
@@ -860,10 +872,10 @@ fn plan_git_clone_reclaim_with_authority_and_membership(
         false
     };
     let short_branch = branch.strip_prefix("refs/heads/").unwrap_or(&branch);
-    let observed_default_branch =
-        default_branch_evidence.and_then(|evidence| evidence.reference.rsplit('/').next());
-    let default_branch_protected =
-        matches!(short_branch, "main" | "develop") || observed_default_branch == Some(short_branch);
+    let default_branch_protected = matches!(short_branch, "main" | "develop")
+        || default_branch_evidence.is_some_and(|evidence| {
+            default_branch_reference_protects(&evidence.reference, short_branch)
+        });
     let mut blockers = Vec::new();
     if !report.evidence_complete {
         blockers.push("git-clone-audit-evidence-incomplete".into());
@@ -1923,6 +1935,60 @@ mod tests {
         assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
         assert!(plan.head_is_authoritative_pull_request_head_ancestor);
         assert!(!plan.default_branch_protected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slash_containing_provider_default_branch_is_always_protected() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"default\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "default"]);
+        git(repository.path(), &["switch", "-c", "release/2026"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"release\n").unwrap();
+        git(repository.path(), &["commit", "-am", "release"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/release/2026", &head],
+        );
+        let closed =
+            ClosedPullRequestHeads::from([("refs/heads/release/2026".into(), head.clone())]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([head.clone()]),
+            ..PullRequestCommitMembership::default()
+        };
+        let plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &closed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&DefaultBranchEvidence {
+                reference: "refs/remotes/origin/release/2026".into(),
+                oid: head,
+                observed_at_ms: 10,
+            }),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+
+        assert!(plan.default_branch_protected);
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-default-branch-protected".into()));
     }
 
     #[cfg(unix)]
