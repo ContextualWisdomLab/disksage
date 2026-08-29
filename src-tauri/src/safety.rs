@@ -636,13 +636,22 @@ pub fn trash_delete_if_identity(
         journal_path,
         now_ms,
     )?;
-    if let Some(error) = outcome.terminal_journal_error {
-        return Err(SafetyError::Journal(error));
+    completed_trash_move(outcome)
+}
+
+/// Preserve the mutation result for legacy callers that expose only success or failure.
+///
+/// Callers that can publish post-mutation warnings use `trash_delete_if_identity_with_outcome`.
+/// A terminal journal or empty staging-directory cleanup failure cannot retroactively make a
+/// completed OS Trash move false.
+fn completed_trash_move(outcome: TrashDeleteOutcome) -> Result<(), SafetyError> {
+    if outcome.moved_to_trash {
+        Ok(())
+    } else {
+        Err(SafetyError::Trash(
+            "trash move did not complete; rescan before cleanup".into(),
+        ))
     }
-    if let Some(error) = outcome.staging_cleanup_error {
-        return Err(SafetyError::Trash(error));
-    }
-    Ok(())
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -920,6 +929,24 @@ mod tests {
             outcome.terminal_journal_error.as_deref(),
             Some("저널 기록 실패: disk-full")
         );
+    }
+
+    #[test]
+    fn legacy_result_does_not_relabel_completed_move_as_failure() {
+        for outcome in [
+            TrashDeleteOutcome {
+                moved_to_trash: true,
+                terminal_journal_error: Some("journal failed".into()),
+                staging_cleanup_error: None,
+            },
+            TrashDeleteOutcome {
+                moved_to_trash: true,
+                terminal_journal_error: None,
+                staging_cleanup_error: Some("staging cleanup failed".into()),
+            },
+        ] {
+            assert!(completed_trash_move(outcome).is_ok());
+        }
     }
 
     #[test]
