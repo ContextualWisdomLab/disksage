@@ -23,24 +23,26 @@ The contract comes from `docs/product-requirements.md` and ADR-0001 through ADR-
 
 | PR | Exact head | Base | State | Responsibility still open |
 | --- | --- | --- | --- | --- |
-| #247 | `629cd15cec2d9c7f154a658b64a86d95b84bdfd5` | `main` | draft, blocked | Explain pending iCloud indexing without granting transfer authority |
-| #263 | `0476e434ef63836ab3932b07fc45ec8f66c88265` | `main` | ready, blocked | Fail permanent cache-Trash deletion closed |
-| #266 | `6bc2e9ee0f95caf061d987395f46cfe5c8502bd0` | `main` | ready, blocked | Prevent placeholder materialization during ancestor scans |
-| #267 | `2bd999aa4cf92f5ee0419cacaafc18ae1b7d1a05` | `main` | ready, blocked | Runtime-agnostic container orphan reclamation |
-| #279 | `acf8d948c3eab99c2314f4f53a0ebb664297012e` | `feat/container-orphan-reclaim-runtime-agnostic-v1` | ready, unstable | Reclaim worktrees only with merged/closed exact-head authority |
-| #282 | `7a48cc63caab2da7bef16914ec81e578f72e0939` | `feat/merged-worktree-head-authority-v1` | ready, unknown | Repair Podman storage before orphan reclaim |
+| #247 | `ff70f8159b82f05593c2ae7611ab3a5229ae886f` | `main` | draft, blocked | Explain pending iCloud indexing without granting transfer authority |
+| #263 | `adf22e96837377d279d1bf9900e63ebfebce27ef` | `main` | ready, blocked | Keep permanent cache-Trash deletion unavailable and exclude provider-managed cache roots |
+| #266 | `fa463566759ba8943d435b05bbed6aff6b896cc0` | `main` | ready, blocked | Prevent placeholder materialization and withhold rejected provider roots from cleanup flows |
+| #267 | `26339648cc848228ec38803568c491b40f8782fb` | `main` | ready, blocked | Runtime-agnostic container orphan reclamation |
+| #282 | `1a16e041e84df9b5748a67594524a24f8fb316d5` | `feat/container-orphan-reclaim-runtime-agnostic-v1` | ready, unstable | Repair Podman storage before orphan reclaim |
 | #285 | `52acc2c8d707e7a8cb18e85334b3216ad5149136` | `feat/podman-storage-repair-v1` | ready, unstable | Gate native uv-cache pruning |
-| #287 | `9894bc732bd0fe701fb509469b07d222ab69f689` | `feat/podman-storage-repair-v1` | ready, dirty | Preserve stopped containers with storage lineage |
-| #293 | `395be7143b37330de1c3dd13b0d8928dc651a1da` | `feat/native-uv-cache-reclaim-v1` | ready, unknown | Reclaim inactive Gradle regeneration roots |
-| #295 | `c4205504a5d9c0fc937b5e4e5c2cc0912e63b6ce` | `feat/gradle-cache-reclaim-v1` | ready, unstable | Reclaim observed macOS generated caches |
+| #287 | `57ce1c420f05610fcda986330cf195c77e00078b` | `feat/podman-storage-repair-v1` | ready, dirty | Preserve stopped containers with storage lineage |
+| #293 | `58d7e6e65cf9bcfca58ae9a24b759224ac6a3a34` | `feat/native-uv-cache-reclaim-v1` | ready, dirty | Reclaim inactive Gradle regeneration roots |
+| #295 | `9ac7cea769aac0cb19b9e9c7ee299e69385563bf` | `feat/gradle-cache-reclaim-v1` | ready, unstable | Reclaim observed macOS generated caches |
 | #298 | `57cf2e868e49f960da70eb14bff4d14e2c5280d7` | `main` | ready, blocked | Bound test-runner disk use |
-| #303 | `5af4e9b89f52cc53694e0b203b023c6744004853` | `main` | ready, blocked | Evidence-bound provider-cache reclaim |
-| #304 | `f3e46c500f27e8b7728979d676089bd9fdd43a40` | `main` | ready, unknown | Diagnose OneDrive provider-cache pressure without deleting provider state |
-| #305 | `b8a0d3a2978325499028e9f1efbaec4576c63a34` | `main` | ready, blocked | Reclaim explicitly identified PostgreSQL test clusters |
-| #306 | `2d7baf72a39c1188463438e164c1bfb2696fce2e` | `main` | ready, blocked | Reclaim Python tool caches |
-| #308 | `a71d4d78d6969c24aa272ee1371006f92915f67b` | `main` | ready, blocked | Bind release verification to platform artifact namespaces |
+| #303 | `6593d8ad42483ad69a79ff7c5e735afd1fc33c55` | `main` | ready, blocked | Evidence-bound provider-cache reclaim |
+| #304 | `f3e46c500f27e8b7728979d676089bd9fdd43a40` | `main` | ready, blocked | Diagnose OneDrive provider-cache pressure without deleting provider state |
+| #305 | `f28d771eeb7879147944e0829bdb1bb2b45e792e` | `main` | ready, blocked | Reclaim explicitly identified PostgreSQL test clusters |
+| #306 | `bb22a5b3683227477e4606d2c1a45c129efbe333` | `main` | ready, blocked | Reclaim Python tool caches while excluding provider-managed roots |
+| #308 | `67306e9c262d76d721edde8edf2c38a96e125956` | `main` | ready, blocked | Bind release verification to platform artifact namespaces |
+| #309 | `30d3996b679cf2c9b4b2be0821f1f6b962e3910a` | `main` | ready, blocked | Reclaim selected development build roots |
+| #310 | `9f8db866f617ad85a35640151276af524ccc51dc` | `main` | ready, blocked | Add read-only, fail-closed Colima disk reclaim planning |
+| #311 | `9698b4527a7387f362af267a72d660c060eeedf0` | `feat/gradle-cache-reclaim-v1` | ready, unstable | Plan and Trash standalone clones only with closed/merged exact authority |
 
-PR #258 itself was observed at predecessor `1ee148690aeb56dffe6ef3de972f55b05e33f5d2`, open, non-draft, `BLOCKED`, and `REVIEW_REQUIRED`. Its 2026-08-26 checks are predecessor evidence only. The live GitHub head after this document changes is authoritative.
+PR #258 itself was observed before this edit at `2a2ad3d600b06b4b9ed2af6bc36957cb64b89438`, open, non-draft, `BLOCKED`, and `REVIEW_REQUIRED`. The live GitHub head after this document changes is authoritative.
 
 ## Bounded operational observations
 
@@ -48,7 +50,7 @@ These diagnose pressure; none authorizes mutation. Private evidence and receipt 
 
 | Observation | Bounded result | Consequence |
 | --- | --- | --- |
-| APFS availability, 2026-08-30 | `110,427,796 KiB` available | The 300 GB product goal is not met. Re-sample before and after any approved action. |
+| APFS availability, 2026-08-30 03:54:59 KST | `113,410,820 KiB` available; `+2,983,024 KiB` versus the earlier same-day `110,427,796 KiB` sample | The fluctuation is not attributable to DiskSage and is not proof of reclaim. The 300 GB product goal is not met; re-sample immediately before and after each approved action. |
 | OneDrive temporary storage, 2026-08-30 | `17,671,028 KiB` allocated; OneDrive processes present | Classify as provider-cache pressure. Age alone cannot authorize deletion. PR #304 owns diagnosis. |
 | Latest retained complete iCloud redacted audit | 120 items, 0 eligible local-copy evictions | There is no retained iCloud eviction cohort. Re-run a complete bounded public-Foundation inventory before planning; `is_uploaded=false` remains a veto. |
 | Retained OneDrive redacted bounded audit | top-128 cohort allocated `5,272,006,656 B`; not whole-root authority | Historical inventory is not a current plan. Require fresh native state, fingerprint, bounded approval, and postcondition. Temporary storage is not this authority. |
@@ -62,7 +64,10 @@ These diagnose pressure; none authorizes mutation. Private evidence and receipt 
 | P0 | Provider pressure can be visible while safe local-copy eviction is zero or stale. | iCloud retained evidence has 0 eligible items; OneDrive inventory is historical and temporary storage lacks user-file authority; Google Drive has 0 meaningful candidates. | UI distinguishes sync incomplete, provider-cache pressure, local-copy eligibility, and no meaningful reclaim; it shows evidence time and only the next admissible action. |
 | P0 | Scanning an ancestor of a provider root may materialize placeholders. | PR #266 remains open. | A fixture proves managed descendants are pruned or queried through a non-materializing capability before regular-file reads. |
 | P0 | Container and generated-cache reclaim is fragmented across stacks. | #267/#282/#285/#287/#293/#295 and #303/#305/#306 are not integrated into `main`. | Each domain reports identity, active-use/lineage blockers, dry-run bytes, bounded recovery semantics, journal, and APFS postcheck; bases merge in order. |
-| P1 | Merged/closed worktree cleanup is not shipped end to end. | #279 is stacked and unstable. | Re-resolve remote PR state, commit reachability, dirty/untracked state, and worktree identity immediately before bounded removal; uncertainty fails closed. |
+| P0 | Virtual-machine disk reclaim is incomplete. | Podman work is split across #267/#282/#287; #310 is Colima planning only. No Parallels inventory, compaction executor, recovery receipt, or open owning PR was found. | Each runtime first proves ownership, stopped/idle state, sparse-image identity and supported native compaction semantics; dry-run and post-action physical-byte evidence remain runtime-specific. |
+| P0 | Photo quality-aware duplicate cleanup is absent. | Current code groups byte-identical files by size, prefix BLAKE3, and full BLAKE3. It has no perceptual grouping, decoded-image quality measurement, or evidence-backed keeper selection; the [exact-duplicate design](superpowers/specs/2026-08-04-exact-duplicate-audit-design.md) does not claim those features. | A research-backed photo-specific ADR defines perceptual equivalence, quality measurements and tie handling; fixtures retain the measurably better source and ambiguous groups remain review-only. |
+| P1 | Merged/closed worktree and standalone-clone cleanup are not shipped end to end. | The earlier worktree PR #279 is no longer open, but its capability is not on protected `main`; standalone clone lifecycle #311 is stacked and unstable. | Re-resolve remote PR state, default branch, commit reachability, dirty/untracked state, active use and filesystem identity immediately before Trash staging; uncertainty fails closed. |
+| P1 | `/tmp` and tool-cache reclaim is only partially integrated. | Protected `main` has catalogued Trash-based cache cleanup, while #263/#293/#295/#306/#309 remain open. None of these open heads is integrated merely because a focused test passed. | Current catalog identity, provider exclusion, active-use evidence, exact approval, Trash journal/undo and APFS postcheck are revalidated on the final integrated head. |
 | P1 | Release evidence is not uniformly namespace-bound. | #308 remains blocked. | Verify every platform artifact, checksum, attestation, and help contract against its exact namespace and source head. |
 | P1 | Repository-wide 100% coverage/docstring/edge claims are not evidenced. | No complete measured report is present. | Publish per-language executable measurements and claim only measured scopes. |
 
@@ -79,11 +84,11 @@ These diagnose pressure; none authorizes mutation. Private evidence and receipt 
 
 ## PRD, ADR, and research consistency
 
-- `docs/product-requirements.md` is the PRD. Its fail-closed state machine governs this baseline; an open PR title or historical observation does not override it.
-- ADR-0001 defines provider evidence and eviction gates; ADR-0002 separates cache reclaim; ADR-0004 bounds maintenance commands; ADR-0006/0007 govern redacted, temporally coherent iCloud evidence.
-- ADR-0008 keeps the hourly agent loop read-only across foreign dependencies. ADR-0009 defines path-free lineage exports. ADR-0011 requires durable failed-copy evidence and placeholder-safe adoption.
+- [`docs/product-requirements.md`](product-requirements.md) is the PRD. Its fail-closed state machine governs this baseline; an open PR title or historical observation does not override it.
+- [ADR-0001](architecture/adr/0001-cloud-offload-goal-state.md) defines exact-copy evidence and sync-gated eviction; [ADR-0002](architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md) separates cache reclaim; [ADR-0004](architecture/adr/0004-bounded-maintenance-command-execution.md) bounds maintenance commands; [ADR-0006](architecture/adr/0006-redacted-icloud-health-evidence.md) and [ADR-0007](architecture/adr/0007-pre-copy-evidence-cohort.md) govern redacted, temporally coherent iCloud evidence.
+- [ADR-0008](architecture/adr/0008-hourly-loop-foreign-dependencies-read-only.md) keeps the hourly agent loop read-only across foreign dependencies. [ADR-0009](architecture/adr/0009-path-free-lineage-relation-graph.md) defines path-free lineage exports. [ADR-0011](architecture/adr/0011-cloud-transfer-failure-and-materialization.md) requires durable failed-copy evidence and placeholder-safe adoption.
 - Accepted ADR meaning is append-only. Contradictory implementation evidence requires a superseding ADR, not silent rewriting.
-- Standards and research citations remain in owning ADR/specification documents. This baseline adds no algorithm, weight, provider guarantee, or speculative architecture, so it makes no new research-adoption claim.
+- Standards and APA 7th research citations remain in owning ADR/specification documents. The photo-quality row deliberately records a research/ADR adoption gap rather than selecting an uncited perceptual metric or arbitrary quality weight. This baseline adds no algorithm, weight, provider guarantee, or speculative architecture.
 
 ## Loop completion rule
 
