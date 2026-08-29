@@ -604,6 +604,17 @@ fn valid_rationale(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+fn seal_receipt_file(file: &fs::File) -> Result<(), String> {
+    let mut permissions = file
+        .metadata()
+        .map_err(|_| "provider-cache-receipt-metadata-failed")?
+        .permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "provider-cache-receipt-permissions-failed".to_string())
+}
+
 fn write_immutable_receipt(
     receipt_dir: &Path,
     plan: &ProviderCacheReclaimPlan,
@@ -613,6 +624,31 @@ fn write_immutable_receipt(
     approval_phrase: &str,
     executed_at_ms: u64,
 ) -> Result<PathBuf, String> {
+    write_immutable_receipt_with_sealer(
+        receipt_dir,
+        plan,
+        requested,
+        rationale,
+        mode,
+        approval_phrase,
+        executed_at_ms,
+        seal_receipt_file,
+    )
+}
+
+fn write_immutable_receipt_with_sealer<F>(
+    receipt_dir: &Path,
+    plan: &ProviderCacheReclaimPlan,
+    requested: &[ProviderCacheCleanupRequest],
+    rationale: &str,
+    mode: ProviderCacheCleanupMode,
+    approval_phrase: &str,
+    executed_at_ms: u64,
+    sealer: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(&fs::File) -> Result<(), String>,
+{
     fs::create_dir_all(receipt_dir).map_err(|_| "provider-cache-receipt-directory-failed")?;
     #[cfg(unix)]
     {
@@ -650,22 +686,38 @@ fn write_immutable_receipt(
         .open(&path)
         .map_err(|_| "provider-cache-receipt-create-new-failed")?;
     use std::io::Write;
-    file.write_all(&body)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| "provider-cache-receipt-write-failed")?;
-    let mut permissions = file
-        .metadata()
-        .map_err(|_| "provider-cache-receipt-metadata-failed")?
-        .permissions();
-    permissions.set_readonly(true);
-    file.set_permissions(permissions)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| "provider-cache-receipt-permissions-failed")?;
-    #[cfg(unix)]
-    fs::File::open(receipt_dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| "provider-cache-receipt-directory-sync-failed")?;
+    let finalization = (|| -> Result<(), String> {
+        file.write_all(&body)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| "provider-cache-receipt-write-failed".to_string())?;
+        sealer(&file)?;
+        #[cfg(unix)]
+        fs::File::open(receipt_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "provider-cache-receipt-directory-sync-failed".to_string())?;
+        Ok(())
+    })();
+    drop(file);
+    if let Err(error) = finalization {
+        if fs::remove_file(&path).is_err() {
+            return Err("provider-cache-receipt-cleanup-failed".into());
+        }
+        #[cfg(unix)]
+        let _ = fs::File::open(receipt_dir).and_then(|directory| directory.sync_all());
+        return Err(error);
+    }
     Ok(path)
+}
+
+fn restore_staged_file_without_replacement(staged: &Path, original: &Path) -> Result<(), String> {
+    match fs::hard_link(staged, original) {
+        Ok(()) => fs::remove_file(staged)
+            .map_err(|_| "provider-cache-permanent-file-purge-restore-unlink-failed".to_string()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            Err("provider-cache-permanent-file-purge-restore-destination-exists".into())
+        }
+        Err(_) => Err("provider-cache-permanent-file-purge-restore-failed".into()),
+    }
 }
 
 fn permanently_purge_exact(
@@ -673,6 +725,18 @@ fn permanently_purge_exact(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Option<String>, String> {
+    permanently_purge_exact_with_after_stage(candidate, journal_path, now_ms, |_, _| Ok(()))
+}
+
+fn permanently_purge_exact_with_after_stage<F>(
+    candidate: &ProviderCacheCandidate,
+    journal_path: &Path,
+    now_ms: u64,
+    after_stage: F,
+) -> Result<Option<String>, String>
+where
+    F: FnOnce(&Path, &Path) -> Result<(), String>,
+{
     let path = Path::new(&candidate.path);
     if crate::safety::filesystem_object_id(path).ok().as_deref() != Some(&candidate.object_id) {
         return Err("provider-cache-object-identity-changed".into());
@@ -694,10 +758,28 @@ fn permanently_purge_exact(
     };
     crate::safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
     fs::rename(path, &staged).map_err(|_| "provider-cache-atomic-stage-failed")?;
+    if let Err(error) = after_stage(&staged, path) {
+        let metadata = fs::symlink_metadata(&staged)
+            .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
+        if metadata.is_file() {
+            restore_staged_file_without_replacement(&staged, path)?;
+        } else {
+            fs::rename(&staged, path)
+                .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+        }
+        return Err(error);
+    }
     let result = if crate::safety::filesystem_object_id(&staged).ok().as_deref()
         != Some(&candidate.object_id)
     {
-        let _ = fs::rename(&staged, path);
+        let metadata = fs::symlink_metadata(&staged)
+            .map_err(|_| "provider-cache-staged-metadata-unavailable")?;
+        if metadata.is_file() {
+            restore_staged_file_without_replacement(&staged, path)?;
+        } else {
+            fs::rename(&staged, path)
+                .map_err(|_| "provider-cache-permanent-directory-purge-restore-failed")?;
+        }
         Err("provider-cache-staged-identity-changed".to_string())
     } else {
         let metadata = fs::symlink_metadata(&staged)
@@ -718,19 +800,18 @@ fn permanently_purge_exact(
         } else {
             match file_sha256(&staged) {
                 Ok(digest) if digest == candidate.content_manifest => {
-                    fs::remove_file(&staged).map_err(|_| {
-                        if fs::rename(&staged, path).is_err() {
-                            "provider-cache-permanent-delete-failed-rollback-failed".to_string()
-                        } else {
-                            "provider-cache-permanent-delete-failed".to_string()
-                        }
-                    })
+                    match fs::remove_file(&staged) {
+                        Ok(()) => Ok(()),
+                        Err(_) => match restore_staged_file_without_replacement(&staged, path) {
+                            Ok(()) => Err("provider-cache-permanent-delete-failed".to_string()),
+                            Err(error) => Err(error),
+                        },
+                    }
                 }
-                _ => {
-                    fs::rename(&staged, path)
-                        .map_err(|_| "provider-cache-permanent-file-purge-restore-failed")?;
-                    Err("provider-cache-staged-content-changed".to_string())
-                }
+                _ => match restore_staged_file_without_replacement(&staged, path) {
+                    Ok(()) => Err("provider-cache-staged-content-changed".to_string()),
+                    Err(error) => Err(error),
+                },
             }
         }
     };
