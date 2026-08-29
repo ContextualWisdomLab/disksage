@@ -51,3 +51,60 @@ fn process_argument_path_prefix_does_not_block_unrelated_cache() {
         "a longer sibling path must not count as exact active use: {evidence:?}"
     );
 }
+
+#[test]
+fn option_assignment_exact_path_is_detected_as_active_use() {
+    let temp = tempfile::tempdir().expect("temporary active-use option fixture");
+    let marker = temp.path().join("npx-option-environment");
+    fs::create_dir(&marker).expect("create option-bound cache environment");
+    let argument = format!("--cache={}", marker.to_string_lossy());
+    let mut child = spawn_command_with_argument(&argument);
+
+    let evidence = active_use_evidence(&marker, 5_000, 64, false);
+    let child_pid = child.id();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(evidence.evidence_complete, "{evidence:?}");
+    assert!(evidence.active, "{evidence:?}");
+    assert!(
+        evidence.observed_pids.contains(&child_pid),
+        "--option=/target must preserve the active-use veto: {evidence:?}"
+    );
+}
+
+#[test]
+fn option_assignment_recursive_descendant_is_detected_without_sibling_prefix_false_positive() {
+    let temp = tempfile::tempdir().expect("temporary recursive option fixture");
+    let marker = temp.path().join("worktree");
+    let descendant = marker.join("nested");
+    let sibling = temp.path().join("worktree-old");
+    fs::create_dir_all(&descendant).expect("create recursive target fixture");
+    fs::create_dir(&sibling).expect("create sibling fixture");
+
+    let descendant_argument = format!("--cwd={}", descendant.to_string_lossy());
+    let mut descendant_child = spawn_command_with_argument(&descendant_argument);
+    let descendant_evidence = active_use_evidence(&marker, 5_000, 64, true);
+    let descendant_pid = descendant_child.id();
+    let _ = descendant_child.kill();
+    let _ = descendant_child.wait();
+
+    assert!(descendant_evidence.evidence_complete, "{descendant_evidence:?}");
+    assert!(
+        descendant_evidence.observed_pids.contains(&descendant_pid),
+        "--option=/target/child must count as recursive active use: {descendant_evidence:?}"
+    );
+
+    let sibling_argument = format!("--cwd={}", sibling.to_string_lossy());
+    let mut sibling_child = spawn_command_with_argument(&sibling_argument);
+    let sibling_evidence = active_use_evidence(&marker, 5_000, 64, true);
+    let sibling_pid = sibling_child.id();
+    let _ = sibling_child.kill();
+    let _ = sibling_child.wait();
+
+    assert!(sibling_evidence.evidence_complete, "{sibling_evidence:?}");
+    assert!(
+        !sibling_evidence.observed_pids.contains(&sibling_pid),
+        "--option=/target-old must not be accepted as a target boundary: {sibling_evidence:?}"
+    );
+}

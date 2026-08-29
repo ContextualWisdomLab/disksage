@@ -778,7 +778,7 @@ fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>,
     };
     let local_current =
         crate::provider_sync::parse_file_providerctl_local_current(&output, metadata.len())
-        .map_err(|error| format!("git-worktree-admin-metadata-{error}"))?;
+            .map_err(|error| format!("git-worktree-admin-metadata-{error}"))?;
     Ok((!local_current).then_some("git-worktree-admin-metadata-not-local-current"))
 }
 
@@ -985,7 +985,9 @@ fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
     (0..=command.len() - path.len()).any(|start| {
         let end = start + path.len();
         command[start..end] == *path
-            && (start == 0 || command[start - 1].is_ascii_whitespace() || command[start - 1] == b'=')
+            && (start == 0
+                || command[start - 1].is_ascii_whitespace()
+                || command[start - 1] == b'=')
             && (end == command.len()
                 || command[end].is_ascii_whitespace()
                 || (recursive && command[end] == b'/'))
@@ -2752,7 +2754,11 @@ mod tests {
         assert!(evidence.evidence_complete, "{evidence:?}");
         assert!(evidence.active, "{evidence:?}");
         assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
-        assert!(!command_contains_path(b"tool /cache/env-old", b"/cache/env", true));
+        assert!(!command_contains_path(
+            b"tool /cache/env-old",
+            b"/cache/env",
+            true
+        ));
         assert!(command_contains_path(
             b"tool /cache/env with spaces/child",
             b"/cache/env with spaces",
