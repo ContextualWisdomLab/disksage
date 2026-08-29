@@ -66,6 +66,7 @@ pub mod container_orphan_reclaim;
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
 pub mod container_orphan_public;
 pub mod duplicate_audit;
+pub mod photo_similarity_audit;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
 pub mod incomplete_download;

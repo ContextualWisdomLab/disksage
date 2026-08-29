@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Audit non-identical JPEG, PNG, TIFF, and WebP photo candidates with a standards-grounded DCT
+  perceptual hash, measured resolution/bit-depth/compression evidence, and an optional unweighted
+  Pareto-dominant survivor recommendation. Managed Photos libraries remain excluded; a user must
+  select one survivor per group before the other members can move reversibly to OS Trash under an
+  exact plan fingerprint and per-item receipt.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
