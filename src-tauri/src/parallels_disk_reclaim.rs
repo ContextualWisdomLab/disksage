@@ -346,4 +346,16 @@ mod tests {
         assert!(canonical.is_absolute());
         assert_eq!(canonical, std::fs::canonicalize(&relative).unwrap());
     }
+
+    #[test]
+    fn allocation_walk_fails_closed_when_time_budget_is_exhausted() {
+        let temp = tempfile::tempdir().unwrap();
+        let disk = temp.path().join("Disk.hdd");
+        std::fs::create_dir_all(&disk).unwrap();
+        std::fs::write(disk.join("descriptor.xml"), b"descriptor").unwrap();
+
+        let error = tree_allocation_with_limits(&disk, MAX_ENTRIES, Duration::ZERO).unwrap_err();
+
+        assert_eq!(error, "parallels-disk-scan-timeout");
+    }
 }
