@@ -284,6 +284,20 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
+fn raw_image_identity_error(
+    before: &crate::podman_reclaim::RawImageEvidence,
+    after: &crate::podman_reclaim::RawImageEvidence,
+) -> Option<&'static str> {
+    if before.path != after.path {
+        return Some("runtime-storage-image-changed");
+    }
+    match (&before.identity_sha256, &after.identity_sha256) {
+        (Some(before_identity), Some(after_identity)) if before_identity == after_identity => None,
+        (Some(_), Some(_)) => Some("runtime-storage-image-changed"),
+        _ => Some("runtime-storage-image-identity-unavailable"),
+    }
+}
+
 fn trim_command(runtime: RuntimeStorageKind) -> Vec<String> {
     match runtime {
         RuntimeStorageKind::PodmanMachine => vec![
@@ -555,24 +569,21 @@ pub fn execute_inactive_stop(
     };
     let (image_before_bytes, image_after_bytes, image_reclaimed, image_error) =
         match (image_before, image_after) {
-            (Ok(before), Ok(after)) if before.path == after.path => {
-                let before = before.allocated_bytes;
-                let after = after.allocated_bytes;
-                (
-                    before,
-                    after,
-                    before
-                        .zip(after)
-                        .map(|(before, after)| before.saturating_sub(after)),
-                    None,
-                )
-            }
-            (Ok(_), Ok(_)) => (
-                None,
-                None,
-                None,
-                Some("runtime-storage-image-changed".into()),
-            ),
+            (Ok(before), Ok(after)) => match raw_image_identity_error(&before, &after) {
+                None => {
+                    let before = before.allocated_bytes;
+                    let after = after.allocated_bytes;
+                    (
+                        before,
+                        after,
+                        before
+                            .zip(after)
+                            .map(|(before, after)| before.saturating_sub(after)),
+                        None,
+                    )
+                }
+                Some(error) => (None, None, None, Some(error.into())),
+            },
             (Err(error), _) | (_, Err(error)) => (None, None, None, Some(error)),
         };
     Ok(RuntimeStorageStopExecution {
@@ -738,24 +749,21 @@ pub fn execute_trim(
         runtime_image_reclaimed_bytes,
         runtime_image_evidence_error,
     ) = match (image_before, image_after) {
-        (Some(Ok(before)), Some(Ok(after))) if before.path == after.path => {
-            let before = before.allocated_bytes;
-            let after = after.allocated_bytes;
-            (
-                before,
-                after,
-                before
-                    .zip(after)
-                    .map(|(before, after)| before.saturating_sub(after)),
-                None,
-            )
-        }
-        (Some(Ok(_)), Some(Ok(_))) => (
-            None,
-            None,
-            None,
-            Some("runtime-storage-image-changed".into()),
-        ),
+        (Some(Ok(before)), Some(Ok(after))) => match raw_image_identity_error(&before, &after) {
+            None => {
+                let before = before.allocated_bytes;
+                let after = after.allocated_bytes;
+                (
+                    before,
+                    after,
+                    before
+                        .zip(after)
+                        .map(|(before, after)| before.saturating_sub(after)),
+                    None,
+                )
+            }
+            Some(error) => (None, None, None, Some(error.into())),
+        },
         (Some(Err(error)), _) | (_, Some(Err(error))) => (None, None, None, Some(error)),
         (None, None) => (None, None, None, None),
         _ => (
@@ -866,6 +874,26 @@ mod tests {
         let (captured, truncated) = drain_bounded(Cursor::new(input)).expect("reader succeeds");
         assert_eq!(captured.len(), MAX_CAPTURE_BYTES);
         assert!(truncated);
+    }
+
+    #[test]
+    fn changed_or_missing_backing_file_identity_is_not_comparable() {
+        let evidence = |identity: Option<&str>| crate::podman_reclaim::RawImageEvidence {
+            path: "/tmp/podman.raw".into(),
+            logical_bytes: 1024,
+            allocated_bytes: Some(512),
+            identity_sha256: identity.map(str::to_owned),
+            freshness_sha256: Some("freshness".into()),
+        };
+        assert_eq!(raw_image_identity_error(&evidence(Some("a")), &evidence(Some("a"))), None);
+        assert_eq!(
+            raw_image_identity_error(&evidence(Some("a")), &evidence(Some("b"))),
+            Some("runtime-storage-image-changed")
+        );
+        assert_eq!(
+            raw_image_identity_error(&evidence(None), &evidence(None)),
+            Some("runtime-storage-image-identity-unavailable")
+        );
     }
 
     #[test]
