@@ -66,6 +66,12 @@ fn main() {
         approved_by: actor,
         exact_phrase: phrase,
     };
+    if let Some(parent) = journal.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            eprintln!("저널 저장 위치를 준비하지 못했습니다. 쓰기 가능한 로컬 경로를 확인하세요.");
+            std::process::exit(2);
+        }
+    }
     let result = execute_candidate(&plan, &fingerprint, &approval, &journal, now_ms());
     println!(
         "{}",
