@@ -559,7 +559,7 @@ pub fn trash_delete_if_identity_with_outcome(
     )
 }
 
-fn trash_delete_if_identity_with_verifier<F>(
+pub(crate) fn trash_delete_if_identity_with_verifier<F>(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,

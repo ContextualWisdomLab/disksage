@@ -1202,12 +1202,62 @@ fn execute_git_clone_reclaim_with_authority(
     {
         return Err("git-clone-live-lease-mismatch".into());
     }
-    let trash_outcome = crate::safety::trash_delete_if_identity_with_outcome(
+    let live_root = PathBuf::from(&live.repository_root);
+    let evidence_matches = |candidate_root: &Path| {
+        let candidate = plan_git_clone_reclaim_with_authority_and_membership(
+            candidate_root,
+            retention_references,
+            &closed,
+            &stale_open,
+            &membership,
+            stale_open_pull_request_cutoff_ms,
+            default_branch_evidence,
+            options,
+            requested_at_ms,
+        );
+        let Ok(candidate) = candidate else { return false };
+        let same_authority = candidate.repository_object_id == live.repository_object_id
+            && candidate.head == live.head
+            && candidate.branch == live.branch
+            && candidate.closed_pull_request_head == live.closed_pull_request_head
+            && candidate.completed_pull_request_commit == live.completed_pull_request_commit
+            && candidate.open_pull_request_commit == live.open_pull_request_commit
+            && candidate.authoritative_pull_request_head == live.authoritative_pull_request_head
+            && candidate.head_is_authoritative_pull_request_head_ancestor
+                == live.head_is_authoritative_pull_request_head_ancestor
+            && candidate.stale_open_pull_request_head == live.stale_open_pull_request_head
+            && candidate.default_branch_reference == live.default_branch_reference
+            && candidate.default_branch_oid == live.default_branch_oid
+            && candidate.head_is_default_branch_ancestor == live.head_is_default_branch_ancestor
+            && candidate.default_branch_protected == live.default_branch_protected
+            && candidate.size == live.size
+            && candidate.checkout_lease_active == live.checkout_lease_active
+            && candidate.checkout_lease_fingerprint == live.checkout_lease_fingerprint
+            && candidate.authority_fingerprint == live.authority_fingerprint
+            && candidate.eligible_after_human_approval
+            && candidate.blockers.is_empty();
+        if !same_authority {
+            return false;
+        }
+        if candidate_root == live_root {
+            return true;
+        }
+        let active = git_worktree::active_use_evidence_with_command_path(
+            candidate_root,
+            &live_root,
+            options.command_timeout_ms,
+            options.max_active_pids,
+            true,
+        );
+        active.assessed && active.evidence_complete && !active.active
+    };
+    let trash_outcome = crate::safety::trash_delete_if_identity_with_verifier(
         Path::new(&live.repository_root),
         &live.repository_object_id,
         live.size.allocated_bytes,
         journal_path,
         requested_at_ms,
+        evidence_matches,
     )
     .map_err(|error| format!("git-clone-trash-failed:{error}"))?;
     if !trash_outcome.moved_to_trash {
