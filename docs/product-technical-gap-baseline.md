@@ -7,21 +7,22 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
-## Open pull-request snapshot — 2026-08-29 20:49:59 +0900
+## Open pull-request snapshot — 2026-08-29 20:53:28 +0900
 
 This table records the exact remote head observed immediately before this documentation commit.
-Because committing this table necessarily advances PR #304 itself, its listed SHA is the
-pre-documentation observation, not a claim that the self-referential row remains its current head.
+Because committing this table necessarily advances PR #304 itself, its listed SHA is the exact
+parent observed before this documentation commit, not a claim that the self-referential row remains
+its current head after the commit.
 Every push invalidates prior check and review evidence; the protected branch state must be queried
 again before a normal merge.
 
 | PR | Exact head observed | Product responsibility | Protected-gate state at observation |
 | --- | --- | --- | --- |
-| #298 | `a21c1eb5a5af6fea696dcd8f26e498e91eb5ae49` | Bound test-runner disk allocation. | Blocked: source checks passed, but Strix failed on an oversized sidecar request and OpenCode produced no qualifying exact-head verdict. |
-| #300 | `c8af6ada10c2a8ca369ad5c41b2d4b923498a254` | Prove when a standalone clone is safely reclaimable. | Unstable: the Windows release build was running and `test` had failed; failure diagnosis remained required. |
-| #302 | `1878181f6cccf691a8de56a9380db94f375059e2` | Preserve dormant checkout ownership with durable leases. | Unstable: fresh build, cache-cleanup, LLM, and test checks were queued or running after the lease serialization fix. |
-| #303 | `0c97ee3bb032d973334ba8fe709038518436b71a` | Reclaim provider caches only from identity-bound evidence. | Blocked: platform builds were running, `test` still failed, and OpenCode/Noema had no passing exact-head gate evidence. |
-| #304 | `d7aa316e954c08c03bd131591ffc6fb7978e7e47` | Diagnose OneDrive provider-cache pressure without granting deletion authority. | Blocked: platform builds and tests were running; Strix, OpenCode, and Noema were failed at the observation head. |
+| #298 | `a21c1eb5a5af6fea696dcd8f26e498e91eb5ae49` | Bound test-runner disk allocation. | Blocked: source checks passed, but the central Strix path aborted on unknown model-price authority at `.github` PR #1408 head `3aa71941`; OpenCode produced no qualifying exact-head verdict. |
+| #300 | `c8af6ada10c2a8ca369ad5c41b2d4b923498a254` | Prove when a standalone clone is safely reclaimable. | Unstable: release builds passed, while `test` failed in the container-orphan regression suite and still required source-versus-environment diagnosis. |
+| #302 | `1878181f6cccf691a8de56a9380db94f375059e2` | Preserve dormant checkout ownership with durable leases. | Unstable: fresh platform builds and tests were running after the lease serialization fix. |
+| #303 | `d763e6eb1cdd8429d4e0eac9c61bde8a83bc17f2` | Reclaim provider caches only from identity-bound evidence. | Blocked: fresh platform, LLM, test, and Noema checks were running after the portable cache-fixture fix; OpenCode had no passing exact-head verdict. |
+| #304 | `81fd7cf74d456a4cd931cc560bf827188e727fe4` | Diagnose OneDrive provider-cache pressure without granting deletion authority. | Blocked: this row records the documentation commit's observed parent; platform, test, LLM, and Strix checks were running, while OpenCode and Noema had no passing exact-head evidence. |
 
 The immediate loop is therefore: diagnose source-owned test failures on #300 and #303, allow
 #302's new exact-head checks to finish while doing that work, and treat provider/review-agent
