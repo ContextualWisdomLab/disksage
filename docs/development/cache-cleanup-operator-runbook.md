@@ -36,3 +36,16 @@ registry cache/source roots when present. The Cargo registry source root is cata
 review but is not part of the automatic six-cache action because rebuilding it may require network
 downloads. Cache contents are not cloud candidates: they are reproducible local artifacts, while
 user files continue through the metadata-first cloud planner and its provider sync/eviction gates.
+
+When no Gradle process is active, the headless command applies identity-bound per-child checks to a
+catalogued Gradle regeneration root. Add `--permanent-cache` only when immediate capacity recovery
+is required and the generated directory does not need a reversible Trash interval:
+
+`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --execute --cache-id gradle-wrapper-cache --permanent-cache --journal-path /ABSOLUTE/journal.jsonl`
+
+The accepted IDs are `gradle-cache`, `gradle-wrapper-cache`, `gradle-jdk-cache`, and
+`gradle-daemon-cache`. Permanent execution first validates the complete catalog target manifest and
+each target's active-use evidence, atomically stages the unchanged filesystem object, then repeats a
+recursive active-use probe on that exact staged object. Incomplete or active evidence restores the
+directory to its original path and deletes nothing. Gradle cleanup never targets project sources,
+Maven local artifacts, Gradle configuration, or an arbitrary path.

@@ -93,7 +93,7 @@ queued or stale status.
 | Colima/Podman VM storage | Run bounded guest `fstrim` while the guest is running | Fresh runtime state, fixed command, exact phrase, and bounded output receipt | `qemu-img`, sparse-file truncation, VM stop/delete, or host allocation claims |
 | Shared temporary storage (`/tmp` or macOS `/private/tmp`) | Show current-user-owned children and advisory lifecycle evidence for top-level DiskSage artifacts; permanent execution is disabled | Real-directory root, sealed object identity, bounded tree fingerprint, ownership and active-use evidence, and explicit execution-disabled blocker | Same-user marker as producer authentication, age/name-only authority, symlinks, active references, database/worktree data, journal/receipt races, and deleting the shared root or any child |
 | Git worktrees | Remove a clean, inactive secondary worktree whose exact head is no longer retained | Fresh Git registration/status/size/open-file evidence and, for PR authority, same-repository state + head OID | Branch deletion, `git prune`, fork worktrees, dirty/active worktrees, or age-only deletion |
-| Standalone Git clones | Move a clean, inactive, single-worktree clone on an exact closed or operator-cutoff stale-open PR head to OS Trash | Fresh same-repository GitHub branch + head OID, retained-reference comparison, recursive active-use check, internal Git directory, object identity, and exact approval | Branch deletion, `git prune`, fork/detached/dirty/active clones, external Git directories, or implicit age thresholds |
+| Standalone Git clones | Move a clean, inactive, single-worktree clone on an exact closed/operator-cutoff stale-open PR head, or a published HEAD proven ancestral to the fresh default-branch OID, to OS Trash | Bounded multi-root discovery; fresh provider branch/OID evidence; exact local reference equality; retained-reference/ancestry proof; recursive active-use check; owner-created durable lease evidence; internal Git directory; object identity; exact approval | Active or invalid checkout leases, branch deletion, `git prune`, stale refs, unpushed/diverged/fork/detached/dirty/active clones, external Git directories, or implicit age and lease thresholds |
 
 The dashboard must sum these domains separately. A displayed target such as 300 GB is a
 measurement goal, not an authorization: unresolved bytes stay visible with their blocker and are
@@ -113,6 +113,7 @@ never converted into a deletion estimate by a heuristic.
 | P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | The perceptual-photo audit now groups distinct-content candidates using Zauner DCT pHash, exact aspect ratio, and the published pHash Hamming bound; it shows resolution, bit depth, format, compression preservation, and an unweighted Pareto rationale. | Completed in source: managed libraries are excluded, every group requires an explicit survivor, execution re-audits identity and moves only non-survivors to OS Trash with receipts, and no automatic or permanent deletion exists. Runtime review against the user's external photo folders remains a separate operational action. |
 | P1 | A stale PR worktree may point at a branch that is still open, so age alone is not deletion authority. | The worktree audit already binds same-repository closed/merged PR head OIDs and protects dirty, active, detached, fork, locked, and retained-tip worktrees. | Require an explicit cutoff and fresh same-repository PR state before proposing an old open-PR worktree; preserve the branch/commit and remove only a clean, inactive worktree after exact approval. |
 | P1 | A standalone clone on a closed or explicitly old open PR head was invisible because the worktree remover always preserves its primary checkout. | The standalone-clone plan now reuses exact Git/GitHub worktree evidence, requires one clean inactive checkout and an internal Git directory, then revalidates identity before Trash. | App commands return a measured plan and execute only its exact approval; the original path disappears, branch and Git maintenance commands are untouched, and physical reclaim remains pending until Trash is emptied. |
+| P1 | Clone cleanup required selecting one repository and could not prove that an otherwise unnamed local HEAD was already published on the default branch. | Rust now inventories multiple selected roots within explicit depth/entry/result limits and binds provider-observed default-branch OID to the exact local remote-tracking ref before an ancestry test. | Dirty, active, stale-ref, unpushed, and diverged clones remain blocked; only complete inventory and fresh exact ancestry evidence can add removal authority. |
 
 ## Technical and operational gaps
 
@@ -1361,3 +1362,16 @@ runner's private workspace temp root instead of weakening the shared production 
   private mode-0700/0600 receipt is identified as
   `disksage-google-drive-live-20260829-e53df609`; no customer path or provider identifier is
   recorded here, and no mutation occurred.
+
+## 2026-08-29 Gradle regeneration-root follow-up
+
+- The existing `gradle-cache` catalog entry covered only `~/.gradle/caches`, which was already
+  absent at the observation point. DiskSage therefore reported none of the remaining 1,897,284 KiB
+  under `~/.gradle`: wrapper distributions used 898,108 KiB, downloaded toolchain JDKs 496,800 KiB,
+  and inactive daemon records 493,140 KiB. No Gradle or Gradle-hosting Java process was running.
+- DiskSage now catalogues those three regeneration roots separately and the headless CLI accepts
+  an exact catalog ID. Every direct child still passes the existing identity snapshot, recursive
+  active-use evidence, immediate identity revalidation, and journal contract. Irreversible mode is
+  rejected for every non-Gradle catalog ID and cannot accept an arbitrary filesystem path.
+- Physical reclamation remains pending until this stacked head is compiled and the current cache
+  children pass a fresh complete active-use probe; build output is not counted as recovered space.

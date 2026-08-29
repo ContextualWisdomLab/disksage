@@ -15,7 +15,19 @@ const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_US
 // Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
 // 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
 // longer operational timeout instead of silently weakening the active-use gate.
-const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_after_find_artifacts_snapshot_hook(hook: impl FnOnce() + 'static) {
+    AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -465,7 +477,7 @@ pub fn permanently_delete_artifacts(
 
 fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
     if permanent {
-        ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS
+        crate::safety::PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS
     } else {
         ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS
     }
@@ -507,6 +519,59 @@ fn clean_artifacts_with_disposition(
                 };
             }
 
+            // Bind the irreversible request before active-use probing. The probe itself is an
+            // external process boundary; a write arriving while it runs must make the safety
+            // boundary's immediately-before-staging comparison fail closed.
+            let permanent_target = if permanent {
+                let refreshed = artifact_manifest(Path::new(&request.path));
+                if !refreshed.scan_complete
+                    || refreshed.skipped != 0
+                    || refreshed.fingerprint != request.fingerprint
+                    || refreshed.object_id != request.object_id
+                {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact changed after validation; rescan before cleanup"
+                            .into(),
+                    };
+                }
+                #[cfg(test)]
+                AFTER_FIND_ARTIFACTS_SNAPSHOT_HOOK.with(|slot| {
+                    if let Some(hook) = slot.borrow_mut().take() {
+                        hook();
+                    }
+                });
+                match crate::rules::cache_target(Path::new(&request.path)) {
+                    Ok(target) => {
+                        let post_bind = artifact_manifest(Path::new(&request.path));
+                        if !post_bind.scan_complete
+                            || post_bind.skipped != 0
+                            || post_bind.fingerprint != request.fingerprint
+                            || post_bind.object_id != request.object_id
+                        {
+                            return DevArtifactCleanResult {
+                                path: request.path.clone(),
+                                ok: false,
+                                error: "development artifact changed while binding deletion authority; rescan before cleanup"
+                                    .into(),
+                            };
+                        }
+                        Some(target)
+                    }
+                    Err(_) => {
+                        return DevArtifactCleanResult {
+                            path: request.path.clone(),
+                            ok: false,
+                            error: "development artifact manifest is incomplete; rescan before cleanup"
+                                .into(),
+                        };
+                    }
+                }
+            } else {
+                None
+            };
+
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&request.path),
                 artifact_active_use_timeout_ms(permanent),
@@ -533,10 +598,20 @@ fn clean_artifacts_with_disposition(
             }
 
             let mutation = if permanent {
+                let Some(target) = permanent_target else {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact manifest is unavailable; rescan before cleanup"
+                            .into(),
+                    };
+                };
                 crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
-                    &request.object_id,
-                    request.bytes,
+                    &target.object_id,
+                    target.bytes,
+                    target.modified_ms,
+                    &target.manifest_fingerprint,
                     journal_path,
                     now_ms,
                 )
@@ -715,6 +790,33 @@ mod tests {
         assert!(
             !journal.exists(),
             "stale identity must not create a journal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_cleanup_rejects_same_size_rewrite_after_review_validation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        let payload = artifact.join("payload.bin");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let journal = tmp.path().join("journal.jsonl");
+        let rewrite_path = payload.clone();
+        set_after_find_artifacts_snapshot_hook(move || {
+            fs::write(&rewrite_path, vec![1u8; 256]).expect("rewrite reviewed payload");
+        });
+
+        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            !results[0].ok,
+            "a same-size rewrite after review validation must invalidate irreversible authority"
+        );
+        assert!(artifact.exists(), "unreviewed artifact contents must remain in place");
+        assert_eq!(
+            fs::read(payload).expect("rewritten payload must survive rejected deletion"),
+            vec![1u8; 256]
         );
     }
 

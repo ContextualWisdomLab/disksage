@@ -37,6 +37,7 @@ export interface CacheTarget {
   bytes: number;
   modified_ms: number;
   object_id: string;
+  manifest_fingerprint: string;
 }
 export interface DevArtifact {
   path: string;
@@ -857,13 +858,30 @@ export interface GitCloneReclaimPlan {
   closed_pull_request_head: boolean;
   stale_open_pull_request_head: boolean;
   stale_open_pull_request_cutoff_ms: number | null;
+  default_branch_reference: string | null;
+  default_branch_oid: string | null;
+  default_branch_observed_at_ms: number | null;
+  head_is_default_branch_ancestor: boolean;
   size: GitWorktreeSizeEvidence;
   active_use: GitWorktreeActiveUseEvidence;
+  checkout_lease_active: boolean;
+  checkout_lease_expires_at_ms: number | null;
+  checkout_lease_fingerprint: string | null;
   authority_fingerprint: string;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
   eligible_after_human_approval: boolean;
   blockers: string[];
+  customer_next_action: string;
+  filesystem_mutation_executed: false;
+}
+
+export interface CloneInventoryReport {
+  roots: string[];
+  clone_roots: string[];
+  visited_entries: number;
+  evidence_complete: boolean;
+  issues: string[];
   filesystem_mutation_executed: false;
 }
 
@@ -1498,6 +1516,8 @@ export const planStaleGitClone = (
   includeClosedPullRequests,
   staleOpenPullRequestCutoffMs,
 });
+export const inventoryStandaloneGitClones = (roots: string[]) =>
+  invoke<CloneInventoryReport>("inventory_standalone_git_clones", { roots });
 export const removeStaleGitClone = (
   repositoryRoot: string,
   retentionReferences: string[],

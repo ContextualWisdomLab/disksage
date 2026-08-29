@@ -244,6 +244,7 @@ pub(crate) fn clean_cache_contents_inner(
     requested_targets: &[rules::CacheTarget],
     journal_path: &Path,
     now_ms: u64,
+    permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
@@ -254,6 +255,15 @@ pub(crate) fn clean_cache_contents_inner(
     sort_targets(&mut current);
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
+    }
+    if permanent_directories
+        && expected.iter().any(|target| {
+            std::fs::symlink_metadata(&target.path)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true)
+        })
+    {
+        return Err("permanent-cache-target-type-unsupported".into());
     }
 
     Ok(expected
@@ -266,7 +276,11 @@ pub(crate) fn clean_cache_contents_inner(
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                if permanent_directories {
+                    crate::safety::PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS
+                } else {
+                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS
+                },
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );
@@ -277,13 +291,35 @@ pub(crate) fn clean_cache_contents_inner(
                     error: error.into(),
                 };
             }
-            let result = safety::trash_delete_if_identity(
-                Path::new(&target.path),
-                &target.object_id,
-                target.bytes,
-                journal_path,
-                now_ms,
-            );
+            let path = Path::new(&target.path);
+            let result = if permanent_directories {
+                if !std::fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                {
+                    return CleanResult {
+                        path: target.path,
+                        ok: false,
+                        error: "permanent-cache-target-type-unsupported".into(),
+                    };
+                }
+                safety::permanent_delete_dir_if_identity(
+                    path,
+                    &target.object_id,
+                    target.bytes,
+                    target.modified_ms,
+                    &target.manifest_fingerprint,
+                    journal_path,
+                    now_ms,
+                )
+            } else {
+                safety::trash_delete_if_identity(
+                    path,
+                    &target.object_id,
+                    target.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            };
             match result {
                 Ok(()) => CleanResult {
                     path: target.path,
@@ -315,7 +351,7 @@ pub(crate) fn clean_regenerable_caches_inner(
             match rules::cache_targets(&path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
-                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms)
+                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms, false)
                     .unwrap_or_else(|error| {
                         vec![CleanResult {
                             path: candidate.path,
@@ -344,6 +380,27 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
+/// Reclaim one named catalog cache through the existing identity and active-use checks.
+/// Permanent deletion is limited to Gradle's regenerable cache-only roots.
+pub fn clean_catalog_cache_headless(
+    cache_id: &str,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    if permanent
+        && !["gradle-cache", "gradle-wrapper-cache", "gradle-jdk-cache", "gradle-daemon-cache"]
+            .contains(&cache_id)
+    {
+        return Err("permanent-cache-id-not-approved".into());
+    }
+    let path = rules::cache_catalog_path(&bases, cache_id)
+        .ok_or_else(|| "cache-id-not-catalogued".to_string())?;
+    let targets = rules::cache_targets(&path)?;
+    clean_cache_contents_inner(&bases, &path, &targets, journal_path, now_ms, permanent)
+}
+
 /// Move only inactive, unchanged npx environments to OS Trash. Package downloads are regenerable
 /// and every directory remains identity-bound, active-use checked, and journaled. A missing npx
 /// cache is an empty successful cleanup rather than an operational failure.
@@ -361,7 +418,7 @@ pub fn clean_inactive_npx_environments_headless(
         Err(_) => return Err("cache-root-metadata-unavailable".into()),
     }
     let targets = rules::cache_targets(&npx)?;
-    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms)
+    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms, false)
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
@@ -391,6 +448,7 @@ pub fn clean_cache_contents(
         &targets,
         &journal_path,
         crate::commands::now_ms(),
+        false,
     )
 }
 
@@ -408,13 +466,27 @@ mod tests {
     }
 
     #[test]
+    fn permanent_catalog_cleanup_is_gradle_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let error = clean_catalog_cache_headless(
+            "npm-cache",
+            &tmp.path().join("journal.jsonl"),
+            1,
+            true,
+        )
+        .err()
+        .expect("non-Gradle permanent cache cleanup must fail");
+        assert_eq!(error, "permanent-cache-id-not-approved");
+    }
+
+    #[test]
     fn cleanup_rejects_non_catalog_root() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1)
+        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1, false)
             .err()
             .expect("non-catalog root must be rejected");
 
@@ -432,7 +504,7 @@ mod tests {
         let mut targets = rules::cache_targets(&bases.temp).unwrap();
         targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
             .err()
             .expect("stale target snapshot must be rejected");
 
@@ -531,7 +603,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1, false)
             .err()
             .expect("symlink root must be rejected");
         assert_eq!(error, "cache-root-not-current-or-safe");

@@ -97,6 +97,10 @@ name = "disksage-git-clone-reclaim"
 path = "src/bin/disksage-git-clone-reclaim.rs"
 
 [[bin]]
+name = "disksage-git-checkout-lease"
+path = "src/bin/disksage-git-checkout-lease.rs"
+
+[[bin]]
 name = "disksage-git-worktree-remove"
 path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
@@ -191,6 +195,7 @@ same-file = "1.0.6"
 tempfile = "3.27.0"
 ureq = "3.3.0"
 fs4 = "1.1.0"
+dirs = "6.0.0"
 unicode-normalization = "0.1"
 unicode-general-category = "1.1.0"
 csv = "1.4.0"

@@ -29,6 +29,10 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
   arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
+- the headless `--cache-id ... --permanent-cache` path may permanently remove only inactive,
+  unchanged direct children of the four catalogued Gradle regeneration roots (`caches`, wrapper
+  distributions, toolchain JDKs, and daemon records). Project files, Maven local artifacts, Gradle
+  configuration, and every non-Gradle catalog ID remain outside that irreversible exception.
 
 This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
 same cache root must not prevent reclaiming an independently inactive entry, and it must never be

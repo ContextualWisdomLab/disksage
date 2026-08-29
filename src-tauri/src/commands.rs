@@ -1184,7 +1184,7 @@ pub async fn plan_stale_git_clone(
     stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_clone_reclaim::GitCloneReclaimPlan, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_clone_reclaim::plan_git_clone_reclaim(
+        git_clone_reclaim::plan_git_clone_reclaim_with_default_branch(
             Path::new(&repository_root),
             &retention_references,
             include_closed_pull_requests,
@@ -1195,6 +1195,23 @@ pub async fn plan_stale_git_clone(
     })
     .await
     .map_err(|_| "git-clone-reclaim-plan-task-failed".to_string())?
+}
+
+/// Discover standalone clones under customer-selected roots without mutating filesystem state.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn inventory_standalone_git_clones(
+    roots: Vec<String>,
+) -> Result<git_clone_reclaim::CloneInventoryReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = roots.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        git_clone_reclaim::inventory_standalone_clones(
+            &roots,
+            git_clone_reclaim::CloneInventoryOptions::default(),
+        )
+    })
+    .await
+    .map_err(|_| "git-clone-inventory-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -1228,7 +1245,7 @@ pub async fn remove_stale_git_clone(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let plan = git_clone_reclaim::plan_git_clone_reclaim(
+        let plan = git_clone_reclaim::plan_git_clone_reclaim_with_default_branch(
             Path::new(&repository_root),
             &retention_references,
             include_closed_pull_requests,
@@ -1253,7 +1270,7 @@ pub async fn remove_stale_git_clone(
             &approval_path,
             &approval,
         )?;
-        let result = git_clone_reclaim::execute_git_clone_reclaim(
+        let result = git_clone_reclaim::execute_git_clone_reclaim_with_default_branch(
             &plan,
             &approval,
             &retention_references,

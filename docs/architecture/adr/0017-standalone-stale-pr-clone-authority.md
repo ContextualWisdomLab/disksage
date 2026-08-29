@@ -19,6 +19,13 @@ clone, a journal destination outside the clone, re-resolves every authority inpu
 filesystem object identity, and moves the clone to OS Trash. If the Trash move cannot complete, the
 existing safety layer restores the staged object and retains the journaled failure for recovery.
 
+DiskSage may also authorize a clean published clone when a fresh provider observation names the
+default branch and its exact commit OID, the corresponding local remote-tracking reference resolves
+to that same OID, and `git merge-base --is-ancestor` proves the clone HEAD reachable from it. This
+path rejects stale provider evidence, stale local references, diverged or unpublished heads, and
+active or dirty clones. Multi-root discovery is breadth-bounded, does not follow symlinks, stops at
+repository roots, and reports an evidence gap when any entry or result limit is exceeded.
+
 DiskSage never invents an age threshold, deletes the branch, runs `git prune`, handles fork or
 detached heads, or reports physical capacity as reclaimed before Trash is emptied.
 
@@ -29,7 +36,7 @@ Trash before the operating system can expose the capacity.
 
 ## Rejected alternatives
 
-Directory age, clone folder names, local branch names alone, and automatic branch deletion are not
+Directory age, clone folder names, local branch names alone, stale remote-tracking references, and automatic branch deletion are not
 authority because each can destroy current or unpublished work.
 
 ## Evidence

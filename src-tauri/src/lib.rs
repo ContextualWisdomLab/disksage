@@ -7,6 +7,8 @@ pub mod archive_git_tree;
 mod brew_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
+/// Read-only target-manifest and active-use evidence for one catalog cache.
+pub mod cache_cleanup_preview;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 pub mod cloud_adr;
@@ -60,6 +62,10 @@ pub mod judge_calibration;
 mod llm;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod gradle_cache_catalog_tests;
+#[cfg(all(test, unix))]
+mod cache_manifest_symlink_tests;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
@@ -176,6 +182,7 @@ pub fn run() {
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
             commands::plan_stale_git_clone,
+            commands::inventory_standalone_git_clones,
             commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
