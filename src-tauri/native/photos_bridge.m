@@ -4,6 +4,7 @@
 
 static const NSUInteger DSMaxChunkBytes = 8 * 1024 * 1024;
 static const int64_t DSResourceTimeoutNanos = 30LL * NSEC_PER_SEC;
+static const int64_t DSAuthorizationTimeoutNanos = 5LL * 60LL * NSEC_PER_SEC;
 
 static char *DSJSON(id value) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
@@ -42,6 +43,7 @@ static NSString *DSMetadataFingerprint(PHAsset *asset, PHAssetResource *resource
 
 static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
   NSArray<PHAssetResource *> *resources = [PHAssetResource assetResourcesForAsset:asset];
+  if (resources.count != 1) return @{ @"state": @"unavailable", @"blocker": @"compound-photo-review-unavailable" };
   PHAssetResource *resource = resources.firstObject;
   if (!resource) return @{ @"state": @"unavailable", @"blocker": @"no-original-resource" };
   PHAssetResourceRequestOptions *options = [PHAssetResourceRequestOptions new];
@@ -69,6 +71,7 @@ static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
       }];
   if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, DSResourceTimeoutNanos)) != 0) {
     [[PHAssetResourceManager defaultManager] cancelDataRequest:requestID];
+    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC));
     return @{ @"state": @"unavailable", @"blocker": @"local-content-read-timed-out" };
   }
   if (completionError) {
@@ -137,9 +140,9 @@ static NSDictionary *DSInventory(NSUInteger maxAssets, uint64_t maxBytes, NSArra
   unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(canonical.bytes, (CC_LONG)canonical.length, digest);
   BOOL truncated = fetch.count > reviewCount;
   return @{ @"authorization": DSStatus(status), @"observed_at_ms": @((uint64_t)(NSDate.date.timeIntervalSince1970 * 1000)),
-            @"inventory_fingerprint": DSHex(digest, sizeof(digest)), @"evidence_complete": @(!truncated),
+            @"inventory_fingerprint": DSHex(digest, sizeof(digest)), @"evidence_complete": @(!truncated && unavailable == 0),
             @"inventory_truncated": @(truncated),
-            @"next_action": truncated ? @"reduce-photos-library-review-scope" : (groups.count ? @"choose-one-photo-to-keep-per-group" : (unavailable ? @"download-originals-in-photos" : @"no-exact-duplicates-found")),
+            @"next_action": truncated ? @"reduce-photos-library-review-scope" : (unavailable ? @"download-originals-in-photos" : (groups.count ? @"choose-one-photo-to-keep-per-group" : @"no-exact-duplicates-found")),
             @"assets": assets, @"exact_groups": groups, @"unavailable_count": @(unavailable),
             @"near_duplicate_evidence": @"unavailable-without-measured-content-equivalence" };
 }
@@ -154,7 +157,8 @@ char *ds_photos_request_authorization(void) {
   [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:^(PHAuthorizationStatus status) {
     result = status; dispatch_semaphore_signal(done);
   }];
-  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, DSAuthorizationTimeoutNanos)) != 0)
+    return DSJSON(@{ @"authorization": @"timed-out" });
   return DSJSON(@{ @"authorization": DSStatus(result) });
 }
 

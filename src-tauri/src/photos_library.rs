@@ -109,7 +109,10 @@ pub fn plan_deletion(
     if inventory.authorization != "authorized" && inventory.authorization != "limited" {
         return Err("photos-access-not-authorized".into());
     }
-    if !inventory.evidence_complete || inventory.inventory_truncated {
+    if !inventory.evidence_complete
+        || inventory.inventory_truncated
+        || inventory.unavailable_count != 0
+    {
         return Err("photos-inventory-incomplete-review-again".into());
     }
     let inventory_fingerprint = inventory
@@ -386,10 +389,21 @@ pub async fn execute_photos_duplicate_deletion(
         .map_err(|_| "photos-receipt-directory-unavailable")?
         .join("photos-receipts");
     std::fs::create_dir_all(&directory).map_err(|_| "photos-receipt-directory-unavailable")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| "photos-receipt-directory-unavailable")?;
+    }
     let path = directory.join(format!("{}.json", receipt.receipt_id));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|_| "photos-receipt-create-failed")?;
     let bytes =
@@ -478,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn icloud_only_asset_is_never_admitted_to_destructive_plan() {
+    fn icloud_only_asset_blocks_destructive_planning() {
         let mut inventory = inventory();
         inventory.unavailable_count = 1;
         let mut cloud = member("cloud", 20);
@@ -488,16 +502,11 @@ mod tests {
         cloud.encoded_bytes = None;
         cloud.metadata_fingerprint = None;
         inventory.assets.push(cloud);
-        let plan = plan_deletion(
-            &inventory,
-            &[PhotosKeeperSelection {
-                content_sha256: "a".repeat(64),
-                keeper_local_identifier: "keep".into(),
-            }],
-        )
-        .unwrap();
-        assert_eq!(plan.delete_identifiers, ["remove"]);
-        assert!(!plan.delete_identifiers.contains(&"cloud".to_string()));
+        inventory.evidence_complete = false;
+        assert_eq!(
+            plan_deletion(&inventory, &[]).unwrap_err(),
+            "photos-inventory-incomplete-review-again"
+        );
     }
 
     #[test]
@@ -526,5 +535,14 @@ mod tests {
             .unwrap_err(),
             "photos-review-expired-review-again"
         );
+    }
+
+    #[test]
+    fn native_boundary_rejects_compound_assets_and_bounds_callbacks() {
+        let source = include_str!("../native/photos_bridge.m");
+        assert!(source.contains("resources.count != 1"));
+        assert!(source.contains("networkAccessAllowed = NO"));
+        assert!(source.contains("cancelDataRequest:requestID"));
+        assert!(source.contains("DSAuthorizationTimeoutNanos"));
     }
 }

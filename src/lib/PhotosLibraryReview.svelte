@@ -37,7 +37,7 @@
       inventory = await api.inspectPhotosDuplicates();
       keepers = {};
       status = inventory.unavailable_count
-        ? `${inventory.unavailable_count}개 원본은 이 Mac에 없어 제외했습니다. 로컬 사본만 계속 검토할 수 있습니다.`
+        ? `${inventory.unavailable_count}개 원본을 이 Mac에서 확인할 수 없습니다. 사진 앱에서 원본을 다운로드한 뒤 다시 확인하세요.`
         : inventory.exact_groups.length
           ? `${inventory.exact_groups.length}개 정확한 사본 그룹을 찾았습니다. 그룹마다 남길 사진을 고르세요.`
           : "내용이 정확히 같은 사진을 찾지 못했습니다.";
@@ -83,7 +83,7 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 
   {#if inventory?.unavailable_count}
-    <p class="blocker" role="status">이 Mac에 없는 원본은 다운로드하거나 삭제하지 않습니다. 해당 사진도 비교하려면 사진 앱에서 원본을 먼저 다운로드하세요.</p>
+    <p class="blocker" role="alert">확인하지 못한 원본은 다운로드하거나 삭제하지 않습니다. 사진 앱에서 원본 다운로드를 완료한 뒤 다시 확인하세요.</p>
   {/if}
   {#if inventory?.inventory_truncated}
     <p class="blocker" role="alert">검토 범위가 너무 큽니다. 사진 앱에서 검토할 사진을 줄인 뒤 다시 확인하세요.</p>
