@@ -11,7 +11,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Exact-head evidence on 2026-08-29 used 17m33s for the base Rust suite and then
+    # exhausted the former 30m job deadline 11m36s into the combined feature suite,
+    # before frontend verification. Preserve the single combined feature build and
+    # give the complete, independently required suites one bounded 60m job budget.
+    timeout-minutes: 60
     env:
       # Test binaries do not need incremental object graphs or debug symbols. Keeping both out of
       # the shared target prevents repeated feature builds from exhausting the hosted 14 GB disk.
