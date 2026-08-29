@@ -6,8 +6,7 @@
 
 use disksage_lib::cache_cleanup::{
     clean_catalog_cache_headless, clean_inactive_npx_environments_headless,
-    clean_regenerable_caches_headless,
-    proven_cache_trash_candidates, purge_proven_cache_trash,
+    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -85,8 +84,11 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             Some("--execute") => execute = true,
             Some("--npx-only") => npx_only = true,
             Some("--cache-id") => {
-                cache_id = Some(args.next().and_then(|value| value.into_string().ok())
-                    .ok_or_else(|| "--cache-id requires UTF-8 ID".to_string())?);
+                cache_id = Some(
+                    args.next()
+                        .and_then(|value| value.into_string().ok())
+                        .ok_or_else(|| "--cache-id requires UTF-8 ID".to_string())?,
+                );
             }
             Some("--permanent-cache") => permanent_cache = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
@@ -104,7 +106,11 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
-    if usize::from(npx_only) + usize::from(purge_proven_cache_trash) + usize::from(cache_id.is_some()) > 1 {
+    if usize::from(npx_only)
+        + usize::from(purge_proven_cache_trash)
+        + usize::from(cache_id.is_some())
+        > 1
+    {
         return Err("cache cleanup modes are mutually exclusive".into());
     }
     if permanent_cache && cache_id.is_none() {
@@ -131,6 +137,18 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn execution_receipt(args: &Args, results: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "executed": true,
+        "npx_only": args.npx_only,
+        "journal_path": args.journal_path,
+        "purge_proven_cache_trash": args.purge_proven_cache_trash,
+        "cache_id": args.cache_id.as_deref(),
+        "permanent_cache": args.permanent_cache,
+        "results": results
+    })
 }
 
 fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), String> {
@@ -164,23 +182,23 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
-        println!(
-            "{}",
-            serde_json::json!({
-                "executed": true,
-                "npx_only": false,
-                "purge_proven_cache_trash": true,
-                "journal_path": args.journal_path,
-                "results": results
-            })
-        );
+        let results = serde_json::to_value(purge_proven_cache_trash(
+            &home_directory()?,
+            &args.journal_path,
+            now_ms(),
+        )?)
+        .map_err(|error| error.to_string())?;
+        println!("{}", execution_receipt(&args, results));
         return Ok(());
     }
     let evidence = if let Some(cache_id) = args.cache_id.as_deref() {
         serde_json::to_value(clean_catalog_cache_headless(
-            cache_id, &args.journal_path, now_ms(), args.permanent_cache,
-        )?).map_err(|error| error.to_string())?
+            cache_id,
+            &args.journal_path,
+            now_ms(),
+            args.permanent_cache,
+        )?)
+        .map_err(|error| error.to_string())?
     } else if args.npx_only {
         serde_json::to_value(clean_inactive_npx_environments_headless(
             &args.journal_path,
@@ -190,15 +208,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
     } else {
         clean_regenerable_caches_headless(&args.journal_path, now_ms())?
     };
-    println!(
-        "{}",
-        serde_json::json!({
-            "executed": true,
-            "npx_only": args.npx_only,
-            "journal_path": args.journal_path,
-            "results": evidence
-        })
-    );
+    println!("{}", execution_receipt(&args, evidence));
     Ok(())
 }
 
@@ -220,11 +230,7 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error = parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 
@@ -265,16 +271,21 @@ mod tests {
     #[test]
     fn named_cache_mode_is_explicit_and_exclusive() {
         let args = parse_args([
-            OsString::from("--cache-id"), OsString::from("gradle-cache"),
+            OsString::from("--cache-id"),
+            OsString::from("gradle-cache"),
             OsString::from("--permanent-cache"),
-        ]).unwrap().unwrap();
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!(args.cache_id.as_deref(), Some("gradle-cache"));
         assert!(args.permanent_cache);
         assert!(parse_args([OsString::from("--permanent-cache")]).is_err());
         assert!(parse_args([
-            OsString::from("--cache-id"), OsString::from("gradle-cache"),
+            OsString::from("--cache-id"),
+            OsString::from("gradle-cache"),
             OsString::from("--npx-only"),
-        ]).is_err());
+        ])
+        .is_err());
     }
 
     #[test]
