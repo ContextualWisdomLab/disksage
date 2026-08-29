@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -66,6 +67,8 @@ pub struct PostgresTestClusterPlan {
     pub pg_ctl_status_identity: String,
     /// Allocated bytes under the symlink-free data directory.
     pub allocated_bytes: u64,
+    /// Digest of every descendant name and filesystem identity at planning time.
+    pub data_directory_content_identity: String,
     /// Wall-clock observation time, excluded from the stable fingerprint.
     pub observed_at_ms: u64,
     /// Stable digest of all deletion-authority evidence.
@@ -113,9 +116,9 @@ pub struct PostgresTestClusterResult {
     /// Available bytes on the containing filesystem before mutation.
     pub free_bytes_before: u64,
     /// Available bytes on the containing filesystem after mutation.
-    pub free_bytes_after: u64,
+    pub free_bytes_after: Option<u64>,
     /// Saturating measured increase in available filesystem bytes.
-    pub physically_reclaimed_bytes: u64,
+    pub physically_reclaimed_bytes: Option<u64>,
     /// Completion observation time.
     pub completed_at_ms: u64,
 }
@@ -184,15 +187,73 @@ impl PostgresCommandRunner for NativePostgresCommandRunner {
         );
         #[cfg(not(unix))]
         let executable_identity = String::new();
+        #[cfg(unix)]
+        let private_executable = if trusted_system_executable(program) {
+            None
+        } else {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let directory = tempfile::Builder::new()
+                .prefix(".disksage-pg-command-")
+                .tempdir()
+                .map_err(|_| "postgres-native-command-private-copy-failed".to_string())?;
+            let path = directory.path().join("command");
+            let destination = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o700)
+                .open(&path)
+                .map_err(|_| "postgres-native-command-private-copy-failed".to_string())?;
+            #[cfg(target_os = "macos")]
+            {
+                use std::os::fd::AsRawFd;
+                if unsafe {
+                    libc::fcopyfile(
+                        verified_program.as_raw_fd(),
+                        destination.as_raw_fd(),
+                        std::ptr::null_mut(),
+                        libc::COPYFILE_DATA | libc::COPYFILE_XATTR,
+                    )
+                } != 0
+                {
+                    return Err("postgres-native-command-private-copy-failed".into());
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let destination = {
+                let mut source = verified_program;
+                let mut destination = destination;
+                std::io::copy(&mut source, &mut destination)
+                    .map_err(|_| "postgres-native-command-private-copy-failed".to_string())?;
+                destination
+            };
+            destination
+                .sync_all()
+                .map_err(|_| "postgres-native-command-private-copy-failed".to_string())?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "postgres-native-command-private-copy-failed".to_string())?;
+            Some((directory, path))
+        };
+        #[cfg(unix)]
+        let mut command = Command::new(
+            private_executable
+                .as_ref()
+                .map_or(program, |(_, path)| path.as_path()),
+        );
+        #[cfg(not(unix))]
         let mut command = Command::new(program);
         command
             .args(args)
+            .env_clear()
+            .env("LC_ALL", "C")
+            .env("PATH", "/usr/bin:/bin")
+            .env("PGAPPNAME", "disksage-postgres-test-reclaim")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
+            command.arg0(program);
             unsafe {
                 command.pre_exec(|| {
                     if libc::setpgid(0, 0) == -1 {
@@ -205,40 +266,54 @@ impl PostgresCommandRunner for NativePostgresCommandRunner {
         let mut child = command
             .spawn()
             .map_err(|_| "postgres-native-command-spawn-failed".to_string())?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "postgres-native-command-stdout-unavailable".to_string())?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "postgres-native-command-stderr-unavailable".to_string())?;
+        let stdout_reader = std::thread::spawn(move || read_bounded(&mut stdout));
+        let stderr_reader = std::thread::spawn(move || read_bounded(&mut stderr));
         let started = Instant::now();
-        loop {
-            if child
+        let status = loop {
+            match child
                 .try_wait()
                 .map_err(|_| "postgres-native-command-wait-failed".to_string())?
-                .is_some()
             {
-                break;
-            }
-            if started.elapsed() >= timeout {
-                #[cfg(unix)]
-                unsafe {
-                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                Some(status) => break status,
+                None if started.elapsed() >= timeout => {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err("postgres-native-command-timeout".into());
                 }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("postgres-native-command-timeout".into());
+                None => std::thread::sleep(Duration::from_millis(20)),
             }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let output = child
-            .wait_with_output()
-            .map_err(|_| "postgres-native-command-output-failed".to_string())?;
+        };
+        let stdout = stdout_reader
+            .join()
+            .map_err(|_| "postgres-native-command-stdout-read-failed".to_string())??;
+        let stderr = stderr_reader
+            .join()
+            .map_err(|_| "postgres-native-command-stderr-read-failed".to_string())??;
         if canonical_regular_executable(program)?.1 != executable_identity {
             return Err("postgres-native-executable-changed".into());
         }
-        if output.stdout.len() > MAX_OUTPUT_BYTES || output.stderr.len() > MAX_OUTPUT_BYTES {
+        if stdout.len() > MAX_OUTPUT_BYTES || stderr.len() > MAX_OUTPUT_BYTES {
             return Err("postgres-native-command-output-too-large".into());
         }
         Ok(CommandOutput {
-            status: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8(output.stdout)
+            status: status.code().unwrap_or(-1),
+            stdout: String::from_utf8(stdout)
                 .map_err(|_| "postgres-native-command-output-invalid".to_string())?,
-            stderr: String::from_utf8(output.stderr)
+            stderr: String::from_utf8(stderr)
                 .map_err(|_| "postgres-native-command-output-invalid".to_string())?,
             executable_identity,
         })
@@ -257,12 +332,46 @@ impl PostgresCommandRunner for NativePostgresCommandRunner {
     }
 }
 
+fn read_bounded(reader: &mut impl Read) -> Result<Vec<u8>, String> {
+    let mut retained = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let count = reader
+            .read(&mut chunk)
+            .map_err(|_| "postgres-native-command-output-read-failed".to_string())?;
+        if count == 0 {
+            return Ok(retained);
+        }
+        if retained.len() <= MAX_OUTPUT_BYTES {
+            let remaining = MAX_OUTPUT_BYTES + 1 - retained.len();
+            retained.extend_from_slice(&chunk[..count.min(remaining)]);
+        }
+    }
+}
+
 fn valid_database_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 63
+        && value.trim() == value
         && !value
             .chars()
             .any(|character| character == '\0' || character.is_control())
+}
+
+#[cfg(unix)]
+fn trusted_system_executable(path: &Path) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        let Ok(metadata) = std::fs::symlink_metadata(candidate) else {
+            return false;
+        };
+        if metadata.uid() != 0 || metadata.permissions().mode() & 0o022 != 0 {
+            return false;
+        }
+        current = candidate.parent();
+    }
+    true
 }
 
 #[cfg(unix)]
@@ -327,7 +436,7 @@ fn directory_identity(path: &Path) -> Result<String, String> {
     Err("postgres-test-cluster-reclaim-unsupported-platform".into())
 }
 
-fn required_structure(data_directory: &Path) -> Result<(String, u64), String> {
+fn required_structure(data_directory: &Path) -> Result<(String, u64, String), String> {
     let version_path = data_directory.join("PG_VERSION");
     let version_metadata = std::fs::symlink_metadata(&version_path)
         .map_err(|_| "postgres-version-file-missing".to_string())?;
@@ -352,14 +461,17 @@ fn required_structure(data_directory: &Path) -> Result<(String, u64), String> {
     {
         return Err("postgres-version-invalid".into());
     }
-    Ok((version, allocated_bytes(data_directory)?))
+    let (allocated_bytes, content_identity) = directory_contents(data_directory)?;
+    Ok((version, allocated_bytes, content_identity))
 }
 
 #[cfg(unix)]
-fn allocated_bytes(root: &Path) -> Result<u64, String> {
-    use std::os::unix::fs::MetadataExt;
+fn directory_contents(root: &Path) -> Result<(u64, String), String> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let mut total = 0u64;
     let mut stack = vec![root.to_path_buf()];
+    let mut hasher = Sha256::new();
     while let Some(path) = stack.pop() {
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|_| "postgres-data-directory-traversal-failed".to_string())?;
@@ -369,23 +481,46 @@ fn allocated_bytes(root: &Path) -> Result<u64, String> {
         total = total
             .checked_add(metadata.blocks().saturating_mul(512))
             .ok_or_else(|| "postgres-allocated-size-overflow".to_string())?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "postgres-data-directory-traversal-failed".to_string())?;
+        if !relative.as_os_str().is_empty() {
+            hasher.update((relative.as_os_str().as_bytes().len() as u64).to_le_bytes());
+            hasher.update(relative.as_os_str().as_bytes());
+            for value in [
+                metadata.dev(),
+                metadata.ino(),
+                metadata.uid() as u64,
+                metadata.permissions().mode() as u64,
+                metadata.len(),
+                metadata.mtime() as u64,
+                metadata.mtime_nsec() as u64,
+                metadata.ctime() as u64,
+                metadata.ctime_nsec() as u64,
+            ] {
+                hasher.update(value.to_le_bytes());
+            }
+        }
         if metadata.is_dir() {
-            for entry in std::fs::read_dir(&path)
+            let mut children = std::fs::read_dir(&path)
                 .map_err(|_| "postgres-data-directory-traversal-failed".to_string())?
-            {
-                stack.push(
+                .map(|entry| {
                     entry
-                        .map_err(|_| "postgres-data-directory-traversal-failed".to_string())?
-                        .path(),
-                );
+                        .map(|entry| entry.path())
+                        .map_err(|_| "postgres-data-directory-traversal-failed".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            children.sort();
+            for child in children.into_iter().rev() {
+                stack.push(child);
             }
         }
     }
-    Ok(total)
+    Ok((total, hex_sha256(&hasher.finalize())))
 }
 
 #[cfg(not(unix))]
-fn allocated_bytes(_root: &Path) -> Result<u64, String> {
+fn directory_contents(_root: &Path) -> Result<(u64, String), String> {
     Err("postgres-test-cluster-reclaim-unsupported-platform".into())
 }
 
@@ -470,6 +605,13 @@ fn successful_stdout(
     Ok(output.stdout)
 }
 
+fn pg_ctl_status_pid(output: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        let (_, suffix) = line.rsplit_once("(PID: ")?;
+        suffix.strip_suffix(')')?.parse().ok()
+    })
+}
+
 fn hex_sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -512,7 +654,8 @@ pub fn plan_with_runner(
     let data_directory = std::fs::canonicalize(&request.data_directory)
         .map_err(|_| "postgres-data-directory-unavailable".to_string())?;
     let data_directory_identity = directory_identity(&data_directory)?;
-    let (postgres_version, allocated_bytes) = required_structure(&data_directory)?;
+    let (postgres_version, allocated_bytes, data_directory_content_identity) =
+        required_structure(&data_directory)?;
     let state = postmaster_state(&data_directory)?;
     if !runner.pid_is_alive(state.pid) {
         return Err("postgres-postmaster-not-running".into());
@@ -529,7 +672,7 @@ pub fn plan_with_runner(
             "status".into(),
         ],
     )?;
-    if !pg_ctl_status.contains(&state.pid.to_string()) {
+    if pg_ctl_status_pid(&pg_ctl_status) != Some(state.pid) {
         return Err("postgres-pg-ctl-status-identity-mismatch".into());
     }
     let database_output = successful_stdout(
@@ -587,6 +730,7 @@ pub fn plan_with_runner(
         pg_ctl_identity,
         pg_ctl_status_identity: hex_sha256(pg_ctl_status.as_bytes()),
         allocated_bytes,
+        data_directory_content_identity,
         observed_at_ms,
         plan_fingerprint: String::new(),
         exact_approval_phrase: String::new(),
@@ -630,6 +774,13 @@ pub fn execute_with_runner(
     }
     let operation_id = operation_id(approved_plan, now_ms);
     let data_directory = Path::new(&approved_plan.data_directory);
+    let canonical_record_directory = std::fs::canonicalize(record_directory)
+        .map_err(|_| "postgres-record-directory-unavailable".to_string())?;
+    if canonical_record_directory == data_directory
+        || canonical_record_directory.starts_with(data_directory)
+    {
+        return Err("postgres-record-directory-inside-cluster".into());
+    }
     let volume_root = data_directory
         .parent()
         .ok_or_else(|| "postgres-data-directory-parent-missing".to_string())?;
@@ -655,7 +806,10 @@ pub fn execute_with_runner(
             "-D".into(),
             approved_plan.data_directory.clone(),
             "-m".into(),
-            "fast".into(),
+            // Smart shutdown establishes PostgreSQL's native admission barrier: new sessions are
+            // rejected and an already-racing client makes the bounded stop fail instead of being
+            // disconnected without approval.
+            "smart".into(),
             "-w".into(),
             "stop".into(),
         ],
@@ -664,6 +818,11 @@ pub fn execute_with_runner(
     let shutdown_completed = shutdown.as_ref().is_ok_and(|output| {
         output.status == 0 && output.executable_identity == approved_plan.pg_ctl_identity
     }) && !runner.pid_is_alive(approved_plan.postmaster_pid);
+    let stopped_content_identity = shutdown_completed
+        .then(|| directory_contents(data_directory).map(|(_, identity)| identity))
+        .transpose()
+        .ok()
+        .flatten();
     let quarantine = volume_root.join(format!(".disksage-postgres-reclaim-{operation_id}"));
     let mut identity_still_matches = false;
     let directory_removed = if shutdown_completed
@@ -671,7 +830,10 @@ pub fn execute_with_runner(
         && std::fs::rename(data_directory, &quarantine).is_ok()
     {
         identity_still_matches = directory_identity(&quarantine)
-            .is_ok_and(|identity| identity == approved_plan.data_directory_identity);
+            .is_ok_and(|identity| identity == approved_plan.data_directory_identity)
+            && stopped_content_identity.as_ref().is_some_and(|expected| {
+                directory_contents(&quarantine).is_ok_and(|(_, observed)| &observed == expected)
+            });
         if identity_still_matches {
             std::fs::remove_dir_all(&quarantine).is_ok()
                 && !quarantine.exists()
@@ -683,10 +845,13 @@ pub fn execute_with_runner(
     } else {
         false
     };
-    let free_after = free_bytes(volume_root).unwrap_or(free_before);
-    let completed = shutdown_completed && directory_removed;
+    let free_after = free_bytes(volume_root).ok();
+    let capacity_evidence_complete = free_after.is_some();
+    let completed = shutdown_completed && directory_removed && capacity_evidence_complete;
     let reason_code = if completed {
         "postgres-test-cluster-reclaimed"
+    } else if directory_removed && !capacity_evidence_complete {
+        "postgres-filesystem-capacity-postcheck-incomplete"
     } else if !shutdown_completed {
         "postgres-shutdown-not-confirmed"
     } else if !identity_still_matches {
@@ -704,7 +869,7 @@ pub fn execute_with_runner(
         directory_removed,
         free_bytes_before: free_before,
         free_bytes_after: free_after,
-        physically_reclaimed_bytes: free_after.saturating_sub(free_before),
+        physically_reclaimed_bytes: free_after.map(|after| after.saturating_sub(free_before)),
         completed_at_ms: now_ms,
     };
     let result_path = record_directory.join(format!("postgres-reclaim-{operation_id}-result.json"));
@@ -767,6 +932,9 @@ mod tests {
                 });
             }
             if args.last().map(String::as_str) == Some("stop") {
+                assert!(args
+                    .windows(2)
+                    .any(|pair| pair[0] == "-m" && pair[1] == "smart"));
                 self.alive.set(false);
                 let _ = std::fs::remove_file(self.data_directory.join("postmaster.pid"));
                 return Ok(CommandOutput {
@@ -850,6 +1018,18 @@ mod tests {
     }
 
     #[test]
+    fn native_runner_drains_large_output_before_rejecting_it() {
+        let error = NativePostgresCommandRunner
+            .run(
+                Path::new("/bin/sh"),
+                &["-c".into(), "yes x | head -c 70000".into()],
+                Duration::from_secs(2),
+            )
+            .unwrap_err();
+        assert_eq!(error, "postgres-native-command-output-too-large");
+    }
+
+    #[test]
     fn mismatch_or_external_client_fails_closed() {
         let (_temp, request, runner) = fixture();
         *runner.databases.borrow_mut() = "other_test\n".into();
@@ -862,6 +1042,17 @@ mod tests {
         assert_eq!(
             plan_with_runner(&request, &runner, 7).unwrap_err(),
             "postgres-external-clients-active"
+        );
+        let (_temp, mut request, runner) = fixture();
+        request.expected_databases = vec![" suite_test".into()];
+        assert_eq!(
+            plan_with_runner(&request, &runner, 7).unwrap_err(),
+            "postgres-expected-database-allowlist-invalid"
+        );
+        assert_eq!(pg_ctl_status_pid("server is running (PID: 42)\n"), Some(42));
+        assert_eq!(
+            pg_ctl_status_pid("server is running (PID: 142)\n"),
+            Some(142)
         );
     }
 
@@ -887,5 +1078,29 @@ mod tests {
         assert!(!request.data_directory.exists());
         assert!(evidence.pending.written && evidence.result.written);
         assert_eq!(std::fs::read_dir(records).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn record_directory_inside_cluster_is_rejected_before_shutdown() {
+        let (_temp, request, runner) = fixture();
+        let records = request.data_directory.join("records");
+        std::fs::create_dir(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let plan = plan_with_runner(&request, &runner, 7).unwrap();
+        let source = tempfile::tempdir().unwrap();
+        assert_eq!(
+            execute_with_runner(
+                &request,
+                &plan,
+                &plan.exact_approval_phrase,
+                &records,
+                source.path(),
+                &runner,
+                7,
+            )
+            .unwrap_err(),
+            "postgres-record-directory-inside-cluster"
+        );
+        assert!(runner.alive.get());
     }
 }
