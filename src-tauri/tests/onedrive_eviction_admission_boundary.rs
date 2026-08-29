@@ -30,7 +30,7 @@ fn onedrive_unpin_has_a_bounded_graceful_term_fallback() {
     assert!(function.contains("request_quit(\"OneDrive\")"));
     assert!(function.contains("request_graceful_term(\"OneDrive\")"));
     assert!(function.contains("provider-recovery-quit-timeout"));
-    assert!(function.contains("collect_provider_primary_runtime"));
+    assert!(function.contains("require_primary_runtime_observation"));
 
     let graceful_term = source
         .split_once("fn request_graceful_term")
@@ -41,4 +41,14 @@ fn onedrive_unpin_has_a_bounded_graceful_term_fallback() {
         .0;
     assert!(graceful_term.contains("\"-TERM\""));
     assert!(!graceful_term.contains("\"-KILL\""));
+
+    let quit = source
+        .split_once("fn request_quit")
+        .expect("quit helper")
+        .1
+        .split_once("fn request_graceful_term")
+        .expect("quit helper boundary")
+        .0;
+    assert!(quit.contains("require_primary_runtime_observation"));
+    assert!(!quit.contains("require_runtime_observation"));
 }

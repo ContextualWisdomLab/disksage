@@ -308,11 +308,7 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     let operation = (|| {
         let mut deadline = Instant::now() + Duration::from_secs(10);
         let mut graceful_term_requested = false;
-        while crate::provider_client_runtime::collect_provider_primary_runtime(
-            CloudProvider::Onedrive,
-        )
-        .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?
-        {
+        while require_primary_runtime_observation(CloudProvider::Onedrive)? {
             if Instant::now() >= deadline {
                 if graceful_term_requested {
                     return Err("provider-recovery-quit-timeout".into());
@@ -353,6 +349,12 @@ fn require_runtime_observation(
 }
 
 #[cfg(not(coverage))]
+fn require_primary_runtime_observation(provider: CloudProvider) -> Result<bool, String> {
+    crate::provider_client_runtime::collect_provider_primary_runtime(provider)
+        .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())
+}
+
+#[cfg(not(coverage))]
 fn request_quit(app: &str) -> Result<(), String> {
     // The app name is selected from the fixed provider map above; no user path or shell is parsed.
     let script = format!("tell application \"{app}\" to quit");
@@ -364,7 +366,7 @@ fn request_quit(app: &str) -> Result<(), String> {
     } else {
         CloudProvider::GoogleDrive
     };
-    if !ok && require_runtime_observation(provider, 0)? {
+    if !ok && require_primary_runtime_observation(provider)? {
         return Err("provider-recovery-quit-request-failed".into());
     }
     Ok(())
@@ -380,7 +382,7 @@ fn request_graceful_term(app: &str) -> Result<(), String> {
     } else {
         CloudProvider::GoogleDrive
     };
-    if !ok && require_runtime_observation(provider, 0)? {
+    if !ok && require_primary_runtime_observation(provider)? {
         return Err("provider-recovery-graceful-term-failed".into());
     }
     Ok(())
