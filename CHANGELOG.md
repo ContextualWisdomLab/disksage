@@ -6,7 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 - Revalidate OneDrive's exact File Provider item/version identity immediately
-  before the Foundation eviction call, and let approved OneDrive batches use
+  before the Foundation eviction call, including every latest sync, policy,
+  size, eviction-capability, and Files On-Demand gate, and let approved OneDrive batches use
   the same immutable per-item execution/checkpoint path as iCloud. Finder
   selection remains available only through the explicit `--finder-assistance`
   fallback.

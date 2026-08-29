@@ -1161,6 +1161,29 @@ fn validate_native_item_identity(expected: &str, observed: &str) -> Result<(), S
     Ok(())
 }
 
+fn validate_onedrive_mutation_status(
+    status: &crate::provider_sync::FileProviderItemStatus,
+    expected_bytes: u64,
+    files_on_demand_available: bool,
+) -> Result<(), String> {
+    if status.observed_bytes != expected_bytes
+        || !status.is_local_current()
+        || !status.is_uploaded
+        || status.is_uploading
+        || status.is_downloading
+        || status.has_unresolved_conflicts
+        || status.is_excluded_from_sync
+        || status.is_sync_paused
+        || status.is_trashed
+        || status.is_keep_downloaded
+        || !status.allows_eviction
+        || !files_on_demand_available
+    {
+        return Err("native-file-provider-item-state-changed".into());
+    }
+    Ok(())
+}
+
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn request_native_icloud_eviction(
     root: &CloudRoot,
@@ -1178,6 +1201,11 @@ fn request_native_icloud_eviction(
         let status = crate::provider_sync::file_providerctl_status(path)?;
         let observed =
             crate::provider_sync::parse_file_providerctl_item_status(&status, metadata.len())?;
+        validate_onedrive_mutation_status(
+            &observed,
+            metadata.len(),
+            crate::provider_recovery::onedrive_files_on_demand_available(),
+        )?;
         validate_native_item_identity(expected_identity, &observed.item_identifier_fingerprint)?;
     }
     if !matches!(
@@ -1574,6 +1602,54 @@ mod tests {
         assert_eq!(
             validate_native_item_identity("invalid", &expected).unwrap_err(),
             "native-file-provider-item-identity-unconfirmed"
+        );
+    }
+
+    #[test]
+    fn onedrive_mutation_revalidates_every_latest_policy_and_sync_gate() {
+        let status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: true,
+            is_downloading: false,
+            is_most_recent_version_downloaded: true,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            is_keep_downloaded: false,
+            capabilities: crate::provider_sync::FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING,
+            allows_eviction: true,
+            observed_bytes: 100,
+            item_identifier_fingerprint: "a".repeat(64),
+        };
+        assert!(validate_onedrive_mutation_status(&status, 100, true).is_ok());
+
+        macro_rules! assert_changed {
+            ($field:ident, $value:expr) => {{
+                let mut changed = status.clone();
+                changed.$field = $value;
+                assert_eq!(
+                    validate_onedrive_mutation_status(&changed, 100, true).unwrap_err(),
+                    "native-file-provider-item-state-changed"
+                );
+            }};
+        }
+        assert_changed!(is_downloaded, false);
+        assert_changed!(is_downloading, true);
+        assert_changed!(is_most_recent_version_downloaded, false);
+        assert_changed!(is_uploaded, false);
+        assert_changed!(is_uploading, true);
+        assert_changed!(has_unresolved_conflicts, true);
+        assert_changed!(is_excluded_from_sync, true);
+        assert_changed!(is_sync_paused, true);
+        assert_changed!(is_trashed, true);
+        assert_changed!(is_keep_downloaded, true);
+        assert_changed!(allows_eviction, false);
+        assert_changed!(observed_bytes, 101);
+        assert_eq!(
+            validate_onedrive_mutation_status(&status, 100, false).unwrap_err(),
+            "native-file-provider-item-state-changed"
         );
     }
 
