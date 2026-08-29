@@ -589,8 +589,10 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
         .child_paths()
         .into_iter()
         .flat_map(|path| {
-            if dir.file_name().and_then(|name| name.to_str()) == Some(".npm")
-                && path.file_name().and_then(|name| name.to_str()) == Some("_npx")
+            if matches!(
+                dir.file_name().and_then(|name| name.to_str()),
+                Some(".npm" | "npm-cache")
+            ) && path.file_name().and_then(|name| name.to_str()) == Some("_npx")
             {
                 CatalogRoot::open(&path)
                     .map(|root| root.child_paths())
