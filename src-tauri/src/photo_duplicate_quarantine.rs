@@ -378,7 +378,10 @@ mod tests {
         png(&first, 42, "one");
         png(&second, 42, "two");
         let audit = audit_photos(&[first.clone(), second], 7);
-        assert_eq!(audit_authority_root(&audit).unwrap(), root.path());
+        assert_eq!(
+            audit_authority_root(&audit).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
+        );
         let group = &audit.exact_groups[0];
         let selection = PhotoQuarantineSelection {
             group_fingerprint: group.content_digest.clone(),

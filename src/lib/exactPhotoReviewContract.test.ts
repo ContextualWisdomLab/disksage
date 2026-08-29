@@ -17,14 +17,15 @@ describe("exact photo review safety and accessibility contract", () => {
 
   it("lets customers compare different encodings without byte-duplicate prefiltering", () => {
     expect(source).toContain("사진 직접 선택");
-    expect(source).toContain("selectedPaths = Array.isArray(chosen)");
+    expect(source).toContain("const paths = Array.isArray(chosen)");
+    expect(source).toContain("selectedPaths = paths");
     expect(source).toContain("auditExactPhotoDuplicates(selectedPaths)");
   });
 
   it("resets stale review evidence after a new scan and does not bind direct picks to the scan root", () => {
-    expect(source).toContain("fingerprint !== reviewedCandidateFingerprint");
-    expect(source).toContain("selectedPaths = duplicateCandidatePaths(duplicateGroups)");
-    expect(source).toContain("audit = null; plan = null; receipt = null");
+    expect(source).toContain('const source = manualSelectionRoot === null ? "scan" : "manual"');
+    expect(source).toContain("syncPhotoCandidatePaths(duplicateGroups, selectedPaths, source)");
+    expect(source).toContain("clearReviewState()");
     expect(source).toContain("planExactPhotoDuplicateQuarantine(audit, selections)");
     expect(source).not.toContain("planExactPhotoDuplicateQuarantine(scannedRoot");
   });
