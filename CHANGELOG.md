@@ -10,6 +10,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Release verified OneDrive local copies through Foundation only after an exact item-and-version
+  fingerprint, current upload/materialization flags, `isKeepDownloaded = 0`, no active handle, and
+  attributed approval survive an immediate re-plan. Postchecks and immutable records distinguish
+  a successful request from measured allocation recovery; dataless files report zero reclaim.
+
 - Admit iCloud local-copy eviction from Apple Foundation's public, per-item ubiquitous metadata
   only when the item is uploaded, current, idle, conflict-free, error-free, and not excluded from
   sync. Upload/download errors remain explicit blockers; exact approval is invalidated by the new

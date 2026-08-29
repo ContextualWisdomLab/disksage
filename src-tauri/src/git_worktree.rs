@@ -3587,6 +3587,7 @@ mod tests {
             is_excluded_from_sync: false,
             is_sync_paused: false,
             is_trashed: false,
+            is_keep_downloaded: false,
             capabilities: 0,
             allows_eviction: false,
             observed_bytes: 30,

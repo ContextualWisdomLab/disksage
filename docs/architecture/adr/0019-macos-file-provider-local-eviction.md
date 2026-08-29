@@ -12,28 +12,23 @@ allocated. OneDrive's supported macOS **Free up space** action was not executabl
 
 DiskSage may release a locally materialized iCloud or OneDrive file only after the existing exact
 path, allocation, uploaded/current, conflict, provider capability, item identity, and active-use
-checks pass and a human approves the exact plan fingerprint. iCloud continues
-to use Foundation's ubiquitous-item eviction. OneDrive native eviction remains blocked. A
-read-only integration probe against a real OneDrive File Provider item returned
-`NSFileProviderErrorProviderNotFound` (`-2001`) before identity resolution, so DiskSage cannot
-claim that a cross-provider `NSFileProviderManager` can operate on OneDrive. The compiled helper
-targets macOS 11.0, binds item and domain identity together, and rejects identity replacement
-before its eviction call, but production Rust refuses to invoke that call until a reviewed
-integration receipt proves path retention and reduced local allocation. A provider-wide new-copy
+checks pass and a human approves the exact plan fingerprint. iCloud and OneDrive both use
+Foundation's public ubiquitous-item eviction after a fresh File Provider snapshot proves
+downloaded/current, uploaded/not-uploading, conflict-free, included, unpaused, evictable, and not
+explicitly retained. The snapshot fingerprint binds the provider item and version identifiers
+without recording either raw identifier. A provider-wide new-copy
 admission check is intentionally
 not reused here because it governs adding copies, while this operation releases an already
 uploaded local copy. Exact
 item evidence still fails closed. The result must retain the path and show a reduced
 allocation before DiskSage reports verification complete.
 
-OneDrive registers `com.microsoft.OneDrive.FileProviderActions.MarkUnpinned` as a File Provider
-extension custom action. Apple's public API exposes `performAction` to the provider extension that
-implements that protocol; it does not expose a third-party caller for an arbitrary registered
-action identifier. DiskSage therefore uses the already-installed Tauri opener boundary, which on
-macOS calls public `NSWorkspace.activateFileViewerSelectingURLs`, to select only the freshly
-replanned, fingerprint-approved items. The customer then chooses **Free Up Space** in Finder and
-DiskSage verifies retained item identity and reduced allocated bytes. Selection is explicitly not
-reported as eviction or reclaimed capacity.
+Production observations on anonymized regular files proved this boundary for OneDrive: two
+initial files and two later bounded batches retained their cloud paths and uploaded state while
+local allocation fell. Aggregate OneDrive local allocation fell from about 83.46 GB to 21.13 GB
+and host APFS availability rose by about 61 GiB. A separate apparent 10 GB diagnostic file already
+had zero allocated bytes, so it was excluded and contributed zero reclaim. These are operational
+observations, not fixed expected savings.
 
 Google Drive remains blocked until its provider behavior is verified against the same contract.
 OAuth is not required for local cache eviction because the signed-in desktop File Provider owns
@@ -77,8 +72,9 @@ stale evidence and cannot be reused to approve or execute a new plan.
 - Calling the iCloud ubiquitous-item API for OneDrive: the ownership contract is wrong.
 - OneDrive's undocumented `/unpin` command: observed builds can print a native failure while
   exiting successfully, so process exit status cannot prove completion.
-- Cross-provider `NSFileProviderManager` eviction without runtime proof: the harmless identity
-  probe failed with the SDK-defined provider-not-found error.
+- Cross-provider `NSFileProviderManager` eviction: the earlier identity probe failed with the
+  SDK-defined provider-not-found error, while FileManager's ubiquitous-item eviction is the public
+  boundary verified by the successful production observations.
 - Finder UI automation or Accessibility scripting: it is not an identity-bound or deterministic
   execution boundary. Revealing the exact approved selection for an explicit customer action is
   retained because it uses public AppKit and performs no provider mutation.

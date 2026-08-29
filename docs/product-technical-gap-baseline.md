@@ -11,6 +11,14 @@ queued or stale status.
 
 ## 2026-08-29 OneDrive local-space recovery observation
 
+- Production use of Foundation ubiquitous-item eviction on anonymized OneDrive files retained
+  uploaded cloud items and reduced local allocation from about 83.46 GB to 21.13 GB; host APFS
+  availability increased by about 61 GiB. DiskSage now admits that path only for a bounded regular
+  file whose fresh File Provider item-and-version fingerprint, upload/current/conflict/policy
+  flags, active-use probe, and exact approval all match immediately before execution. A dataless
+  apparent 10 GB file correctly contributes zero reclaim. Mixed folders, active readers, changed
+  versions, and stale approvals remain blocked.
+
 - A metadata-only inventory completed across 277,410 entries and found 118 locally materialized
   candidates totaling 62,060,163,072 allocated bytes. A fresh plan after provider drift retained
   110 eligible items totaling 58,836,140,032 allocated bytes and excluded eight items; private
@@ -20,20 +28,11 @@ queued or stale status.
   Files On-Demand eviction, observes the primary app separately from its resident File Provider
   helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
   client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
-- The vendor `/unpin` command printed `Failed operation=2 ... status=-2` but exited zero, proving
-  that its exit code is not completion evidence. The same result was observed with the primary
-  OneDrive app running and with both NFC and NFD path spellings, so neither client lifecycle nor
-  Unicode normalization repairs that unsupported boundary. A harmless public-API identity probe against a
-  real OneDrive File Provider item then failed with `NSFileProviderErrorProviderNotFound` (`-2001`).
-  DiskSage therefore blocks OneDrive native execution. The macOS 11 helper and Rust boundary bind
-  item plus domain identity and reject path replacement, but they cannot authorize eviction.
-- The remaining acceptance proof is a reviewed provider-supported eviction on a freshly replanned item,
-  immutable result recording, and observed allocation reduction. Apple exposes OneDrive's registered
-  custom action to the extension implementation, not as a public third-party invocation API.
-  DiskSage now uses public AppKit through its existing opener dependency to select the exact approved
-  items in Finder, records that selection as non-mutating assistance, and verifies retained provider
-  identity plus allocated-byte reduction only after the customer chooses **Free Up Space**. Until
-  that postcheck succeeds, the measured 58.8 GB is opportunity, not reclaimed capacity.
+- The vendor `/unpin` command and cross-provider `NSFileProviderManager` identity probe remain
+  rejected boundaries: their earlier failures cannot prove eviction. The subsequent Foundation
+  FileManager observations supply the missing execution and post-allocation evidence without using
+  either vendor-private commands or cloud-object deletion. Finder remains a customer-controlled
+  fallback when a freshly approved native request fails.
 
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
