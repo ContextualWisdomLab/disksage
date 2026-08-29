@@ -5,6 +5,7 @@
   import TopFiles from "$lib/TopFiles.svelte";
   import Treemap from "$lib/Treemap.svelte";
   import Cleanup from "$lib/Cleanup.svelte";
+  import PodmanEvidence from "$lib/PodmanEvidence.svelte";
   import Duplicates from "$lib/Duplicates.svelte";
   import Inventory from "$lib/Inventory.svelte";
   import Organize from "$lib/Organize.svelte";
@@ -119,6 +120,8 @@
   {/if}
 
   <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
+
+  <PodmanEvidence />
 
   <Inventory scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 

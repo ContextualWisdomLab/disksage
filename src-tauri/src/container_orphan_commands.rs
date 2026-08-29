@@ -89,6 +89,45 @@ fn target_for_kind(
     }
 }
 
+fn pin_docker_authority(
+    binary_path: &std::path::Path,
+    authority: &DockerAmbientAuthority,
+) -> Result<DockerAmbientAuthority, String> {
+    match authority {
+        DockerAmbientAuthority::Host(host) => Ok(DockerAmbientAuthority::Host(host.clone())),
+        DockerAmbientAuthority::Context(context) => {
+            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, context)?;
+            Ok(DockerAmbientAuthority::PinnedContext { name: context.clone(), fingerprint })
+        }
+        DockerAmbientAuthority::Default => {
+            let name = "default".to_string();
+            let fingerprint = container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, &name)?;
+            Ok(DockerAmbientAuthority::PinnedContext { name, fingerprint })
+        }
+        DockerAmbientAuthority::PinnedContext { .. } => Err("docker-authority-already-pinned".into()),
+    }
+}
+
+fn pinned_docker_target(
+    authority: &DockerAmbientAuthority,
+) -> Result<container_orphan_reclaim::ContainerRuntimeTarget, String> {
+    match authority {
+        DockerAmbientAuthority::Host(host) => {
+            container_orphan_reclaim::ContainerRuntimeTarget::docker_native_host(
+                docker_binary(),
+                host.clone(),
+            )
+        }
+        DockerAmbientAuthority::PinnedContext { name, .. } => {
+            container_orphan_reclaim::ContainerRuntimeTarget::docker_native_context(
+                docker_binary(),
+                name.clone(),
+            )
+        }
+        _ => Err("docker-authority-not-pinned".into()),
+    }
+}
+
 fn validate_requested_scope(
     target: &container_orphan_reclaim::ContainerRuntimeTarget,
     requested_scope: &Option<String>,
@@ -134,6 +173,7 @@ enum DockerHostEnvironment {
 enum DockerAmbientAuthority {
     Default,
     Context(String),
+    PinnedContext { name: String, fingerprint: String },
     Host(String),
 }
 
@@ -260,6 +300,13 @@ fn docker_authority_binding(authority: &DockerAmbientAuthority) -> String {
             hasher.update([0]);
             hasher.update(context.as_bytes());
         }
+        DockerAmbientAuthority::PinnedContext { name, fingerprint } => {
+            hasher.update(b"pinned-context");
+            hasher.update([0]);
+            hasher.update(name.as_bytes());
+            hasher.update([0]);
+            hasher.update(fingerprint.as_bytes());
+        }
         DockerAmbientAuthority::Host(host) => {
             hasher.update(b"host");
             hasher.update([0]);
@@ -314,15 +361,23 @@ fn bind_docker_authority_plan(
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
     let docker_authority = docker_ambient_authority();
+    let pinned_docker_authority = docker_authority
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|authority| pin_docker_authority(&docker_binary(), authority));
     runtime_kinds_for_docker_authority(&docker_authority)
         .into_iter()
         .filter_map(|kind| {
-            let target = target_for_kind(kind).ok()?;
+            let target = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+                pinned_docker_target(pinned_docker_authority.as_ref().ok()?).ok()?
+            } else {
+                target_for_kind(kind).ok()?
+            };
             let plan = container_orphan_public::sanitize_plan(
                 container_orphan_reclaim::probe_container_orphans(&target),
             );
             if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-                let authority = docker_authority.as_ref().ok()?;
+                let authority = pinned_docker_authority.as_ref().ok()?;
                 Some(bind_docker_authority_plan(plan, authority))
             } else {
                 Some(plan)
@@ -349,12 +404,23 @@ pub fn execute_container_orphan_prune(
     }
     let kind = parse_runtime_kind(&runtime_kind)?;
     let category = parse_category(&category)?;
-    let target = target_for_kind(kind)?;
+    let (target, docker_authority) = if kind
+        == container_orphan_reclaim::ContainerRuntimeKind::DockerNative
+    {
+        let ambient = docker_ambient_authority()
+            .map_err(|error| format!("orphan-prune-{error}"))?;
+        let pinned = pin_docker_authority(&docker_binary(), &ambient)
+            .map_err(|error| format!("orphan-prune-{error}"))?;
+        (pinned_docker_target(&pinned)?, Some(pinned))
+    } else {
+        (target_for_kind(kind)?, None)
+    };
     validate_requested_scope(&target, &scope_name)?;
     let engine_confirmation = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-        let authority = docker_ambient_authority()
-            .map_err(|error| format!("orphan-prune-{error}"))?;
-        unbind_docker_authority_approval(&confirmation_phrase, &authority)?
+        unbind_docker_authority_approval(
+            &confirmation_phrase,
+            docker_authority.as_ref().ok_or("docker-authority-not-pinned")?,
+        )?
     } else {
         confirmation_phrase
     };
@@ -492,6 +558,28 @@ mod tests {
         assert_eq!(
             unbind_docker_authority_approval(&bound, &host_b).unwrap_err(),
             "orphan-prune-docker-authority-mismatch"
+        );
+        let target = pinned_docker_target(&pin_docker_authority(&docker_binary(), &host_a).unwrap())
+            .unwrap();
+        let prefix = target.command_prefix().unwrap();
+        assert_eq!(&prefix[prefix.len() - 2..], ["--host", "unix:///tmp/customer-a.sock"]);
+
+        let tls_context = DockerAmbientAuthority::PinnedContext {
+            name: "customer-tls".to_string(),
+            fingerprint: "context-definition-a".to_string(),
+        };
+        let changed_tls_context = DockerAmbientAuthority::PinnedContext {
+            name: "customer-tls".to_string(),
+            fingerprint: "context-definition-b".to_string(),
+        };
+        let target = pinned_docker_target(&tls_context).unwrap();
+        assert_eq!(
+            &target.command_prefix().unwrap()[1..],
+            ["--context", "customer-tls"]
+        );
+        assert_ne!(
+            bind_docker_authority_approval(base, &tls_context),
+            bind_docker_authority_approval(base, &changed_tls_context)
         );
     }
 

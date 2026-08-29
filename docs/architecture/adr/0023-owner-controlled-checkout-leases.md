@@ -1,4 +1,4 @@
-# ADR-0022: Checkout leases are owner-controlled and durable
+# ADR-0023: Checkout leases are owner-controlled and durable
 
 - Status: Accepted
 - Date: 2026-08-29

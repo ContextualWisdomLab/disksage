@@ -1365,7 +1365,7 @@ fn git_admin_metadata_blocker(
 fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| "git-worktree-admin-metadata-stat-failed".to_string())?;
-    let output = match crate::provider_sync::file_providerctl_status(&path.to_string_lossy()) {
+    let output = match crate::provider_sync::file_providerctl_status(path) {
         Ok(output) => output,
         Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
         Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
@@ -1615,7 +1615,22 @@ pub fn active_use_evidence(
     max_pids: usize,
     recursive: bool,
 ) -> GitWorktreeActiveUseEvidence {
-    let command_cwd = path.parent().unwrap_or(path);
+    active_use_evidence_with_command_path(path, path, timeout_ms, max_pids, recursive)
+}
+
+/// Probe handles below `object_path` while matching process arguments against `command_path`.
+///
+/// Atomic staging changes an object's pathname but not an already-started process command. Keeping
+/// these identities separate closes that rename boundary without weakening the bounded probes.
+#[cfg(unix)]
+pub(crate) fn active_use_evidence_with_command_path(
+    object_path: &Path,
+    command_path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    let command_cwd = object_path.parent().unwrap_or(object_path);
     let method = if recursive {
         "lsof-recursive-pid"
     } else {
@@ -1625,7 +1640,7 @@ pub fn active_use_evidence(
     if recursive {
         lsof_args.push(OsString::from("+D"));
     }
-    lsof_args.push(path.as_os_str().to_os_string());
+    lsof_args.push(object_path.as_os_str().to_os_string());
     let result = match run_bounded_command("lsof", &lsof_args, command_cwd, timeout_ms) {
         Ok(result) => result,
         Err(error) => {
@@ -1730,7 +1745,7 @@ pub fn active_use_evidence(
             };
         }
     };
-    let path_bytes = path.as_os_str().as_encoded_bytes();
+    let path_bytes = command_path.as_os_str().as_encoded_bytes();
     for line in ps.stdout.split(|byte| *byte == b'\n') {
         let line = &line[line
             .iter()
@@ -1783,6 +1798,17 @@ pub(crate) fn active_use_evidence(
         results_truncated: false,
         error: Some("active-use-platform-unsupported".into()),
     }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn active_use_evidence_with_command_path(
+    object_path: &Path,
+    _command_path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    active_use_evidence(object_path, timeout_ms, max_pids, recursive)
 }
 
 fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
@@ -3098,35 +3124,18 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
         .map(|binding| binding.reference_ref.clone())
         .collect();
     let audit_live = |observed_at_ms| {
-        let closed_heads = if include_closed_pull_requests {
-            github_closed_pull_request_heads_with_options(&repository_root, options)?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            github_stale_open_pull_request_heads(
-                &repository_root,
-                cutoff_ms,
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                github_pull_request_commit_membership(&repository_root, options)?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let evidence = crate::git_worktree_github_evidence::collect(
+            &repository_root,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         audit_git_worktrees_with_pull_request_membership(
             &repository_root,
             &reference_names,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             observed_at_ms,
@@ -3507,6 +3516,28 @@ mod tests {
             b"/cache/env with spaces",
             true,
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_probe_keeps_original_command_path_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("approved-cache");
+        let staged = temp.path().join(".disksage-stage").join("approved-cache");
+        fs::create_dir_all(&staged).unwrap();
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 20 & wait", original.to_str().unwrap()])
+            .spawn()
+            .unwrap();
+
+        let evidence =
+            active_use_evidence_with_command_path(&staged, &original, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
     }
 
     #[cfg(target_os = "macos")]
@@ -4015,6 +4046,7 @@ mod tests {
             is_excluded_from_sync: false,
             is_sync_paused: false,
             is_trashed: false,
+            is_keep_downloaded: false,
             capabilities: 0,
             allows_eviction: false,
             observed_bytes: 30,

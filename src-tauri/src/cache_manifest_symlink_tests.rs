@@ -44,8 +44,7 @@ fn manifest_variable_fields_are_length_framed() {
     let cache_root = temp.path().join("cache-root");
     fs::create_dir(&cache_root).expect("create cache root");
     let target_path = cache_root.join("ab");
-    let payload = b"generated-payload";
-    fs::write(&target_path, payload).expect("write generated cache fixture");
+    fs::write(&target_path, b"generated-payload").expect("write generated cache fixture");
 
     let targets = crate::rules::cache_targets(&cache_root).expect("enumerate cache targets");
     assert_eq!(targets.len(), 1);
@@ -60,10 +59,9 @@ fn manifest_variable_fields_are_length_framed() {
             .as_bytes(),
     );
     expected.update(&[0]);
-    expected.update(&target.bytes.to_le_bytes());
-    expected.update(&target.modified_ms.to_le_bytes());
+    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
+    update_framed(&mut expected, crate::rules::cache_metadata_fingerprint(&metadata).as_bytes());
     update_framed(&mut expected, target.object_id.as_bytes());
-    expected.update(payload);
 
     assert_eq!(
         target.manifest_fingerprint,

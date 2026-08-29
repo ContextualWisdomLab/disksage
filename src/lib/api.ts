@@ -55,6 +55,7 @@ export interface CleanResult {
   path: string;
   ok: boolean;
   error: string;
+  warning: string;
 }
 
 export interface OrphanRelationEvidence {
@@ -110,6 +111,7 @@ export interface OrphanCleanupItemResult {
   attempted: boolean;
   moved_to_trash: boolean;
   error: string | null;
+  warning: string | null;
 }
 export interface OrphanCleanupResult {
   schema_kind: "disksage.orphan-cleanup-result/v1";
@@ -240,13 +242,16 @@ export interface RuntimeStoragePlan {
   executable_available: boolean;
   guest_running: boolean | null;
   guest_reachable: boolean | null;
+  running_container_count: number | null;
   trim_command: string[] | null;
+  stop_command: string[] | null;
   recovery_command: string[][] | null;
   host_compaction_supported: boolean;
   host_compaction_blockers: string[];
   observed_at_ms: number;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
+  stop_approval_phrase: string | null;
   recovery_approval_phrase: string | null;
   evidence_complete: boolean;
   issue: string | null;
@@ -266,6 +271,10 @@ export interface RuntimeStorageExecution {
   rationale: string;
   volume_comparison: LocalVolumeComparison | null;
   volume_evidence_error: string | null;
+  runtime_image_allocated_bytes_before: number | null;
+  runtime_image_allocated_bytes_after: number | null;
+  runtime_image_reclaimed_bytes: number | null;
+  runtime_image_evidence_error: string | null;
 }
 
 export interface RuntimeStorageRecoveryExecution {
@@ -279,6 +288,12 @@ export interface RuntimeStorageRecoveryExecution {
   executed: boolean;
   executed_at_ms: number;
   rationale: string;
+}
+
+export interface RuntimeStorageStopExecution extends Omit<RuntimeStorageExecution, "schema_kind"> {
+  schema_kind: "disksage.runtime-storage-stop-execution";
+  running_container_count_before: number;
+  guest_running_after: boolean | null;
 }
 
 export const inspectRuntimeStorage = () =>
@@ -300,6 +315,14 @@ export const executeRuntimeStorageRecovery = (
   rationale: string,
 ) => invoke<RuntimeStorageRecoveryExecution>("execute_runtime_storage_recovery", {
   runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export const executeInactivePodmanMachineStop = (
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageStopExecution>("execute_inactive_podman_machine_stop", {
   confirmationPhrase,
   rationale,
 });

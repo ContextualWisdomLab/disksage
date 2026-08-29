@@ -3,9 +3,8 @@
 //! Planning is read-only and never opens file content. Execution is macOS-only, requires a
 //! fingerprint-bound human approval, revalidates native iCloud state and active handles, calls
 //! Foundation's local-only ubiquitous-item eviction API, and reports allocation reduction
-//! separately from the API request. Modern macOS File Provider status is observed through a
-//! bounded, read-only diagnostic command because ubiquitous URL resource values are absent for
-//! some File Provider-backed iCloud paths.
+//! separately from the API request. iCloud state is observed through Foundation's public
+//! ubiquitous-item resource values; provider-specific diagnostics are not an iCloud authority.
 
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use serde::Serialize;
@@ -17,20 +16,12 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 
-pub const ICLOUD_LOCAL_EVICTION_VERSION: u32 = 2;
+pub const ICLOUD_LOCAL_EVICTION_VERSION: u32 = 3;
 const ACTIVE_USE_TIMEOUT_MS: u64 = 5_000;
 const MAX_ACTIVE_USE_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ACTIVE_PIDS: usize = 64;
 const MAX_RATIONALE_BYTES: usize = 1_024;
 const POST_EVICTION_WAIT_MS: u64 = 5_000;
-const NATIVE_FILE_PROVIDER_TIMEOUT_MS: u64 = 30_000;
-// Cross-provider manager construction is proven read-only, but eviction remains disabled until a
-// reviewed, allocation-verifying integration receipt proves the operation on OneDrive.
-const ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN: bool = false;
-
-#[cfg(all(target_os = "macos", not(coverage)))]
-const FILE_PROVIDER_EVICTION_HELPER: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/disksage-fileprovider-evict"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -55,8 +46,11 @@ pub struct IcloudLocalState {
     pub is_ubiquitous: bool,
     pub is_uploaded: bool,
     pub is_uploading: bool,
+    pub upload_error_present: bool,
     pub is_downloading: bool,
+    pub download_error_present: bool,
     pub downloading_status_current: bool,
+    pub downloading_status_not_downloaded: bool,
     pub has_unresolved_conflicts: bool,
     pub is_excluded_from_sync: bool,
     pub is_sync_paused: Option<bool>,
@@ -88,6 +82,8 @@ pub struct IcloudLocalEvictionPlan {
     pub logical_bytes: u64,
     pub allocated_bytes: u64,
     pub filesystem_modified_ms: u64,
+    pub filesystem_device_id: u64,
+    pub filesystem_inode: u64,
     pub observed_at_ms: u64,
     pub icloud_state: IcloudLocalState,
     pub active_use: ActiveUseEvidence,
@@ -123,6 +119,8 @@ pub struct IcloudLocalEvictionResult {
     pub eviction_request_succeeded: bool,
     pub cloud_item_path_retained: bool,
     pub is_ubiquitous_after: bool,
+    pub is_uploaded_after: bool,
+    pub local_copy_status_not_downloaded: bool,
     pub local_allocation_reduction_verified: bool,
     pub verification_complete: bool,
     pub verification_blockers: Vec<String>,
@@ -134,12 +132,17 @@ struct LocalFileObservation {
     logical_bytes: u64,
     allocated_bytes: u64,
     modified_ms: u64,
+    device_id: u64,
+    inode: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PostEvictionObservation {
     path_retained: bool,
+    state_observation_complete: bool,
     is_ubiquitous: bool,
+    is_uploaded: bool,
+    downloading_status_not_downloaded: bool,
     allocated_bytes: u64,
 }
 
@@ -166,6 +169,17 @@ fn system_time_ms(value: std::io::Result<SystemTime>) -> u64 {
 fn allocated_bytes(metadata: &Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(unix)]
+fn filesystem_identity(metadata: &Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(not(unix))]
+fn filesystem_identity(_metadata: &Metadata) -> (u64, u64) {
+    (0, 0)
 }
 
 #[cfg(windows)]
@@ -251,10 +265,13 @@ fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservat
     if !metadata.is_file() {
         return Err("icloud-local-eviction-path-not-regular-file".into());
     }
+    let (device_id, inode) = filesystem_identity(&metadata);
     Ok(LocalFileObservation {
         logical_bytes: metadata.len(),
         allocated_bytes: allocated_bytes(&metadata),
         modified_ms: system_time_ms(metadata.modified()),
+        device_id,
+        inode,
     })
 }
 
@@ -309,7 +326,7 @@ fn plan_fingerprint(
     active_use: &ActiveUseEvidence,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-icloud-local-eviction-plan-v2\0");
+    hasher.update(b"disksage-icloud-local-eviction-plan-v3\0");
     for value in [
         root.id.as_bytes(),
         root.provider.as_str().as_bytes(),
@@ -322,15 +339,24 @@ fn plan_fingerprint(
         hasher.update(value);
         hasher.update(&[0]);
     }
-    for value in [file.logical_bytes, file.allocated_bytes, file.modified_ms] {
+    for value in [
+        file.logical_bytes,
+        file.allocated_bytes,
+        file.modified_ms,
+        file.device_id,
+        file.inode,
+    ] {
         hasher.update(&value.to_le_bytes());
     }
     for value in [
         state.is_ubiquitous,
         state.is_uploaded,
         state.is_uploading,
+        state.upload_error_present,
         state.is_downloading,
+        state.download_error_present,
         state.downloading_status_current,
+        state.downloading_status_not_downloaded,
         state.has_unresolved_conflicts,
         state.is_excluded_from_sync,
         active_use.evidence_complete,
@@ -349,10 +375,7 @@ fn plan_fingerprint(
     hash_optional_u64(&mut hasher, state.provider_reported_bytes);
     hash_optional_string(&mut hasher, state.item_identifier_fingerprint.as_deref());
     if root.provider == CloudProvider::Onedrive {
-        #[cfg(all(target_os = "macos", not(coverage)))]
-        hasher.update(blake3::hash(FILE_PROVIDER_EVICTION_HELPER).as_bytes());
-        #[cfg(any(not(target_os = "macos"), coverage))]
-        hasher.update(b"native-file-provider-eviction-unavailable");
+        hasher.update(b"foundation-file-manager-ubiquitous-item-eviction-v1");
     }
     for pid in &active_use.observed_pids {
         hasher.update(&pid.to_le_bytes());
@@ -375,21 +398,20 @@ fn build_plan(
     if !state.is_ubiquitous {
         push_unique(&mut blockers, "icloud-item-not-ubiquitous");
     }
-    if state.observation_method == IcloudStateObservationMethod::FoundationUbiquitousResourceValues
-    {
-        push_unique(
-            &mut blockers,
-            "icloud-file-provider-native-status-unavailable",
-        );
-    }
     if !state.is_uploaded {
         push_unique(&mut blockers, "icloud-upload-not-confirmed");
     }
     if state.is_uploading {
         push_unique(&mut blockers, "icloud-upload-still-running");
     }
+    if state.upload_error_present {
+        push_unique(&mut blockers, "icloud-upload-error-present");
+    }
     if state.is_downloading {
         push_unique(&mut blockers, "icloud-download-running");
+    }
+    if state.download_error_present {
+        push_unique(&mut blockers, "icloud-download-error-present");
     }
     if !state.downloading_status_current {
         push_unique(&mut blockers, "icloud-current-version-unconfirmed");
@@ -439,9 +461,6 @@ fn build_plan(
     if active_use.active {
         push_unique(&mut blockers, "active-file-use-detected");
     }
-    if root.provider == CloudProvider::Onedrive && !ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN {
-        push_unique(&mut blockers, "onedrive-use-finder-free-up-space");
-    }
     let eligible_after_human_approval = blockers.is_empty();
     push_unique(&mut blockers, "human-local-eviction-approval-required");
     let fingerprint = plan_fingerprint(root, path, &file, &state, &active_use);
@@ -454,6 +473,8 @@ fn build_plan(
         logical_bytes: file.logical_bytes,
         allocated_bytes: file.allocated_bytes,
         filesystem_modified_ms: file.modified_ms,
+        filesystem_device_id: file.device_id,
+        filesystem_inode: file.inode,
         observed_at_ms,
         icloud_state: state,
         active_use,
@@ -867,13 +888,28 @@ fn foundation_string_resource(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
+fn foundation_error_resource_present(
+    url: &objc2_foundation::NSURL,
+    key: &objc2_foundation::NSURLResourceKey,
+) -> Result<bool, String> {
+    use objc2::runtime::AnyObject;
+
+    let mut value: Option<objc2::rc::Retained<AnyObject>> = None;
+    unsafe { url.getResourceValue_forKey_error(&mut value, key) }
+        .map_err(|error| error.localizedDescription().to_string())?;
+    Ok(value.is_some())
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
 fn observe_foundation_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{
-        NSString, NSURLIsUbiquitousItemKey, NSURLUbiquitousItemDownloadingStatusCurrent,
-        NSURLUbiquitousItemDownloadingStatusKey, NSURLUbiquitousItemHasUnresolvedConflictsKey,
-        NSURLUbiquitousItemIsDownloadingKey, NSURLUbiquitousItemIsExcludedFromSyncKey,
-        NSURLUbiquitousItemIsUploadedKey, NSURLUbiquitousItemIsUploadingKey, NSURL,
+        NSString, NSURLIsUbiquitousItemKey, NSURLUbiquitousItemDownloadingErrorKey,
+        NSURLUbiquitousItemDownloadingStatusCurrent, NSURLUbiquitousItemDownloadingStatusKey,
+        NSURLUbiquitousItemDownloadingStatusNotDownloaded,
+        NSURLUbiquitousItemHasUnresolvedConflictsKey, NSURLUbiquitousItemIsDownloadingKey,
+        NSURLUbiquitousItemIsExcludedFromSyncKey, NSURLUbiquitousItemIsUploadedKey,
+        NSURLUbiquitousItemIsUploadingKey, NSURLUbiquitousItemUploadingErrorKey, NSURL,
     };
 
     let path = path
@@ -889,12 +925,22 @@ fn observe_foundation_icloud_state(path: &Path) -> Result<IcloudLocalState, Stri
                 is_ubiquitous: foundation_bool_resource(&url, NSURLIsUbiquitousItemKey)?,
                 is_uploaded: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadedKey)?,
                 is_uploading: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadingKey)?,
+                upload_error_present: foundation_error_resource_present(
+                    &url,
+                    NSURLUbiquitousItemUploadingErrorKey,
+                )?,
                 is_downloading: foundation_bool_resource(
                     &url,
                     NSURLUbiquitousItemIsDownloadingKey,
                 )?,
+                download_error_present: foundation_error_resource_present(
+                    &url,
+                    NSURLUbiquitousItemDownloadingErrorKey,
+                )?,
                 downloading_status_current: status
                     .isEqualToString(NSURLUbiquitousItemDownloadingStatusCurrent),
+                downloading_status_not_downloaded: status
+                    .isEqualToString(NSURLUbiquitousItemDownloadingStatusNotDownloaded),
                 has_unresolved_conflicts: foundation_bool_resource(
                     &url,
                     NSURLUbiquitousItemHasUnresolvedConflictsKey,
@@ -922,13 +968,16 @@ fn file_provider_icloud_state(
         is_ubiquitous,
         is_uploaded: status.is_uploaded,
         is_uploading: status.is_uploading,
+        upload_error_present: false,
         is_downloading: status.is_downloading,
+        download_error_present: false,
         downloading_status_current: status.is_local_current(),
+        downloading_status_not_downloaded: !status.is_downloaded && !status.is_downloading,
         has_unresolved_conflicts: status.has_unresolved_conflicts,
         is_excluded_from_sync: status.is_excluded_from_sync,
         is_sync_paused: Some(status.is_sync_paused),
         is_trashed: Some(status.is_trashed),
-        allows_eviction: Some(status.allows_eviction),
+        allows_eviction: Some(status.allows_eviction && !status.is_keep_downloaded),
         provider_reported_bytes: Some(status.observed_bytes),
         item_identifier_fingerprint: Some(status.item_identifier_fingerprint.clone()),
     }
@@ -963,8 +1012,11 @@ fn observe_file_provider_icloud_state(
         &status,
     );
     if root.provider == CloudProvider::Onedrive {
-        state.allows_eviction =
-            Some(crate::provider_recovery::onedrive_files_on_demand_available());
+        state.allows_eviction = Some(
+            status.allows_eviction
+                && !status.is_keep_downloaded
+                && crate::provider_recovery::onedrive_files_on_demand_available(),
+        );
     }
     Ok(state)
 }
@@ -975,24 +1027,11 @@ fn observe_icloud_state(
     path: &Path,
     observed_bytes: u64,
 ) -> Result<IcloudLocalState, String> {
-    match observe_file_provider_icloud_state(root, path, observed_bytes) {
-        Ok(state) => Ok(state),
-        Err(error) if file_provider_command_allows_foundation_fallback(&error) => {
-            observe_foundation_icloud_state(path)
-                .map_err(|_| "icloud-state-observation-unavailable".to_string())
-        }
-        Err(error) => Err(error),
+    if root.provider == CloudProvider::Icloud {
+        return observe_foundation_icloud_state(path)
+            .map_err(|_| "icloud-state-observation-unavailable".to_string());
     }
-}
-
-fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
-    matches!(
-        error,
-        "file-provider-status-command-unavailable"
-            | "file-provider-status-command-failed"
-            | "file-provider-status-field-missing:hasUnresolvedConflicts"
-            | "file-provider-status-field-missing:itemIdentifier"
-    )
+    observe_file_provider_icloud_state(root, path, observed_bytes)
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
@@ -1030,7 +1069,7 @@ fn approval_id_for(
     rationale: &str,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-icloud-local-eviction-approval-v1\0");
+    hasher.update(b"disksage-icloud-local-eviction-approval-v2\0");
     for value in [
         plan_fingerprint.as_bytes(),
         approved_by.as_bytes(),
@@ -1112,158 +1151,37 @@ fn validate_approval(
     Ok(())
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FileProviderEvictionReply {
-    ok: bool,
-    code: String,
-    #[serde(rename = "identityFingerprint")]
-    identity_fingerprint: Option<String>,
+fn validate_native_item_identity(expected: &str, observed: &str) -> Result<(), String> {
+    if !valid_hex64(expected) || !valid_hex64(observed) {
+        return Err("native-file-provider-item-identity-unconfirmed".into());
+    }
+    if expected != observed {
+        return Err("native-file-provider-item-identity-changed".into());
+    }
+    Ok(())
 }
 
-fn native_file_provider_customer_action(code: &str) -> &'static str {
-    match code {
-        "domain-not-found" => "cloud-location-reconnect-onedrive-and-try-again",
-        "manager-unavailable" => "cloud-location-restart-onedrive-and-try-again",
-        value if value.starts_with("request-failed:") => {
-            "cloud-item-could-not-be-made-online-only-try-finder"
-        }
-        _ => "native-file-provider-eviction-failed-try-again",
-    }
-}
-
-fn native_file_provider_identity_matches(
-    reply: &FileProviderEvictionReply,
-    expected: &str,
-) -> bool {
-    reply.identity_fingerprint.as_deref() == Some(expected)
-}
-
-#[cfg(all(target_os = "macos", not(coverage)))]
-fn run_file_provider_helper(
-    path: &Path,
-    expected_identity: Option<&str>,
-) -> Result<FileProviderEvictionReply, String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    use std::os::unix::process::CommandExt;
-
-    let directory = tempfile::Builder::new()
-        .prefix("disksage-fileprovider-")
-        .tempdir()
-        .map_err(|_| "native-file-provider-helper-directory-unavailable".to_string())?;
-    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
-        .map_err(|_| "native-file-provider-helper-directory-permissions-failed".to_string())?;
-    let helper = directory.path().join("evict");
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o700)
-        .open(&helper)
-        .map_err(|_| "native-file-provider-helper-create-failed".to_string())?;
-    output
-        .write_all(FILE_PROVIDER_EVICTION_HELPER)
-        .and_then(|_| output.sync_all())
-        .map_err(|_| "native-file-provider-helper-write-failed".to_string())?;
-    drop(output);
-    let written = std::fs::read(&helper)
-        .map_err(|_| "native-file-provider-helper-identity-unavailable".to_string())?;
-    if blake3::hash(&written) != blake3::hash(FILE_PROVIDER_EVICTION_HELPER) {
-        return Err("native-file-provider-helper-identity-mismatch".into());
-    }
-
-    let mut command = Command::new(&helper);
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    command.arg(if expected_identity.is_some() {
-        "--evict"
-    } else {
-        "--resolve"
-    });
-    command.arg(path);
-    if let Some(expected_identity) = expected_identity {
-        command.arg(expected_identity);
-    }
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| "native-file-provider-helper-start-failed".to_string())?;
-    let stdout = child.stdout.take().expect("stdout was configured as piped");
-    let stderr = child.stderr.take().expect("stderr was configured as piped");
-    let stdout_reader = drain_bounded(stdout);
-    let stderr_reader = drain_bounded(stderr);
-    let pid = child.id();
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None)
-                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                    < NATIVE_FILE_PROVIDER_TIMEOUT_MS =>
-            {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Ok(None) => {
-                unsafe {
-                    let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err("native-file-provider-eviction-timed-out-try-again".into());
-            }
-            Err(_) => {
-                unsafe {
-                    let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err("native-file-provider-helper-wait-failed".into());
-            }
-        }
-    };
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "native-file-provider-helper-output-read-failed".to_string())??;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "native-file-provider-helper-error-read-failed".to_string())??;
-    if stdout.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
-        || stderr.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
+fn validate_onedrive_mutation_status(
+    status: &crate::provider_sync::FileProviderItemStatus,
+    expected_bytes: u64,
+    files_on_demand_available: bool,
+) -> Result<(), String> {
+    if status.observed_bytes != expected_bytes
+        || !status.is_local_current()
+        || !status.is_uploaded
+        || status.is_uploading
+        || status.is_downloading
+        || status.has_unresolved_conflicts
+        || status.is_excluded_from_sync
+        || status.is_sync_paused
+        || status.is_trashed
+        || status.is_keep_downloaded
+        || !status.allows_eviction
+        || !files_on_demand_available
     {
-        return Err("native-file-provider-helper-output-too-large".into());
+        return Err("native-file-provider-item-state-changed".into());
     }
-    let reply: FileProviderEvictionReply = serde_json::from_slice(&stdout)
-        .map_err(|_| "native-file-provider-helper-response-invalid".to_string())?;
-    if let Some(expected_identity) = expected_identity {
-        if !native_file_provider_identity_matches(&reply, expected_identity) {
-            return Err("native-file-provider-item-or-domain-identity-changed".into());
-        }
-    }
-    let expected_code = if expected_identity.is_some() {
-        "eviction-request-completed"
-    } else {
-        "identity-resolved"
-    };
-    if !status.success() || !reply.ok || reply.code != expected_code {
-        return Err(native_file_provider_customer_action(&reply.code).into());
-    }
-    Ok(reply)
-}
-
-#[cfg(all(target_os = "macos", not(coverage)))]
-fn request_file_provider_eviction(path: &Path, expected_identity: &str) -> Result<(), String> {
-    run_file_provider_helper(path, Some(expected_identity)).map(|_| ())
+    Ok(())
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -1273,16 +1191,27 @@ fn request_native_icloud_eviction(
     expected_item_identity: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if root.provider == CloudProvider::Onedrive {
-        if !ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN {
-            return Err("onedrive-native-eviction-integration-proof-required".into());
-        }
         let expected_identity = expected_item_identity
-            .filter(|value| valid_hex64(value))
             .ok_or_else(|| "native-file-provider-item-identity-unconfirmed".to_string())?;
-        request_file_provider_eviction(path, expected_identity)?;
-        return Ok(Vec::new());
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "native-file-provider-item-identity-unavailable".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("native-file-provider-item-identity-unavailable".into());
+        }
+        let status = crate::provider_sync::file_providerctl_status(path)?;
+        let observed =
+            crate::provider_sync::parse_file_providerctl_item_status(&status, metadata.len())?;
+        validate_onedrive_mutation_status(
+            &observed,
+            metadata.len(),
+            crate::provider_recovery::onedrive_files_on_demand_available(),
+        )?;
+        validate_native_item_identity(expected_identity, &observed.item_identifier_fingerprint)?;
     }
-    if root.provider != CloudProvider::Icloud {
+    if !matches!(
+        root.provider,
+        CloudProvider::Icloud | CloudProvider::Onedrive
+    ) {
         return Err("cloud-local-eviction-provider-unsupported".into());
     }
     use objc2::rc::autoreleasepool;
@@ -1313,23 +1242,29 @@ fn observe_post_eviction(root: &CloudRoot, path: &Path) -> PostEvictionObservati
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return PostEvictionObservation {
             path_retained: false,
+            state_observation_complete: false,
             is_ubiquitous: false,
+            is_uploaded: false,
+            downloading_status_not_downloaded: false,
             allocated_bytes: 0,
         };
     };
-    let is_ubiquitous = observe_icloud_state(root, path, metadata.len())
-        .map(|state| state.is_ubiquitous)
-        .unwrap_or(false);
+    let state = observe_icloud_state(root, path, metadata.len()).ok();
     PostEvictionObservation {
         path_retained: metadata.is_file() && !metadata.file_type().is_symlink(),
-        is_ubiquitous,
+        state_observation_complete: state.is_some(),
+        is_ubiquitous: state.as_ref().is_some_and(|state| state.is_ubiquitous),
+        is_uploaded: state.as_ref().is_some_and(|state| state.is_uploaded),
+        downloading_status_not_downloaded: state
+            .as_ref()
+            .is_some_and(|state| state.downloading_status_not_downloaded),
         allocated_bytes: allocated_bytes(&metadata),
     }
 }
 
 fn result_id_for(result: &IcloudLocalEvictionResult) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-icloud-local-eviction-result-v1\0");
+    hasher.update(b"disksage-icloud-local-eviction-result-v2\0");
     for value in [
         result.plan_fingerprint.as_bytes(),
         result.approval_id.as_bytes(),
@@ -1350,6 +1285,8 @@ fn result_id_for(result: &IcloudLocalEvictionResult) -> String {
         result.eviction_request_succeeded,
         result.cloud_item_path_retained,
         result.is_ubiquitous_after,
+        result.is_uploaded_after,
+        result.local_copy_status_not_downloaded,
         result.local_allocation_reduction_verified,
         result.verification_complete,
     ] {
@@ -1375,8 +1312,18 @@ fn build_result(
     if !post.path_retained {
         blockers.push("icloud-cloud-item-path-not-retained".into());
     }
-    if !post.is_ubiquitous {
-        blockers.push("icloud-ubiquitous-identity-not-retained".into());
+    if !post.state_observation_complete {
+        blockers.push("icloud-post-eviction-state-unavailable".into());
+    } else {
+        if !post.is_ubiquitous {
+            blockers.push("icloud-ubiquitous-identity-not-retained".into());
+        }
+        if !post.is_uploaded {
+            blockers.push("icloud-upload-not-confirmed-after-eviction".into());
+        }
+        if !post.downloading_status_not_downloaded {
+            blockers.push("icloud-local-copy-status-not-evicted".into());
+        }
     }
     if !reduced {
         blockers.push("local-allocation-reduction-unverified".into());
@@ -1395,6 +1342,8 @@ fn build_result(
         eviction_request_succeeded: true,
         cloud_item_path_retained: post.path_retained,
         is_ubiquitous_after: post.is_ubiquitous,
+        is_uploaded_after: post.is_uploaded,
+        local_copy_status_not_downloaded: post.downloading_status_not_downloaded,
         local_allocation_reduction_verified: reduced,
         verification_complete,
         verification_blockers: blockers,
@@ -1405,6 +1354,43 @@ fn build_result(
     };
     result.result_id = result_id_for(&result);
     result
+}
+
+fn post_eviction_observation_is_terminal(
+    observed: &PostEvictionObservation,
+    allocated_bytes_before: u64,
+    timed_out: bool,
+) -> bool {
+    !observed.path_retained
+        || (observed.state_observation_complete
+            && (!observed.is_ubiquitous
+                || (observed.is_uploaded
+                    && observed.downloading_status_not_downloaded
+                    && observed.allocated_bytes < allocated_bytes_before)))
+        || timed_out
+}
+
+fn wait_for_post_eviction_with<O, S>(
+    allocated_bytes_before: u64,
+    deadline: Instant,
+    mut observe: O,
+    mut sleep: S,
+) -> PostEvictionObservation
+where
+    O: FnMut() -> PostEvictionObservation,
+    S: FnMut(Duration),
+{
+    loop {
+        let observed = observe();
+        if post_eviction_observation_is_terminal(
+            &observed,
+            allocated_bytes_before,
+            Instant::now() >= deadline,
+        ) {
+            return observed;
+        }
+        sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(not(coverage))]
@@ -1432,19 +1418,12 @@ pub fn execute_icloud_local_eviction(
             .as_deref(),
     )?;
 
-    let started = Instant::now();
-    let post = loop {
-        let observed = observe_post_eviction(root, path);
-        if !observed.path_retained
-            || !observed.is_ubiquitous
-            || observed.allocated_bytes < approved_plan.allocated_bytes
-            || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                >= POST_EVICTION_WAIT_MS
-        {
-            break observed;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let post = wait_for_post_eviction_with(
+        approved_plan.allocated_bytes,
+        Instant::now() + Duration::from_millis(POST_EVICTION_WAIT_MS),
+        || observe_post_eviction(root, path),
+        std::thread::sleep,
+    );
     Ok(build_result(
         approved_plan,
         approval,
@@ -1575,73 +1554,6 @@ pub fn write_immutable_record<T: Serialize>(
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn native_file_provider_errors_tell_the_customer_what_to_do_next() {
-        assert_eq!(
-            native_file_provider_customer_action("domain-not-found"),
-            "cloud-location-reconnect-onedrive-and-try-again"
-        );
-        assert_eq!(
-            native_file_provider_customer_action("request-failed:NSFileProviderErrorDomain:-1"),
-            "cloud-item-could-not-be-made-online-only-try-finder"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn replacement_item_or_domain_identity_is_rejected_before_eviction() {
-        let reply = FileProviderEvictionReply {
-            ok: true,
-            code: "eviction-request-completed".into(),
-            identity_fingerprint: Some("a".repeat(64)),
-        };
-        assert!(!native_file_provider_identity_matches(
-            &reply,
-            &"b".repeat(64)
-        ));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn onedrive_native_execution_remains_blocked_without_integration_proof() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = root_for(temporary.path(), CloudProvider::Onedrive);
-        assert_eq!(
-            request_native_icloud_eviction(&root, &temporary.path().join("never-opened"), None)
-                .unwrap_err(),
-            "onedrive-native-eviction-integration-proof-required"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn compiled_helper_is_macos_11_compatible_and_rejects_invalid_process_input() {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let helper = directory.path().join("helper");
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o700)
-            .open(&helper)
-            .unwrap();
-        file.write_all(FILE_PROVIDER_EVICTION_HELPER).unwrap();
-        drop(file);
-        let output = Command::new(&helper).output().unwrap();
-        assert_eq!(output.status.code(), Some(64));
-        let reply: FileProviderEvictionReply = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(reply.code, "invalid-invocation");
-        let build = Command::new("xcrun")
-            .args(["vtool", "-show-build"])
-            .arg(&helper)
-            .output()
-            .unwrap();
-        assert!(build.status.success());
-        assert!(String::from_utf8_lossy(&build.stdout).contains("minos 11.0"));
-    }
-
     fn root(path: &Path) -> CloudRoot {
         root_for(path, CloudProvider::Icloud)
     }
@@ -1664,8 +1576,11 @@ mod tests {
             is_ubiquitous: true,
             is_uploaded: true,
             is_uploading: false,
+            upload_error_present: false,
             is_downloading: false,
+            download_error_present: false,
             downloading_status_current: true,
+            downloading_status_not_downloaded: false,
             has_unresolved_conflicts: false,
             is_excluded_from_sync: false,
             is_sync_paused: Some(false),
@@ -1677,28 +1592,69 @@ mod tests {
     }
 
     #[test]
-    fn foundation_fallback_is_limited_to_unavailable_provider_commands() {
-        for error in [
-            "file-provider-status-command-unavailable",
-            "file-provider-status-command-failed",
-            "file-provider-status-field-missing:hasUnresolvedConflicts",
-            "file-provider-status-field-missing:itemIdentifier",
-        ] {
-            assert!(file_provider_command_allows_foundation_fallback(error));
-        }
-        for error in [
-            "file-provider-status-command-timeout",
-            "file-provider-status-output-too-large",
-            "file-provider-status-field-missing:isUploaded",
-            "file-provider-status-document-size-mismatch",
-            "icloud-item-not-ubiquitous",
-        ] {
-            assert!(!file_provider_command_allows_foundation_fallback(error));
-        }
+    fn native_item_identity_requires_the_exact_planned_version() {
+        let expected = "a".repeat(64);
+        assert!(validate_native_item_identity(&expected, &expected).is_ok());
+        assert_eq!(
+            validate_native_item_identity(&expected, &"b".repeat(64)).unwrap_err(),
+            "native-file-provider-item-identity-changed"
+        );
+        assert_eq!(
+            validate_native_item_identity("invalid", &expected).unwrap_err(),
+            "native-file-provider-item-identity-unconfirmed"
+        );
     }
 
     #[test]
-    fn foundation_observation_never_authorizes_local_eviction() {
+    fn onedrive_mutation_revalidates_every_latest_policy_and_sync_gate() {
+        let status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: true,
+            is_downloading: false,
+            is_most_recent_version_downloaded: true,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            is_keep_downloaded: false,
+            capabilities: crate::provider_sync::FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING,
+            allows_eviction: true,
+            observed_bytes: 100,
+            item_identifier_fingerprint: "a".repeat(64),
+        };
+        assert!(validate_onedrive_mutation_status(&status, 100, true).is_ok());
+
+        macro_rules! assert_changed {
+            ($field:ident, $value:expr) => {{
+                let mut changed = status.clone();
+                changed.$field = $value;
+                assert_eq!(
+                    validate_onedrive_mutation_status(&changed, 100, true).unwrap_err(),
+                    "native-file-provider-item-state-changed"
+                );
+            }};
+        }
+        assert_changed!(is_downloaded, false);
+        assert_changed!(is_downloading, true);
+        assert_changed!(is_most_recent_version_downloaded, false);
+        assert_changed!(is_uploaded, false);
+        assert_changed!(is_uploading, true);
+        assert_changed!(has_unresolved_conflicts, true);
+        assert_changed!(is_excluded_from_sync, true);
+        assert_changed!(is_sync_paused, true);
+        assert_changed!(is_trashed, true);
+        assert_changed!(is_keep_downloaded, true);
+        assert_changed!(allows_eviction, false);
+        assert_changed!(observed_bytes, 101);
+        assert_eq!(
+            validate_onedrive_mutation_status(&status, 100, false).unwrap_err(),
+            "native-file-provider-item-state-changed"
+        );
+    }
+
+    #[test]
+    fn complete_foundation_observation_authorizes_only_after_human_approval() {
         let temp = tempfile::tempdir().unwrap();
         let mut state = state();
         state.observation_method = IcloudStateObservationMethod::FoundationUbiquitousResourceValues;
@@ -1715,10 +1671,40 @@ mod tests {
             idle(),
             20,
         );
+        assert!(plan.eligible_after_human_approval);
+        assert_eq!(
+            plan.blockers,
+            ["human-local-eviction-approval-required".to_string()]
+        );
+    }
+
+    #[test]
+    fn foundation_upload_or_download_error_blocks_local_eviction() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = state();
+        state.observation_method = IcloudStateObservationMethod::FoundationUbiquitousResourceValues;
+        state.upload_error_present = true;
+        state.download_error_present = true;
+        state.is_sync_paused = None;
+        state.is_trashed = None;
+        state.allows_eviction = None;
+        state.provider_reported_bytes = None;
+        state.item_identifier_fingerprint = None;
+        let plan = build_plan(
+            &root(temp.path()),
+            &temp.path().join("file.bin"),
+            file(),
+            state,
+            idle(),
+            20,
+        );
         assert!(!plan.eligible_after_human_approval);
         assert!(plan
             .blockers
-            .contains(&"icloud-file-provider-native-status-unavailable".into()));
+            .contains(&"icloud-upload-error-present".into()));
+        assert!(plan
+            .blockers
+            .contains(&"icloud-download-error-present".into()));
     }
 
     fn file_provider_state() -> IcloudLocalState {
@@ -1734,6 +1720,7 @@ mod tests {
                 is_excluded_from_sync: false,
                 is_sync_paused: false,
                 is_trashed: false,
+                is_keep_downloaded: false,
                 capabilities: 805_306_495,
                 allows_eviction: true,
                 observed_bytes: 100,
@@ -1758,6 +1745,8 @@ mod tests {
             logical_bytes: 100,
             allocated_bytes: 4096,
             modified_ms: 10,
+            device_id: 1,
+            inode: 2,
         }
     }
 
@@ -1799,14 +1788,32 @@ mod tests {
             20,
         );
         assert_eq!(plan.provider, CloudProvider::Onedrive);
-        assert!(!plan.eligible_after_human_approval);
-        assert_eq!(
-            plan.blockers,
-            [
-                "onedrive-use-finder-free-up-space",
-                "human-local-eviction-approval-required"
-            ]
+        assert!(plan.eligible_after_human_approval);
+        assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+    }
+
+    #[test]
+    fn dataless_provider_item_reports_zero_reclaim_and_never_executes() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = build_plan(
+            &root_for(temp.path(), CloudProvider::Onedrive),
+            &temp.path().join("diagnostic.log"),
+            LocalFileObservation {
+                logical_bytes: 10_000_000_000,
+                allocated_bytes: 0,
+                modified_ms: 10,
+                device_id: 1,
+                inode: 2,
+            },
+            file_provider_state(),
+            idle(),
+            20,
         );
+        assert_eq!(plan.allocated_bytes, 0);
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"icloud-local-copy-not-allocated".into()));
     }
 
     #[test]
@@ -1923,6 +1930,35 @@ mod tests {
             assert!(!plan.eligible_after_human_approval, "{blocker}");
             assert!(plan.blockers.contains(&blocker.to_string()), "{blocker}");
         }
+    }
+
+    #[test]
+    fn keep_downloaded_policy_blocks_local_eviction() {
+        let mut status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: true,
+            is_downloading: false,
+            is_most_recent_version_downloaded: true,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            is_keep_downloaded: true,
+            capabilities: 805_306_495,
+            allows_eviction: true,
+            observed_bytes: 100,
+            item_identifier_fingerprint: "a".repeat(64),
+        };
+        assert_eq!(
+            file_provider_icloud_state(true, &status).allows_eviction,
+            Some(false)
+        );
+        status.is_keep_downloaded = false;
+        assert_eq!(
+            file_provider_icloud_state(true, &status).allows_eviction,
+            Some(true)
+        );
     }
 
     #[test]
@@ -2068,6 +2104,42 @@ mod tests {
     }
 
     #[test]
+    fn transient_post_eviction_metadata_failure_is_retried() {
+        let mut observations = std::collections::VecDeque::from([
+            PostEvictionObservation {
+                path_retained: true,
+                state_observation_complete: false,
+                is_ubiquitous: false,
+                is_uploaded: false,
+                downloading_status_not_downloaded: false,
+                allocated_bytes: 512,
+            },
+            PostEvictionObservation {
+                path_retained: true,
+                state_observation_complete: true,
+                is_ubiquitous: true,
+                is_uploaded: true,
+                downloading_status_not_downloaded: true,
+                allocated_bytes: 512,
+            },
+        ]);
+        let selected = wait_for_post_eviction_with(
+            4096,
+            Instant::now() + Duration::from_secs(1),
+            || {
+                observations
+                    .pop_front()
+                    .expect("a later observation is available")
+            },
+            |_| {},
+        );
+        assert!(observations.is_empty());
+        assert!(selected.state_observation_complete);
+        assert!(selected.is_uploaded);
+        assert!(selected.downloading_status_not_downloaded);
+    }
+
+    #[test]
     fn post_result_never_equates_path_blocks_with_volume_free_space() {
         let temp = tempfile::tempdir().unwrap();
         let plan = plan(temp.path());
@@ -2085,7 +2157,10 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: true,
+                state_observation_complete: true,
                 is_ubiquitous: true,
+                is_uploaded: true,
+                downloading_status_not_downloaded: true,
                 allocated_bytes: 512,
             },
             Vec::new(),
@@ -2116,7 +2191,10 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: true,
+                state_observation_complete: true,
                 is_ubiquitous: true,
+                is_uploaded: true,
+                downloading_status_not_downloaded: true,
                 allocated_bytes: 512,
             },
             vec!["provider-client-runtime-not-observed-after-restart".into()],
@@ -2148,7 +2226,10 @@ mod tests {
             22,
             PostEvictionObservation {
                 path_retained: false,
+                state_observation_complete: false,
                 is_ubiquitous: false,
+                is_uploaded: false,
+                downloading_status_not_downloaded: false,
                 allocated_bytes: 4096,
             },
             Vec::new(),

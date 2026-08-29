@@ -265,6 +265,8 @@ pub struct GitCloneReclaimResult {
     pub branch_delete_command_executed: bool,
     pub git_prune_executed: bool,
     pub physically_reclaimed_bytes: Option<u64>,
+    /// Present when the Trash move completed but a post-mutation audit/cleanup step failed.
+    pub post_mutation_warning: Option<String>,
 }
 
 fn hash_field(hasher: &mut blake3::Hasher, value: &str) {
@@ -1200,7 +1202,7 @@ fn execute_git_clone_reclaim_with_authority(
     {
         return Err("git-clone-live-lease-mismatch".into());
     }
-    crate::safety::trash_delete_if_identity(
+    let trash_outcome = crate::safety::trash_delete_if_identity_with_outcome(
         Path::new(&live.repository_root),
         &live.repository_object_id,
         live.size.allocated_bytes,
@@ -1208,6 +1210,10 @@ fn execute_git_clone_reclaim_with_authority(
         requested_at_ms,
     )
     .map_err(|error| format!("git-clone-trash-failed:{error}"))?;
+    if !trash_outcome.moved_to_trash {
+        return Err("git-clone-trash-did-not-complete".into());
+    }
+    let post_mutation_warning = crate::safety::trash_delete_outcome_warning(&trash_outcome);
     let path_absence_verified = matches!(
         std::fs::symlink_metadata(&live.repository_root),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
@@ -1227,6 +1233,7 @@ fn execute_git_clone_reclaim_with_authority(
         branch_delete_command_executed: false,
         git_prune_executed: false,
         physically_reclaimed_bytes: None,
+        post_mutation_warning,
     })
 }
 

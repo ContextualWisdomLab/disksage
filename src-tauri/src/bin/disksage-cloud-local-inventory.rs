@@ -98,8 +98,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
             "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
             "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            "--help" | "-h" => return Err("--help는 단독으로 사용해야 함".into()),
+            _ => return Err("알 수 없는 인자".into()),
         }
         index += 1;
     }
@@ -530,7 +530,18 @@ fn run_watchdog(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "cloud-local-inventory-invalid-utf8-argument".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let discovery = cloud::discover_cloud_roots_report(&home_dir()?);
     if args.all_roots {

@@ -36,6 +36,8 @@ const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
 /// Bounded per-command wall clock; matches the existing Podman prune bound.
 const ORPHAN_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
+const MAX_DOCKER_HOST_BYTES: usize = 2 * 1024;
+const INDETERMINATE_MUTATION_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
 
 /// Maximum number of network-inspect probes per audit; keeps the read-only pass bounded.
 pub const MAX_NETWORK_CANDIDATES: usize = 64;
@@ -81,6 +83,8 @@ pub struct ContainerRuntimeTarget {
     pub kind: ContainerRuntimeKind,
     pub binary_path: PathBuf,
     pub scope_name: Option<String>,
+    docker_host: Option<String>,
+    docker_context: Option<String>,
 }
 
 fn valid_scope_name(value: &str) -> bool {
@@ -110,6 +114,39 @@ impl ContainerRuntimeTarget {
             kind,
             binary_path,
             scope_name,
+            docker_host: None,
+            docker_context: None,
+        })
+    }
+
+    /// Pins Docker-native commands to one resolved daemon endpoint.
+    pub(crate) fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
+        if host.is_empty()
+            || host.len() > MAX_DOCKER_HOST_BYTES
+            || host.chars().any(char::is_control)
+        {
+            return Err("unsafe-docker-host".into());
+        }
+        Ok(Self {
+            kind: ContainerRuntimeKind::DockerNative,
+            binary_path,
+            scope_name: None,
+            docker_host: Some(host),
+            docker_context: None,
+        })
+    }
+
+    /// Pins Docker-native commands to a named CLI context, preserving its TLS material.
+    pub(crate) fn docker_native_context(binary_path: PathBuf, context: String) -> Result<Self, String> {
+        if !valid_scope_name(&context) {
+            return Err("unsafe-runtime-scope-name".into());
+        }
+        Ok(Self {
+            kind: ContainerRuntimeKind::DockerNative,
+            binary_path,
+            scope_name: None,
+            docker_host: None,
+            docker_context: Some(context),
         })
     }
 
@@ -137,7 +174,13 @@ impl ContainerRuntimeTarget {
         }
         let mut prefix = vec![binary];
         match self.kind {
-            ContainerRuntimeKind::DockerNative => {}
+            ContainerRuntimeKind::DockerNative => {
+                if let Some(context) = &self.docker_context {
+                    prefix.extend(["--context".to_string(), context.clone()]);
+                } else if let Some(host) = &self.docker_host {
+                    prefix.extend(["--host".to_string(), host.clone()]);
+                }
+            }
             ContainerRuntimeKind::DockerColimaContext | ContainerRuntimeKind::PodmanMachine => {
                 let flag = match self.kind {
                     ContainerRuntimeKind::PodmanMachine => "--connection",
@@ -156,6 +199,52 @@ impl ContainerRuntimeTarget {
         }
         Ok(prefix)
     }
+}
+
+/// Resolves a named Docker context to the endpoint used by an explicit `--host` command.
+pub(crate) fn resolve_docker_context_host(
+    binary_path: &Path,
+    context: &str,
+) -> Result<String, String> {
+    if !valid_scope_name(context) {
+        return Err("unsafe-runtime-scope-name".into());
+    }
+    let output = command_text(
+        binary_path,
+        &["context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
+        ORPHAN_COMMAND_TIMEOUT,
+        "docker-context-host-inspect",
+    )?;
+    let host: String = serde_json::from_str(output.trim())
+        .map_err(|_| "docker-context-host-invalid".to_string())?;
+    ContainerRuntimeTarget::docker_native_host(binary_path.to_path_buf(), host.clone())?;
+    Ok(host)
+}
+
+/// Returns a stable fingerprint of the complete context definition, including TLS metadata.
+pub(crate) fn resolve_docker_context_fingerprint(
+    binary_path: &Path,
+    context: &str,
+) -> Result<String, String> {
+    if !valid_scope_name(context) {
+        return Err("unsafe-runtime-scope-name".into());
+    }
+    let output = command_text(
+        binary_path,
+        &["context", "inspect", context, "--format", "{{json .}}"],
+        ORPHAN_COMMAND_TIMEOUT,
+        "docker-context-inspect",
+    )?;
+    let value: Value = serde_json::from_str(output.trim())
+        .map_err(|_| "docker-context-invalid".to_string())?;
+    let canonical = serde_json::to_vec(&value).map_err(|_| "docker-context-invalid".to_string())?;
+    let digest = Sha256::digest(canonical);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").map_err(|_| "docker-context-invalid".to_string())?;
+    }
+    Ok(encoded)
 }
 
 /// Orphan categories audited and pruned by this engine, one at a time.
@@ -853,6 +942,21 @@ fn command_capture(
     })
 }
 
+fn mutation_capture_result(
+    result: Result<CommandCapture, String>,
+    label: &str,
+) -> Result<CommandCapture, String> {
+    match result {
+        Ok(output) => Ok(output),
+        Err(error) if !error.starts_with(&format!("{label}-spawn:")) => Ok(CommandCapture {
+            status_code: -1,
+            stdout: String::new(),
+            stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
 fn command_text(
     executable: &Path,
     args: &[&str],
@@ -1258,7 +1362,10 @@ pub fn execute_container_orphan_prune(
     owned_args.extend(plan.candidate_ids.iter().cloned());
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
     let label = format!("orphan-prune-{}", category.as_str());
-    let output = command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label)?;
+    let output = mutation_capture_result(
+        command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label),
+        &label,
+    )?;
     let after_observed_at_ms = current_epoch_ms().max(executed_at_ms);
     let after_available_bytes = host_available_bytes(after_observed_at_ms);
     let observed_available_gain_bytes = before_available_bytes
@@ -1274,7 +1381,7 @@ pub fn execute_container_orphan_prune(
         stdout: output.stdout,
         stderr: output.stderr,
         output_truncated: false,
-        executed: output.status_code == 0,
+        executed: true,
         executed_at_ms,
         before_available_bytes,
         after_available_bytes,
@@ -1725,6 +1832,19 @@ mod tests {
 
         assert_eq!(result.unwrap_err(), "descendant-timeout-timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
+
+        let receipt = mutation_capture_result(
+            Err("descendant-timeout-timeout".into()),
+            "descendant-timeout",
+        )
+        .unwrap();
+        assert_eq!(receipt.status_code, -1);
+        assert_eq!(receipt.stderr, INDETERMINATE_MUTATION_OUTCOME);
+        assert!(mutation_capture_result(
+            Err("descendant-timeout-spawn:unavailable".into()),
+            "descendant-timeout",
+        )
+        .is_err());
     }
 
     #[test]

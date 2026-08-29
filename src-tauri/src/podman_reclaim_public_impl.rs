@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 mod implementation;
 
 pub use implementation::{
-    probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
-    PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,
-    PodmanRecommendedActionKind, PodmanStorageCheckPlan, PodmanStorageRepairExecution,
-    PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
-    PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
-    PODMAN_RECLAIM_SCHEMA_KIND,
+    inspect_raw_image_evidence, probe_podman_reclaim, GuestFilesystemEvidence,
+    PodmanDanglingImagePruneExecution, PodmanMachineEvidence, PodmanReclaimAssessment,
+    PodmanReclaimPlan, PodmanRecommendedAction, PodmanRecommendedActionKind,
+    PodmanStorageCheckPlan, PodmanStorageRepairExecution, PodmanStoreEvidence,
+    PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
+    RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
@@ -104,6 +104,7 @@ fn run_bounded(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -183,6 +184,7 @@ fn run_mutation_bounded(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -378,6 +380,31 @@ fn storage_check_complete(status_code: i32, output: &str, ids: &[String]) -> boo
     (status_code == 0 && ids.is_empty()) || (!ids.is_empty() && expected_damage_completion)
 }
 
+fn storage_repair_provider_issue(output: &BoundedOutput) -> Option<String> {
+    if output.status_code == 0 {
+        return None;
+    }
+    if output.status_code != 125 {
+        return Some("podman-storage-repair-provider-exit-status-unexpected".into());
+    }
+    let provider_diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    let dependent_container = provider_diagnostic.lines().any(|line| {
+        line.contains("layer")
+            && line.contains("container")
+            && ["in use", "used by", "referenced by"]
+                .iter()
+                .any(|marker| line.contains(marker))
+    });
+    Some(
+        if dependent_container {
+            "podman-storage-repair-provider-unable-to-detach-damaged-container"
+        } else {
+            "podman-storage-repair-provider-refused"
+        }
+        .into(),
+    )
+}
+
 fn storage_check_evidence(
     podman_bin: &Path,
     machine: &str,
@@ -475,8 +502,8 @@ pub fn execute_podman_storage_repair(
         MUTATION_WAIT_STATUS_CODE => Some("podman-storage-repair-wait".into()),
         MUTATION_CAPTURE_STATUS_CODE => Some("podman-storage-repair-output-too-large".into()),
         MUTATION_UTF8_STATUS_CODE => Some("podman-storage-repair-output-not-utf8".into()),
-        0 => None,
-        _ => Some("podman-storage-repair-command-failed".into()),
+        0 if !postcheck_complete => Some("podman-storage-repair-postcheck-incomplete".into()),
+        _ => storage_repair_provider_issue(&output),
     };
 
     Ok(PodmanStorageRepairExecution {
@@ -495,7 +522,7 @@ pub fn execute_podman_storage_repair(
         status_code: output.status_code,
         command_attempted: true,
         execution_issue,
-        executed: output.status_code == 0 || (postcheck_complete && repaired_layer_records > 0),
+        executed: output.status_code == 0 && postcheck_complete,
         repaired_layer_records,
         remaining_damaged_layer_records,
         postcheck_complete,
@@ -706,6 +733,37 @@ mod mutation_runner_tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn provider_issue_requires_one_coherent_dependency_diagnostic_line() {
+        let separate_lines = BoundedOutput {
+            status_code: 125,
+            stdout: "damaged layer abc\ncontainer inventory follows".into(),
+            stderr: "resource is in use".into(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&separate_lines).as_deref(),
+            Some("podman-storage-repair-provider-refused")
+        );
+        let coherent = BoundedOutput {
+            status_code: 125,
+            stdout: "layer abc is used by container def".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&coherent).as_deref(),
+            Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+        );
+        let untrusted = BoundedOutput {
+            status_code: 1,
+            stdout: "layer abc is used by container def".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            storage_repair_provider_issue(&untrusted).as_deref(),
+            Some("podman-storage-repair-provider-exit-status-unexpected")
+        );
+    }
+
+    #[test]
     fn timed_out_readonly_command_terminates_descendants_holding_output_pipes() {
         let temp = tempfile::tempdir().expect("temporary runtime directory");
         let fake = temp.path().join("readonly");
@@ -800,5 +858,17 @@ wait
 
         assert_eq!(output.status_code, 0);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn shared_storage_repair_parser_owns_candidate_identity() {
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        let ids = damaged_layer_ids(&format!(
+            "Damaged layer {second}:\nDamaged layer {first}:\nDamaged layer {second}:"
+        ))
+        .unwrap();
+        assert_eq!(ids, vec![first, second]);
+        assert_eq!(storage_check_fingerprint(&ids).len(), 64);
     }
 }

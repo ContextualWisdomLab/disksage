@@ -21,6 +21,7 @@ use crate::dev_artifacts;
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
+    git_worktree_github_evidence,
     icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
@@ -117,6 +118,9 @@ pub struct CleanResult {
     pub path: String,
     pub ok: bool,
     pub error: String,
+    /// Post-move audit or staging notice. A non-empty warning never rewrites a completed move as
+    /// a failed operation.
+    pub warning: String,
 }
 
 /// 정리 실행의 순수 코어 — 결과는 항목별, 하나가 실패해도 나머지는 진행 (스펙 §8)
@@ -148,11 +152,13 @@ pub fn clean_paths_inner(paths: &[PathBuf], journal_path: &Path, now_ms: u64) ->
                     path: p.to_string_lossy().into_owned(),
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: p.to_string_lossy().into_owned(),
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -181,6 +187,7 @@ pub fn clean_dev_artifacts_inner(
             } else {
                 result.error
             },
+            warning: result.warning,
         })
         .collect()
 }
@@ -209,11 +216,13 @@ pub fn execute_moves_inner(
                     path: p.src.clone(),
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: p.src.clone(),
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -237,11 +246,13 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
                     path: src,
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: src,
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -530,7 +541,7 @@ pub fn inspect_runtime_storage() -> Vec<crate::runtime_storage::RuntimeStoragePl
 /// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn execute_runtime_storage_trim(
+pub async fn execute_runtime_storage_trim(
     runtime: String,
     confirmation_phrase: String,
     rationale: String,
@@ -540,13 +551,27 @@ pub fn execute_runtime_storage_trim(
         "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
         _ => return Err("runtime-storage-unknown-runtime".into()),
     };
-    crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-trim-task-failed".to_string())?
+}
+
+/// Stops an idle Podman machine after a fresh native query proves no containers are running.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_inactive_podman_machine_stop(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageStopExecution, String> {
+    crate::runtime_storage::execute_inactive_stop(&confirmation_phrase, &rationale)
 }
 
 /// Restarts a runtime that reports running but cannot serve guest commands.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn execute_runtime_storage_recovery(
+pub async fn execute_runtime_storage_recovery(
     runtime: String,
     confirmation_phrase: String,
     rationale: String,
@@ -556,7 +581,11 @@ pub fn execute_runtime_storage_recovery(
         "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
         _ => return Err("runtime-storage-unknown-runtime".into()),
     };
-    crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-recovery-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -998,43 +1027,21 @@ pub async fn plan_stale_git_worktrees(
     stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let closed_heads = if include_closed_pull_requests {
-            git_worktree::github_closed_pull_request_heads(
-                Path::new(&repository_root),
-                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            git_worktree::github_stale_open_pull_request_heads(
-                Path::new(&repository_root),
-                cutoff_ms,
-                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                git_worktree::github_pull_request_commit_membership(
-                    Path::new(&repository_root),
-                    git_worktree::GitWorktreeAuditOptions::default(),
-                )?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            git_worktree::GitWorktreeAuditOptions::default(),
+            options,
             cloud::system_now_ms(),
         )
     })
@@ -1074,41 +1081,18 @@ pub async fn remove_stale_git_worktrees(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let closed_heads = if include_closed_pull_requests {
-            git_worktree::github_closed_pull_request_heads(
-                Path::new(&repository_root),
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-            git_worktree::github_stale_open_pull_request_heads(
-                Path::new(&repository_root),
-                cutoff_ms,
-                options.command_timeout_ms,
-            )?
-        } else {
-            Default::default()
-        };
-        let mut pull_request_commits =
-            if include_closed_pull_requests || stale_open_pull_request_cutoff_ms.is_some() {
-                git_worktree::github_pull_request_commit_membership(
-                    Path::new(&repository_root),
-                    options,
-                )?
-            } else {
-                Default::default()
-            };
-        if !include_closed_pull_requests {
-            pull_request_commits.completed.clear();
-        }
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
         let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            &closed_heads,
-            &stale_open_heads,
-            &pull_request_commits,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),

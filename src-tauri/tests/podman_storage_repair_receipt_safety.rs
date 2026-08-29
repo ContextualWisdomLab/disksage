@@ -56,6 +56,26 @@ exit 2
     ))
 }
 
+fn fake_container_referenced_damage_podman() -> (tempfile::TempDir, PathBuf) {
+    let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+case " $* " in
+  *" system check --quick --repair "*)
+    echo "Error: layer {layer_id} is in use by container 111111111111" >&2
+    exit 125
+    ;;
+  *" system check --quick "*)
+    echo "Damaged layer {layer_id}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
 fn fake_scope_drift_podman() -> (tempfile::TempDir, PathBuf) {
     let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -240,6 +260,29 @@ fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
         "remaining damaged layers are unknown when the postcheck is incomplete"
     );
     assert_eq!(json["executed"], false);
+}
+
+#[test]
+fn provider_refusal_identifies_a_container_referenced_damaged_layer() {
+    let (_temp, fake) = fake_container_referenced_damage_podman();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "retain the damaged container for an evidence-guided remediation",
+        6,
+    )
+    .expect("a provider refusal remains an auditable non-executed attempt");
+
+    assert!(!receipt.executed);
+    assert_eq!(receipt.status_code, 125);
+    assert_eq!(
+        receipt.execution_issue.as_deref(),
+        Some("podman-storage-repair-provider-unable-to-detach-damaged-container")
+    );
+    assert_eq!(receipt.remaining_damaged_layer_records, Some(1));
 }
 
 #[test]
