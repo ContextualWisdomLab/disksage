@@ -363,15 +363,20 @@ fn request_quit(app: &str) -> Result<(), String> {
     // The app name is selected from the fixed provider map above; no user path or shell is parsed.
     let script = format!("tell application \"{app}\" to quit");
     let ok = run_bounded(Path::new("/usr/bin/osascript"), &["-e", script.as_str()])?;
-    // AppleScript returns non-zero when the app was already absent. The subsequent runtime
-    // observation is authoritative; unavailable evidence must never be treated as process absence.
+    // AppleScript can return non-zero after the primary app has already disappeared. Extensions
+    // may legitimately remain, so only the exact desktop process is authoritative here.
     let provider = if app == "OneDrive" {
         CloudProvider::Onedrive
     } else {
         CloudProvider::GoogleDrive
     };
-    if !ok && require_runtime_observation(provider, 0)? {
-        return Err("provider-recovery-quit-request-failed".into());
+    if !ok {
+        let primary_runtime_observed =
+            crate::provider_client_runtime::collect_provider_primary_runtime(provider)
+                .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
+        if primary_runtime_observed {
+            return Err("provider-recovery-quit-request-failed".into());
+        }
     }
     Ok(())
 }
@@ -386,8 +391,13 @@ fn request_graceful_term(app: &str) -> Result<(), String> {
     } else {
         CloudProvider::GoogleDrive
     };
-    if !ok && require_runtime_observation(provider, 0)? {
-        return Err("provider-recovery-graceful-term-failed".into());
+    if !ok {
+        let primary_runtime_observed =
+            crate::provider_client_runtime::collect_provider_primary_runtime(provider)
+                .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
+        if primary_runtime_observed {
+            return Err("provider-recovery-graceful-term-failed".into());
+        }
     }
     Ok(())
 }
