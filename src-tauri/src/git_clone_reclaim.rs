@@ -799,7 +799,7 @@ pub fn execute_git_clone_reclaim_with_default_branch(
                 requested_at_ms,
             )
         }
-        (Some(expected_reference), Some(expected_oid), Some(observed_at_ms)) => {
+        (Some(expected_reference), Some(expected_oid), Some(_)) => {
             let (reference, oid) = git_worktree::github_default_branch_reference_oid(
                 Path::new(&approved_plan.repository_root),
                 options.command_timeout_ms,
@@ -810,7 +810,7 @@ pub fn execute_git_clone_reclaim_with_default_branch(
             let evidence = DefaultBranchEvidence {
                 reference,
                 oid,
-                observed_at_ms,
+                observed_at_ms: requested_at_ms,
             };
             execute_git_clone_reclaim_with_authority(
                 approved_plan,
