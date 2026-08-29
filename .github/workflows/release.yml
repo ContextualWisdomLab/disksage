@@ -33,6 +33,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            tauri_features: llm-engine
             bundles: |
               src-tauri/target/release/bundle/deb/*.deb
               src-tauri/target/release/bundle/appimage/*.AppImage
@@ -45,6 +46,7 @@ jobs:
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
           - os: windows-2022
+            tauri_features: llm-engine
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
@@ -57,6 +59,7 @@ jobs:
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit.exe
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
           - os: macos-latest
+            tauri_features: llm-engine,colima-macos-cli
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
               src-tauri/target/release/disksage-cloud-plan-macos-arm64
@@ -115,7 +118,11 @@ jobs:
           cache-targets: false
 
       - name: Tauri build (with embedded LLM)
-        run: npm run tauri -- build --features llm-engine
+        run: npm run tauri -- build --features "${{ matrix.tauri_features }}"
+
+      - name: Check macOS-only Colima reclaim CLI
+        if: matrix.os == 'macos-latest'
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features colima-macos-cli --bin disksage-colima-disk-reclaim
 
       - name: Diagnose WiX MSI linker failure
         if: failure() && matrix.os == 'windows-2022'
