@@ -39,6 +39,15 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (".mypy_cache", &["pyproject.toml", "setup.cfg", "mypy.ini"]),
+    (
+        ".pytest_cache",
+        &["pyproject.toml", "setup.cfg", "pytest.ini", "tox.ini"],
+    ),
+    (
+        ".ruff_cache",
+        &["pyproject.toml", "ruff.toml", ".ruff.toml"],
+    ),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
     (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
@@ -362,6 +371,27 @@ mod tests {
         assert!(found.iter().any(|artifact| {
             artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
         }));
+    }
+
+    #[test]
+    fn finds_only_marker_adjacent_python_tool_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "typed", "mypy.ini", ".mypy_cache");
+        project(tmp.path(), "tested", "pytest.ini", ".pytest_cache");
+        project(tmp.path(), "linted", "ruff.toml", ".ruff_cache");
+        fs::create_dir_all(tmp.path().join("unowned/.mypy_cache")).unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let kinds: std::collections::BTreeSet<&str> = found
+            .iter()
+            .map(|artifact| artifact.kind.as_str())
+            .collect();
+
+        assert_eq!(
+            kinds,
+            [".mypy_cache", ".pytest_cache", ".ruff_cache"].into()
+        );
+        assert!(!found.iter().any(|artifact| artifact.project == "unowned"));
     }
 
     #[test]
