@@ -361,15 +361,31 @@ pub fn seal_completed_temp_artifact(
     let encoded = serde_json::to_vec_pretty(&marker)
         .map_err(|_| "shared-temp-completion-marker-invalid".to_string())?;
     let marker_path = path.join(COMPLETION_MARKER_NAME);
+    let staging_path = path.join(format!(
+        ".{COMPLETION_MARKER_NAME}.{}.staging",
+        marker.completion_id
+    ));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o400)
-        .open(&marker_path)
+        .open(&staging_path)
         .map_err(|_| "shared-temp-completion-marker-create-failed".to_string())?;
-    file.write_all(&encoded)
+    if file
+        .write_all(&encoded)
         .and_then(|_| file.sync_all())
-        .map_err(|_| "shared-temp-completion-marker-write-failed".to_string())?;
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&staging_path);
+        return Err("shared-temp-completion-marker-write-failed".into());
+    }
+    drop(file);
+    if std::fs::hard_link(&staging_path, &marker_path).is_err() {
+        let _ = std::fs::remove_file(&staging_path);
+        return Err("shared-temp-completion-marker-publish-failed".into());
+    }
+    std::fs::remove_file(&staging_path)
+        .map_err(|_| "shared-temp-completion-marker-staging-cleanup-failed".to_string())?;
     File::open(&path)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| "shared-temp-completion-marker-sync-failed".to_string())?;
@@ -506,198 +522,6 @@ pub fn approve_shared_temp_reclaim(
     })
 }
 
-fn receipt_id(receipt: &SharedTempReclaimReceipt) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.shared-temp-reclaim-receipt.v1\0");
-    for value in [&receipt.approval_id, &receipt.plan_fingerprint] {
-        hash_field(&mut hasher, value.as_bytes());
-    }
-    for value in [
-        receipt.completed_at_ms,
-        receipt.allocated_bytes_upper_bound,
-        receipt.before_available_bytes,
-        receipt.after_available_bytes,
-        receipt.observed_available_gain_bytes,
-    ] {
-        hasher.update(&value.to_le_bytes());
-    }
-    hasher.update(&[
-        receipt.path_absence_verified as u8,
-        receipt.permanent_delete_executed as u8,
-    ]);
-    hasher.finalize().to_hex().to_string()
-}
-
-#[cfg(unix)]
-fn private_destination_path(
-    artifact_path: &Path,
-    destination: &Path,
-    error: &str,
-) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-    if !destination.is_absolute()
-        || destination
-            .components()
-            .any(|part| matches!(part, Component::ParentDir))
-        || destination.starts_with(artifact_path)
-    {
-        return Err(error.into());
-    }
-    let parent = destination
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| error.to_string())?;
-    let parent_metadata = std::fs::symlink_metadata(parent).map_err(|_| error.to_string())?;
-    if !parent_metadata.is_dir()
-        || parent_metadata.file_type().is_symlink()
-        || parent_metadata.permissions().mode() & 0o022 != 0
-    {
-        return Err(error.into());
-    }
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|_| error.to_string())?;
-    if canonical_parent.starts_with(artifact_path) {
-        return Err(error.into());
-    }
-    let file_name = destination
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| error.to_string())?;
-    Ok(canonical_parent.join(file_name))
-}
-
-#[cfg(unix)]
-fn validate_receipt_path(artifact_path: &Path, receipt_path: &Path) -> Result<PathBuf, String> {
-    let resolved = private_destination_path(
-        artifact_path,
-        receipt_path,
-        "shared-temp-receipt-parent-unsafe",
-    )?;
-    if std::fs::symlink_metadata(&resolved).is_ok() {
-        return Err("shared-temp-receipt-path-invalid".into());
-    }
-    Ok(resolved)
-}
-
-#[cfg(unix)]
-fn validate_journal_path(artifact_path: &Path, journal_path: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let resolved = private_destination_path(
-        artifact_path,
-        journal_path,
-        "shared-temp-journal-path-unsafe",
-    )?;
-    match std::fs::symlink_metadata(&resolved) {
-        Ok(metadata)
-            if metadata.is_file()
-                && !metadata.file_type().is_symlink()
-                && metadata.permissions().mode() & 0o022 == 0 =>
-        {
-            Ok(resolved)
-        }
-        Ok(_) => Err("shared-temp-journal-path-unsafe".into()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(resolved),
-        Err(_) => Err("shared-temp-journal-path-unsafe".into()),
-    }
-}
-
-/// Freshly revalidate, permanently remove, and persist a create-only read-only receipt.
-#[cfg(any())]
-fn disabled_legacy_shared_temp_reclaim(
-    approved_plan: &SharedTempReclaimPlan,
-    approval: &SharedTempReclaimApproval,
-    journal_path: &Path,
-    receipt_path: &Path,
-    requested_at_ms: u64,
-) -> Result<SharedTempReclaimReceipt, String> {
-    // Fail closed until producer authenticity and the final revalidation, journal, deletion, and
-    // receipt can be made one OS-enforced atomic authority transition. Same-user marker files and
-    // path-based opens cannot establish that contract without TOCTOU or evidence-loss windows.
-    return Err("shared-temp-permanent-execution-disabled".into());
-    #[allow(unreachable_code)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        if approval.version != SHARED_TEMP_RECLAIM_VERSION
-            || approval.plan_fingerprint != approved_plan.plan_fingerprint
-            || approved_plan.exact_approval_phrase.as_deref()
-                != Some(&approval.exact_approval_phrase)
-            || requested_at_ms < approval.approved_at_ms
-            || requested_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
-        {
-            return Err("shared-temp-execution-approval-invalid-or-stale".into());
-        }
-        let live = plan_shared_temp_reclaim(Path::new(&approved_plan.path), requested_at_ms)?;
-        if live.plan_fingerprint != approved_plan.plan_fingerprint
-            || live.root_object_id != approved_plan.root_object_id
-            || !live.eligible_after_human_approval
-        {
-            return Err("shared-temp-live-plan-mismatch".into());
-        }
-        let artifact_path = Path::new(&live.path);
-        let shared_root = Path::new(&live.shared_root);
-        let receipt_path = validate_receipt_path(artifact_path, receipt_path)?;
-        let journal_path = validate_journal_path(artifact_path, journal_path)?;
-        let before = crate::volume_pressure::snapshot_volume(shared_root, requested_at_ms)
-            .map_err(|_| "shared-temp-volume-before-unavailable".to_string())?;
-        crate::safety::permanent_delete_dir_if_identity(
-            artifact_path,
-            &live.root_object_id,
-            live.allocated_bytes,
-            &journal_path,
-            requested_at_ms,
-        )
-        .map_err(|error| format!("shared-temp-permanent-delete-failed:{error}"))?;
-        let path_absence_verified = !artifact_path.exists();
-        if !path_absence_verified {
-            return Err("shared-temp-path-still-present".into());
-        }
-        let completed_at_ms = crate::cloud::system_now_ms();
-        let after = crate::volume_pressure::snapshot_volume(shared_root, completed_at_ms)
-            .map_err(|_| "shared-temp-volume-after-unavailable".to_string())?;
-        let mut receipt = SharedTempReclaimReceipt {
-            schema_kind: "disksage.shared-temp-reclaim-receipt".into(),
-            version: SHARED_TEMP_RECLAIM_VERSION,
-            receipt_id: String::new(),
-            approval_id: approval.approval_id.clone(),
-            plan_fingerprint: live.plan_fingerprint,
-            completed_at_ms,
-            allocated_bytes_upper_bound: live.allocated_bytes,
-            before_available_bytes: before.available_bytes,
-            after_available_bytes: after.available_bytes,
-            observed_available_gain_bytes: after
-                .available_bytes
-                .saturating_sub(before.available_bytes),
-            path_absence_verified,
-            permanent_delete_executed: true,
-        };
-        receipt.receipt_id = receipt_id(&receipt);
-        let encoded = serde_json::to_vec_pretty(&receipt)
-            .map_err(|_| "shared-temp-receipt-json-invalid".to_string())?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o400)
-            .open(&receipt_path)
-            .map_err(|_| "shared-temp-receipt-create-failed".to_string())?;
-        file.write_all(&encoded)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "shared-temp-receipt-write-failed".to_string())?;
-        if file
-            .metadata()
-            .map_err(|_| "shared-temp-receipt-metadata-failed".to_string())?
-            .permissions()
-            .mode()
-            & 0o777
-            != 0o400
-        {
-            return Err("shared-temp-receipt-mode-invalid".into());
-        }
-        File::open(receipt_path.parent().unwrap())
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "shared-temp-receipt-parent-sync-failed".to_string())?;
-        Ok(receipt)
-    }
-}
-
 /// Fail closed because portable path APIs cannot provide an atomic, authenticated deletion proof.
 #[cfg(unix)]
 pub fn execute_shared_temp_reclaim(
@@ -773,6 +597,28 @@ mod tests {
         assert!(plan
             .blockers
             .contains(&"shared-temp-tree-link-present".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completion_marker_publication_never_replaces_an_existing_marker() {
+        let artifact = artifact("disksage-marker-create-only-");
+        std::fs::write(artifact.path().join(COMPLETION_MARKER_NAME), b"existing").unwrap();
+        assert_eq!(
+            seal_completed_temp_artifact(artifact.path(), "disksage:test", 10).unwrap_err(),
+            "shared-temp-completion-marker-publish-failed"
+        );
+        assert_eq!(
+            std::fs::read(artifact.path().join(COMPLETION_MARKER_NAME)).unwrap(),
+            b"existing"
+        );
+        assert!(!std::fs::read_dir(artifact.path())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".staging")));
     }
 
     #[cfg(unix)]
