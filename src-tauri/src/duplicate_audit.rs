@@ -643,6 +643,17 @@ fn remove_if_storage_identity(
     Ok(())
 }
 
+#[cfg(not(unix))]
+fn remove_if_storage_identity(
+    _path: &Path,
+    _expected_storage_identity: &str,
+    _expected_logical_bytes: u64,
+    _expected_content_digests: &ContentDigests,
+    _staging_token: u64,
+) -> Result<(), String> {
+    Err("duplicate-reclaim-unsupported-platform".into())
+}
+
 fn removal_failure_code(error: &str) -> String {
     error.split(':').next().unwrap_or(error).to_string()
 }
