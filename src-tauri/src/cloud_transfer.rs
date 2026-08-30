@@ -1288,6 +1288,25 @@ pub(crate) fn record_copy_failure(
     write_copy_failure_record(&record, receipt_dir).map(|_| ())
 }
 
+/// Persist one provider-copy failure while retaining the original customer-actionable error.
+#[cfg(not(coverage))]
+pub fn journal_provider_api_copy_failure(
+    candidate: &CloudCandidate,
+    error: &str,
+    failure_dir: &Path,
+) -> String {
+    match record_copy_failure(
+        candidate,
+        CloudCopyApprovalAction::CopyOnly,
+        error,
+        crate::cloud::system_now_ms(),
+        failure_dir,
+    ) {
+        Ok(()) => error.to_string(),
+        Err(journal_error) => format!("{error};{journal_error}"),
+    }
+}
+
 #[cfg(all(not(coverage), target_os = "macos"))]
 const COPY_TIMEOUT_BASE_SECS: u64 = 120;
 #[cfg(all(not(coverage), target_os = "macos"))]
@@ -2228,6 +2247,22 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o400);
         }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn provider_post_success_failure_is_journaled_without_replacing_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let failure_dir = temporary.path().join("cloud-copy-failures");
+
+        let error = journal_provider_api_copy_failure(
+            &candidate(),
+            "source-changed-after-provider-upload",
+            &failure_dir,
+        );
+
+        assert_eq!(error, "source-changed-after-provider-upload");
+        assert_eq!(std::fs::read_dir(&failure_dir).unwrap().count(), 1);
     }
 
     #[cfg(not(coverage))]

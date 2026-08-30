@@ -1936,6 +1936,15 @@ fn create_cloud_candidate_receipt(
 }
 
 #[cfg(not(coverage))]
+fn record_provider_api_copy_failure(
+    candidate: &cloud::CloudCandidate,
+    error: &str,
+    failure_dir: &Path,
+) -> String {
+    cloud_transfer::journal_provider_api_copy_failure(candidate, error, failure_dir)
+}
+
+#[cfg(not(coverage))]
 fn create_cloud_candidate_provider_api_receipt(
     root: &str,
     cloud_root: &str,
@@ -2018,6 +2027,12 @@ fn create_cloud_candidate_provider_api_receipt(
         &copy_approval,
         copied_at_ms,
     )?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let failure_dir = app_data_dir.join("cloud-copy-failures");
+    let receipt_dir = app_data_dir.join("cloud-receipts");
     let access_token = provider_oauth::refreshed_access_token(&connection_path, &selected)?;
     let control = provider_api_write::ProviderUploadControl::new(cancel, deadline);
     let upload = provider_api_write::upload_file(
@@ -2032,20 +2047,7 @@ fn create_cloud_candidate_provider_api_receipt(
     let upload = match upload {
         Ok(upload) => upload,
         Err(error) => {
-            let failure_dir = app.path().app_data_dir()
-                .map_err(|_| "app-data-directory-unavailable".to_string())?
-                .join("cloud-copy-failures");
-            let journal_error = cloud_transfer::record_copy_failure(
-                candidate,
-                cloud_transfer::CloudCopyApprovalAction::CopyOnly,
-                &error,
-                cloud::system_now_ms(),
-                &failure_dir,
-            ).err();
-            return Err(match journal_error {
-                Some(journal_error) => format!("{error};{journal_error}"),
-                None => error,
-            });
+            return Err(record_provider_api_copy_failure(candidate, &error, &failure_dir));
         }
     };
     if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
@@ -2055,18 +2057,14 @@ fn create_cloud_candidate_provider_api_receipt(
             &upload.object_id,
             access_token.as_str(),
         );
-        return Err(match cleanup {
+        let error = match cleanup {
             Ok(()) => error,
             Err(cleanup_error) => format!(
                 "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
             ),
-        });
+        };
+        return Err(record_provider_api_copy_failure(candidate, &error, &failure_dir));
     }
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "app-data-directory-unavailable".to_string())?;
-    let receipt_dir = app_data_dir.join("cloud-receipts");
     let receipt_path = match cloud_transfer::write_provider_api_receipt(&receipt, &receipt_dir) {
         Ok(path) => path,
         Err(error) => {
@@ -2075,12 +2073,13 @@ fn create_cloud_candidate_provider_api_receipt(
                 &upload.object_id,
                 access_token.as_str(),
             );
-            return Err(match cleanup {
+            let error = match cleanup {
                 Ok(()) => error,
                 Err(cleanup_error) => format!(
                     "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
                 ),
-            });
+            };
+            return Err(record_provider_api_copy_failure(candidate, &error, &failure_dir));
         }
     };
     let mut projection_warnings = Vec::new();
@@ -2287,12 +2286,12 @@ pub async fn copy_cloud_candidate_via_provider_api(
             operation: Arc::clone(&cloud_copy_operation),
             fingerprint: metadata_fingerprint.clone(),
         };
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(PROVIDER_API_COPY_DEADLINE_SECS))
-            .ok_or_else(|| "cloud-copy-deadline-unavailable".to_string())?;
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(PROVIDER_API_COPY_DEADLINE_SECS))
+            .ok_or_else(|| "cloud-copy-deadline-unavailable".to_string())?;
         create_cloud_candidate_provider_api_receipt(
             &root,
             &cloud_root,
