@@ -36,6 +36,12 @@ const operationalAssetNames = [
   'disksage-shared-temp-reclaim-plan-macos-arm64',
 ] as const;
 
+const platformDirectories = {
+  linux: 'release-disksage-ubuntu-22.04-1',
+  windows: 'release-disksage-windows-2022-1',
+  macos: 'release-disksage-macos-latest-1',
+} as const;
+
 /** Read one UTF-8 file from the source-controlled repository root. */
 function readRepositoryFile(relativePath: string): string {
   return readFileSync(resolve(repositoryRoot, relativePath), 'utf8');
@@ -70,41 +76,16 @@ function extractWorkflowRunScript(job: string, stepName: string): string {
     .join('\n');
 }
 
-/** Create one complete, valid release artifact tree for verifier execution. */
+/** Create one complete, valid pre-SBOM release artifact tree for verifier execution. */
 function createCompleteReleaseFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-allowlist-'));
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
-  mkdirSync(join(artifactRoot, 'sbom'), { recursive: true });
-  writeFileSync(
-    join(artifactRoot, 'sbom', 'disksage.spdx.json'),
-    JSON.stringify({
-      spdxVersion: 'SPDX-2.3',
-      dataLicense: 'CC0-1.0',
-      SPDXID: 'SPDXRef-DOCUMENT',
-      name: 'disksage-deadbeef',
-      documentNamespace: 'https://github.com/ContextualWisdomLab/disksage/sbom/deadbeef',
-      creationInfo: { created: '2000-01-01T00:00:00.000Z', creators: ['Tool: disksage-release-sbom'] },
-      documentDescribes: ['SPDXRef-Cargo-root'],
-      packages: [{
-        SPDXID: 'SPDXRef-Cargo-root',
-        name: 'cargo:disksage',
-        versionInfo: '0.1.0',
-        downloadLocation: 'NOASSERTION',
-        filesAnalyzed: false,
-        licenseConcluded: 'NOASSERTION',
-        licenseDeclared: 'NOASSERTION',
-        supplier: 'NOASSERTION',
-      }],
-      relationships: [],
-      documentComment: 'Dependency inventory bound to source revision deadbeef.',
-    }),
-  );
   const bundlePaths = [
-    'ubuntu/bundle/deb/disksage.deb',
-    'ubuntu/bundle/appimage/disksage.AppImage',
-    'windows/bundle/msi/disksage.msi',
-    'windows/bundle/nsis/disksage-setup.exe',
-    'macos/bundle/dmg/disksage.dmg',
+    `${platformDirectories.linux}/bundle/deb/disksage.deb`,
+    `${platformDirectories.linux}/bundle/appimage/disksage.AppImage`,
+    `${platformDirectories.windows}/bundle/msi/disksage.msi`,
+    `${platformDirectories.windows}/bundle/nsis/disksage-setup.exe`,
+    `${platformDirectories.macos}/bundle/dmg/disksage.dmg`,
   ];
   for (const bundlePath of bundlePaths) {
     const absolutePath = join(artifactRoot, bundlePath);
@@ -113,10 +94,10 @@ function createCompleteReleaseFixture(): string {
   }
   for (const assetName of operationalAssetNames) {
     const platformDirectory = assetName.includes('windows')
-      ? 'windows'
+      ? platformDirectories.windows
       : assetName.includes('macos')
-        ? 'macos'
-        : 'ubuntu';
+        ? platformDirectories.macos
+        : platformDirectories.linux;
     const assetPath = join(artifactRoot, platformDirectory, assetName);
     const bytes = Buffer.from(`operational-cli:${assetName}`);
     mkdirSync(dirname(assetPath), { recursive: true });
@@ -129,7 +110,7 @@ function createCompleteReleaseFixture(): string {
   return fixtureRoot;
 }
 
-/** Execute the source-controlled release admission script against one fixture. */
+/** Execute the source-controlled pre-SBOM release admission step against one fixture. */
 function runReleaseArtifactVerifier(fixtureRoot: string) {
   const workflow = readRepositoryFile('.github/workflows/release.yml');
   const attestJob = extractWorkflowJob(workflow, 'attest-release');
@@ -140,7 +121,11 @@ function runReleaseArtifactVerifier(fixtureRoot: string) {
   return spawnSync('bash', ['-c', verifier], {
     cwd: fixtureRoot,
     encoding: 'utf8',
-    env: { ...process.env, GITHUB_WORKSPACE: repositoryRoot },
+    env: {
+      ...process.env,
+      GITHUB_WORKSPACE: repositoryRoot,
+      GITHUB_RUN_ATTEMPT: '1',
+    },
   });
 }
 
@@ -151,7 +136,12 @@ describe('release artifact exact-set admission', () => {
       const fixtureRoot = createCompleteReleaseFixture();
       try {
         writeFileSync(
-          join(fixtureRoot, 'release-artifacts', 'ubuntu', 'unexpected-debug-dump.txt'),
+          join(
+            fixtureRoot,
+            'release-artifacts',
+            platformDirectories.linux,
+            'unexpected-debug-dump.txt',
+          ),
           'buyer-private-or-unreviewed-output',
         );
 
@@ -172,7 +162,12 @@ describe('release artifact exact-set admission', () => {
       try {
         symlinkSync(
           'disksage-cloud-plan-linux-x86_64',
-          join(fixtureRoot, 'release-artifacts', 'ubuntu', 'unexpected-cli-alias'),
+          join(
+            fixtureRoot,
+            'release-artifacts',
+            platformDirectories.linux,
+            'unexpected-cli-alias',
+          ),
         );
 
         const result = runReleaseArtifactVerifier(fixtureRoot);
