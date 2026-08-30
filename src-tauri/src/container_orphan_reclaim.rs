@@ -934,6 +934,7 @@ fn parse_container_ownership(
 fn parse_network_ownership(
     output: &str,
     expected_id: &str,
+    require_embedded_membership: bool,
 ) -> Result<(ResourceOwnershipEvidence, bool), String> {
     let records = split_json_envelopes(output)?;
     if records.len() != 1 {
@@ -946,7 +947,11 @@ fn parse_network_ownership(
     }
     let name = validate_resource_name(&string_field(record, &["Name", "name"])?, "network")?;
     let driver = string_field(record, &["Driver", "driver"])?;
-    let attached = network_has_attached_containers(output)?;
+    let attached = if require_embedded_membership {
+        network_has_attached_containers(output)?
+    } else {
+        false
+    };
     let ownership = ownership_binding(
         b"disksage.container-network-identity.v1\0",
         &[&id, &name, &driver],
@@ -1537,8 +1542,11 @@ fn audit_category(
                         ORPHAN_COMMAND_TIMEOUT,
                         "orphan-network-ownership",
                     )?;
-                    let (ownership, inspected_attached) =
-                        parse_network_ownership(&ownership_output, &network_id)?;
+                    let (ownership, inspected_attached) = parse_network_ownership(
+                        &ownership_output,
+                        &network_id,
+                        target.kind != ContainerRuntimeKind::PodmanMachine,
+                    )?;
                     ownership_by_id.insert(network_id.clone(), ownership);
                     let has_attached_containers =
                         if target.kind == ContainerRuntimeKind::PodmanMachine {
@@ -2156,7 +2164,7 @@ mod tests {
         let owned = format!(
             r#"[{{"Id":"{DOCKER_ID_A}","Name":"cache-net","Driver":"bridge","Containers":{{}},"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]"#
         );
-        let (evidence, attached) = parse_network_ownership(&owned, DOCKER_ID_A).unwrap();
+        let (evidence, attached) = parse_network_ownership(&owned, DOCKER_ID_A, true).unwrap();
         assert!(evidence.explicitly_reclaimable);
         assert!(!attached);
         let compose = owned.replace(
@@ -2164,7 +2172,7 @@ mod tests {
             "\"com.docker.compose.network\":\"default\",\"io.contextualwisdomlab.disksage.owner\"",
         );
         assert!(
-            !parse_network_ownership(&compose, DOCKER_ID_A)
+            !parse_network_ownership(&compose, DOCKER_ID_A, true)
                 .unwrap()
                 .0
                 .explicitly_reclaimable
