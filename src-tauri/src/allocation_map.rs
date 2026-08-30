@@ -225,7 +225,10 @@ mod tests {
         let report = measure_root(&root, 2, Duration::from_secs(1)).unwrap();
         assert_eq!(report.visited_entries, 2);
         assert!(report.evidence_complete);
-        assert!(report.allocated_bytes < 4096);
+        use std::os::unix::fs::MetadataExt;
+        let expected_without_target = std::fs::symlink_metadata(&root).unwrap().blocks() * 512
+            + std::fs::symlink_metadata(root.join("link")).unwrap().blocks() * 512;
+        assert_eq!(report.allocated_bytes, expected_without_target);
         assert_eq!(
             measure_root(&root, 1, Duration::from_secs(1))
                 .unwrap()
