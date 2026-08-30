@@ -416,6 +416,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 } else {
                     age_days(&path, now_ms)
                 };
+                if age < min_age_days {
+                    return None;
+                }
                 let manifest = artifact_manifest(&path);
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
