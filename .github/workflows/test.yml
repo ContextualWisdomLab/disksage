@@ -25,6 +25,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Exact-head checkout regression
+        env:
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_CHECKOUT_SHA" || {
+            printf 'checkout mismatch: expected %s, got %s\n' "$EXPECTED_CHECKOUT_SHA" "$actual_sha" >&2
+            exit 1
+          }
       - name: Runner reclaim positive-evidence regression
         shell: bash
         run: bash .github/scripts/test-reclaim-test-runner-space.sh
