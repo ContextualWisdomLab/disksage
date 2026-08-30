@@ -1283,7 +1283,12 @@ pub fn inspect_cloud_provider_global_sync(
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-global-sync-icloud-specialized".into());
     }
-    provider_global_sync::inspect_new_copy_admission(selected.provider)
+    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    provider_global_sync::inspect_new_copy_admission_checkpointed(
+        selected.provider,
+        &app_data_dir,
+        cloud::system_now_ms(),
+    )
 }
 
 #[cfg(not(coverage))]

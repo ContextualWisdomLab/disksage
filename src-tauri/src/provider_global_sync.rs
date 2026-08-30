@@ -8,6 +8,8 @@
 use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 // macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
 // room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
@@ -165,6 +167,13 @@ pub fn checkpoint_report(
     if observed_at_ms == 0 {
         return Err("provider-global-sync-checkpoint-time-invalid".into());
     }
+    if report
+        .probe_receipt
+        .as_ref()
+        .is_some_and(|receipt| receipt.observed_at_ms != observed_at_ms)
+    {
+        return Err("provider-global-sync-checkpoint-time-mismatch".into());
+    }
     let observation_count = if let Some(previous) = previous {
         validate_probe_checkpoint(previous)?;
         if previous.provider != report.provider || observed_at_ms <= previous.observed_at_ms {
@@ -198,6 +207,131 @@ pub fn checkpoint_report(
     checkpoint.checkpoint_fingerprint_sha256 = checkpoint_fingerprint(&checkpoint);
     validate_probe_checkpoint(&checkpoint)?;
     Ok(checkpoint)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderCheckpointDocument {
+    checkpoint: ProviderGlobalSyncCheckpoint,
+    report: ProviderGlobalSyncReport,
+}
+
+fn checkpoint_path(app_data_dir: &Path, provider: CloudProvider) -> Result<PathBuf, String> {
+    if !app_data_dir.is_absolute() || provider_identifier(provider).is_none() {
+        return Err("provider-global-sync-checkpoint-path-invalid".into());
+    }
+    Ok(app_data_dir.join(format!("provider-global-sync-{}.json", provider.as_str())))
+}
+
+fn load_checkpoint_document(
+    app_data_dir: &Path,
+    provider: CloudProvider,
+) -> Result<Option<ProviderCheckpointDocument>, String> {
+    let path = checkpoint_path(app_data_dir, provider)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("provider-global-sync-checkpoint-read-failed".into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 256 * 1024 {
+        return Err("provider-global-sync-checkpoint-file-invalid".into());
+    }
+    let document: ProviderCheckpointDocument = serde_json::from_slice(
+        &std::fs::read(path).map_err(|_| "provider-global-sync-checkpoint-read-failed")?,
+    )
+    .map_err(|_| "provider-global-sync-checkpoint-decode-failed")?;
+    validate_probe_checkpoint(&document.checkpoint)?;
+    validate_report_evidence(&document.report)?;
+    if document.checkpoint.provider != provider || document.report.provider != provider {
+        return Err("provider-global-sync-checkpoint-provider-invalid".into());
+    }
+    Ok(Some(document))
+}
+
+fn persist_checkpoint_document(
+    app_data_dir: &Path,
+    document: &ProviderCheckpointDocument,
+) -> Result<(), String> {
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "provider-global-sync-checkpoint-directory-failed")?;
+    let path = checkpoint_path(app_data_dir, document.checkpoint.provider)?;
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|_| "provider-global-sync-checkpoint-random-failed")?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temporary = path.with_extension(format!("{nonce}.tmp"));
+    let encoded = serde_json::to_vec_pretty(document)
+        .map_err(|_| "provider-global-sync-checkpoint-encode-failed")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|_| "provider-global-sync-checkpoint-create-failed")?;
+    if file.write_all(&encoded).is_err() || file.sync_all().is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("provider-global-sync-checkpoint-write-failed".into());
+    }
+    #[cfg(windows)]
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|_| "provider-global-sync-checkpoint-replace-failed")?;
+    }
+    std::fs::rename(&temporary, &path).map_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+        "provider-global-sync-checkpoint-replace-failed".to_string()
+    })
+}
+
+pub(crate) fn inspect_new_copy_admission_checkpointed_with<F>(
+    provider: CloudProvider,
+    app_data_dir: &Path,
+    now_ms: u64,
+    probe: F,
+) -> Result<ProviderGlobalSyncReport, String>
+where
+    F: FnOnce() -> Result<ProviderGlobalSyncReport, String>,
+{
+    let previous = load_checkpoint_document(app_data_dir, provider)?;
+    if let Some(previous) = previous.as_ref() {
+        if !previous.checkpoint.keep_local || !automatic_probe_due(&previous.checkpoint, now_ms)? {
+            return Ok(previous.report.clone());
+        }
+    }
+    let report = probe()?;
+    let observed_at_ms = report
+        .probe_receipt
+        .as_ref()
+        .map_or(now_ms, |receipt| receipt.observed_at_ms);
+    let checkpoint = checkpoint_report(
+        &report,
+        observed_at_ms,
+        previous.as_ref().map(|document| &document.checkpoint),
+    )?;
+    persist_checkpoint_document(
+        app_data_dir,
+        &ProviderCheckpointDocument {
+            checkpoint,
+            report: report.clone(),
+        },
+    )?;
+    Ok(report)
+}
+
+pub fn inspect_new_copy_admission_checkpointed(
+    provider: CloudProvider,
+    app_data_dir: &Path,
+    now_ms: u64,
+) -> Result<ProviderGlobalSyncReport, String> {
+    inspect_new_copy_admission_checkpointed_with(provider, app_data_dir, now_ms, || {
+        inspect_new_copy_admission(provider)
+    })
 }
 
 pub fn automatic_probe_due(
@@ -1052,12 +1186,88 @@ sync engine state:
         assert!(!automatic_probe_due(&first, 300_999).unwrap());
         assert!(automatic_probe_due(&first, 301_000).unwrap());
 
-        let second = checkpoint_report(&report, 301_000, Some(&first)).unwrap();
+        let fresh_report = inconclusive_probe_report(
+            CloudProvider::Onedrive,
+            301_000,
+            "provider-global-sync-probe-timeout",
+        );
+        let second = checkpoint_report(&fresh_report, 301_000, Some(&first)).unwrap();
         assert_eq!(second.observation_count, 2);
         assert_ne!(
             first.checkpoint_fingerprint_sha256,
             second.checkpoint_fingerprint_sha256
         );
+    }
+
+    #[test]
+    fn checkpoint_rejects_a_timestamp_newer_than_inconclusive_evidence() {
+        let report = inconclusive_probe_report(
+            CloudProvider::Onedrive,
+            1_000,
+            "provider-global-sync-probe-timeout",
+        );
+        assert_eq!(
+            checkpoint_report(&report, 301_000, None).unwrap_err(),
+            "provider-global-sync-checkpoint-time-mismatch"
+        );
+    }
+
+    #[test]
+    fn checkpointed_inspection_persists_and_delays_blocked_reobservation() {
+        let directory = tempfile::tempdir().unwrap();
+        let probes = std::cell::Cell::new(0_u32);
+        let first = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            1_000,
+            || {
+                probes.set(probes.get() + 1);
+                Ok(inconclusive_probe_report(
+                    CloudProvider::Onedrive,
+                    1_000,
+                    "provider-global-sync-probe-timeout",
+                ))
+            },
+        )
+        .unwrap();
+        assert!(!first.evidence_complete);
+
+        let cached = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            300_999,
+            || -> Result<ProviderGlobalSyncReport, String> {
+                panic!("a blocked provider must respect the persisted backoff")
+            },
+        )
+        .unwrap();
+        assert_eq!(cached, first);
+        assert_eq!(probes.get(), 1);
+
+        let fresh = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            301_000,
+            || {
+                probes.set(probes.get() + 1);
+                Ok(parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap())
+            },
+        )
+        .unwrap();
+        assert!(fresh.evidence_complete);
+        assert_eq!(fresh.state, ProviderGlobalSyncState::Clear);
+        assert_eq!(probes.get(), 2);
+
+        let stopped = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            u64::MAX,
+            || -> Result<ProviderGlobalSyncReport, String> {
+                panic!("a complete clear checkpoint stops automatic polling")
+            },
+        )
+        .unwrap();
+        assert_eq!(stopped, fresh);
     }
 
     #[test]
