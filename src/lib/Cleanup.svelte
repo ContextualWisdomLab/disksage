@@ -3,7 +3,7 @@
   import * as devArtifactApi from "./devArtifactApi";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
-  import { confirm } from "@tauri-apps/plugin-dialog";
+  import { confirm, open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -13,6 +13,7 @@
 
   let caches: api.CacheCandidate[] = $state([]);
   let artifacts: api.DevArtifact[] = $state([]);
+  let devArtifactRoot = $state("");
   let selected: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
@@ -62,10 +63,41 @@
     invalidateDevArtifactApproval();
     try {
       caches = await api.listCacheCandidates();
-      artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
+      artifacts = devArtifactRoot ? await api.listDevArtifacts(devArtifactRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
       loadError = String(e);
+    }
+  }
+
+  async function chooseDevArtifactRoot() {
+    if (busy) return;
+    loadError = "";
+    let chosenRoot: string | string[] | null;
+    try {
+      chosenRoot = await open({
+        directory: true,
+        multiple: false,
+        title: "정리할 개발 폴더 선택",
+      });
+    } catch (e) {
+      loadError = String(e);
+      return;
+    }
+    if (typeof chosenRoot !== "string" || chosenRoot.length === 0) return;
+
+    busy = true;
+    devArtifactRoot = chosenRoot;
+    selected = new Set();
+    invalidateDevArtifactApproval();
+    try {
+      artifacts = await api.listDevArtifacts(devArtifactRoot);
+      loadVerdicts(artifacts.map((a) => a.path));
+    } catch (e) {
+      artifacts = [];
+      loadError = String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -192,12 +224,12 @@
 
   async function reviewDevArtifactSelection() {
     const selectedArtifacts = selectedDevArtifacts();
-    if (busy || selectedArtifacts.length === 0 || !scannedRoot) return;
+    if (busy || selectedArtifacts.length === 0 || !devArtifactRoot) return;
     busy = true;
     loadError = "";
     invalidateDevArtifactApproval();
     try {
-      devArtifactApproval = await devArtifactApi.reviewDevArtifacts(scannedRoot, selectedArtifacts);
+      devArtifactApproval = await devArtifactApi.reviewDevArtifacts(devArtifactRoot, selectedArtifacts);
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -217,7 +249,7 @@
     const approval = devArtifactApproval;
     if (
       selectedArtifacts.length === 0
-      || !scannedRoot
+      || !devArtifactRoot
       || !devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())
       || devArtifactConfirmationPhrase.trim() !== approval.exact_phrase
     ) return;
@@ -241,7 +273,7 @@
     busy = true;
     try {
       const cleanResults = await devArtifactApi.cleanDevArtifactsBound(
-        scannedRoot,
+        devArtifactRoot,
         0,
         selectedArtifacts,
         approval,
@@ -299,10 +331,11 @@
     {/each}
   </ul>
 
-  <h3>개발 빌드 파일 {scannedRoot ? `(${scannedRoot})` : "(정리할 개발 폴더를 먼저 스캔하세요)"}</h3>
+  <h3>개발 빌드 파일 {devArtifactRoot ? `(${devArtifactRoot})` : "(개발 폴더를 선택하세요)"}</h3>
   <p class="notice" role="status">
-    선택한 개발 폴더 안에서 다시 만들 수 있다고 확인된 Cargo·Node·Python 빌드 파일만 표시합니다. 개발 도구를 닫고 항목을 선택한 뒤 휴지통으로 보내세요.
+    개발 빌드 파일은 전체 디스크 스캔 위치를 재귀 탐색하지 않습니다. 정리할 프로젝트 작업공간을 직접 선택한 뒤 그 안에서 다시 만들 수 있다고 확인된 Cargo·Node·Python 빌드 파일만 표시합니다. 개발 도구를 닫고 항목을 선택한 뒤 휴지통으로 보내세요.
   </p>
+  <button onclick={chooseDevArtifactRoot} disabled={busy}>개발 폴더 선택</button>
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
