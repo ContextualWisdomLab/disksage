@@ -46,9 +46,8 @@ fn manifest_variable_fields_are_length_framed() {
     let target_path = cache_root.join("ab");
     fs::write(&target_path, b"generated-payload").expect("write generated cache fixture");
 
-    let targets = crate::rules::cache_targets(&cache_root).expect("enumerate cache targets");
-    assert_eq!(targets.len(), 1);
-    let target = &targets[0];
+    let target = crate::rules_catalog::cache_target(&target_path)
+        .expect("snapshot the relocation-stable catalog manifest");
 
     let mut expected = blake3::Hasher::new();
     update_framed(
@@ -60,7 +59,10 @@ fn manifest_variable_fields_are_length_framed() {
     );
     expected.update(&[0]);
     let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
-    update_framed(&mut expected, crate::rules::cache_metadata_fingerprint(&metadata).as_bytes());
+    update_framed(
+        &mut expected,
+        crate::rules_catalog::cache_metadata_fingerprint(&metadata).as_bytes(),
+    );
     update_framed(&mut expected, target.object_id.as_bytes());
 
     assert_eq!(
@@ -80,7 +82,8 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
     fs::write(target.join("payload.bin"), b"generated")
         .expect("write generated cache payload");
 
-    let reviewed = crate::rules::cache_target(&target).expect("snapshot reviewed cache target");
+    let reviewed = crate::rules::cache_authority_target(&target)
+        .expect("snapshot reviewed cache authority");
     let before = fs::symlink_metadata(&target).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
@@ -103,7 +106,8 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
         (after.ctime(), after.ctime_nsec()),
         "fixture must produce a ctime-only root metadata transition"
     );
-    let live = crate::rules::cache_target(&target).expect("snapshot live cache target");
+    let live = crate::rules::cache_authority_target(&target)
+        .expect("snapshot live cache authority");
     assert_eq!(reviewed.object_id, live.object_id);
     assert_eq!(reviewed.modified_ms, live.modified_ms);
     assert_ne!(
@@ -121,7 +125,8 @@ fn permanent_delete_rejects_ctime_only_root_drift() {
     fs::create_dir(&target_path).expect("create generated cache target");
     fs::write(target_path.join("payload.bin"), b"generated")
         .expect("write generated cache payload");
-    let reviewed = crate::rules::cache_target(&target_path).expect("snapshot reviewed cache target");
+    let reviewed = crate::rules::cache_authority_target(&target_path)
+        .expect("snapshot reviewed cache authority");
     let before = fs::symlink_metadata(&target_path).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
