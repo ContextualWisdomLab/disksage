@@ -16,12 +16,18 @@ pub struct AllocationMapEntry {
 }
 
 fn normal_components(path: &Path) -> Vec<&std::ffi::OsStr> {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value),
-            _ => None,
-        })
-        .collect()
+    let mut normalized = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::RootDir => normalized.clear(),
+            Component::CurDir | Component::Prefix(_) => {}
+        }
+    }
+    normalized
 }
 
 fn contains_component_sequence(components: &[&std::ffi::OsStr], sequence: &[&str]) -> bool {
@@ -251,6 +257,14 @@ mod tests {
             classification(Path::new("/Users/test/album.photoslibrary-notes")),
             "user-or-application-data"
         );
+        for ordinary in [
+            "/tmp/Library/../Mobile Documents",
+            "/tmp/.cargo/../registry",
+            "/tmp/private/var/../folders",
+            "/tmp/containers/../podman",
+        ] {
+            assert_eq!(classification(Path::new(ordinary)), "user-or-application-data");
+        }
     }
 
     #[test]
