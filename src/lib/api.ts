@@ -164,6 +164,42 @@ export const cleanOrphanCandidates = (
   rationale,
 });
 
+export interface DeletedOpenActionItem {
+  application: string;
+  holder_count: number;
+  distinct_file_count: number;
+  observed_logical_bytes: number;
+  customer_next_action: string;
+}
+
+export interface DeletedOpenActionPlan {
+  schema_kind: "disksage.deleted-open-action-plan";
+  schema_version: number;
+  evidence_complete: boolean;
+  observed_file_count: number;
+  observed_logical_bytes: number;
+  physically_reclaimable_bytes: null;
+  actions: DeletedOpenActionItem[];
+  receipt: {
+    schema_kind: "disksage.deleted-open-action-receipt";
+    schema_version: number;
+    receipt_id: string;
+    observed_at_ms: number;
+    evidence_complete: boolean;
+    observed_file_count: number;
+    observed_logical_bytes: number;
+    physically_reclaimable_bytes: null;
+    mutation_executed: false;
+  };
+  customer_next_action: string;
+  local_paths_included: false;
+  process_termination_executed: false;
+  mutation_executed: false;
+}
+
+export const inspectDeletedOpenFiles = () =>
+  invoke<DeletedOpenActionPlan>("inspect_deleted_open_files");
+
 export interface PodmanReclaimPlan {
   schema_kind: "disksage.podman-reclaim-plan";
   schema_version: number;

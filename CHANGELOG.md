@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Connect deleted-open capacity evidence to a read-only Cleanup action plan: show which apps to
+  quit normally, keep paths and process controls out of the customer screen, record the bounded
+  observation, and measure actual free space only after the person rescans.
+
 - Add a bounded, read-only deleted-open file audit that omits pathnames, deduplicates observed file
   identities, leaves physical reclaim unknown, and directs people to close the listed apps normally
   before rescanning; it never terminates a process or mutates a file.

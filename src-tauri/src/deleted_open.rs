@@ -41,11 +41,135 @@ pub struct DeletedOpenAuditReport {
     pub mutation_executed: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeletedOpenActionItem {
+    pub application: String,
+    pub holder_count: u64,
+    pub distinct_file_count: u64,
+    pub observed_logical_bytes: u64,
+    pub customer_next_action: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeletedOpenActionReceipt {
+    pub schema_kind: &'static str,
+    pub schema_version: u32,
+    pub receipt_id: String,
+    pub observed_at_ms: u64,
+    pub evidence_complete: bool,
+    pub observed_file_count: u64,
+    pub observed_logical_bytes: u64,
+    pub physically_reclaimable_bytes: Option<u64>,
+    pub mutation_executed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeletedOpenActionPlan {
+    pub schema_kind: &'static str,
+    pub schema_version: u32,
+    pub evidence_complete: bool,
+    pub observed_file_count: u64,
+    pub observed_logical_bytes: u64,
+    pub physically_reclaimable_bytes: Option<u64>,
+    pub actions: Vec<DeletedOpenActionItem>,
+    pub receipt: DeletedOpenActionReceipt,
+    pub customer_next_action: &'static str,
+    pub local_paths_included: bool,
+    pub process_termination_executed: bool,
+    pub mutation_executed: bool,
+}
+
 #[derive(Default)]
 struct ProcessAccumulator {
     command: String,
     file_count: u64,
     logical_bytes: u64,
+}
+
+/// Converts a path-free audit into a customer action plan and immutable-value read receipt.
+pub fn plan_from_audit(
+    audit: DeletedOpenAuditReport,
+    observed_at_ms: u64,
+) -> DeletedOpenActionPlan {
+    let commands_complete = audit
+        .processes
+        .iter()
+        .all(|process| !process.command.trim().is_empty());
+    let evidence_complete = audit.evidence_complete && commands_complete;
+    let mut grouped: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+    for process in &audit.processes {
+        if process.command.trim().is_empty() {
+            continue;
+        }
+        let entry = grouped.entry(process.command.clone()).or_default();
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = entry.1.saturating_add(process.distinct_file_count);
+        entry.2 = entry.2.saturating_add(process.observed_logical_bytes);
+    }
+    let mut actions = grouped
+        .into_iter()
+        .map(
+            |(application, (holder_count, distinct_file_count, observed_logical_bytes))| {
+                DeletedOpenActionItem {
+                    customer_next_action: format!(
+                        "Quit every {application} window normally, then scan again."
+                    ),
+                    application,
+                    holder_count,
+                    distinct_file_count,
+                    observed_logical_bytes,
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    actions.sort_by(|left, right| {
+        right
+            .observed_logical_bytes
+            .cmp(&left.observed_logical_bytes)
+            .then_with(|| left.application.cmp(&right.application))
+    });
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-deleted-open-action-receipt-v1\0");
+    hasher.update(&observed_at_ms.to_le_bytes());
+    hasher.update(&audit.observed_file_count.to_le_bytes());
+    hasher.update(&audit.observed_logical_bytes.to_le_bytes());
+    hasher.update(&[u8::from(evidence_complete)]);
+    for action in &actions {
+        hasher.update(action.application.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&action.holder_count.to_le_bytes());
+        hasher.update(&action.distinct_file_count.to_le_bytes());
+        hasher.update(&action.observed_logical_bytes.to_le_bytes());
+    }
+    let receipt = DeletedOpenActionReceipt {
+        schema_kind: "disksage.deleted-open-action-receipt",
+        schema_version: 1,
+        receipt_id: hasher.finalize().to_hex().to_string(),
+        observed_at_ms,
+        evidence_complete,
+        observed_file_count: audit.observed_file_count,
+        observed_logical_bytes: audit.observed_logical_bytes,
+        physically_reclaimable_bytes: None,
+        mutation_executed: false,
+    };
+    DeletedOpenActionPlan {
+        schema_kind: "disksage.deleted-open-action-plan",
+        schema_version: 1,
+        evidence_complete,
+        observed_file_count: audit.observed_file_count,
+        observed_logical_bytes: audit.observed_logical_bytes,
+        physically_reclaimable_bytes: None,
+        actions,
+        receipt,
+        customer_next_action: if evidence_complete {
+            "Quit every listed app normally, then scan again."
+        } else {
+            "Keep the apps open and scan again after DiskSage can complete this check."
+        },
+        local_paths_included: false,
+        process_termination_executed: false,
+        mutation_executed: false,
+    }
 }
 
 /// Parses bounded `lsof +L1 -F0pcfDist` output without retaining deleted pathnames.
@@ -354,5 +478,46 @@ mod tests {
             .processes
             .iter()
             .all(|process| process.distinct_file_count == 1));
+    }
+
+    #[test]
+    fn action_plan_groups_apps_without_granting_termination_or_reclaim_credit() {
+        let audit = parse_lsof_nul(
+            b"p10\0cEditor\0f1\0tREG\0D1\0i20\0s4096\0p11\0cEditor\0f2\0tREG\0D1\0i21\0s512\0",
+            false,
+        );
+        let plan = plan_from_audit(audit, 123);
+        assert!(plan.evidence_complete);
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].application, "Editor");
+        assert_eq!(plan.actions[0].holder_count, 2);
+        assert_eq!(plan.observed_logical_bytes, 4_608);
+        assert_eq!(plan.physically_reclaimable_bytes, None);
+        assert!(!plan.process_termination_executed);
+        assert!(!plan.mutation_executed);
+        assert!(!serde_json::to_string(&plan).unwrap().contains("/private/"));
+    }
+
+    #[test]
+    fn action_plan_with_missing_app_identity_is_incomplete_and_has_no_action() {
+        let audit = parse_lsof_nul(b"p10\0c\0f1\0tREG\0D1\0i20\0s4096\0", false);
+        let plan = plan_from_audit(audit, 123);
+        assert!(!plan.evidence_complete);
+        assert!(plan.actions.is_empty());
+        assert_eq!(
+            plan.customer_next_action,
+            "Keep the apps open and scan again after DiskSage can complete this check."
+        );
+    }
+
+    #[test]
+    fn action_plan_orders_largest_customer_action_first() {
+        let audit = parse_lsof_nul(
+            b"p10\0cSmall\0f1\0tREG\0D1\0i20\0s10\0p11\0cLarge\0f2\0tREG\0D1\0i21\0s100\0",
+            false,
+        );
+        let plan = plan_from_audit(audit, 123);
+        assert_eq!(plan.actions[0].application, "Large");
+        assert_eq!(plan.actions[1].application, "Small");
     }
 }

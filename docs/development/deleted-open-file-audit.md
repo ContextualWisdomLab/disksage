@@ -15,6 +15,12 @@ complete while local capacity remains occupied.
 The audit never kills a process, removes a file, or counts its logical total toward verified
 physical recovery. A later APFS observation remains a separate shared-volume measurement.
 
+The Cleanup screen exposes that same boundary as a read-only action plan. It groups holders by
+application name, presents logical bytes only as capacity still held, and keeps the bounded receipt
+identifier under audit details. DiskSage neither offers nor invokes a forced quit. After the person
+quits every listed instance normally, scanning again creates a fresh receipt; only the separate
+APFS available-space observation may describe physical recovery.
+
 ## Reference
 
 The Open Group. (2024). *unlink, unlinkat*. In *POSIX.1-2024*. IEEE and The Open Group.

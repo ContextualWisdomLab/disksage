@@ -455,6 +455,13 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Returns a read-only, path-free plan for capacity held by deleted files.
+#[tauri::command]
+pub fn inspect_deleted_open_files() -> Result<crate::deleted_open::DeletedOpenActionPlan, String> {
+    let audit = crate::deleted_open::collect_deleted_open_audit()?;
+    Ok(crate::deleted_open::plan_from_audit(audit, now_ms()))
+}
+
 fn valid_brew_fingerprint(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
