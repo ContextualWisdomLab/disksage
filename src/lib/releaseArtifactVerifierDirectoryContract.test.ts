@@ -137,12 +137,15 @@ describe('release artifact verifier directory contract', () => {
     expect(publishStart).toBeGreaterThan(attestStart);
 
     const attestJob = workflow.slice(attestStart, publishStart);
+    const downloadOffset = attestJob.indexOf('- name: Download exact release artifact set');
     const verifierOffset = attestJob.indexOf(
       'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
     );
     const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
 
+    expect(downloadOffset).toBeGreaterThanOrEqual(0);
     expect(verifierOffset).toBeGreaterThanOrEqual(0);
+    expect(verifierOffset).toBeGreaterThan(downloadOffset);
     expect(sbomOffset).toBeGreaterThan(verifierOffset);
   });
 });
