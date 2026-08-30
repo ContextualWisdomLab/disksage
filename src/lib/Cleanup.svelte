@@ -4,6 +4,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
@@ -43,6 +44,18 @@
     devArtifactApproval = null;
     devArtifactConfirmationPhrase = "";
   }
+
+  onMount(() => {
+    const timer = window.setInterval(() => {
+      if (
+        devArtifactApproval !== null
+        && !devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
+      ) {
+        invalidateDevArtifactApproval();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  });
 
   async function load() {
     loadError = "";
@@ -194,7 +207,7 @@
 
   function devArtifactExecutionReady(): boolean {
     return !busy
-      && devArtifactApproval !== null
+      && devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
       && devArtifactConfirmationPhrase.trim() === devArtifactApproval.exact_phrase
       && selectionCount > 0;
   }
@@ -205,7 +218,7 @@
     if (
       selectedArtifacts.length === 0
       || !scannedRoot
-      || approval === null
+      || !devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())
       || devArtifactConfirmationPhrase.trim() !== approval.exact_phrase
     ) return;
     const summary = selectedArtifacts.map(
@@ -219,16 +232,30 @@
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
+    if (!devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())) {
+      invalidateDevArtifactApproval();
+      loadError = "승인 시간이 만료되었습니다. 선택 항목을 유지했으니 다시 검토해 승인 문구를 생성하세요.";
+      return;
+    }
 
     busy = true;
     try {
-      results = await devArtifactApi.cleanDevArtifactsBound(
+      const cleanResults = await devArtifactApi.cleanDevArtifactsBound(
         scannedRoot,
         0,
         selectedArtifacts,
         approval,
         devArtifactConfirmationPhrase.trim(),
       );
+      results = cleanResults;
+      const approvalFailure = cleanResults.some(
+        (result) => !result.ok && result.error?.includes("development-artifact-approval-"),
+      );
+      if (approvalFailure) {
+        invalidateDevArtifactApproval();
+        loadError = "승인 증거가 더 이상 유효하지 않습니다. 선택 항목을 유지했으니 다시 검토해 승인 문구를 생성하세요.";
+        return;
+      }
       selected = new Set();
       invalidateDevArtifactApproval();
       await load();
@@ -311,7 +338,7 @@
     {#if devArtifactApproval}
       <div class="typed-approval">
         <p class="notice" role="status">
-          아래 승인 문구는 현재 선택 지문에만 유효합니다. 선택을 바꾸거나 새로고침하면 다시 검토해야 합니다.
+          아래 승인 문구는 현재 선택 지문에만 유효합니다. 선택을 바꾸거나 새로고침하거나 승인 시간이 만료되면 다시 검토해야 합니다.
         </p>
         <code>{devArtifactApproval.exact_phrase}</code>
         <label>
