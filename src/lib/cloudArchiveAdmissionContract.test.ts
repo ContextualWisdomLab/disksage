@@ -57,8 +57,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("<summary>감사 세부 정보</summary>");
     expect(source).not.toContain("전역 동기화 admission");
     expect(source).toContain("마지막 확인 {evidenceObservedAt(providerGlobalSyncObservedAtMs)}");
-    expect(source).toContain('providerGlobalSync.blockers.length === 0 ? "1분" : "5분"');
-    expect(source).toContain("후 자동 재확인");
+    expect(source).toContain('providerGlobalSync.blockers.length === 0 ? "새 복사 계획을 시작할 때 다시 확인" : "5분 후 자동 재확인"');
     expect(source).toContain("접근 불가·진단만 가능");
     expect(source).toContain("이 클라우드 위치를 현재 읽을 수 없습니다.");
     expect(source).toContain("!selectedRootDetails()?.readable");

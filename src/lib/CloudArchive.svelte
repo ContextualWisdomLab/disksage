@@ -1083,7 +1083,10 @@
         <p class:warning={providerGlobalSync.blockers.length > 0}>
           {providerGlobalSyncNextAction(providerGlobalSync)}
         </p>
-        <span class="context">마지막 확인 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} · {providerGlobalSync.blockers.length === 0 ? "1분" : "5분"} 후 자동 재확인</span>
+        <span class="context">
+          마지막 확인 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} ·
+          {providerGlobalSync.blockers.length === 0 ? "새 복사 계획을 시작할 때 다시 확인" : "5분 후 자동 재확인"}
+        </span>
         {#if providerGlobalSync.blockers.length > 0}
           <p class="warning">
             차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
