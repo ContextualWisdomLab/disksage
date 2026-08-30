@@ -1183,6 +1183,17 @@ runner's private workspace temp root instead of weakening the shared production 
   the approved cloud items remain intact and locally materialized until that native path passes
   post-allocation verification.
 
+## 2026-08-30 generated-cache symbolic-link boundary
+
+- Live execution-readiness audits found that the allowlisted uv and Playwright caches contain
+  symbolic-link entries. The prior all-or-nothing rejection prevented DiskSage from producing an
+  approval fingerprint, allocated-byte estimate, or activity blockers for these ordinary caches.
+- The manifest now fingerprints a link's own target text without resolving, opening, or traversing
+  its destination. An allowlisted root that is itself a symbolic link remains denied, special files
+  remain denied, and fresh evidence plus exact human approval are still mandatory before removal.
+- Focused regression tests prove that changing content outside the cache through a child link does
+  not alter the cache manifest and that a root link cannot enter the reclaim contract.
+
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.

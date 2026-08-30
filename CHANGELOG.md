@@ -26,6 +26,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   options without echoing attacker-controlled option payloads.
 
 - Add an exact-allowlist generated-cache auditor that defaults to dry-run, blocks live processes,
+  fingerprints cache-internal symbolic links without following them, and continues to reject an
+  allowlisted root that is itself a symbolic link.
   tool locks, registered or dirty temporary Git workspaces, and provider/Photos/VM boundaries, and
   requires a fingerprint-bound approval plus a crash-recoverable private JSON Lines receipt before
   removal. Add a plan-first CLI; temporary Git workspaces remain audit-only and route to the
