@@ -154,6 +154,7 @@ pub fn run() {
             photos_library::photos_authorization_status,
             photos_library::request_photos_authorization,
             photos_library::inspect_photos_duplicates,
+            photos_library::inspect_photos_duplicates_page,
             photos_library::plan_photos_duplicate_deletion,
             photos_library::execute_photos_duplicate_deletion,
             commands::get_ontology,

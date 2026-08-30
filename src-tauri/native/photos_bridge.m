@@ -197,6 +197,37 @@ char *ds_photos_inventory(uint32_t maxAssets, uint64_t maxBytes) {
   return DSJSON(DSInventory(MIN((NSUInteger)maxAssets, 10000), MIN(maxBytes, 536870912ULL), nil));
 }
 
+// One PhotoKit asset is the native pagination unit. Each call returns only after PhotoKit's
+// resource completion handler (or its explicit unavailable result), allowing the UI to checkpoint,
+// repaint, or cancel between assets without guessing a wall-clock page timeout.
+char *ds_photos_inventory_page(uint64_t offset, uint64_t maxBytes) {
+  PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+  if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited)
+    return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @((uint64_t)(NSDate.date.timeIntervalSince1970 * 1000)),
+                     @"total_count": @0, @"offset": @(offset), @"next_offset": [NSNull null],
+                     @"native_completion_observed": @YES, @"page_duration_ms": @0,
+                     @"assets": @[], @"unavailable_count": @0 });
+  PHFetchOptions *options = [PHFetchOptions new];
+  options.predicate = [NSPredicate predicateWithFormat:@"mediaType == %d", PHAssetMediaTypeImage];
+  PHFetchResult<PHAsset *> *fetch = [PHAsset fetchAssetsWithOptions:options];
+  uint64_t total = fetch.count;
+  uint64_t started = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
+  NSArray *assets = @[];
+  uint64_t unavailable = 0;
+  if (offset < total) {
+    NSDictionary *asset = DSAssetEvidence([fetch objectAtIndex:(NSUInteger)offset], MIN(maxBytes, 536870912ULL));
+    assets = @[asset];
+    unavailable = asset[@"content_sha256"] ? 0 : 1;
+  }
+  uint64_t completed = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
+  NSNumber *next = offset + assets.count < total ? @(offset + assets.count) : nil;
+  return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @(completed),
+                   @"total_count": @(total), @"offset": @(offset),
+                   @"next_offset": next ?: [NSNull null], @"native_completion_observed": @YES,
+                   @"page_duration_ms": @(completed - started), @"assets": assets,
+                   @"unavailable_count": @(unavailable) });
+}
+
 char *ds_photos_delete(const char *requestJSON) {
   NSData *data = [[NSData alloc] initWithBytes:requestJSON length:strlen(requestJSON)];
   NSDictionary *request = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];

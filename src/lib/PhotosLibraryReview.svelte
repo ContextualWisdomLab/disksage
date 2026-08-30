@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { photosApprovalReady, photosSelections } from "./photosLibraryState";
+  import { photosApprovalReady, photosCheckpointCanResume, photosSelections } from "./photosLibraryState";
 
   let authorization = $state("checking");
   let inventory: api.PhotosDuplicateInventory | null = $state(null);
@@ -13,6 +13,7 @@
   let status = $state("");
   let error = $state("");
   let busy = $state(false);
+  let cancelRequested = $state(false);
 
   $effect(() => {
     api.photosAuthorizationStatus()
@@ -32,17 +33,30 @@
   }
 
   async function inspect() {
-    busy = true; error = ""; plan = null; receipt = null;
+    busy = true; cancelRequested = false; error = ""; plan = null; receipt = null;
     try {
-      inventory = await api.inspectPhotosDuplicates();
+      let checkpoint: api.PhotosDuplicateInventory | null = photosCheckpointCanResume(inventory) ? inventory : null;
+      do {
+        checkpoint = await api.inspectPhotosDuplicatesPage(checkpoint);
+        inventory = checkpoint;
+        status = checkpoint.next_action;
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      } while (checkpoint.inventory_truncated && !cancelRequested);
       keepers = {};
-      status = inventory.unavailable_count
+      status = cancelRequested
+        ? `${inventory?.assets.length ?? 0}개까지 확인했습니다. 계속하려면 사진 사본 확인을 다시 누르세요.`
+        : inventory.unavailable_count
         ? `${inventory.unavailable_count}개 원본을 이 Mac에서 확인할 수 없습니다. 사진 앱에서 원본을 다운로드한 뒤 다시 확인하세요.`
         : inventory.exact_groups.length
           ? `${inventory.exact_groups.length}개 정확한 사본 그룹을 찾았습니다. 그룹마다 남길 사진을 고르세요.`
           : "내용이 정확히 같은 사진을 찾지 못했습니다.";
     } catch { error = "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요."; }
     finally { busy = false; }
+  }
+
+  function cancelInspect() {
+    cancelRequested = true;
+    status = "현재 사진 확인이 끝나면 멈춥니다.";
   }
 
   async function makePlan() {
@@ -75,7 +89,11 @@
     {#if authorization !== "authorized" && authorization !== "limited"}
       <button class="secondary" onclick={connect} disabled={busy}>사진 앱 연결</button>
     {:else}
-      <button class="secondary" onclick={inspect} disabled={busy}>{busy ? "확인 중…" : "사진 사본 확인"}</button>
+      {#if busy}
+        <button class="secondary" onclick={cancelInspect}>확인 멈추기</button>
+      {:else}
+        <button class="secondary" onclick={inspect}>사진 사본 확인</button>
+      {/if}
     {/if}
   </div>
   <p class="guidance">사진 앱이 관리하는 원본만 안전하게 확인합니다. 이 Mac에 없는 원본은 다운로드하거나 삭제하지 않습니다.</p>
