@@ -725,7 +725,9 @@ pub fn stage_and_remove_regenerable_root(
         std::fs::remove_dir(&staging).map_err(|_| "generated-cache-staging-cleanup-failed")
     };
     let staged_result = (|| {
-        let active = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        let active = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active.assessed || !active.evidence_complete || active.active {
             return Err("generated-cache-staged-active-use".to_string());
         }
@@ -739,7 +741,9 @@ pub fn stage_and_remove_regenerable_root(
         {
             return Err("generated-cache-staged-manifest-mismatch".into());
         }
-        let active_after_hash = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        let active_after_hash = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active_after_hash.assessed
             || !active_after_hash.evidence_complete
             || active_after_hash.active
