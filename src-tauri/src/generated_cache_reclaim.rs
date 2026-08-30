@@ -445,7 +445,15 @@ pub fn plan_with_evidence(
     if !activity.open_pids.is_empty() || activity.live_cwd_present {
         blockers.push("process-active".into());
     }
-    if !activity.tool_lock_paths.is_empty() {
+    // uv-created environments contain persistent zero-byte `.lock` metadata (including
+    // vendored setuptools metadata).  A pathname is not an active advisory lock.  Runtime use
+    // remains fail-closed through the independently collected open-PID/live-CWD evidence.
+    if !activity.tool_lock_paths.is_empty()
+        && !matches!(
+            contract,
+            RegenerationContract::TemporaryWorkspaceUvEnvironment
+        )
+    {
         blockers.push("tool-lock-present".into());
     }
     if matches!(contract, RegenerationContract::TemporaryGitWorkspace)
@@ -712,7 +720,13 @@ pub fn stage_and_remove_regenerable_root(
             return Err("generated-cache-staged-active-use".to_string());
         }
         let (_, _, fingerprint, locks) = observe_tree(&staged)?;
-        if fingerprint != plan.content_fingerprint || !locks.is_empty() {
+        if fingerprint != plan.content_fingerprint
+            || (!locks.is_empty()
+                && !matches!(
+                    plan.contract,
+                    RegenerationContract::TemporaryWorkspaceUvEnvironment
+                ))
+        {
             return Err("generated-cache-staged-manifest-mismatch".into());
         }
         let active_after_hash = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
@@ -886,6 +900,11 @@ mod tests {
         std::fs::write(workspace.join("package-lock.json"), b"{}").unwrap();
         std::fs::write(workspace.join("services/api/pyproject.toml"), b"[project]").unwrap();
         std::fs::write(workspace.join("services/api/uv.lock"), b"version = 1").unwrap();
+        std::fs::write(workspace.join("services/api/.venv/.lock"), b"").unwrap();
+        std::fs::create_dir_all(
+            workspace.join("services/api/.venv/lib/python/site-packages/vendor/.lock"),
+        )
+        .unwrap();
         assert_eq!(
             regeneration_contract(&workspace.join("node_modules"), Path::new("/Users/test")),
             Some(RegenerationContract::TemporaryWorkspaceNodeModules)
@@ -900,6 +919,19 @@ mod tests {
         assert_eq!(
             regeneration_contract(&workspace, Path::new("/Users/test")),
             None
+        );
+        let environment = workspace.join("services/api/.venv");
+        let plan =
+            plan_with_evidence(&environment, Path::new("/Users/test"), inactive(), 1).unwrap();
+        assert_eq!(plan.activity.tool_lock_paths.len(), 2);
+        assert!(plan.blockers.is_empty());
+        let mut active = inactive();
+        active.open_pids.push(42);
+        assert!(
+            plan_with_evidence(&environment, Path::new("/Users/test"), active, 2)
+                .unwrap()
+                .blockers
+                .contains(&"process-active".into())
         );
         std::fs::remove_dir_all(workspace).unwrap();
     }
