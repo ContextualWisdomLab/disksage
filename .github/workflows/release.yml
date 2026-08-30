@@ -63,10 +63,26 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-macos-arm64.sha256
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64.sha256
+              src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64
+              src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64.sha256
+              src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64
+              src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64.sha256
+              src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
+              src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-macos-arm64
+            eviction_batch_cli_source: src-tauri/target/release/disksage-cloud-local-eviction-batch
+            eviction_batch_cli_asset: src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
+            icloud_eviction_batch_cli_source: src-tauri/target/release/disksage-icloud-local-eviction-batch
+            icloud_eviction_batch_cli_asset: src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64
+            cloud_local_inventory_cli_source: src-tauri/target/release/disksage-cloud-local-inventory
+            cloud_local_inventory_cli_asset: src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64
+            onedrive_finder_verify_cli_source: src-tauri/target/release/disksage-onedrive-finder-verify
+            onedrive_finder_verify_cli_asset: src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -146,6 +162,14 @@ jobs:
           cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
           --bin disksage-cloud-plan --bin disksage-duplicate-audit
 
+      - name: Build macOS cloud-local inventory and planners
+        if: matrix.os == 'macos-latest'
+        run: >-
+          cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
+          --bin disksage-cloud-local-eviction-batch
+          --bin disksage-icloud-local-eviction-batch --bin disksage-cloud-local-inventory
+          --bin disksage-onedrive-finder-verify
+
       - name: Stage and verify operational CLIs
         shell: bash
         run: |
@@ -170,7 +194,7 @@ jobs:
               cat "$help_stderr" >&2
               return 1
             fi
-            grep -F "$usage_marker" "$help_stdout"
+            grep -F -- "$usage_marker" "$help_stdout"
             if command -v sha256sum >/dev/null 2>&1; then
               (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
             else
@@ -180,6 +204,12 @@ jobs:
           }
           stage_cli "${{ matrix.cloud_cli_source }}" "${{ matrix.cloud_cli_asset }}" "usage: disksage-cloud-plan"
           stage_cli "${{ matrix.duplicate_cli_source }}" "${{ matrix.duplicate_cli_asset }}" "usage: disksage-duplicate-audit"
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            stage_cli "${{ matrix.eviction_batch_cli_source }}" "${{ matrix.eviction_batch_cli_asset }}" "--manifest ABSOLUTE_JSON"
+            stage_cli "${{ matrix.icloud_eviction_batch_cli_source }}" "${{ matrix.icloud_eviction_batch_cli_asset }}" "usage: disksage-icloud-local-eviction-batch"
+            stage_cli "${{ matrix.cloud_local_inventory_cli_source }}" "${{ matrix.cloud_local_inventory_cli_asset }}" "usage: disksage-cloud-local-inventory"
+            stage_cli "${{ matrix.onedrive_finder_verify_cli_source }}" "${{ matrix.onedrive_finder_verify_cli_asset }}" "usage: disksage-onedrive-finder-verify"
+          fi
 
       - name: Verify macOS DMG app signature
         if: matrix.os == 'macos-latest'
@@ -306,15 +336,19 @@ jobs:
             disksage-cloud-plan-windows-x86_64.exe \
             disksage-duplicate-audit-windows-x86_64.exe \
             disksage-cloud-plan-macos-arm64 \
-            disksage-duplicate-audit-macos-arm64; do
+            disksage-duplicate-audit-macos-arm64 \
+            disksage-cloud-local-eviction-batch-macos-arm64 \
+            disksage-icloud-local-eviction-batch-macos-arm64 \
+            disksage-cloud-local-inventory-macos-arm64 \
+            disksage-onedrive-finder-verify-macos-arm64; do
             require_exactly_one_file "$required_name"
             require_exactly_one_file "$required_name.sha256"
           done
           checksum_files=()
           checksum_file=""
           while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
-          if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+          if [[ ${#checksum_files[@]} -ne 10 ]]; then
+            printf 'Expected ten operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
             exit 1
           fi
           for checksum_file in "${checksum_files[@]}"; do
@@ -354,8 +388,8 @@ jobs:
           fi
           regular_file_count=0
           while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 18 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
+          if [[ $regular_file_count -ne 26 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 26 regular files, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 

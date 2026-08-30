@@ -118,6 +118,9 @@ pub struct CleanResult {
     pub path: String,
     pub ok: bool,
     pub error: String,
+    /// Post-move audit or staging notice. A non-empty warning never rewrites a completed move as
+    /// a failed operation.
+    pub warning: String,
 }
 
 /// 정리 실행의 순수 코어 — 결과는 항목별, 하나가 실패해도 나머지는 진행 (스펙 §8)
@@ -149,11 +152,13 @@ pub fn clean_paths_inner(paths: &[PathBuf], journal_path: &Path, now_ms: u64) ->
                     path: p.to_string_lossy().into_owned(),
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: p.to_string_lossy().into_owned(),
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -182,6 +187,7 @@ pub fn clean_dev_artifacts_inner(
             } else {
                 result.error
             },
+            warning: result.warning,
         })
         .collect()
 }
@@ -210,11 +216,13 @@ pub fn execute_moves_inner(
                     path: p.src.clone(),
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: p.src.clone(),
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -238,11 +246,13 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
                     path: src,
                     ok: true,
                     error: String::new(),
+                    warning: String::new(),
                 },
                 Err(e) => CleanResult {
                     path: src,
                     ok: false,
                     error: e.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -362,6 +372,9 @@ pub fn set_settings(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    if let Some(issue) = scanner::scan_root_access_issue(Path::new(&root)) {
+        return Err(issue.into());
+    }
     if state.scanning.swap(true, Ordering::SeqCst) {
         return Err("scan already running".into());
     }
@@ -543,6 +556,16 @@ pub async fn execute_runtime_storage_trim(
     })
     .await
     .map_err(|_| "runtime-storage-trim-task-failed".to_string())?
+}
+
+/// Stops an idle Podman machine after a fresh native query proves no containers are running.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_inactive_podman_machine_stop(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageStopExecution, String> {
+    crate::runtime_storage::execute_inactive_stop(&confirmation_phrase, &rationale)
 }
 
 /// Restarts a runtime that reports running but cannot serve guest commands.

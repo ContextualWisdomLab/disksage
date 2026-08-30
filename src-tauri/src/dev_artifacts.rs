@@ -39,6 +39,9 @@ pub struct DevArtifactCleanResult {
     pub path: String,
     pub ok: bool,
     pub error: String,
+    /// Post-move audit or staging notice for a completed reversible action.
+    #[serde(default)]
+    pub warning: String,
 }
 
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
@@ -504,6 +507,7 @@ fn clean_artifacts_with_disposition(
                     path: request.path.clone(),
                     ok: false,
                     error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+                    warning: String::new(),
                 };
             }
 
@@ -522,6 +526,7 @@ fn clean_artifacts_with_disposition(
                     path: request.path.clone(),
                     ok: false,
                     error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                    warning: String::new(),
                 };
             }
             if active_use.active {
@@ -529,36 +534,57 @@ fn clean_artifacts_with_disposition(
                     path: request.path.clone(),
                     ok: false,
                     error: "development artifact is active; close the using process before cleanup".into(),
+                    warning: String::new(),
                 };
             }
 
-            let mutation = if permanent {
-                crate::safety::permanent_delete_dir_if_identity(
+            if permanent {
+                return match crate::safety::permanent_delete_dir_if_identity(
                     Path::new(&request.path),
                     &request.object_id,
                     request.bytes,
                     journal_path,
                     now_ms,
-                )
-            } else {
-                crate::safety::trash_delete_if_identity(
-                    Path::new(&request.path),
-                    &request.object_id,
-                    request.bytes,
-                    journal_path,
-                    now_ms,
-                )
-            };
-            match mutation {
-                Ok(()) => DevArtifactCleanResult {
+                ) {
+                    Ok(()) => DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: true,
+                        error: String::new(),
+                        warning: String::new(),
+                    },
+                    Err(error) => DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: error.to_string(),
+                        warning: String::new(),
+                    },
+                };
+            }
+            match crate::safety::trash_delete_if_identity_with_outcome(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(outcome) if outcome.moved_to_trash => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: true,
                     error: String::new(),
+                    warning: crate::safety::trash_delete_outcome_warning(&outcome)
+                        .unwrap_or_default(),
+                },
+                Ok(_) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "trash move did not complete; rescan before cleanup".into(),
+                    warning: String::new(),
                 },
                 Err(error) => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: false,
                     error: error.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -804,5 +830,20 @@ mod tests {
         fs::remove_file(tmp.path().join(".git")).unwrap();
         fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
         assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn completed_artifact_move_serializes_warning_without_failure() {
+        let result = DevArtifactCleanResult {
+            path: "/private/fixture/target".into(),
+            ok: true,
+            error: String::new(),
+            warning: "terminal audit record unavailable".into(),
+        };
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["error"], "");
+        assert_eq!(value["warning"], "terminal audit record unavailable");
     }
 }
