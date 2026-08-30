@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
-const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -474,6 +474,7 @@ pub fn stage_and_remove_regenerable_root(
     path: &Path,
     home: &Path,
     now_ms: u64,
+    approval_deadline_ms: u64,
 ) -> Result<(), String> {
     use std::os::unix::fs::DirBuilderExt;
     if plan.root != path.to_string_lossy()
@@ -522,6 +523,13 @@ pub fn stage_and_remove_regenerable_root(
             || active_after_hash.active
         {
             return Err("generated-cache-staged-active-use".into());
+        }
+        let current_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "generated-cache-clock-unavailable")?
+            .as_millis() as u64;
+        if current_ms > approval_deadline_ms {
+            return Err("generated-cache-approval-expired-before-removal".into());
         }
         std::fs::remove_dir_all(&staged)
             .map_err(|_| "generated-cache-remove-failed".to_string())?;
@@ -800,7 +808,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("model.bin"), b"regenerable").unwrap();
         let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
-        stage_and_remove_regenerable_root(&plan, &root, home, 2).unwrap();
+        stage_and_remove_regenerable_root(&plan, &root, home, 2, u64::MAX).unwrap();
         assert!(!root.exists());
         assert!(!home
             .join(".cache")

@@ -278,6 +278,12 @@ pub fn execute_gradle_daemon_logs(
             audit_warning,
         };
         receipts.push(receipt);
+        if receipts
+            .last()
+            .is_some_and(|receipt| receipt.audit_warning.is_some())
+        {
+            break;
+        }
     }
     Ok(receipts)
 }
