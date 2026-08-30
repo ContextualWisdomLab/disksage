@@ -153,7 +153,6 @@ pub fn run() {
             photo_duplicate_quarantine::execute_exact_photo_duplicate_quarantine,
             photos_library::photos_authorization_status,
             photos_library::request_photos_authorization,
-            photos_library::inspect_photos_duplicates,
             photos_library::inspect_photos_duplicates_page,
             photos_library::finalize_photos_duplicate_inventory,
             photos_library::plan_photos_duplicate_deletion,

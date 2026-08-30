@@ -519,6 +519,9 @@ pub async fn inspect_photos_duplicates_page(
     let page = tauri::async_runtime::spawn_blocking(move || native::inventory_page(offset))
         .await
         .map_err(|_| "photos-operation-interrupted".to_string())??;
+    if !matches!(page.authorization.as_str(), "authorized" | "limited") {
+        return Err("photos-authorization-required".into());
+    }
     if checkpoint.as_ref().is_some_and(|value| {
         value.total_count != page.total_count
             || value.inventory_identity != page.inventory_identity

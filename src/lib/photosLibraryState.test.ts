@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { photosApprovalReady, photosCheckpointCanResume, photosSelections } from "./photosLibraryState";
+import { photosApprovalReady, photosSelections } from "./photosLibraryState";
 import type { PhotosDuplicateInventory } from "./api";
 
 const inventory = {
@@ -17,9 +17,4 @@ describe("Apple Photos review state", () => {
     expect(photosApprovalReady(plan, "DELETE", "same photo")).toBe(false);
   });
 
-  it("resumes only an incomplete read-only PhotoKit checkpoint", () => {
-    expect(photosCheckpointCanResume({ inventory_truncated: true, evidence_complete: false } as PhotosDuplicateInventory)).toBe(true);
-    expect(photosCheckpointCanResume({ inventory_truncated: false, evidence_complete: true } as PhotosDuplicateInventory)).toBe(false);
-    expect(photosCheckpointCanResume(null)).toBe(false);
-  });
 });

@@ -47,7 +47,7 @@
         : null;
       do {
         const page = await api.inspectPhotosDuplicatesPage(checkpoint);
-        inventoryPages = [...inventoryPages, page];
+        inventoryPages.push(page);
         checkpoint = page.next_offset === null ? null : {
           next_offset: page.next_offset,
           total_count: page.total_count,
@@ -59,7 +59,7 @@
       if (!checkpoint) inventory = await api.finalizePhotosDuplicateInventory(inventoryPages);
       keepers = {};
       if (cancelRequested) {
-        status = `${inventoryPages.length}개까지 확인했습니다. 계속하려면 사진 사본 확인을 다시 누르세요.`;
+        status = `${inventoryPages.length}개까지 확인했습니다. 이 화면에서 사진 사본 확인을 다시 누르면 이어집니다.`;
       } else if (inventory) {
         status = inventory.unavailable_count
           ? `${inventory.unavailable_count}개 원본을 이 Mac에서 확인할 수 없습니다. 사진 앱에서 원본을 다운로드한 뒤 다시 확인하세요.`
@@ -67,7 +67,12 @@
             ? `${inventory.exact_groups.length}개 정확한 사본 그룹을 찾았습니다. 그룹마다 남길 사진을 고르세요.`
             : "내용이 정확히 같은 사진을 찾지 못했습니다.";
       }
-    } catch { error = "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요."; }
+    } catch (reason) {
+      if (String(reason).includes("photos-page-checkpoint-mismatch")) inventoryPages = [];
+      error = String(reason).includes("photos-authorization-required")
+        ? "사진 접근이 해제됐습니다. 사진 앱을 다시 연결한 뒤 확인하세요."
+        : "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요.";
+    }
     finally { inspecting = false; busy = false; }
   }
 
@@ -125,7 +130,7 @@
     {/if}
   {/if}
   {#if inventory?.inventory_truncated}
-    <p class="blocker" role="status">사진 확인을 잠시 멈췄습니다. 사진 사본 확인을 다시 눌러 이어서 확인하세요.</p>
+    <p class="blocker" role="status">사진 확인을 잠시 멈췄습니다. 이 화면에서 사진 사본 확인을 다시 눌러 이어서 확인하세요.</p>
   {/if}
   {#each inventory?.exact_groups ?? [] as group, index (group.content_sha256)}
     <fieldset>

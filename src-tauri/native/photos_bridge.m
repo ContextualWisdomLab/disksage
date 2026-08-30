@@ -4,6 +4,8 @@
 
 static const NSUInteger DSMaxChunkBytes = 8 * 1024 * 1024;
 static const int64_t DSAuthorizationTimeoutNanos = 5LL * 60LL * NSEC_PER_SEC;
+static NSArray<NSString *> *DSPageIdentifiers = nil;
+static NSString *DSPageInventoryIdentity = nil;
 
 static char *DSJSON(id value) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
@@ -218,20 +220,34 @@ char *ds_photos_inventory_page(uint64_t offset, uint64_t maxBytes) {
   PHFetchOptions *options = [PHFetchOptions new];
   options.predicate = [NSPredicate predicateWithFormat:@"mediaType == %d", PHAssetMediaTypeImage];
   PHFetchResult<PHAsset *> *fetch = [PHAsset fetchAssetsWithOptions:options];
-  NSString *inventoryIdentity = DSInventoryIdentity(fetch);
+  if (offset == 0 || !DSPageIdentifiers || !DSPageInventoryIdentity) {
+    NSMutableArray<NSString *> *identifiers = [NSMutableArray arrayWithCapacity:fetch.count];
+    for (PHAsset *asset in fetch) [identifiers addObject:asset.localIdentifier];
+    DSPageIdentifiers = [identifiers copy];
+    DSPageInventoryIdentity = DSInventoryIdentity(fetch);
+  }
+  NSString *inventoryIdentity = DSPageInventoryIdentity;
+  uint64_t snapshotTotal = DSPageIdentifiers.count;
   uint64_t total = fetch.count;
+  BOOL libraryChanged = total != snapshotTotal;
   uint64_t started = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
   NSArray *assets = @[];
   uint64_t unavailable = 0;
-  if (offset < total) {
-    NSDictionary *asset = DSAssetEvidence([fetch objectAtIndex:(NSUInteger)offset], MIN(maxBytes, 536870912ULL));
-    assets = @[asset];
-    unavailable = asset[@"content_sha256"] ? 0 : 1;
+  if (total == snapshotTotal && offset < snapshotTotal) {
+    NSString *identifier = DSPageIdentifiers[(NSUInteger)offset];
+    PHFetchResult<PHAsset *> *selected = [PHAsset fetchAssetsWithLocalIdentifiers:@[identifier] options:nil];
+    if (selected.count == 1) {
+      NSDictionary *asset = DSAssetEvidence(selected.firstObject, MIN(maxBytes, 536870912ULL));
+      assets = @[asset];
+      unavailable = asset[@"content_sha256"] ? 0 : 1;
+    } else libraryChanged = YES;
   }
+  if (libraryChanged || (offset + assets.count >= snapshotTotal && ![DSInventoryIdentity(fetch) isEqualToString:inventoryIdentity]))
+    inventoryIdentity = @"photos-library-changed";
   uint64_t completed = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
-  NSNumber *next = offset + assets.count < total ? @(offset + assets.count) : nil;
+  NSNumber *next = offset + assets.count < snapshotTotal ? @(offset + assets.count) : nil;
   return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @(completed),
-                   @"total_count": @(total), @"offset": @(offset),
+                   @"total_count": @(snapshotTotal), @"offset": @(offset),
                    @"inventory_identity": inventoryIdentity,
                    @"next_offset": next ?: [NSNull null], @"native_completion_observed": @YES,
                    @"page_duration_ms": @(completed - started), @"assets": assets,

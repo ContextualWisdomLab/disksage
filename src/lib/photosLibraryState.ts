@@ -13,6 +13,3 @@ export const photosSelections = (
 
 export const photosApprovalReady = (plan: PhotosDeletionPlan, approval: string, rationale: string) =>
   approval === plan.exact_approval_phrase && rationale.trim().length > 0;
-
-export const photosCheckpointCanResume = (inventory: PhotosDuplicateInventory | null) =>
-  inventory !== null && inventory.inventory_truncated && !inventory.evidence_complete;

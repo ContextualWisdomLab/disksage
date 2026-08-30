@@ -256,7 +256,6 @@ export interface PhotosDeletionReceipt {
 }
 export const photosAuthorizationStatus = () => invoke<PhotosAuthorization>("photos_authorization_status");
 export const requestPhotosAuthorization = () => invoke<PhotosAuthorization>("request_photos_authorization");
-export const inspectPhotosDuplicates = () => invoke<PhotosDuplicateInventory>("inspect_photos_duplicates");
 export const inspectPhotosDuplicatesPage = (checkpoint: PhotosInventoryCheckpoint | null) =>
   invoke<PhotosInventoryPage>("inspect_photos_duplicates_page", { checkpoint });
 export const finalizePhotosDuplicateInventory = (pages: PhotosInventoryPage[]) =>
