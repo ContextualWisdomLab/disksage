@@ -103,6 +103,33 @@ describe('release artifact verifier directory contract', () => {
   );
 
   it.runIf(process.platform !== 'win32')(
+    'rejects a bundle nested below its exact release matrix directory',
+    () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-artifact-verifier-'));
+      const artifactRoot = join(fixtureRoot, 'release-artifacts');
+      try {
+        materializeExactArtifactSet(artifactRoot);
+        const source = join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb');
+        const misplaced = join(
+          artifactRoot,
+          platformDirectories.linux,
+          'bundle/deb/unexpected/disksage.deb',
+        );
+        mkdirSync(dirname(misplaced), { recursive: true });
+        renameSync(source, misplaced);
+
+        const result = verify(artifactRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('Debian bundle');
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
     'rejects a Windows operational CLI and checksum outside the Windows artifact directory',
     () => {
       const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-artifact-verifier-'));
