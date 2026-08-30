@@ -73,6 +73,52 @@ fn manifest_variable_fields_are_length_framed() {
 }
 
 #[test]
+fn directory_authority_binds_catalog_manifest_fingerprint() {
+    fn update_framed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+        let length = u64::try_from(bytes.len()).expect("fixture field length fits u64");
+        hasher.update(&length.to_le_bytes());
+        hasher.update(bytes);
+    }
+
+    let temp = tempfile::tempdir().expect("temporary directory-authority fixture");
+    let cache_root = temp.path().join("cache-root");
+    let target_path = cache_root.join("generated-cache");
+    fs::create_dir_all(&target_path).expect("create generated cache directory");
+    fs::write(target_path.join("payload.bin"), b"generated-payload")
+        .expect("write generated cache payload");
+
+    let catalog_targets =
+        crate::rules_catalog::cache_targets(&cache_root).expect("enumerate catalog cache targets");
+    let authority_targets =
+        crate::rules::cache_targets(&cache_root).expect("upgrade cache target authority");
+    assert_eq!(catalog_targets.len(), 1);
+    assert_eq!(authority_targets.len(), 1);
+    assert_eq!(catalog_targets[0].path, authority_targets[0].path);
+
+    let (_, stable_tree) = crate::rules::cache_manifest_components(
+        &authority_targets[0].manifest_fingerprint,
+    )
+    .expect("parse versioned directory authority");
+    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
+    let mut expected = blake3::Hasher::new();
+    expected.update(b"disksage-cache-directory-authority-v2\0");
+    update_framed(
+        &mut expected,
+        catalog_targets[0].manifest_fingerprint.as_bytes(),
+    );
+    update_framed(
+        &mut expected,
+        crate::rules::cache_root_relocation_metadata_fingerprint(&metadata).as_bytes(),
+    );
+
+    assert_eq!(
+        stable_tree,
+        expected.finalize().to_hex().as_str(),
+        "directory destructive authority must cryptographically bind the reviewed catalog manifest"
+    );
+}
+
+#[test]
 fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
