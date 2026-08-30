@@ -190,16 +190,45 @@ fn run() -> Result<(), String> {
 
 fn main() {
     #[cfg(unix)]
-    let result = disksage_lib::git_worktree::with_ignored_command_pid(
-        unsafe { libc::getppid() as u32 },
-        run,
-    );
+    let result = match invoking_shell_pid() {
+        Some(pid) => disksage_lib::git_worktree::with_ignored_command_pid(pid, run),
+        None => run(),
+    };
     #[cfg(not(unix))]
     let result = run();
     if let Err(error) = result {
         eprintln!("disksage-generated-cache-reclaim: {error}");
         std::process::exit(2);
     }
+}
+
+#[cfg(unix)]
+fn invoking_shell_pid() -> Option<u32> {
+    let pid = unsafe { libc::getppid() as u32 };
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 4_096 || !output.stderr.is_empty() {
+        return None;
+    }
+    shell_command(&output.stdout).then_some(pid)
+}
+
+#[cfg(unix)]
+fn shell_command(command: &[u8]) -> bool {
+    let command = command
+        .split(|byte| byte.is_ascii_whitespace())
+        .find(|part| !part.is_empty())
+        .unwrap_or_default();
+    let basename = command
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or(command);
+    matches!(
+        basename,
+        b"sh" | b"bash" | b"zsh" | b"dash" | b"ksh" | b"fish" | b"csh" | b"tcsh"
+    )
 }
 
 #[cfg(test)]
@@ -217,6 +246,15 @@ mod tests {
                 .unwrap()
                 .execute
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_known_shell_executables_can_be_ignored_as_launchers() {
+        assert!(shell_command(b"/bin/zsh\n"));
+        assert!(shell_command(b"bash\n"));
+        assert!(!shell_command(b"/usr/bin/python3\n"));
+        assert!(!shell_command(b"/Applications/Worker cache/path\n"));
     }
     #[test]
     fn authority_and_paths_are_not_caller_controlled() {
