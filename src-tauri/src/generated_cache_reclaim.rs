@@ -6,12 +6,14 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+static AUDIT_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -256,14 +258,24 @@ fn receive_tree_observation(
 
 /// Isolate filesystem traversal so a blocked kernel read cannot retain mutation authority.
 fn observe_tree(path: &Path) -> Result<TreeObservation, String> {
+    if AUDIT_WORKER_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("generated-cache-audit-worker-busy".into());
+    }
     let owned_path = path.to_path_buf();
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("disksage-generated-cache-audit".into())
         .spawn(move || {
             let _ = sender.send(observe_tree_inner(&owned_path));
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
         })
-        .map_err(|_| "generated-cache-audit-worker-spawn-failed".to_string())?;
+        .map_err(|_| {
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            "generated-cache-audit-worker-spawn-failed".to_string()
+        })?;
     receive_tree_observation(receiver, Duration::from_millis(MAX_APPROVAL_AGE_MS))
 }
 
