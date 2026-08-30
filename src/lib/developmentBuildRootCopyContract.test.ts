@@ -21,4 +21,14 @@ describe("development build-root customer copy", () => {
     expect(component).toContain("bind:value={devArtifactConfirmationPhrase}");
     expect(component).not.toContain("api.cleanDevArtifacts(");
   });
+
+  it("requires an explicit development workspace instead of recursively using the disk scan root", () => {
+    const component = readFileSync(resolve(process.cwd(), "src/lib/Cleanup.svelte"), "utf8");
+
+    expect(component).toContain("chooseDevArtifactRoot");
+    expect(component).toContain("directory: true");
+    expect(component).toContain("devArtifactRoot");
+    expect(component).toContain("api.listDevArtifacts(devArtifactRoot)");
+    expect(component).not.toContain("api.listDevArtifacts(scannedRoot)");
+  });
 });
