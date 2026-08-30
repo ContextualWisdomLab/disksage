@@ -1518,6 +1518,32 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn identity_bound_remove_preserves_open_candidate_after_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
+        let _open_handle = File::open(&path).unwrap();
+
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            2,
+        )
+        .unwrap_err();
+
+        assert!(!error.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), b"approved bytes");
+    }
+
     #[cfg(unix)]
     #[test]
     fn staged_candidate_is_surfaced_when_original_name_is_occupied() {
