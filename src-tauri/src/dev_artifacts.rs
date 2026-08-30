@@ -152,6 +152,16 @@ fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
     Some(metadata.len())
 }
 
+fn canonicalize_provider_roots<I>(roots: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    roots
+        .into_iter()
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+        .collect()
+}
+
 fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
     #[cfg(windows)]
     let candidates = [
@@ -176,10 +186,11 @@ fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
     if crate::safety::filesystem_object_id(&home).ok()? != expected_identity {
         return None;
     }
-    crate::cloud::discover_cloud_roots(&home)
-        .into_iter()
-        .map(|cloud_root| std::fs::canonicalize(cloud_root.path).ok())
-        .collect()
+    Some(canonicalize_provider_roots(
+        crate::cloud::discover_cloud_roots(&home)
+            .into_iter()
+            .map(|cloud_root| cloud_root.path),
+    ))
 }
 
 fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
@@ -399,10 +410,13 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
-            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
+            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일. Provider ancestry
+            // canonicalization is needed only for directories because only directories can affect
+            // traversal or become generated-root candidates.
             entry.depth() == 0
                 || (scanner::keep_entry(entry)
-                    && !provider_managed_ancestry(entry.path(), &provider_roots))
+                    && (!entry.file_type().is_dir()
+                        || !provider_managed_ancestry(entry.path(), &provider_roots)))
         });
 
     for entry in walker {
@@ -450,6 +464,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
+            if manifest.allocated_bytes == 0 {
+                return None;
+            }
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -642,6 +659,20 @@ mod tests {
             found.is_empty(),
             "zero-allocation generated roots cannot be executable cleanup candidates"
         );
+    }
+
+    #[test]
+    fn unavailable_provider_root_does_not_discard_other_provider_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = tmp.path().join("provider-existing");
+        let unavailable = tmp.path().join("provider-unavailable");
+        fs::create_dir_all(&existing).unwrap();
+
+        let roots = canonicalize_provider_roots([existing.clone(), unavailable.clone()]);
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], fs::canonicalize(existing).unwrap());
+        assert_eq!(roots[1], unavailable);
     }
 
     #[test]
