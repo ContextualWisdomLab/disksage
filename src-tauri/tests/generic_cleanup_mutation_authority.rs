@@ -40,11 +40,15 @@ fn generic_cleanup_route_must_fail_closed_before_path_consuming_recycle() {
 }
 
 #[test]
-fn generic_cleanup_repair_must_not_unregister_identity_bound_dev_artifact_cleanup() {
+fn generic_cleanup_repair_must_preserve_only_approval_bound_dev_artifact_cleanup() {
     let lib = source("src/lib.rs");
 
     assert!(
-        lib.contains("commands::clean_dev_artifacts,"),
-        "generic clean_paths hardening must preserve the separately object-bound clean_dev_artifacts IPC route"
+        lib.contains("dev_artifact_approval::clean_dev_artifacts_bound,"),
+        "development artifact cleanup must remain registered through the selection-bound approval command"
+    );
+    assert!(
+        !lib.contains("commands::clean_dev_artifacts,"),
+        "the legacy boolean-approved clean_dev_artifacts IPC route must not be registered"
     );
 }
