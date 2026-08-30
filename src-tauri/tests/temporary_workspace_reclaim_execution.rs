@@ -4,6 +4,8 @@ use disksage_lib::generated_cache_reclaim::{audit, stage_and_remove_regenerable_
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn git_workspace(prefix: &str) -> tempfile::TempDir {
     let workspace = tempfile::Builder::new()
         .prefix(prefix)
@@ -64,6 +66,7 @@ fn remove_only_dependency_subtree(dependency: PathBuf, workspace: &Path) {
 
 #[test]
 fn javascript_reclaim_removes_only_the_regenerable_dependency_subtree() {
+    let _serial = TEST_SERIAL.lock().unwrap();
     let workspace = git_workspace("disksage-js-reclaim-execution-");
     let dependency = javascript_dependency(workspace.path());
 
@@ -75,6 +78,7 @@ fn javascript_reclaim_removes_only_the_regenerable_dependency_subtree() {
 
 #[test]
 fn uv_reclaim_removes_only_the_regenerable_dependency_subtree() {
+    let _serial = TEST_SERIAL.lock().unwrap();
     let workspace = git_workspace("disksage-uv-reclaim-execution-");
     let dependency = uv_dependency(workspace.path());
 
@@ -86,6 +90,7 @@ fn uv_reclaim_removes_only_the_regenerable_dependency_subtree() {
 
 #[test]
 fn expired_authority_after_staging_restores_the_original_dependency_path() {
+    let _serial = TEST_SERIAL.lock().unwrap();
     let workspace = git_workspace("disksage-reclaim-restore-");
     let dependency = javascript_dependency(workspace.path());
     let home = Path::new("/Users/test");
