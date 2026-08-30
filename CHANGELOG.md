@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a bounded, read-only deleted-open file audit that omits pathnames, deduplicates observed file
+  identities, leaves physical reclaim unknown, and directs people to close the listed apps normally
+  before rescanning; it never terminates a process or mutates a file.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

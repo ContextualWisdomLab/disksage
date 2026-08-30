@@ -60,6 +60,8 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
+/// Read-only inventory of unlinked files still held by running processes.
+pub mod deleted_open;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
 pub mod incomplete_download;
