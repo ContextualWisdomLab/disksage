@@ -23,6 +23,8 @@ pub struct GradleDaemonLogReceipt {
     pub bytes: u64,
     pub removed: bool,
     pub reason: String,
+    /// Audit durability warning emitted only after the filesystem mutation completed.
+    pub audit_warning: Option<String>,
 }
 
 fn daemon_pid(path: &Path) -> Option<u32> {
@@ -228,6 +230,7 @@ pub fn execute_gradle_daemon_logs(
                         bytes: candidate.bytes,
                         removed: false,
                         reason,
+                        audit_warning: None,
                     });
                     continue;
                 }
@@ -261,13 +264,18 @@ pub fn execute_gradle_daemon_logs(
         } else {
             format!("error:{reason}")
         };
-        journal(journal_path, candidate, &outcome)?;
+        let audit_warning = match journal(journal_path, candidate, &outcome) {
+            Ok(()) => None,
+            Err(error) if removed => Some(error),
+            Err(error) => return Err(error),
+        };
         let receipt = GradleDaemonLogReceipt {
             path: candidate.path.clone(),
             pid: candidate.pid,
             bytes: candidate.bytes,
             removed,
             reason,
+            audit_warning,
         };
         receipts.push(receipt);
     }

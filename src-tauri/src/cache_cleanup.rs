@@ -119,6 +119,9 @@ fn looks_like_updater_download_cache(path: &Path) -> bool {
 }
 
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
+    if OBSERVED_UPDATER_CACHE_NAMES.contains(&name) {
+        return looks_like_updater_download_cache(path).then_some("updater-download-cache");
+    }
     let signature = match name {
         "_cacache"
             if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
@@ -204,7 +207,9 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str())
+            && !OBSERVED_UPDATER_CACHE_NAMES.contains(&name.as_str())
+        {
             continue;
         }
         let path = entry.path();
@@ -758,6 +763,34 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn proven_updater_cache_in_trash_is_listed_and_revalidated_before_purge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        let updater = trash.join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let malformed = trash.join("shure.motiv-updater");
+        fs::create_dir_all(malformed.join("pending")).unwrap();
+        fs::write(malformed.join("pending/unexpected.bin"), b"retain").unwrap();
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "updater-download-cache");
+
+        let results = purge_proven_cache_trash(
+            tmp.path(),
+            &tmp.path().join("journal.jsonl"),
+            7,
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert!(!updater.exists());
+        assert!(malformed.exists());
     }
 
     #[cfg(unix)]

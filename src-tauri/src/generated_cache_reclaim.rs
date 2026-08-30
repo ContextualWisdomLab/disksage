@@ -108,9 +108,13 @@ fn hash_reader_bounded<R: Read>(
     hasher: &mut blake3::Hasher,
     hashed_bytes: &mut u64,
     limit: u64,
+    deadline: Option<Instant>,
 ) -> Result<(), String> {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         let read = reader
             .read(&mut buffer)
             .map_err(|_| "generated-cache-file-unreadable".to_string())?;
@@ -165,7 +169,12 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
     let mut hashed_content_bytes = 0_u64;
     let mut locks = Vec::new();
     let mut hasher = blake3::Hasher::new();
+    // An audit that outlives the approval-validity window cannot produce usable authority.
+    let deadline = Instant::now() + Duration::from_millis(MAX_APPROVAL_AGE_MS);
     while let Some(current) = stack.pop() {
+        if Instant::now() >= deadline {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         if entries >= MAX_ENTRIES {
             return Err("generated-cache-entry-limit".into());
         }
@@ -214,6 +223,7 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
                 &mut hasher,
                 &mut hashed_content_bytes,
                 MAX_HASHED_CONTENT_BYTES,
+                Some(deadline),
             )?;
         } else {
             let mut children = std::fs::read_dir(&current)
@@ -807,7 +817,7 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut hashed = 0;
         assert_eq!(
-            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4).unwrap_err(),
+            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4, None).unwrap_err(),
             "generated-cache-content-bound-exceeded"
         );
         assert!(hashed > 4);
