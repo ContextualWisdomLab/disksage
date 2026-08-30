@@ -1204,7 +1204,21 @@ fn execute_git_clone_reclaim_with_authority(
         return Err("git-clone-live-lease-mismatch".into());
     }
     let live_root = PathBuf::from(&live.repository_root);
+    let authority_revalidated = std::cell::Cell::new(false);
     let evidence_matches = |candidate_root: &Path| {
+        if candidate_root != live_root {
+            if !authority_revalidated.get() {
+                return false;
+            }
+            let active = git_worktree::active_use_evidence_with_command_path(
+                candidate_root,
+                &live_root,
+                options.command_timeout_ms,
+                options.max_active_pids,
+                true,
+            );
+            return active.assessed && active.evidence_complete && !active.active;
+        }
         let candidate = if default_branch_evidence.is_some() {
             plan_git_clone_reclaim_with_default_branch(
                 candidate_root,
@@ -1273,17 +1287,8 @@ fn execute_git_clone_reclaim_with_authority(
         if !same_authority {
             return false;
         }
-        if candidate_root == live_root {
-            return true;
-        }
-        let active = git_worktree::active_use_evidence_with_command_path(
-            candidate_root,
-            &live_root,
-            options.command_timeout_ms,
-            options.max_active_pids,
-            true,
-        );
-        active.assessed && active.evidence_complete && !active.active
+        authority_revalidated.set(true);
+        true
     };
     let trash_outcome = crate::safety::trash_delete_if_identity_with_verifier(
         Path::new(&live.repository_root),
