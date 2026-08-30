@@ -9,6 +9,15 @@ use std::collections::{BTreeMap, HashSet};
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 
+fn lsof_result_is_usable(
+    status_success: bool,
+    status_code: Option<i32>,
+    output: &[u8],
+    stderr: &[u8],
+) -> bool {
+    status_success || (status_code == Some(1) && output.is_empty() && stderr.is_empty())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeletedOpenProcessEvidence {
     pub process_id: u32,
@@ -47,6 +56,7 @@ pub fn parse_lsof_nul(output: &[u8], capture_truncated: bool) -> DeletedOpenAudi
     let mut inode = None;
     let mut size = None;
     let mut file_type = None;
+    let mut file_started = false;
     let mut seen_files = HashSet::new();
     let mut seen_holders = HashSet::new();
     let mut observed_file_count = 0u64;
@@ -60,12 +70,16 @@ pub fn parse_lsof_nul(output: &[u8], capture_truncated: bool) -> DeletedOpenAudi
                            device: &mut Option<String>,
                            inode: &mut Option<u64>,
                            size: &mut Option<u64>,
-                           file_type: &mut Option<String>| {
-        if device.is_none() && inode.is_none() && size.is_none() && file_type.is_none() {
+                           file_type: &mut Option<String>,
+                           file_started: &mut bool| {
+        if !*file_started {
             return;
         }
+        *file_started = false;
         record_count += 1;
-        if file_type.as_deref() != Some("REG") {
+        if file_type.is_none() {
+            evidence_complete = false;
+        } else if file_type.as_deref() != Some("REG") {
             // Non-regular descriptors do not represent held filesystem file capacity.
         } else if record_count > MAX_RECORDS {
             evidence_complete = false;
@@ -110,19 +124,24 @@ pub fn parse_lsof_nul(output: &[u8], capture_truncated: bool) -> DeletedOpenAudi
                     &mut inode,
                     &mut size,
                     &mut file_type,
+                    &mut file_started,
                 );
                 process_id = std::str::from_utf8(value).ok().and_then(|v| v.parse().ok());
                 command.clear();
             }
             b'c' => command = String::from_utf8_lossy(value).into_owned(),
-            b'f' => finish_file(
-                process_id,
-                &command,
-                &mut device,
-                &mut inode,
-                &mut size,
-                &mut file_type,
-            ),
+            b'f' => {
+                finish_file(
+                    process_id,
+                    &command,
+                    &mut device,
+                    &mut inode,
+                    &mut size,
+                    &mut file_type,
+                    &mut file_started,
+                );
+                file_started = true;
+            }
             b'D' => device = Some(String::from_utf8_lossy(value).into_owned()),
             b'i' => inode = std::str::from_utf8(value).ok().and_then(|v| v.parse().ok()),
             b's' => size = std::str::from_utf8(value).ok().and_then(|v| v.parse().ok()),
@@ -138,6 +157,7 @@ pub fn parse_lsof_nul(output: &[u8], capture_truncated: bool) -> DeletedOpenAudi
         &mut inode,
         &mut size,
         &mut file_type,
+        &mut file_started,
     );
 
     let processes = processes
@@ -186,7 +206,7 @@ pub fn collect_deleted_open_audit() -> Result<DeletedOpenAuditReport, String> {
         .args(["-nP", "-w", "+L1", "-F0pcfDist"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -203,6 +223,10 @@ pub fn collect_deleted_open_audit() -> Result<DeletedOpenAuditReport, String> {
         .stdout
         .take()
         .ok_or_else(|| "deleted-open-lsof-output-unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "deleted-open-lsof-error-output-unavailable".to_string())?;
     let reader = thread::spawn(move || {
         let mut bytes = Vec::with_capacity(64 * 1024);
         let mut truncated = false;
@@ -216,6 +240,14 @@ pub fn collect_deleted_open_audit() -> Result<DeletedOpenAuditReport, String> {
         }
         Ok::<_, String>((bytes, truncated))
     });
+    let error_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr
+            .take(64 * 1024)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "deleted-open-lsof-error-read-failed".to_string())?;
+        Ok::<_, String>(bytes)
+    });
     let deadline = Instant::now() + Duration::from_secs(15);
     let status = loop {
         match child.try_wait() {
@@ -226,6 +258,7 @@ pub fn collect_deleted_open_audit() -> Result<DeletedOpenAuditReport, String> {
                 }
                 let _ = child.wait();
                 let _ = reader.join();
+                let _ = error_reader.join();
                 return Err("deleted-open-lsof-timeout".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
@@ -235,7 +268,10 @@ pub fn collect_deleted_open_audit() -> Result<DeletedOpenAuditReport, String> {
     let (bytes, truncated) = reader
         .join()
         .map_err(|_| "deleted-open-lsof-reader-failed".to_string())??;
-    if !status.success() {
+    let error_bytes = error_reader
+        .join()
+        .map_err(|_| "deleted-open-lsof-error-reader-failed".to_string())??;
+    if !lsof_result_is_usable(status.success(), status.code(), &bytes, &error_bytes) {
         return Err("deleted-open-lsof-failed".into());
     }
     Ok(parse_lsof_nul(&bytes, truncated))
@@ -273,6 +309,8 @@ mod tests {
                 false,
             ),
             (&b"p10\0cEditor\0f1\0tREG\0D1\0i20\0s4096\0"[..], true),
+            (&b"p10\0cEditor\0f1\0"[..], false),
+            (&b"p10\0cEditor\0f1\0D1\0i20\0s4096\0"[..], false),
         ] {
             let report = parse_lsof_nul(output, truncated);
             assert!(!report.evidence_complete);
@@ -281,6 +319,18 @@ mod tests {
                 .reason_codes
                 .contains(&"deleted-open-evidence-incomplete".into()));
         }
+    }
+
+    #[test]
+    fn lsof_documented_empty_result_is_usable_but_errors_are_not() {
+        assert!(lsof_result_is_usable(false, Some(1), b"", b""));
+        assert!(!lsof_result_is_usable(
+            false,
+            Some(1),
+            b"",
+            b"permission denied"
+        ));
+        assert!(!lsof_result_is_usable(false, Some(2), b"", b""));
     }
 
     #[test]
