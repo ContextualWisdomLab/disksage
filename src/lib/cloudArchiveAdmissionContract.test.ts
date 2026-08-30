@@ -68,7 +68,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
   });
 
-  it("exposes cancellation only for the cancellable native copy path", () => {
+  it("exposes cancellation for native and provider API uploads but not adoption", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     const copyStart = source.indexOf("async function copyCandidate(candidate: api.CloudCandidate)");
     const cancelStart = source.indexOf("async function cancelCopy()", copyStart);
@@ -86,15 +86,15 @@ describe("CloudArchive iCloud admission contract", () => {
     const cancelBody = source.slice(cancelStart, providerApiStart);
 
     expect(copyBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = true;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;[\s\S]*?cancellableCopyActive = true;/,
     );
     expect(providerApiBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;[\s\S]*?cancellableCopyActive = true;/,
     );
     expect(adoptBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;[\s\S]*?cancellableCopyActive = false;/,
     );
-    expect(cancelBody).toContain("if (!nativeCopyActive || !copyingFingerprint || cancellingCopy) return;");
+    expect(cancelBody).toContain("if (!cancellableCopyActive || !copyingFingerprint || cancellingCopy) return;");
     expect(cancelBody).toContain("await api.cancelCloudCopy(copyingFingerprint);");
   });
 
@@ -108,9 +108,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(reportStart).toBeGreaterThan(markupStart);
     expect(cancelControl).toBeGreaterThan(markupStart);
     expect(cancelControl).toBeLessThan(reportStart);
-    expect(source).toContain("if (!scannedRoot || !selectedRoot || nativeCopyActive) return;");
-    expect(source).toContain("disabled={busy || nativeCopyActive}");
-    expect(source).toContain("disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}");
+    expect(source).toContain("if (!scannedRoot || !selectedRoot || cancellableCopyActive) return;");
+    expect(source).toContain("disabled={busy || cancellableCopyActive}");
+    expect(source).toContain("disabled={busy || cancellableCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}");
   });
 
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {

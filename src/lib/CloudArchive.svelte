@@ -99,7 +99,7 @@
   let loadError = $state("");
   let report: api.CloudPlanReport | null = $state(null);
   let copyingFingerprint = $state("");
-  let nativeCopyActive = $state(false);
+  let cancellableCopyActive = $state(false);
   let cancellingCopy = $state(false);
   let reviewingFingerprint = $state("");
   let copied: api.CloudCopyOutput | null = $state(null);
@@ -183,7 +183,7 @@
   });
 
   async function preview() {
-    if (!scannedRoot || !selectedRoot || nativeCopyActive) return;
+    if (!scannedRoot || !selectedRoot || cancellableCopyActive) return;
     busy = true;
     loadError = "";
     report = null;
@@ -354,8 +354,9 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
-    // Native copy runs through the cancellable helper; adoption is verification-only.
-    nativeCopyActive = true;
+    // Both native and provider-API uploads register a cancellable operation;
+    // adoption remains verification-only.
+    cancellableCopyActive = true;
     loadError = "";
     copied = null;
     attestation = null;
@@ -381,12 +382,12 @@
         : boundedCloudArchiveErrorMessage("copy", e);
     } finally {
       copyingFingerprint = "";
-      nativeCopyActive = false;
+      cancellableCopyActive = false;
     }
   }
 
   async function cancelCopy() {
-    if (!nativeCopyActive || !copyingFingerprint || cancellingCopy) return;
+    if (!cancellableCopyActive || !copyingFingerprint || cancellingCopy) return;
     cancellingCopy = true;
     loadError = "";
     try {
@@ -409,7 +410,8 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
-    nativeCopyActive = false;
+    // Provider-API uploads share the command cancellation registry with native copies.
+    cancellableCopyActive = true;
     loadError = "";
     copied = null;
     attestation = null;
@@ -433,7 +435,7 @@
       loadError = boundedCloudArchiveErrorMessage("provider-api-copy", e);
     } finally {
       copyingFingerprint = "";
-      nativeCopyActive = false;
+      cancellableCopyActive = false;
     }
   }
 
@@ -451,8 +453,8 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
-    // Adoption verifies an existing file without a cancellable native copy helper.
-    nativeCopyActive = false;
+    // Adoption verifies an existing file without starting a cancellable upload.
+    cancellableCopyActive = false;
     loadError = "";
     copied = null;
     attestation = null;
@@ -475,7 +477,7 @@
       loadError = boundedCloudArchiveErrorMessage("adopt", e);
     } finally {
       copyingFingerprint = "";
-      nativeCopyActive = false;
+      cancellableCopyActive = false;
     }
   }
 
@@ -885,7 +887,7 @@
     <div class="controls">
       <label>
         대상
-        <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy || nativeCopyActive}>
+        <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy || cancellableCopyActive}>
           {#each roots as root (root.id)}
             <option value={root.path}>
               {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가·진단만 가능"}
@@ -901,7 +903,7 @@
         마지막 수정 후 최소 일수
         <input type="number" min="0" step="1" bind:value={minAgeDays} disabled={busy} />
       </label>
-      <button onclick={preview} disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
+      <button onclick={preview} disabled={busy || cancellableCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
@@ -1224,7 +1226,7 @@
   {#if !scannedRoot}<p class="muted">먼저 스캔을 완료하세요.</p>{/if}
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
-  {#if nativeCopyActive && copyingFingerprint}
+  {#if cancellableCopyActive && copyingFingerprint}
     <div class="copy-progress" aria-live="polite">
       <span>진행 중인 클라우드 복사는 후보 상태가 바뀌어도 취소할 수 있습니다.</span>
       <button
