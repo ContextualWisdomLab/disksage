@@ -185,12 +185,26 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
 fn temporary_workspace_root(path: &Path) -> Option<std::path::PathBuf> {
     let temp_root = std::env::temp_dir();
     let relative = path.strip_prefix(&temp_root).ok()?;
-    let first = relative.components().next()?;
-    let workspace = temp_root.join(first.as_os_str());
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let first = match relative.components().next()? {
+        std::path::Component::Normal(value) => value,
+        _ => return None,
+    };
+    let workspace = temp_root.join(first);
     if workspace == path || !path.starts_with(&workspace) {
         return None;
     }
-    let git_marker = std::fs::symlink_metadata(workspace.join(".git")).ok()?;
+    let canonical_workspace = std::fs::canonicalize(&workspace).ok()?;
+    let canonical_parent = std::fs::canonicalize(path.parent()?).ok()?;
+    if !canonical_parent.starts_with(&canonical_workspace) {
+        return None;
+    }
+    let git_marker = std::fs::symlink_metadata(canonical_workspace.join(".git")).ok()?;
     if git_marker.file_type().is_symlink() || !(git_marker.is_file() || git_marker.is_dir()) {
         return None;
     }
@@ -203,24 +217,20 @@ fn is_regular_file(path: &Path) -> bool {
 }
 
 fn temporary_workspace_artifact_contract(path: &Path) -> Option<RegenerationContract> {
-    let workspace = temporary_workspace_root(path)?;
+    temporary_workspace_root(path)?;
     let parent = path.parent()?;
     match path.file_name()?.to_str()? {
         "node_modules"
             if is_regular_file(&parent.join("package.json"))
                 && ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"]
                     .iter()
-                    .any(|name| {
-                        is_regular_file(&parent.join(name))
-                            || is_regular_file(&workspace.join(name))
-                    }) =>
+                    .any(|name| is_regular_file(&parent.join(name))) =>
         {
             Some(RegenerationContract::TemporaryWorkspaceNodeModules)
         }
         ".venv"
             if is_regular_file(&parent.join("pyproject.toml"))
-                && (is_regular_file(&parent.join("uv.lock"))
-                    || is_regular_file(&workspace.join("uv.lock"))) =>
+                && is_regular_file(&parent.join("uv.lock")) =>
         {
             Some(RegenerationContract::TemporaryWorkspaceUvEnvironment)
         }
