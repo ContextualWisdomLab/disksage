@@ -1,10 +1,46 @@
 #![cfg(target_os = "windows")]
 
 use serde_json::Value;
+use std::ffi::c_void;
 use std::fs;
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::process::Command;
+
+fn mark_sparse(file: &fs::File) {
+    const FSCTL_SET_SPARSE: u32 = 0x0009_00c4;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn DeviceIoControl(
+            device: *mut c_void,
+            control_code: u32,
+            input: *mut c_void,
+            input_size: u32,
+            output: *mut c_void,
+            output_size: u32,
+            bytes_returned: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
+    }
+
+    let mut bytes_returned = 0_u32;
+    // SAFETY: `file` remains open for the call, the handle is the file handle returned by the
+    // standard library, and FSCTL_SET_SPARSE accepts null input/output buffers to mark a file sparse.
+    let result = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle().cast(),
+            FSCTL_SET_SPARSE,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(result, 0, "mark generated fixture sparse");
+}
 
 #[test]
 fn userprofile_only_windows_environment_still_discovers_build_roots() {
@@ -23,6 +59,7 @@ fn userprofile_only_windows_environment_still_discovers_build_roots() {
     fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lock");
     let mut generated = fs::File::create(target.join("generated.bin"))
         .expect("create generated sparse fixture");
+    mark_sparse(&generated);
     generated.write_all(&[0x5a; 4096]).expect("write allocated prefix");
     generated.set_len(64 * 1024 * 1024).expect("extend sparse fixture");
 
@@ -128,7 +165,7 @@ fn long_windows_build_paths_keep_physical_allocation_evidence_complete() {
 }
 
 #[test]
-fn absolute_windows_root_with_parent_component_keeps_manifest_complete() {
+fn absolute_windows_root_with_parent_component_is_rejected_before_inventory() {
     let temp = tempfile::tempdir().expect("create fixture root");
     let home = temp.path().join("home");
     let appdata = home.join("AppData/Roaming");
@@ -159,14 +196,13 @@ fn absolute_windows_root_with_parent_component_keeps_manifest_complete() {
         .expect("run development artifact inventory through parent component");
 
     assert!(
-        output.status.success(),
-        "parent-component inventory failed: {}",
+        !output.status.success(),
+        "lexical parent traversal must fail closed before inventory"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--root는 존재하는 절대 디렉터리여야 함"),
+        "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("inventory JSON");
-    assert_eq!(report["candidate_count"], 1);
-    assert_eq!(report["candidates"][0]["project"], "cargo-app");
-    assert_eq!(report["candidates"][0]["scan_complete"], true);
-    assert_eq!(report["candidates"][0]["skipped"], 0);
-    assert_eq!(report["candidates"][0]["files"], 1);
 }
