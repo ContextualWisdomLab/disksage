@@ -80,6 +80,27 @@ pub fn review_selection(
     })
 }
 
+fn review_current_selection(
+    root: &Path,
+    requests: &[DevArtifact],
+    reviewed_at_ms: u64,
+) -> Result<DevArtifactApproval, String> {
+    let requested_fingerprint = selection_fingerprint(root, requests)?;
+    let current = dev_artifacts::find_artifacts(root, 0, reviewed_at_ms);
+    let mut refreshed = Vec::with_capacity(requests.len());
+    for request in requests {
+        let Some(candidate) = current.iter().find(|candidate| candidate.path == request.path) else {
+            return Err("development-artifact-selection-stale".into());
+        };
+        refreshed.push(candidate.clone());
+    }
+    let refreshed_fingerprint = selection_fingerprint(root, &refreshed)?;
+    if refreshed_fingerprint != requested_fingerprint {
+        return Err("development-artifact-selection-stale".into());
+    }
+    review_selection(root, &refreshed, reviewed_at_ms)
+}
+
 fn rejection(requests: &[DevArtifact], code: &str) -> Vec<DevArtifactCleanResult> {
     requests
         .iter()
@@ -153,7 +174,7 @@ pub fn review_dev_artifacts(
     root: String,
     artifacts: Vec<DevArtifact>,
 ) -> Result<DevArtifactApproval, String> {
-    review_selection(Path::new(&root), &artifacts, crate::commands::now_ms())
+    review_current_selection(Path::new(&root), &artifacts, crate::commands::now_ms())
 }
 
 #[cfg(not(coverage))]
