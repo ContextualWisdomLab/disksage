@@ -5,6 +5,12 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Discover commit-to-pull-request membership through GitHub's authoritative association endpoint,
+  then verify every candidate against its exact PR commit list instead of searching PR text for a
+  SHA; show a safe follow-up message when Trash succeeds but completion evidence is unavailable.
+- Re-audit a stale clone immediately before and after atomic Trash staging, including tracked and
+  untracked status, exact PR/default-branch ancestry, checkout leases, active use, allocation, and
+  filesystem identity; restore and abort when any late evidence differs.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
   surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
 - Revalidate every selected photo group member and block the whole quarantine when a survivor or
@@ -325,6 +331,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Require standalone-clone cleanup to bind a real in-root Git directory, complete audit evidence, and an external safe journal before an approved Trash move.
 
 ### Security
+
+- Require standalone clone cleanup to prove fresh closed/merged PR commit membership, exact
+  authoritative PR-head ancestry, no open PR, a non-default branch, complete provider-local bytes,
+  and a fresh identity-bound recheck before the existing reversible Trash move.
 
 - Default personal cloud-provider OAuth consent to read-only; upload scope and API write
   authority now require an explicit user opt-in.

@@ -4,6 +4,7 @@
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
+  import GitCloneCleanup from "./GitCloneCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
   import ContainerOrphanCleanup from "./ContainerOrphanCleanup.svelte";
@@ -332,6 +333,7 @@
   {/if}
 
   <GitWorktreeCleanup {scannedRoot} />
+  <GitCloneCleanup {scannedRoot} />
   <BrewCleanup />
 
   <ContainerOrphanCleanup />

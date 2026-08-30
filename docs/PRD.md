@@ -27,7 +27,9 @@ an observation goal, never deletion authority.
   remain unavailable and the customer screen receives no local path or runtime diagnostic detail.
 - Worktrees and standalone clones require fresh exact Git/GitHub authority, clean and inactive
   state, complete and valid lease evidence, no active owner-created lease or Git worktree lock,
-  explicit approval, and no branch deletion or Git pruning. Lease expiry is supplied by its owner;
+  a closed or merged PR whose authoritative head contains the local HEAD, no open PR membership,
+  explicit approval, and no branch deletion or Git pruning. Default branches and stale-open PRs
+  are always preserved. Lease expiry is supplied by its owner;
   DiskSage never invents one.
 - All customer-visible text states what happened, what remains blocked, and the next safe action;
   it does not expose implementation boundaries.

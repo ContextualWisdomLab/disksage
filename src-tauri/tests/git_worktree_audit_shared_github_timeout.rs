@@ -41,7 +41,7 @@ case "$*" in
   "pr list --state closed --search is:unmerged"*) sleep 1; printf '[]\n' ;;
   "pr list "*) printf '[]\n' ;;
   "repo view "*) sleep 1; printf 'ContextualWisdomLab/disksage\n' ;;
-  "search prs "*) printf '[]\n' ;;
+  "api --paginate --slurp repos/ContextualWisdomLab/disksage/commits/"*) printf '[[]]\n' ;;
   *) printf 'unexpected fake gh invocation\n' >&2; exit 9 ;;
 esac
 "#,

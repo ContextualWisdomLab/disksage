@@ -13,17 +13,17 @@ preserves the primary checkout. A separate clone left on a PR head therefore rem
 DiskSage may propose a standalone clone only when it has exactly one registered worktree, a clean
 working tree, complete recursive active-use and size evidence, a real `.git` directory directly
 bounded by the canonical clone root, and a fresh same-repository GitHub branch-and-head match for a
-closed PR or an operator-supplied stale-open cutoff. The complete audit must itself report no
+closed or merged PR. The local HEAD must equal or be an ancestor of that exact authoritative PR
+head, contain no open-PR membership, and not be `main`, `develop`, or the provider-observed default
+branch. Stale-open PRs and default-branch ancestry are preservation evidence, never removal
+authority. The complete audit must itself report no
 evidence gap. Execution requires the exact plan phrase, a create-new approval record outside the
 clone, a journal destination outside the clone, re-resolves every authority input, verifies the
 filesystem object identity, and moves the clone to OS Trash. If the Trash move cannot complete, the
 existing safety layer restores the staged object and retains the journaled failure for recovery.
 
-DiskSage may also authorize a clean published clone when a fresh provider observation names the
-default branch and its exact commit OID, the corresponding local remote-tracking reference resolves
-to that same OID, and `git merge-base --is-ancestor` proves the clone HEAD reachable from it. This
-path rejects stale provider evidence, stale local references, diverged or unpublished heads, and
-active or dirty clones. Multi-root discovery is breadth-bounded, does not follow symlinks, stops at
+Fresh default-branch evidence is mandatory so the protected branch cannot be mistaken for a
+completed feature branch. Multi-root discovery is breadth-bounded, does not follow symlinks, stops at
 repository roots, and reports an evidence gap when any entry or result limit is exceeded.
 
 DiskSage never invents an age threshold, deletes the branch, runs `git prune`, handles fork or

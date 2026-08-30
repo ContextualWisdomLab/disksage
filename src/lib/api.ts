@@ -858,12 +858,17 @@ export interface GitCloneReclaimPlan {
   head: string;
   branch: string;
   closed_pull_request_head: boolean;
+  completed_pull_request_commit: boolean;
+  open_pull_request_commit: boolean;
+  authoritative_pull_request_head: string | null;
+  head_is_authoritative_pull_request_head_ancestor: boolean;
   stale_open_pull_request_head: boolean;
   stale_open_pull_request_cutoff_ms: number | null;
   default_branch_reference: string | null;
   default_branch_oid: string | null;
   default_branch_observed_at_ms: number | null;
   head_is_default_branch_ancestor: boolean;
+  default_branch_protected: boolean;
   size: GitWorktreeSizeEvidence;
   active_use: GitWorktreeActiveUseEvidence;
   checkout_lease_active: boolean;
@@ -909,6 +914,7 @@ export interface GitCloneReclaimResult {
   branch_delete_command_executed: false;
   git_prune_executed: false;
   physically_reclaimed_bytes: number | null;
+  post_mutation_warning: string | null;
 }
 
 export interface StaleGitCloneRemovalOutput {

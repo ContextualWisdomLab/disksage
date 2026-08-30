@@ -67,6 +67,10 @@ fn execution_refreshes_default_branch_evidence_timestamp_after_old_plan() {
         format!(
             r#"#!/bin/sh
 case "$*" in
+  "repo view --json nameWithOwner --jq .nameWithOwner")
+    printf '%s\n' 'example/disksage-fixture'
+    exit 0
+    ;;
   "repo view --json nameWithOwner,defaultBranchRef --jq [.nameWithOwner,.defaultBranchRef.name]|@tsv")
     printf '%s\t%s\n' 'example/disksage-fixture' 'main'
     exit 0

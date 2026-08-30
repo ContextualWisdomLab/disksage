@@ -6,7 +6,8 @@
 
 use crate::git_worktree::{
     self, ClosedPullRequestHeads, GitWorktreeActiveUseEvidence, GitWorktreeAuditOptions,
-    GitWorktreeAuditReport, GitWorktreeSizeEvidence, StaleOpenPullRequestHeads,
+    GitWorktreeAuditReport, GitWorktreeSizeEvidence, PullRequestCommitMembership,
+    StaleOpenPullRequestHeads,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -17,7 +18,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub const GIT_CLONE_RECLAIM_SCHEMA_KIND: &str = "disksage.git-clone-reclaim-plan";
-pub const GIT_CLONE_RECLAIM_VERSION: u32 = 2;
+pub const GIT_CLONE_RECLAIM_VERSION: u32 = 3;
 const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_DEFAULT_BRANCH_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1_000;
 const CHECKOUT_LEASE_FILENAME: &str = "disksage-checkout-lease.json";
@@ -209,6 +210,10 @@ pub struct GitCloneReclaimPlan {
     pub head: String,
     pub branch: String,
     pub closed_pull_request_head: bool,
+    pub completed_pull_request_commit: bool,
+    pub open_pull_request_commit: bool,
+    pub authoritative_pull_request_head: Option<String>,
+    pub head_is_authoritative_pull_request_head_ancestor: bool,
     pub stale_open_pull_request_head: bool,
     pub stale_open_pull_request_cutoff_ms: Option<u64>,
     #[serde(default)]
@@ -219,6 +224,7 @@ pub struct GitCloneReclaimPlan {
     pub default_branch_observed_at_ms: Option<u64>,
     #[serde(default)]
     pub head_is_default_branch_ancestor: bool,
+    pub default_branch_protected: bool,
     pub size: GitWorktreeSizeEvidence,
     pub active_use: GitWorktreeActiveUseEvidence,
     pub checkout_lease_active: bool,
@@ -599,6 +605,9 @@ fn plan_fingerprint(
     size: &GitWorktreeSizeEvidence,
     default_branch_evidence: Option<&DefaultBranchEvidence>,
     head_is_default_branch_ancestor: bool,
+    authoritative_pull_request_head: Option<&str>,
+    head_is_authoritative_pull_request_head_ancestor: bool,
+    default_branch_protected: bool,
     checkout_lease_fingerprint: Option<&str>,
     blockers: &[String],
 ) -> String {
@@ -627,6 +636,22 @@ fn plan_fingerprint(
         } else {
             "0"
         },
+    );
+    hash_field(
+        &mut hasher,
+        authoritative_pull_request_head.unwrap_or("no-authoritative-pr-head"),
+    );
+    hash_field(
+        &mut hasher,
+        if head_is_authoritative_pull_request_head_ancestor {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash_field(
+        &mut hasher,
+        if default_branch_protected { "1" } else { "0" },
     );
     hash_field(
         &mut hasher,
@@ -666,6 +691,18 @@ fn has_bounded_standalone_git_directory(repository_root: &Path, common_dir: &Pat
         .parent()
         .is_some_and(|parent| parent == repository_root)
         && std::fs::canonicalize(git_entry).ok().as_deref() == Some(common_dir)
+}
+
+/// Conservatively recognize a checked-out branch as the provider-observed default branch.
+///
+/// The evidence reference has the form `refs/remotes/<remote>/<branch>`. Remote names are not a
+/// safe delimiter because Git permits `/` in them, so splitting at an arbitrary slash can erase a
+/// branch prefix such as `release/2026`. Requiring the complete local branch as the reference
+/// suffix preserves exact slash-containing names; any ambiguous suffix match protects the clone.
+fn default_branch_reference_protects(reference: &str, local_branch: &str) -> bool {
+    reference
+        .strip_prefix("refs/remotes/")
+        .is_some_and(|remote_reference| remote_reference.ends_with(&format!("/{local_branch}")))
 }
 
 /// Validate the append-only journal destination before the source clone can be moved.
@@ -722,11 +759,36 @@ pub fn plan_git_clone_reclaim_with_authority(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitCloneReclaimPlan, String> {
-    let report = git_worktree::audit_git_worktrees_with_pull_request_heads(
+    plan_git_clone_reclaim_with_authority_and_membership(
         repository_root,
         retention_references,
         closed_pull_request_heads,
         stale_open_pull_request_heads,
+        &PullRequestCommitMembership::default(),
+        stale_open_pull_request_cutoff_ms,
+        default_branch_evidence,
+        options,
+        generated_at_ms,
+    )
+}
+
+fn plan_git_clone_reclaim_with_authority_and_membership(
+    repository_root: &Path,
+    retention_references: &[String],
+    closed_pull_request_heads: &ClosedPullRequestHeads,
+    stale_open_pull_request_heads: &StaleOpenPullRequestHeads,
+    pull_request_commits: &PullRequestCommitMembership,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    default_branch_evidence: Option<&DefaultBranchEvidence>,
+    options: GitWorktreeAuditOptions,
+    generated_at_ms: u64,
+) -> Result<GitCloneReclaimPlan, String> {
+    let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
+        repository_root,
+        retention_references,
+        closed_pull_request_heads,
+        stale_open_pull_request_heads,
+        pull_request_commits,
         stale_open_pull_request_cutoff_ms,
         options,
         generated_at_ms,
@@ -739,6 +801,32 @@ pub fn plan_git_clone_reclaim_with_authority(
     let repository_path = PathBuf::from(&report.repository_root);
     let common_dir = PathBuf::from(&report.common_dir);
     let branch = primary.branch.clone().unwrap_or_default();
+    let mut matching_pull_request_heads = std::collections::BTreeSet::new();
+    let mut pull_request_head_probe_incomplete = false;
+    for (_, authoritative_head) in closed_pull_request_heads
+        .iter()
+        .filter(|(branch_ref, _)| branch_ref == &branch)
+    {
+        match git_worktree::exact_oid_contains_commit(
+            &repository_path,
+            authoritative_head,
+            &primary.head,
+            options.command_timeout_ms,
+        ) {
+            Ok(true) => {
+                matching_pull_request_heads.insert(authoritative_head.clone());
+            }
+            Ok(false) => {}
+            Err(_) => pull_request_head_probe_incomplete = true,
+        }
+    }
+    let authoritative_pull_request_head = if matching_pull_request_heads.len() == 1 {
+        matching_pull_request_heads.iter().next().cloned()
+    } else {
+        None
+    };
+    let head_is_authoritative_pull_request_head_ancestor =
+        authoritative_pull_request_head.is_some();
     let active_use = git_worktree::active_use_evidence(
         &repository_path,
         options.command_timeout_ms,
@@ -785,6 +873,12 @@ pub fn plan_git_clone_reclaim_with_authority(
     } else {
         false
     };
+    let short_branch = branch.strip_prefix("refs/heads/").unwrap_or(&branch);
+    let default_branch_protected = head_is_default_branch_ancestor
+        || matches!(short_branch, "main" | "develop")
+        || default_branch_evidence.is_some_and(|evidence| {
+            default_branch_reference_protects(&evidence.reference, short_branch)
+        });
     let mut blockers = Vec::new();
     if !report.evidence_complete {
         blockers.push("git-clone-audit-evidence-incomplete".into());
@@ -806,17 +900,32 @@ pub fn plan_git_clone_reclaim_with_authority(
     } else if checkout_lease_active {
         blockers.push("git-checkout-lease-active".into());
     }
-    if !primary.closed_pull_request_head
-        && !primary.stale_open_pull_request_head
-        && !head_is_default_branch_ancestor
-    {
+    if primary.open_pull_request_commit || primary.stale_open_pull_request_head {
+        blockers.push("git-clone-open-pull-request-present".into());
+    }
+    if !primary.completed_pull_request_commit && !primary.closed_pull_request_head {
         blockers.push("git-clone-pr-head-authority-missing".into());
+    }
+    if !head_is_authoritative_pull_request_head_ancestor {
+        blockers.push("git-clone-authoritative-pr-head-ancestry-missing".into());
+    }
+    if matching_pull_request_heads.len() > 1 {
+        blockers.push("git-clone-authoritative-pr-head-ambiguous".into());
+    }
+    if pull_request_head_probe_incomplete {
+        blockers.push("git-clone-authoritative-pr-head-evidence-incomplete".into());
     }
     if default_branch_evidence.is_some() && !default_evidence_fresh {
         blockers.push("git-clone-default-branch-evidence-stale".into());
     }
     if default_branch_probe_incomplete {
         blockers.push("git-clone-default-branch-ancestry-evidence-incomplete".into());
+    }
+    if default_branch_evidence.is_none() {
+        blockers.push("git-clone-default-branch-evidence-missing".into());
+    }
+    if default_branch_protected {
+        blockers.push("git-clone-default-branch-protected".into());
     }
     if primary.head_is_retained_tip {
         blockers.push("git-clone-head-is-retained-tip".into());
@@ -848,6 +957,9 @@ pub fn plan_git_clone_reclaim_with_authority(
         &primary.size,
         default_branch_evidence,
         head_is_default_branch_ancestor,
+        authoritative_pull_request_head.as_deref(),
+        head_is_authoritative_pull_request_head_ancestor,
+        default_branch_protected,
         checkout_lease
             .as_ref()
             .map(|lease| lease.lease_fingerprint.as_str()),
@@ -872,12 +984,17 @@ pub fn plan_git_clone_reclaim_with_authority(
         head: primary.head.clone(),
         branch,
         closed_pull_request_head: primary.closed_pull_request_head,
+        completed_pull_request_commit: primary.completed_pull_request_commit,
+        open_pull_request_commit: primary.open_pull_request_commit,
+        authoritative_pull_request_head,
+        head_is_authoritative_pull_request_head_ancestor,
         stale_open_pull_request_head: primary.stale_open_pull_request_head,
         stale_open_pull_request_cutoff_ms,
         default_branch_reference: default_branch_evidence.map(|value| value.reference.clone()),
         default_branch_oid: default_branch_evidence.map(|value| value.oid.clone()),
         default_branch_observed_at_ms: default_branch_evidence.map(|value| value.observed_at_ms),
         head_is_default_branch_ancestor,
+        default_branch_protected,
         size: primary.size.clone(),
         active_use,
         checkout_lease_active,
@@ -933,25 +1050,10 @@ pub fn plan_git_clone_reclaim(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitCloneReclaimPlan, String> {
-    let closed = if include_closed_pull_requests {
-        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
-    } else {
-        ClosedPullRequestHeads::new()
-    };
-    let stale_open = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-        git_worktree::github_stale_open_pull_request_heads(
-            repository_root,
-            cutoff_ms,
-            options.command_timeout_ms,
-        )?
-    } else {
-        StaleOpenPullRequestHeads::new()
-    };
-    plan_git_clone_reclaim_with_pull_request_heads(
+    plan_git_clone_reclaim_with_default_branch(
         repository_root,
         retention_references,
-        &closed,
-        &stale_open,
+        include_closed_pull_requests,
         stale_open_pull_request_cutoff_ms,
         options,
         generated_at_ms,
@@ -983,25 +1085,7 @@ pub fn plan_git_clone_reclaim_with_default_branch(
     } else {
         StaleOpenPullRequestHeads::new()
     };
-    let pr_plan = plan_git_clone_reclaim_with_authority(
-        repository_root,
-        retention_references,
-        &closed,
-        &stale_open,
-        stale_open_pull_request_cutoff_ms,
-        None,
-        options,
-        generated_at_ms,
-    )?;
-    if pr_plan.closed_pull_request_head
-        || pr_plan.stale_open_pull_request_head
-        || pr_plan
-            .blockers
-            .iter()
-            .any(|blocker| blocker != "git-clone-pr-head-authority-missing")
-    {
-        return Ok(pr_plan);
-    }
+    let membership = git_worktree::github_pull_request_commit_membership(repository_root, options)?;
     let (reference, oid) = git_worktree::github_default_branch_reference_oid(
         repository_root,
         options.command_timeout_ms,
@@ -1011,11 +1095,12 @@ pub fn plan_git_clone_reclaim_with_default_branch(
         oid,
         observed_at_ms: generated_at_ms,
     };
-    plan_git_clone_reclaim_with_authority(
+    plan_git_clone_reclaim_with_authority_and_membership(
         repository_root,
         retention_references,
         &closed,
         &stale_open,
+        &membership,
         stale_open_pull_request_cutoff_ms,
         Some(&evidence),
         options,
@@ -1087,11 +1172,13 @@ fn execute_git_clone_reclaim_with_authority(
     } else {
         StaleOpenPullRequestHeads::new()
     };
-    let live = plan_git_clone_reclaim_with_authority(
+    let membership = git_worktree::github_pull_request_commit_membership(repository_root, options)?;
+    let live = plan_git_clone_reclaim_with_authority_and_membership(
         repository_root,
         retention_references,
         &closed,
         &stale_open,
+        &membership,
         stale_open_pull_request_cutoff_ms,
         default_branch_evidence,
         options,
@@ -1116,12 +1203,100 @@ fn execute_git_clone_reclaim_with_authority(
     {
         return Err("git-clone-live-lease-mismatch".into());
     }
-    let trash_outcome = crate::safety::trash_delete_if_identity_with_outcome(
+    let live_root = PathBuf::from(&live.repository_root);
+    let authority_revalidated = std::cell::Cell::new(false);
+    let evidence_matches = |candidate_root: &Path| {
+        if candidate_root != live_root {
+            if !authority_revalidated.get() {
+                return false;
+            }
+            let active = git_worktree::active_use_evidence_with_command_path(
+                candidate_root,
+                &live_root,
+                options.command_timeout_ms,
+                options.max_active_pids,
+                true,
+            );
+            return active.assessed && active.evidence_complete && !active.active;
+        }
+        let candidate = if default_branch_evidence.is_some() {
+            plan_git_clone_reclaim_with_default_branch(
+                candidate_root,
+                retention_references,
+                include_closed_pull_requests,
+                stale_open_pull_request_cutoff_ms,
+                options,
+                requested_at_ms,
+            )
+        } else {
+            let refreshed_closed = if include_closed_pull_requests {
+                git_worktree::github_closed_pull_request_heads_with_options(candidate_root, options)
+            } else {
+                Ok(ClosedPullRequestHeads::new())
+            };
+            let refreshed_stale = stale_open_pull_request_cutoff_ms.map_or_else(
+                || Ok(StaleOpenPullRequestHeads::new()),
+                |cutoff_ms| {
+                    git_worktree::github_stale_open_pull_request_heads(
+                        candidate_root,
+                        cutoff_ms,
+                        options.command_timeout_ms,
+                    )
+                },
+            );
+            refreshed_closed
+                .and_then(|closed| refreshed_stale.map(|stale| (closed, stale)))
+                .and_then(|(closed, stale)| {
+                    git_worktree::github_pull_request_commit_membership(candidate_root, options)
+                        .and_then(|membership| {
+                            plan_git_clone_reclaim_with_authority_and_membership(
+                                candidate_root,
+                                retention_references,
+                                &closed,
+                                &stale,
+                                &membership,
+                                stale_open_pull_request_cutoff_ms,
+                                None,
+                                options,
+                                requested_at_ms,
+                            )
+                        })
+                })
+        };
+        let Ok(candidate) = candidate else { return false };
+        let same_authority = candidate.repository_object_id == live.repository_object_id
+            && candidate.head == live.head
+            && candidate.branch == live.branch
+            && candidate.closed_pull_request_head == live.closed_pull_request_head
+            && candidate.completed_pull_request_commit == live.completed_pull_request_commit
+            && candidate.open_pull_request_commit == live.open_pull_request_commit
+            && candidate.authoritative_pull_request_head == live.authoritative_pull_request_head
+            && candidate.head_is_authoritative_pull_request_head_ancestor
+                == live.head_is_authoritative_pull_request_head_ancestor
+            && candidate.stale_open_pull_request_head == live.stale_open_pull_request_head
+            && candidate.default_branch_reference == live.default_branch_reference
+            && candidate.default_branch_oid == live.default_branch_oid
+            && candidate.head_is_default_branch_ancestor == live.head_is_default_branch_ancestor
+            && candidate.default_branch_protected == live.default_branch_protected
+            && candidate.size == live.size
+            && candidate.checkout_lease_active == live.checkout_lease_active
+            && candidate.checkout_lease_fingerprint == live.checkout_lease_fingerprint
+            && candidate.authority_fingerprint == live.authority_fingerprint
+            && candidate.eligible_after_human_approval
+            && candidate.blockers.is_empty();
+        if !same_authority {
+            return false;
+        }
+        authority_revalidated.set(true);
+        true
+    };
+    let trash_outcome = crate::safety::trash_delete_if_identity_with_verifier(
         Path::new(&live.repository_root),
         &live.repository_object_id,
         live.size.allocated_bytes,
         journal_path,
         requested_at_ms,
+        evidence_matches,
     )
     .map_err(|error| format!("git-clone-trash-failed:{error}"))?;
     if !trash_outcome.moved_to_trash {
@@ -1285,7 +1460,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn fresh_exact_default_branch_ancestor_authorizes_clean_pushed_clone() {
+    fn default_branch_ancestry_without_completed_pr_never_authorizes_clone() {
         let repository = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-b", "main"]);
         git(
@@ -1326,8 +1501,38 @@ mod tests {
             11,
         )
         .unwrap();
-        assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-pr-head-authority-missing".into()));
         assert!(plan.head_is_default_branch_ancestor);
+        let completed = ClosedPullRequestHeads::from([(
+            "refs/heads/completed-local".into(),
+            ancestor.clone(),
+        )]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([ancestor.clone()]),
+            ..PullRequestCommitMembership::default()
+        };
+        let completed_plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/remotes/origin/main".into()],
+            &completed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(completed_plan.completed_pull_request_commit);
+        assert!(completed_plan.head_is_default_branch_ancestor);
+        assert!(completed_plan.default_branch_protected);
+        assert!(!completed_plan.eligible_after_human_approval);
+        assert!(completed_plan
+            .blockers
+            .contains(&"git-clone-default-branch-protected".into()));
         let refreshed_evidence = DefaultBranchEvidence {
             observed_at_ms: 12,
             ..evidence
@@ -1455,11 +1660,10 @@ mod tests {
         )
         .unwrap();
         assert!(!released.checkout_lease_active);
-        assert!(
-            released.eligible_after_human_approval,
-            "{:?}",
-            released.blockers
-        );
+        assert!(!released.eligible_after_human_approval);
+        assert!(released
+            .blockers
+            .contains(&"git-clone-open-pull-request-present".into()));
     }
 
     #[cfg(unix)]
@@ -1631,18 +1835,29 @@ mod tests {
         std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
         git(repository.path(), &["add", "tracked.txt"]);
         git(repository.path(), &["commit", "-m", "main"]);
+        let default_oid = git(repository.path(), &["rev-parse", "HEAD"]);
         git(repository.path(), &["switch", "-c", "old-pr"]);
         std::fs::write(repository.path().join("tracked.txt"), b"old pr\n").unwrap();
         git(repository.path(), &["commit", "-am", "old pr"]);
         let head = git(repository.path(), &["rev-parse", "HEAD"]);
-        let closed = ClosedPullRequestHeads::from([("refs/heads/old-pr".into(), head)]);
+        let closed = ClosedPullRequestHeads::from([("refs/heads/old-pr".into(), head.clone())]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([head]),
+            ..PullRequestCommitMembership::default()
+        };
 
-        let plan = plan_git_clone_reclaim_with_pull_request_heads(
+        let plan = plan_git_clone_reclaim_with_authority_and_membership(
             repository.path(),
             &["refs/heads/main".into()],
             &closed,
             &StaleOpenPullRequestHeads::new(),
+            &membership,
             None,
+            Some(&DefaultBranchEvidence {
+                reference: "refs/heads/main".into(),
+                oid: default_oid,
+                observed_at_ms: 10,
+            }),
             GitWorktreeAuditOptions::default(),
             10,
         )
@@ -1794,5 +2009,166 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "git-worktree-stale-open-pull-request-heads-invalid");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_completed_clean_exact_pr_clone_is_eligible() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let default_oid = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(repository.path(), &["switch", "-c", "completed-pr"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"completed\n").unwrap();
+        git(repository.path(), &["commit", "-am", "completed"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        let closed =
+            ClosedPullRequestHeads::from([("refs/heads/completed-pr".into(), head.clone())]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([head]),
+            ..PullRequestCommitMembership::default()
+        };
+        let evidence = DefaultBranchEvidence {
+            reference: "refs/heads/main".into(),
+            oid: default_oid,
+            observed_at_ms: 10,
+        };
+        let plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &closed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&evidence),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
+        assert!(plan.head_is_authoritative_pull_request_head_ancestor);
+        assert!(!plan.default_branch_protected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slash_containing_provider_default_branch_is_always_protected() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"default\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "default"]);
+        git(repository.path(), &["switch", "-c", "release/2026"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"release\n").unwrap();
+        git(repository.path(), &["commit", "-am", "release"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/origin/release/2026", &head],
+        );
+        let closed =
+            ClosedPullRequestHeads::from([("refs/heads/release/2026".into(), head.clone())]);
+        let membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([head.clone()]),
+            ..PullRequestCommitMembership::default()
+        };
+        let plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &closed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&DefaultBranchEvidence {
+                reference: "refs/remotes/origin/release/2026".into(),
+                oid: head,
+                observed_at_ms: 10,
+            }),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+
+        assert!(plan.default_branch_protected);
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-default-branch-protected".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_pr_and_unique_local_commit_are_blocked() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let default_oid = git(repository.path(), &["rev-parse", "HEAD"]);
+        git(repository.path(), &["switch", "-c", "completed-pr"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"remote\n").unwrap();
+        git(repository.path(), &["commit", "-am", "remote"]);
+        let remote_head = git(repository.path(), &["rev-parse", "HEAD"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"unique\n").unwrap();
+        git(repository.path(), &["commit", "-am", "unique local"]);
+        let local_head = git(repository.path(), &["rev-parse", "HEAD"]);
+        let closed =
+            ClosedPullRequestHeads::from([("refs/heads/completed-pr".into(), remote_head)]);
+        let mut membership = PullRequestCommitMembership {
+            completed: std::collections::BTreeSet::from([local_head.clone()]),
+            ..PullRequestCommitMembership::default()
+        };
+        membership
+            .open
+            .insert(local_head, std::collections::BTreeSet::from([7]));
+        let plan = plan_git_clone_reclaim_with_authority_and_membership(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &closed,
+            &StaleOpenPullRequestHeads::new(),
+            &membership,
+            None,
+            Some(&DefaultBranchEvidence {
+                reference: "refs/heads/main".into(),
+                oid: default_oid,
+                observed_at_ms: 10,
+            }),
+            GitWorktreeAuditOptions::default(),
+            11,
+        )
+        .unwrap();
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-open-pull-request-present".into()));
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-authoritative-pr-head-ancestry-missing".into()));
     }
 }
