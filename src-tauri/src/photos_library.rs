@@ -861,10 +861,11 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_bounds_callbacks() {
+    fn native_boundary_keeps_local_reads_offline_without_an_arbitrary_timeout() {
         let source = include_str!("../native/photos_bridge.m");
         assert!(source.contains("networkAccessAllowed = NO"));
-        assert!(source.contains("cancelDataRequest:requestID"));
+        assert!(source.contains("dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER)"));
+        assert!(!source.contains("cancelDataRequest:requestID"));
         assert!(source.contains("DSAuthorizationTimeoutNanos"));
     }
 
