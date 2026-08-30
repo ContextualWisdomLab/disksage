@@ -157,8 +157,15 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
         .or_else(|| {
-            path.starts_with(crate::rules::shared_temp_root())
-                .then_some(RegenerationContract::TemporaryGitWorkspace)
+            #[cfg(unix)]
+            {
+                path.starts_with(crate::rules::shared_temp_root())
+                    .then_some(RegenerationContract::TemporaryGitWorkspace)
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
         })
 }
 
@@ -198,14 +205,14 @@ fn update_platform_metadata(hasher: &mut blake3::Hasher, metadata: &std::fs::Met
 }
 
 #[cfg(unix)]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+fn allocated_bytes(metadata: &std::fs::Metadata) -> Result<u64, String> {
     use std::os::unix::fs::MetadataExt;
-    metadata.blocks().saturating_mul(512)
+    Ok(metadata.blocks().saturating_mul(512))
 }
 
 #[cfg(windows)]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
-    metadata.len()
+fn allocated_bytes(_metadata: &std::fs::Metadata) -> Result<u64, String> {
+    Err("generated-cache-allocation-evidence-unsupported-platform".into())
 }
 
 fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
@@ -234,7 +241,7 @@ fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
             return Err("generated-cache-special-file-rejected".into());
         }
         entries += 1;
-        bytes = bytes.saturating_add(allocated_bytes(&metadata));
+        bytes = bytes.saturating_add(allocated_bytes(&metadata)?);
         let relative = current
             .strip_prefix(path)
             .map_err(|_| "generated-cache-relative-path-failed")?;
@@ -417,7 +424,7 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if path.starts_with("/private/tmp") {
+    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
         match bounded_git(
             path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
