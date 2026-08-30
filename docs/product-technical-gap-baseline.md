@@ -1236,6 +1236,12 @@ runner's private workspace temp root instead of weakening the shared production 
   content digest before invoking Photos' own deletion transaction and confirmation; a create-new
   receipt follows success. Near-duplicate managed assets remain unavailable rather than receiving
   an uncalibrated score, so that Gap is explicit and non-destructive.
+- A 5,000-item read-only audit did not return customer-visible progress before an external
+  60-second observation was stopped. The native bridge now returns exactly one asset only after
+  PhotoKit's completion callback; Rust persists gap-free checkpoint evidence, and the UI renders
+  progress and accepts cancellation between completed assets. Resuming uses the accepted
+  checkpoint instead of restarting. No elapsed-time threshold is interpreted as failure and no
+  photo mutation is introduced by this audit path.
 
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open

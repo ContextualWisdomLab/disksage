@@ -1,7 +1,11 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { photosApprovalReady, photosSelections } from "./photosLibraryState";
+  import {
+    photosApprovalReady,
+    photosAuthorizationAfterInspectionFailure,
+    photosSelections,
+  } from "./photosLibraryState";
 
   let authorization = $state("checking");
   let inventory: api.PhotosDuplicateInventory | null = $state(null);
@@ -13,6 +17,9 @@
   let status = $state("");
   let error = $state("");
   let busy = $state(false);
+  let inspecting = $state(false);
+  let cancelRequested = $state(false);
+  let inventoryPages: api.PhotosInventoryPage[] = $state([]);
 
   $effect(() => {
     api.photosAuthorizationStatus()
@@ -32,17 +39,51 @@
   }
 
   async function inspect() {
-    busy = true; error = ""; plan = null; receipt = null;
+    busy = true; inspecting = true; cancelRequested = false; error = ""; plan = null; receipt = null;
     try {
-      inventory = await api.inspectPhotosDuplicates();
+      if (inventoryPages.at(-1)?.next_offset == null) inventoryPages = [];
+      let checkpoint: api.PhotosInventoryCheckpoint | null = inventoryPages.length
+        ? {
+            next_offset: inventoryPages.at(-1)?.next_offset ?? 0,
+            total_count: inventoryPages[0].total_count,
+            inventory_identity: inventoryPages[0].inventory_identity,
+          }
+        : null;
+      do {
+        const page = await api.inspectPhotosDuplicatesPage(checkpoint);
+        inventoryPages.push(page);
+        checkpoint = page.next_offset === null ? null : {
+          next_offset: page.next_offset,
+          total_count: page.total_count,
+          inventory_identity: page.inventory_identity,
+        };
+        status = `${page.total_count}개 중 ${page.offset + page.assets.length}개를 확인했습니다.`;
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      } while (checkpoint && !cancelRequested);
+      if (!checkpoint) inventory = await api.finalizePhotosDuplicateInventory(inventoryPages);
       keepers = {};
-      status = inventory.unavailable_count
-        ? `${inventory.unavailable_count}개 원본을 이 Mac에서 확인할 수 없습니다. 사진 앱에서 원본을 다운로드한 뒤 다시 확인하세요.`
-        : inventory.exact_groups.length
-          ? `${inventory.exact_groups.length}개 정확한 사본 그룹을 찾았습니다. 그룹마다 남길 사진을 고르세요.`
-          : "내용이 정확히 같은 사진을 찾지 못했습니다.";
-    } catch { error = "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요."; }
-    finally { busy = false; }
+      if (cancelRequested) {
+        status = `${inventoryPages.length}개까지 확인했습니다. 이 화면에서 사진 사본 확인을 다시 누르면 이어집니다.`;
+      } else if (inventory) {
+        status = inventory.unavailable_count
+          ? `${inventory.unavailable_count}개 원본을 이 Mac에서 확인할 수 없습니다. 사진 앱에서 원본을 다운로드한 뒤 다시 확인하세요.`
+          : inventory.exact_groups.length
+            ? `${inventory.exact_groups.length}개 정확한 사본 그룹을 찾았습니다. 그룹마다 남길 사진을 고르세요.`
+            : "내용이 정확히 같은 사진을 찾지 못했습니다.";
+      }
+    } catch (reason) {
+      if (String(reason).includes("photos-page-checkpoint-mismatch")) inventoryPages = [];
+      authorization = photosAuthorizationAfterInspectionFailure(authorization, reason);
+      error = String(reason).includes("photos-authorization-required")
+        ? "사진 접근이 해제됐습니다. 사진 앱을 다시 연결한 뒤 확인하세요."
+        : "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요.";
+    }
+    finally { inspecting = false; busy = false; }
+  }
+
+  function cancelInspect() {
+    cancelRequested = true;
+    status = "현재 사진 확인이 끝나면 멈춥니다.";
   }
 
   async function makePlan() {
@@ -75,7 +116,11 @@
     {#if authorization !== "authorized" && authorization !== "limited"}
       <button class="secondary" onclick={connect} disabled={busy}>사진 앱 연결</button>
     {:else}
-      <button class="secondary" onclick={inspect} disabled={busy}>{busy ? "확인 중…" : "사진 사본 확인"}</button>
+      {#if inspecting}
+        <button class="secondary" onclick={cancelInspect}>확인 멈추기</button>
+      {:else}
+        <button class="secondary" onclick={inspect} disabled={busy}>사진 사본 확인</button>
+      {/if}
     {/if}
   </div>
   <p class="guidance">사진 앱이 관리하는 원본만 안전하게 확인합니다. 이 Mac에 없는 원본은 다운로드하거나 삭제하지 않습니다.</p>
@@ -90,7 +135,7 @@
     {/if}
   {/if}
   {#if inventory?.inventory_truncated}
-    <p class="blocker" role="alert">검토 범위가 너무 큽니다. 사진 앱에서 검토할 사진을 줄인 뒤 다시 확인하세요.</p>
+    <p class="blocker" role="status">사진 확인을 잠시 멈췄습니다. 이 화면에서 사진 사본 확인을 다시 눌러 이어서 확인하세요.</p>
   {/if}
   {#each inventory?.exact_groups ?? [] as group, index (group.content_sha256)}
     <fieldset>

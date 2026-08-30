@@ -13,3 +13,6 @@ export const photosSelections = (
 
 export const photosApprovalReady = (plan: PhotosDeletionPlan, approval: string, rationale: string) =>
   approval === plan.exact_approval_phrase && rationale.trim().length > 0;
+
+export const photosAuthorizationAfterInspectionFailure = (current: string, reason: unknown) =>
+  String(reason).includes("photos-authorization-required") ? "unavailable" : current;
