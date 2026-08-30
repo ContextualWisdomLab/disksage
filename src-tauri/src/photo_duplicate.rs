@@ -208,6 +208,28 @@ fn normalize_rgba16(
     Ok(normalized)
 }
 
+fn opened_file_object_id(file: &std::fs::File) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let info = winapi_util::file::information(file)
+            .map_err(|_| "photo-input-identity-unavailable".to_string())?;
+        return Ok(format!(
+            "windows:{}:{}",
+            info.volume_serial_number(),
+            info.file_index()
+        ));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let metadata = file
+            .metadata()
+            .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
+        crate::safety::object_id_from_metadata(&metadata)
+            .ok_or_else(|| "photo-input-identity-unavailable".to_string())
+    }
+}
+
 fn hash_current_file(
     path: &Path,
     expected: &std::fs::Metadata,
@@ -217,10 +239,10 @@ fn hash_current_file(
     let opened = file
         .metadata()
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
-    let opened_identity = crate::safety::object_id_from_metadata(&opened);
+    let opened_identity = opened_file_object_id(&file)?;
     if opened.len() != expected.len()
         || opened.modified().ok() != expected.modified().ok()
-        || !metadata_identity_matches(opened_identity.as_deref(), expected_identity)
+        || !metadata_identity_matches(Some(opened_identity.as_str()), expected_identity)
     {
         return Err("photo-input-changed".into());
     }
@@ -242,13 +264,8 @@ fn hash_current_file(
     Ok((hasher.finalize().to_hex().to_string(), bytes))
 }
 
-/// Compare handle metadata identity when the platform exposes it.
-///
-/// Windows path identity remains bound by `filesystem_object_id` before and after the read; its
-/// standard metadata object does not expose the same identity and therefore contributes no
-/// contradictory value here.
 fn metadata_identity_matches(observed: Option<&str>, expected: &str) -> bool {
-    observed.is_none_or(|identity| identity == expected)
+    observed == Some(expected)
 }
 
 pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
@@ -586,5 +603,27 @@ mod tests {
             Some("replacement"),
             "path-identity"
         ));
+    }
+
+    #[test]
+    fn opened_handle_identity_remains_bound_when_path_is_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("current.png");
+        let replacement = temp.path().join("replacement.png");
+        let held = temp.path().join("held-original.png");
+        png(&current, 8, 8, 1);
+        png(&replacement, 8, 8, 2);
+
+        let expected_identity = crate::safety::filesystem_object_id(&current).unwrap();
+        let opened = std::fs::File::open(&current).unwrap();
+        std::fs::rename(&current, &held).unwrap();
+        std::fs::rename(&replacement, &current).unwrap();
+
+        assert_eq!(opened_file_object_id(&opened).unwrap(), expected_identity);
+        assert_ne!(
+            crate::safety::filesystem_object_id(&current).unwrap(),
+            expected_identity,
+            "path replacement must not be mistaken for the already-open reviewed object"
+        );
     }
 }
