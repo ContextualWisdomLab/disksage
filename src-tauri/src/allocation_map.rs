@@ -127,6 +127,18 @@ pub fn measure_root(
     max_entries: u64,
     max_duration: Duration,
 ) -> Result<AllocationMapEntry, String> {
+    measure_root_with_resolution_hook(root, max_entries, max_duration, || {})
+}
+
+fn measure_root_with_resolution_hook<F>(
+    root: &Path,
+    max_entries: u64,
+    max_duration: Duration,
+    after_resolution: F,
+) -> Result<AllocationMapEntry, String>
+where
+    F: FnOnce(),
+{
     use std::os::unix::fs::MetadataExt;
     if !root.is_absolute() || max_entries == 0 || max_duration.is_zero() {
         return Err("allocation-map-options-invalid".into());
@@ -140,9 +152,12 @@ pub fn measure_root(
     // `component/..` pair is not equivalent when `component` is an intermediate symlink.
     let resolved_root = std::fs::canonicalize(root)
         .map_err(|_| "allocation-map-root-unavailable".to_string())?;
-    let device = root_metadata.dev();
+    after_resolution();
+    let resolved_metadata = std::fs::symlink_metadata(&resolved_root)
+        .map_err(|_| "allocation-map-root-unavailable".to_string())?;
+    let device = resolved_metadata.dev();
     let started = Instant::now();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack = vec![resolved_root.clone()];
     let mut allocated_identities = HashSet::new();
     let mut allocated_bytes = 0_u64;
     let mut visited_entries = 0_u64;
@@ -291,6 +306,43 @@ mod tests {
         assert_eq!(classification(&selected_root), "provider-managed");
         let report = measure_root(&selected_root, 1, Duration::from_secs(1)).unwrap();
         assert_ne!(report.classification, "provider-managed");
+    }
+
+    #[test]
+    fn traversal_remains_bound_to_the_root_resolved_before_link_retargeting() {
+        use std::os::unix::fs::{symlink, MetadataExt};
+        let temp = tempfile::tempdir().unwrap();
+        let provider_parent = temp.path().join("Library");
+        let provider_root = provider_parent.join("Mobile Documents");
+        let ordinary_parent = temp.path().join("ordinary");
+        let ordinary_root = ordinary_parent.join("Mobile Documents");
+        std::fs::create_dir_all(&provider_root).unwrap();
+        std::fs::create_dir_all(&ordinary_root).unwrap();
+        std::fs::write(provider_root.join("provider.bin"), b"provider").unwrap();
+        let bridge = temp.path().join("bridge");
+        symlink(&provider_parent, &bridge).unwrap();
+        let selected_root = bridge.join("Mobile Documents");
+
+        let report = measure_root_with_resolution_hook(
+            &selected_root,
+            2,
+            Duration::from_secs(1),
+            || {
+                std::fs::remove_file(&bridge).unwrap();
+                symlink(&ordinary_parent, &bridge).unwrap();
+            },
+        )
+        .unwrap();
+
+        let expected = std::fs::symlink_metadata(&provider_root).unwrap().blocks() * 512
+            + std::fs::symlink_metadata(provider_root.join("provider.bin"))
+                .unwrap()
+                .blocks()
+                * 512;
+        assert_eq!(report.root, selected_root.to_string_lossy());
+        assert_eq!(report.classification, "provider-managed");
+        assert_eq!(report.allocated_bytes, expected);
+        assert_eq!(report.visited_entries, 2);
     }
 
     #[test]
