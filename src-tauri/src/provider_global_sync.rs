@@ -6,6 +6,7 @@
 //! in the report.
 
 use crate::cloud::CloudProvider;
+use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -107,7 +108,8 @@ pub enum ProviderProbeNextAction {
     KeepLocalAndRescan,
 }
 
-pub const PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION: u32 = 1;
+// Version two makes `observed_at_ms` a required part of the serialized report contract.
+pub const PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION: u32 = 2;
 
 fn checkpoint_fingerprint(checkpoint: &ProviderGlobalSyncCheckpoint) -> String {
     let mut hash = Sha256::new();
@@ -226,6 +228,59 @@ fn checkpoint_path(app_data_dir: &Path, provider: CloudProvider) -> Result<PathB
     Ok(app_data_dir.join(format!("provider-global-sync-{}.json", provider.as_str())))
 }
 
+fn checkpoint_lock_path(app_data_dir: &Path, provider: CloudProvider) -> Result<PathBuf, String> {
+    checkpoint_path(app_data_dir, provider).map(|path| path.with_extension("lock"))
+}
+
+fn lock_checkpoint_transaction(
+    app_data_dir: &Path,
+    provider: CloudProvider,
+) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "provider-global-sync-checkpoint-directory-failed")?;
+    let path = checkpoint_lock_path(app_data_dir, provider)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| "provider-global-sync-checkpoint-lock-open-failed")?;
+    FileExt::lock(&file)
+        .map_err(|_| "provider-global-sync-checkpoint-lock-failed")?;
+    Ok(file)
+}
+
+fn recoverable_checkpoint_error(error: &str) -> bool {
+    matches!(
+        error,
+        "provider-global-sync-checkpoint-file-invalid"
+            | "provider-global-sync-checkpoint-decode-failed"
+            | "provider-global-sync-checkpoint-invalid"
+            | "provider-global-sync-evidence-invalid"
+            | "provider-global-sync-checkpoint-provider-invalid"
+    )
+}
+
+fn quarantine_invalid_checkpoint(
+    app_data_dir: &Path,
+    provider: CloudProvider,
+) -> Result<(), String> {
+    let path = checkpoint_path(app_data_dir, provider)?;
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|_| "provider-global-sync-checkpoint-random-failed")?;
+    let suffix = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let quarantine = path.with_extension(format!("invalid-{suffix}"));
+    std::fs::rename(path, quarantine)
+        .map_err(|_| "provider-global-sync-checkpoint-quarantine-failed".to_string())
+}
+
 fn load_checkpoint_document(
     app_data_dir: &Path,
     provider: CloudProvider,
@@ -312,7 +367,18 @@ where
     let _transaction = lock
         .lock()
         .map_err(|_| "provider-global-sync-checkpoint-lock-failed")?;
-    let previous = load_checkpoint_document(app_data_dir, provider)?;
+    // The advisory file lock covers the complete read-probe-write transaction across app
+    // instances. The process-local lock above preserves deterministic same-process ordering.
+    let _cross_process_transaction = lock_checkpoint_transaction(app_data_dir, provider)?;
+    let (previous, recovered_invalid_checkpoint) =
+        match load_checkpoint_document(app_data_dir, provider) {
+            Ok(previous) => (previous, false),
+            Err(error) if recoverable_checkpoint_error(&error) => {
+                quarantine_invalid_checkpoint(app_data_dir, provider)?;
+                (None, true)
+            }
+            Err(error) => return Err(error),
+        };
     if !force {
         if let Some(previous) = previous.as_ref() {
             if !previous.checkpoint.keep_local
@@ -322,7 +388,12 @@ where
             }
         }
     }
-    let report = probe()?;
+    let mut report = probe()?;
+    if recovered_invalid_checkpoint {
+        report
+            .notices
+            .push("provider-global-sync-checkpoint-recovered".into());
+    }
     let observed_at_ms = report.observed_at_ms;
     let checkpoint = checkpoint_report(
         &report,
@@ -1329,6 +1400,61 @@ sync engine state:
         .unwrap();
         assert_eq!(forced.state, ProviderGlobalSyncState::Pending);
         assert_eq!(forced.observed_at_ms, 2_000);
+    }
+
+    #[test]
+    fn corrupt_checkpoint_is_quarantined_and_replaced_by_fresh_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = checkpoint_path(directory.path(), CloudProvider::Onedrive).unwrap();
+        std::fs::write(&path, b"{truncated").unwrap();
+
+        let report = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            2_000,
+            false,
+            || {
+                let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+                report.observed_at_ms = 2_000;
+                Ok(report)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.state, ProviderGlobalSyncState::Clear);
+        assert!(report
+            .notices
+            .contains(&"provider-global-sync-checkpoint-recovered".to_string()));
+        assert!(
+            load_checkpoint_document(directory.path(), CloudProvider::Onedrive)
+                .unwrap()
+                .is_some()
+        );
+        assert!(std::fs::read_dir(directory.path())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")));
+    }
+
+    #[test]
+    fn checkpoint_transaction_lock_is_shared_across_file_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = lock_checkpoint_transaction(directory.path(), CloudProvider::Onedrive).unwrap();
+        let lock_path = checkpoint_lock_path(directory.path(), CloudProvider::Onedrive).unwrap();
+        let second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        assert!(matches!(
+            FileExt::try_lock(&second),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+        drop(first);
+        FileExt::try_lock(&second).unwrap();
     }
 
     #[test]

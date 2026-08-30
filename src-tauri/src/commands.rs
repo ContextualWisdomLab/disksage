@@ -1479,7 +1479,19 @@ fn cloud_plan_for_inputs(
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
         (health, None)
     } else {
-        let global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        let global_sync = app
+            .path()
+            .app_data_dir()
+            .ok()
+            .and_then(|app_data_dir| {
+                provider_global_sync::inspect_new_copy_admission_checkpointed(
+                    selected.provider,
+                    &app_data_dir,
+                    cloud::system_now_ms(),
+                    false,
+                )
+                .ok()
+            });
         provider_global_sync::attach_new_copy_admission_notice(
             &mut report.notices,
             global_sync.as_ref(),
