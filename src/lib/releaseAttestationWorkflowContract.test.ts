@@ -19,7 +19,8 @@ describe("release attestation workflow contract", () => {
     expect(checkoutIndex).toBeGreaterThanOrEqual(0);
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
-    expect(attestJob).toContain("expected exactly 32 regular files");
+    expect(attestJob).toContain("expected exactly 43 regular files before SBOM generation");
+    expect(attestJob).toContain("expected exactly 44 regular files after SBOM generation");
   });
 
   it("ships the cleanup executables exposed by this release line", () => {
