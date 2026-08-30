@@ -216,7 +216,7 @@ fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
     Some(canonicalize_provider_roots(
         crate::cloud::discover_cloud_roots(&home)
             .into_iter()
-            .map(|cloud_root| cloud_root.path),
+            .map(|cloud_root| PathBuf::from(cloud_root.path)),
     ))
 }
 
