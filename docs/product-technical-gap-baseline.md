@@ -1387,3 +1387,10 @@ runner's private workspace temp root instead of weakening the shared production 
   rejected for every non-Gradle catalog ID and cannot accept an arbitrary filesystem path.
 - Physical reclamation remains pending until this stacked head is compiled and the current cache
   children pass a fresh complete active-use probe; build output is not counted as recovered space.
+# macOS per-user temporary Cargo targets
+
+DiskSage now binds cleanup of its own temporary Cargo build targets to the exact producer prefix,
+direct per-user temporary-directory parent, Cargo lock marker, complete open-file/live-CWD evidence,
+content fingerprint, fresh approval, atomic staging, and immutable receipt. Other `/private/var/folders`
+content remains read-only inventory: neither age nor size authorizes deletion, and provider, Photos, VM,
+system, active-process, locked, registered-worktree, and dirty-worktree boundaries remain fail-closed.
