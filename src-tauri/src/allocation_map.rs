@@ -81,9 +81,9 @@ fn classification(path: &Path) -> &'static str {
     } else if contains_component(&components, "Caches") || contains_component(&components, ".cache")
     {
         "cache"
-    } else if path.file_name().is_some_and(|name| {
-        name == std::ffi::OsStr::new("target") || name == std::ffi::OsStr::new("node_modules")
-    }) || contains_component_sequence(&components, &[".cargo", "registry"])
+    } else if contains_component(&components, "target")
+        || contains_component(&components, "node_modules")
+        || contains_component_sequence(&components, &[".cargo", "registry"])
     {
         "generated"
     } else {
@@ -129,6 +129,8 @@ mod unix_bound {
     use std::mem::MaybeUninit;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    const MAX_OPEN_DIRECTORY_DEPTH: usize = 64;
 
     #[cfg(target_os = "linux")]
     unsafe fn errno_location() -> *mut libc::c_int {
@@ -292,6 +294,32 @@ mod unix_bound {
         }
     }
 
+    struct DirectoryFrame {
+        directory: OwnedFd,
+        children: Vec<OsString>,
+        next_child: usize,
+    }
+
+    fn directory_frame(
+        directory: OwnedFd,
+        remaining_entries: u64,
+        started: Instant,
+        max_duration: Duration,
+    ) -> Result<DirectoryFrame, &'static str> {
+        let iterator = DirectoryNameIterator::from_fd(&directory)?;
+        let children = collect_children_within_budget(
+            iterator,
+            remaining_entries,
+            started,
+            max_duration,
+        )?;
+        Ok(DirectoryFrame {
+            directory,
+            children,
+            next_child: 0,
+        })
+    }
+
     pub(super) fn measure_root_with_resolution_hook<F>(
         root: &Path,
         max_entries: u64,
@@ -336,62 +364,83 @@ mod unix_bound {
         let mut stop_reason = None;
         let mut stack = Vec::new();
         if is_directory(&root_stat) {
-            stack.push(root_fd);
+            match directory_frame(
+                root_fd,
+                max_entries.saturating_sub(visited_entries),
+                started,
+                max_duration,
+            ) {
+                Ok(frame) => stack.push(frame),
+                Err(reason) => stop_reason = Some(reason),
+            }
         }
 
-        'scan: while let Some(directory) = stack.pop() {
+        'scan: while stop_reason.is_none() && !stack.is_empty() {
             if started.elapsed() >= max_duration {
                 stop_reason = Some("duration-limit-reached");
                 break;
             }
-            let remaining_entries = max_entries.saturating_sub(visited_entries);
-            let iterator = match DirectoryNameIterator::from_fd(&directory) {
-                Ok(iterator) => iterator,
-                Err(reason) => {
-                    stop_reason = Some(reason);
-                    break;
-                }
-            };
-            let children = match collect_children_within_budget(
-                iterator,
-                remaining_entries,
-                started,
-                max_duration,
-            ) {
-                Ok(children) => children,
-                Err(reason) => {
-                    stop_reason = Some(reason);
-                    break;
-                }
-            };
+            if stack
+                .last()
+                .is_some_and(|frame| frame.next_child >= frame.children.len())
+            {
+                stack.pop();
+                continue;
+            }
+            if visited_entries >= max_entries {
+                stop_reason = Some("entry-limit-reached");
+                break;
+            }
 
-            for name in children.into_iter().rev() {
-                if started.elapsed() >= max_duration {
-                    stop_reason = Some("duration-limit-reached");
-                    break 'scan;
-                }
-                let child_stat = match stat_child(&directory, &name) {
+            let (name, child_stat) = {
+                let frame = stack.last_mut().expect("non-empty traversal stack");
+                let name = frame.children[frame.next_child].clone();
+                frame.next_child += 1;
+                let stat = match stat_child(&frame.directory, &name) {
                     Ok(stat) => stat,
                     Err(reason) => {
                         stop_reason = Some(reason);
                         break 'scan;
                     }
                 };
-                if child_stat.st_dev as u64 != device {
-                    continue;
-                }
-                visited_entries = visited_entries.saturating_add(1);
-                if allocated_identities.insert(stat_identity(&child_stat)) {
-                    allocated_total = allocated_total.saturating_add(allocated_bytes(&child_stat));
-                }
-                if is_directory(&child_stat) {
-                    match open_child_directory(&directory, &name, &child_stat) {
-                        Ok(child) => stack.push(child),
-                        Err(reason) => {
-                            stop_reason = Some(reason);
-                            break 'scan;
-                        }
+                (name, stat)
+            };
+
+            if child_stat.st_dev as u64 != device {
+                continue;
+            }
+            visited_entries = visited_entries.saturating_add(1);
+            if allocated_identities.insert(stat_identity(&child_stat)) {
+                allocated_total = allocated_total.saturating_add(allocated_bytes(&child_stat));
+            }
+            if !is_directory(&child_stat) {
+                continue;
+            }
+            if stack.len() >= MAX_OPEN_DIRECTORY_DEPTH {
+                stop_reason = Some("descriptor-depth-limit-reached");
+                break;
+            }
+
+            let child_directory = {
+                let frame = stack.last().expect("non-empty traversal stack");
+                match open_child_directory(&frame.directory, &name, &child_stat) {
+                    Ok(child) => child,
+                    Err(reason) => {
+                        stop_reason = Some(reason);
+                        break;
                     }
+                }
+            };
+            match directory_frame(
+                child_directory,
+                max_entries.saturating_sub(visited_entries),
+                started,
+                max_duration,
+            ) {
+                Ok(frame) => stack.push(frame),
+                Err(reason) => {
+                    stop_reason = Some(reason);
+                    break;
                 }
             }
         }
