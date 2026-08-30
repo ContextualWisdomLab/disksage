@@ -21,6 +21,21 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{flag} 값을 지정하세요."))
 }
 
+fn output_requires_failure_exit(output: &serde_json::Value) -> bool {
+    let result = output.get("result");
+    result
+        .and_then(|value| value.get("execution_succeeded"))
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+        || result
+            .and_then(|value| value.get("verification_complete"))
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        || output
+            .get("result_record_error")
+            .is_some_and(|error| !error.is_null())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["--help"] || args == ["-h"] {
@@ -110,12 +125,7 @@ fn main() {
     match result {
         Ok(output) => {
             println!("{}", serde_json::to_string_pretty(&output).unwrap());
-            if output
-                .get("result")
-                .and_then(|result| result.get("execution_succeeded"))
-                .and_then(serde_json::Value::as_bool)
-                == Some(false)
-            {
+            if output_requires_failure_exit(&output) {
                 std::process::exit(2);
             }
         }
@@ -123,5 +133,37 @@ fn main() {
             eprintln!("{error}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_execution_with_failed_verification_exits_nonzero() {
+        let output = serde_json::json!({
+            "result": {"execution_succeeded": true, "verification_complete": false},
+            "result_record_error": null,
+        });
+        assert!(output_requires_failure_exit(&output));
+    }
+
+    #[test]
+    fn successful_execution_with_failed_result_persistence_exits_nonzero() {
+        let output = serde_json::json!({
+            "result": {"execution_succeeded": true, "verification_complete": true},
+            "result_record_error": "result-record-create-failed",
+        });
+        assert!(output_requires_failure_exit(&output));
+    }
+
+    #[test]
+    fn fully_verified_and_recorded_execution_keeps_success_exit() {
+        let output = serde_json::json!({
+            "result": {"execution_succeeded": true, "verification_complete": true},
+            "result_record_error": null,
+        });
+        assert!(!output_requires_failure_exit(&output));
     }
 }
