@@ -614,7 +614,6 @@ where
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
-    use std::path::PathBuf;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
         GeneratedCacheActivityEvidence {
@@ -660,8 +659,11 @@ mod tests {
                 .blockers
                 .contains(&"process-active".into()));
         }
-        let root = PathBuf::from("/private/tmp/disksage-generated-cache-test-dirty");
-        std::fs::create_dir_all(&root).unwrap();
+        let root_dir = tempfile::Builder::new()
+            .prefix("disksage-generated-cache-test-dirty-")
+            .tempdir_in(crate::rules::shared_temp_root())
+            .unwrap();
+        let root = root_dir.path().to_path_buf();
         let mut evidence = inactive();
         evidence.git_dirty = true;
         evidence.git_worktree_registered = true;
@@ -670,7 +672,6 @@ mod tests {
         assert!(plan
             .blockers
             .contains(&"temporary-workspace-specialized-executor-required".into()));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
