@@ -145,6 +145,7 @@ pub fn run() {
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
             commands::inspect_deleted_open_files,
+            commands::deleted_open_audit_supported,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,

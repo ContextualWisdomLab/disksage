@@ -199,6 +199,7 @@ export interface DeletedOpenActionPlan {
 
 export const inspectDeletedOpenFiles = () =>
   invoke<DeletedOpenActionPlan>("inspect_deleted_open_files");
+export const deletedOpenAuditSupported = () => invoke<boolean>("deleted_open_audit_supported");
 
 export interface PodmanReclaimPlan {
   schema_kind: "disksage.podman-reclaim-plan";

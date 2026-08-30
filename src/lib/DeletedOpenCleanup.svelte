@@ -5,7 +5,14 @@
   let plan: api.DeletedOpenActionPlan | null = $state(null);
   let busy = $state(false);
   let error = $state("");
+  let supported = $state(false);
   const visibleActionLimit = 25;
+
+  $effect(() => {
+    api.deletedOpenAuditSupported()
+      .then((value) => { supported = value; })
+      .catch(() => { supported = false; });
+  });
 
   async function inspect() {
     if (busy) return;
@@ -22,6 +29,7 @@
   }
 </script>
 
+{#if supported}
 <section aria-labelledby="deleted-open-title">
   <h3 id="deleted-open-title">앱을 닫으면 확보되는 공간</h3>
   <p>이미 삭제된 파일을 앱이 계속 사용 중인지 확인합니다. 앱이나 파일을 강제로 닫지 않습니다.</p>
@@ -67,6 +75,7 @@
     </div>
   {/if}
 </section>
+{/if}
 
 <style>
   section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
