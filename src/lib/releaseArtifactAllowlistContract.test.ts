@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -76,9 +77,16 @@ function extractWorkflowRunScript(job: string, stepName: string): string {
     .join('\n');
 }
 
-/** Create one complete, valid pre-SBOM release artifact tree for verifier execution. */
+/** Create one complete, valid pre-SBOM release artifact tree and checkout fixture. */
 function createCompleteReleaseFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-allowlist-'));
+  const verifierTarget = join(fixtureRoot, '.github/scripts/verify-release-artifacts.sh');
+  mkdirSync(dirname(verifierTarget), { recursive: true });
+  copyFileSync(
+    resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+    verifierTarget,
+  );
+
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
   const bundlePaths = [
     `${platformDirectories.linux}/bundle/deb/disksage.deb`,
