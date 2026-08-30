@@ -59,6 +59,28 @@ mod unix_regressions {
     }
 
     #[test]
+    fn retained_ancestor_names_consume_the_same_entry_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let first = root.join("a");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::write(first.join("inner.bin"), b"inner").unwrap();
+        for name in ["b", "c", "d", "e", "f", "g"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+        }
+
+        let report = measure_root(&root, 8, Duration::from_secs(1)).unwrap();
+
+        assert_eq!(report.stop_reason, Some("entry-limit-reached"));
+        assert!(!report.evidence_complete);
+        assert_eq!(
+            report.visited_entries, 2,
+            "queued sibling names must consume the same global entry budget before descending"
+        );
+    }
+
+    #[test]
     fn cli_entry_budget_is_shared_across_all_requested_roots() {
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("first");
