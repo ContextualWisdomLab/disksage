@@ -23,6 +23,8 @@ pub struct GradleDaemonLogReceipt {
     pub bytes: u64,
     pub removed: bool,
     pub reason: String,
+    /// Audit durability warning emitted only after the filesystem mutation completed.
+    pub audit_warning: Option<String>,
 }
 
 fn daemon_pid(path: &Path) -> Option<u32> {
@@ -199,7 +201,7 @@ pub fn execute_gradle_daemon_logs(
     let root = candidates
         .first()
         .and_then(|candidate| candidate.path.parent()?.parent());
-    for candidate in candidates {
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
         journal(journal_path, candidate, "pending")?;
         let blocker = if root != candidate.path.parent().and_then(Path::parent) {
             Some("gradle-daemon-log-root-mismatch")
@@ -228,6 +230,7 @@ pub fn execute_gradle_daemon_logs(
                         bytes: candidate.bytes,
                         removed: false,
                         reason,
+                        audit_warning: None,
                     });
                     continue;
                 }
@@ -261,15 +264,36 @@ pub fn execute_gradle_daemon_logs(
         } else {
             format!("error:{reason}")
         };
-        journal(journal_path, candidate, &outcome)?;
+        let audit_warning = match journal(journal_path, candidate, &outcome) {
+            Ok(()) => None,
+            Err(error) if removed => Some(error),
+            Err(error) => return Err(error),
+        };
         let receipt = GradleDaemonLogReceipt {
             path: candidate.path.clone(),
             pid: candidate.pid,
             bytes: candidate.bytes,
             removed,
             reason,
+            audit_warning,
         };
         receipts.push(receipt);
+        if receipts
+            .last()
+            .is_some_and(|receipt| receipt.audit_warning.is_some())
+        {
+            receipts.extend(candidates[candidate_index + 1..].iter().map(|pending| {
+                GradleDaemonLogReceipt {
+                    path: pending.path.clone(),
+                    pid: pending.pid,
+                    bytes: pending.bytes,
+                    removed: false,
+                    reason: "skipped-after-audit-durability-failure".into(),
+                    audit_warning: None,
+                }
+            }));
+            break;
+        }
     }
     Ok(receipts)
 }

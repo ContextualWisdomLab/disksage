@@ -2,15 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
-const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+static AUDIT_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -108,9 +110,13 @@ fn hash_reader_bounded<R: Read>(
     hasher: &mut blake3::Hasher,
     hashed_bytes: &mut u64,
     limit: u64,
+    deadline: Option<Instant>,
 ) -> Result<(), String> {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         let read = reader
             .read(&mut buffer)
             .map_err(|_| "generated-cache-file-unreadable".to_string())?;
@@ -151,13 +157,65 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
         .or_else(|| {
-            path.starts_with("/private/tmp")
-                .then_some(RegenerationContract::TemporaryGitWorkspace)
+            #[cfg(unix)]
+            {
+                path.starts_with(crate::rules::shared_temp_root())
+                    .then_some(RegenerationContract::TemporaryGitWorkspace)
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
         })
 }
 
-fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> {
+type TreeObservation = (u64, u64, String, Vec<String>);
+
+#[cfg(unix)]
+fn path_bytes(path: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn path_bytes(path: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.encode_wide().flat_map(u16::to_le_bytes).collect()
+}
+
+#[cfg(unix)]
+fn update_platform_metadata(hasher: &mut blake3::Hasher, metadata: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
+    hasher.update(&metadata.dev().to_le_bytes());
+    hasher.update(&metadata.ino().to_le_bytes());
+    hasher.update(&metadata.mode().to_le_bytes());
+    hasher.update(&metadata.uid().to_le_bytes());
+    hasher.update(&metadata.gid().to_le_bytes());
+    hasher.update(&metadata.mtime().to_le_bytes());
+    hasher.update(&metadata.mtime_nsec().to_le_bytes());
+}
+
+#[cfg(windows)]
+fn update_platform_metadata(hasher: &mut blake3::Hasher, metadata: &std::fs::Metadata) {
+    use std::os::windows::fs::MetadataExt;
+    hasher.update(&metadata.creation_time().to_le_bytes());
+    hasher.update(&metadata.last_write_time().to_le_bytes());
+    hasher.update(&metadata.file_attributes().to_le_bytes());
+    hasher.update(&metadata.file_size().to_le_bytes());
+}
+
+#[cfg(unix)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> Result<u64, String> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(metadata.blocks().saturating_mul(512))
+}
+
+#[cfg(windows)]
+fn allocated_bytes(_metadata: &std::fs::Metadata) -> Result<u64, String> {
+    Err("generated-cache-allocation-evidence-unsupported-platform".into())
+}
+
+fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
@@ -165,7 +223,12 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
     let mut hashed_content_bytes = 0_u64;
     let mut locks = Vec::new();
     let mut hasher = blake3::Hasher::new();
+    // An audit that outlives the approval-validity window cannot produce usable authority.
+    let deadline = Instant::now() + Duration::from_millis(MAX_APPROVAL_AGE_MS);
     while let Some(current) = stack.pop() {
+        if Instant::now() >= deadline {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         if entries >= MAX_ENTRIES {
             return Err("generated-cache-entry-limit".into());
         }
@@ -182,12 +245,13 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
             return Err("generated-cache-special-file-rejected".into());
         }
         entries += 1;
-        bytes = bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        bytes = bytes.saturating_add(allocated_bytes(&metadata)?);
         let relative = current
             .strip_prefix(path)
             .map_err(|_| "generated-cache-relative-path-failed")?;
-        hasher.update(&(relative.as_os_str().as_bytes().len() as u64).to_le_bytes());
-        hasher.update(relative.as_os_str().as_bytes());
+        let relative_bytes = path_bytes(relative.as_os_str());
+        hasher.update(&(relative_bytes.len() as u64).to_le_bytes());
+        hasher.update(&relative_bytes);
         hasher.update(if is_symlink {
             b"symlink"
         } else if metadata.is_dir() {
@@ -195,23 +259,17 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         } else {
             b"file"
         });
-        hasher.update(&metadata.dev().to_le_bytes());
-        hasher.update(&metadata.ino().to_le_bytes());
-        hasher.update(&metadata.mode().to_le_bytes());
-        hasher.update(&metadata.uid().to_le_bytes());
-        hasher.update(&metadata.gid().to_le_bytes());
         hasher.update(&metadata.len().to_le_bytes());
-        hasher.update(&metadata.mtime().to_le_bytes());
-        hasher.update(&metadata.mtime_nsec().to_le_bytes());
+        update_platform_metadata(&mut hasher, &metadata);
         if current.file_name().is_some_and(|name| name == ".lock") {
             locks.push(current.to_string_lossy().into_owned());
         }
         if is_symlink {
             let target = std::fs::read_link(&current)
                 .map_err(|_| "generated-cache-symlink-unreadable".to_string())?;
-            let target_bytes = target.as_os_str().as_bytes();
+            let target_bytes = path_bytes(target.as_os_str());
             hasher.update(&(target_bytes.len() as u64).to_le_bytes());
-            hasher.update(target_bytes);
+            hasher.update(&target_bytes);
         } else if metadata.is_file() {
             estimated_content_bytes = estimated_content_bytes
                 .checked_add(metadata.len())
@@ -226,6 +284,7 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
                 &mut hasher,
                 &mut hashed_content_bytes,
                 MAX_HASHED_CONTENT_BYTES,
+                Some(deadline),
             )?;
         } else {
             let mut children = std::fs::read_dir(&current)
@@ -242,6 +301,39 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         hasher.finalize().to_hex().to_string(),
         locks,
     ))
+}
+
+fn receive_tree_observation(
+    receiver: mpsc::Receiver<Result<TreeObservation, String>>,
+    timeout: Duration,
+) -> Result<TreeObservation, String> {
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| "generated-cache-audit-worker-timeout".to_string())?
+}
+
+/// Isolate filesystem traversal so a blocked kernel read cannot retain mutation authority.
+fn observe_tree(path: &Path) -> Result<TreeObservation, String> {
+    if AUDIT_WORKER_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("generated-cache-audit-worker-busy".into());
+    }
+    let owned_path = path.to_path_buf();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("disksage-generated-cache-audit".into())
+        .spawn(move || {
+            let result = observe_tree_inner(&owned_path);
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            let _ = sender.send(result);
+        })
+        .map_err(|_| {
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            "generated-cache-audit-worker-spawn-failed".to_string()
+        })?;
+    receive_tree_observation(receiver, Duration::from_millis(MAX_APPROVAL_AGE_MS))
 }
 
 pub fn plan_with_evidence(
@@ -344,7 +436,7 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if path.starts_with("/private/tmp") {
+    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
         match bounded_git(
             path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -476,8 +568,8 @@ pub fn stage_and_remove_regenerable_root(
     path: &Path,
     home: &Path,
     now_ms: u64,
+    approval_deadline_ms: u64,
 ) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt;
     if plan.root != path.to_string_lossy()
         || plan.contract
             != regeneration_contract(path, home).ok_or("generated-cache-removal-boundary-denied")?
@@ -494,8 +586,13 @@ pub fn stage_and_remove_regenerable_root(
         ".disksage-generated-cache-staging-{}",
         &plan.plan_fingerprint[..16]
     ));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
+    let mut staging_builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        staging_builder.mode(0o700);
+    }
+    staging_builder
         .create(&staging)
         .map_err(|_| "generated-cache-staging-create-failed")?;
     let staged = staging.join(name);
@@ -525,6 +622,13 @@ pub fn stage_and_remove_regenerable_root(
         {
             return Err("generated-cache-staged-active-use".into());
         }
+        let current_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "generated-cache-clock-unavailable")?
+            .as_millis() as u64;
+        if current_ms > approval_deadline_ms {
+            return Err("generated-cache-approval-expired-before-removal".into());
+        }
         std::fs::remove_dir_all(&staged)
             .map_err(|_| "generated-cache-remove-failed".to_string())?;
         std::fs::remove_dir(&staging)
@@ -539,15 +643,22 @@ pub fn stage_and_remove_regenerable_root(
     Ok(())
 }
 
+fn create_new_private_file(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|_| "generated-cache-receipt-create-failed".to_string())
+}
+
 pub fn write_immutable_receipt(path: &Path, receipt: &GeneratedCacheReceipt) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|_| "generated-cache-receipt-create-failed".to_string())?;
+    let mut file = create_new_private_file(path)?;
     let bytes = serde_json::to_vec_pretty(receipt)
         .map_err(|_| "generated-cache-receipt-encode-failed".to_string())?;
     file.write_all(&bytes)
@@ -571,14 +682,8 @@ where
     F: FnOnce(&Path) -> Result<(), String>,
 {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     validate_execution(plan, approval, fresh, attempted_at_ms)?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(receipt_path)
-        .map_err(|_| "generated-cache-receipt-create-failed".to_string())?;
+    let mut file = create_new_private_file(receipt_path)?;
     let pending = GeneratedCachePendingReceipt {
         schema_version: GENERATED_CACHE_SCHEMA_VERSION,
         plan_fingerprint: plan.plan_fingerprint.clone(),
@@ -614,7 +719,6 @@ where
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
-    use std::path::PathBuf;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
         GeneratedCacheActivityEvidence {
@@ -660,8 +764,11 @@ mod tests {
                 .blockers
                 .contains(&"process-active".into()));
         }
-        let root = PathBuf::from("/private/tmp/disksage-generated-cache-test-dirty");
-        std::fs::create_dir_all(&root).unwrap();
+        let root_dir = tempfile::Builder::new()
+            .prefix("disksage-generated-cache-test-dirty-")
+            .tempdir_in(crate::rules::shared_temp_root())
+            .unwrap();
+        let root = root_dir.path().to_path_buf();
         let mut evidence = inactive();
         evidence.git_dirty = true;
         evidence.git_worktree_registered = true;
@@ -670,7 +777,6 @@ mod tests {
         assert!(plan
             .blockers
             .contains(&"temporary-workspace-specialized-executor-required".into()));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -838,7 +944,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("model.bin"), b"regenerable").unwrap();
         let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
-        stage_and_remove_regenerable_root(&plan, &root, home, 2).unwrap();
+        stage_and_remove_regenerable_root(&plan, &root, home, 2, u64::MAX).unwrap();
         assert!(!root.exists());
         assert!(!home
             .join(".cache")
@@ -855,9 +961,23 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut hashed = 0;
         assert_eq!(
-            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4).unwrap_err(),
+            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4, None).unwrap_err(),
             "generated-cache-content-bound-exceeded"
         );
         assert!(hashed > 4);
+    }
+
+    #[test]
+    fn stalled_audit_worker_fails_closed_without_waiting_for_sender() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = sender.send(Ok((0, 0, String::new(), Vec::new())));
+        });
+        assert_eq!(
+            receive_tree_observation(receiver, Duration::from_millis(1)).unwrap_err(),
+            "generated-cache-audit-worker-timeout"
+        );
+        worker.join().unwrap();
     }
 }

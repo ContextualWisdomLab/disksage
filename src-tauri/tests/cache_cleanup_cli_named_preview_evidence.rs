@@ -53,9 +53,26 @@ fn named_cache_dry_run_publishes_target_manifest_and_active_use_evidence() {
     assert!(target["bytes"].as_u64().is_some_and(|bytes| bytes > 0));
     assert!(target["modified_ms"].as_u64().is_some());
     assert!(target["object_id"].as_str().is_some_and(|value| !value.is_empty()));
-    assert!(target["manifest_fingerprint"]
+
+    let manifest = target["manifest_fingerprint"]
         .as_str()
-        .is_some_and(|value| value.len() == 64));
+        .expect("named-cache preview must publish the destructive-authority manifest");
+    let mut manifest_parts = manifest.split(':');
+    assert_eq!(manifest_parts.next(), Some("v2"));
+    for component_name in ["reviewed root", "relocation-stable tree"] {
+        let digest = manifest_parts
+            .next()
+            .unwrap_or_else(|| panic!("missing {component_name} manifest digest"));
+        assert_eq!(digest.len(), 64, "{component_name} digest must be BLAKE3 hex");
+        assert!(
+            digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{component_name} digest must contain only hexadecimal bytes"
+        );
+    }
+    assert!(
+        manifest_parts.next().is_none(),
+        "authority manifest must not contain unversioned trailing components"
+    );
 
     let active_use = target["active_use"]
         .as_object()
