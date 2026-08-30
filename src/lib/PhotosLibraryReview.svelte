@@ -1,7 +1,11 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { photosApprovalReady, photosSelections } from "./photosLibraryState";
+  import {
+    photosApprovalReady,
+    photosAuthorizationAfterInspectionFailure,
+    photosSelections,
+  } from "./photosLibraryState";
 
   let authorization = $state("checking");
   let inventory: api.PhotosDuplicateInventory | null = $state(null);
@@ -69,6 +73,7 @@
       }
     } catch (reason) {
       if (String(reason).includes("photos-page-checkpoint-mismatch")) inventoryPages = [];
+      authorization = photosAuthorizationAfterInspectionFailure(authorization, reason);
       error = String(reason).includes("photos-authorization-required")
         ? "사진 접근이 해제됐습니다. 사진 앱을 다시 연결한 뒤 확인하세요."
         : "사진을 확인하지 못했습니다. 접근 권한을 확인한 뒤 다시 시도하세요.";
