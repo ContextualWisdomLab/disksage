@@ -60,6 +60,8 @@ pub struct PhotosDuplicateInventory {
     pub near_duplicate_evidence: Option<String>,
     #[serde(default)]
     pub inventory_total_count: Option<u64>,
+    #[serde(default)]
+    pub inventory_page_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,12 +70,21 @@ pub struct PhotosInventoryPage {
     pub authorization: String,
     pub observed_at_ms: u64,
     pub total_count: u64,
+    pub inventory_identity: String,
     pub offset: u64,
     pub next_offset: Option<u64>,
     pub native_completion_observed: bool,
     pub page_duration_ms: u64,
     pub assets: Vec<PhotosAssetEvidence>,
     pub unavailable_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosInventoryCheckpoint {
+    pub next_offset: u64,
+    pub total_count: u64,
+    pub inventory_identity: String,
 }
 
 /// Merge one native-completed PhotoKit page into a resumable read-only checkpoint.
@@ -96,9 +107,11 @@ pub fn merge_inventory_page(
         unavailable_count: 0,
         near_duplicate_evidence: Some("unavailable-without-measured-content-equivalence".into()),
         inventory_total_count: Some(page.total_count),
+        inventory_page_identity: Some(page.inventory_identity.clone()),
     });
     if inventory.authorization != page.authorization
         || inventory.inventory_total_count != Some(page.total_count)
+        || inventory.inventory_page_identity.as_deref() != Some(&page.inventory_identity)
         || inventory.assets.len() as u64 != page.offset
         || page
             .next_offset
@@ -500,15 +513,35 @@ pub async fn inspect_photos_duplicates() -> Result<PhotosDuplicateInventory, Str
 
 #[tauri::command]
 pub async fn inspect_photos_duplicates_page(
-    previous: Option<PhotosDuplicateInventory>,
-) -> Result<PhotosDuplicateInventory, String> {
-    let offset = previous
-        .as_ref()
-        .map_or(0, |value| value.assets.len() as u64);
+    checkpoint: Option<PhotosInventoryCheckpoint>,
+) -> Result<PhotosInventoryPage, String> {
+    let offset = checkpoint.as_ref().map_or(0, |value| value.next_offset);
     let page = tauri::async_runtime::spawn_blocking(move || native::inventory_page(offset))
         .await
         .map_err(|_| "photos-operation-interrupted".to_string())??;
-    merge_inventory_page(previous, page)
+    if checkpoint.as_ref().is_some_and(|value| {
+        value.total_count != page.total_count
+            || value.inventory_identity != page.inventory_identity
+            || value.next_offset != page.offset
+    }) {
+        return Err("photos-page-checkpoint-mismatch".into());
+    }
+    Ok(page)
+}
+
+#[tauri::command]
+pub fn finalize_photos_duplicate_inventory(
+    pages: Vec<PhotosInventoryPage>,
+) -> Result<PhotosDuplicateInventory, String> {
+    let mut inventory = None;
+    for page in pages {
+        inventory = Some(merge_inventory_page(inventory, page)?);
+    }
+    let inventory = inventory.ok_or("photos-page-checkpoint-empty")?;
+    if inventory.inventory_truncated {
+        return Err("photos-page-checkpoint-incomplete".into());
+    }
+    Ok(inventory)
 }
 
 #[tauri::command]
@@ -634,6 +667,7 @@ mod tests {
                 "unavailable-without-measured-content-equivalence".into(),
             ),
             inventory_total_count: Some(2),
+            inventory_page_identity: Some("stable-library".into()),
         }
     }
 
@@ -642,6 +676,7 @@ mod tests {
             authorization: "authorized".into(),
             observed_at_ms: 100 + offset,
             total_count: total,
+            inventory_identity: "stable-library".into(),
             offset,
             next_offset: (offset + 1 < total).then_some(offset + 1),
             native_completion_observed: true,
@@ -676,6 +711,17 @@ mod tests {
         assert_eq!(
             merge_inventory_page(Some(first), incomplete).unwrap_err(),
             "photos-page-native-completion-required"
+        );
+    }
+
+    #[test]
+    fn equal_count_library_replacement_invalidates_checkpoint_identity() {
+        let first = merge_inventory_page(None, page(0, 2, member("keep", 10))).unwrap();
+        let mut replaced = page(1, 2, member("replacement", 8));
+        replaced.inventory_identity = "changed-library".into();
+        assert_eq!(
+            merge_inventory_page(Some(first), replaced).unwrap_err(),
+            "photos-page-checkpoint-mismatch"
         );
     }
 

@@ -4,7 +4,7 @@ import type { PhotosDuplicateInventory } from "./api";
 
 const inventory = {
   exact_groups: [{ content_sha256: "digest", members: [], keeper_required: true, automatic_delete_allowed: false }],
-} as PhotosDuplicateInventory;
+} as unknown as PhotosDuplicateInventory;
 
 describe("Apple Photos review state", () => {
   it("requires one explicit keeper and exact fresh approval inputs", () => {

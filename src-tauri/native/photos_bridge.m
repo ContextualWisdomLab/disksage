@@ -29,6 +29,18 @@ static NSString *DSHex(const unsigned char *bytes, NSUInteger length) {
   return hex;
 }
 
+static NSString *DSInventoryIdentity(PHFetchResult<PHAsset *> *fetch) {
+  CC_SHA256_CTX context; CC_SHA256_Init(&context);
+  for (PHAsset *asset in fetch) {
+    NSData *identifier = [asset.localIdentifier dataUsingEncoding:NSUTF8StringEncoding];
+    uint64_t length = CFSwapInt64HostToLittle((uint64_t)identifier.length);
+    CC_SHA256_Update(&context, &length, sizeof(length));
+    CC_SHA256_Update(&context, identifier.bytes, (CC_LONG)identifier.length);
+  }
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(digest, &context);
+  return DSHex(digest, sizeof(digest));
+}
+
 static NSString *DSMetadataFingerprint(PHAsset *asset, PHAssetResource *resource) {
   NSString *text = [NSString stringWithFormat:@"%@\n%ld\n%ld\n%.0f\n%.0f\n%@\n%@\n%ld",
                     asset.localIdentifier, (long)asset.pixelWidth, (long)asset.pixelHeight,
@@ -205,11 +217,13 @@ char *ds_photos_inventory_page(uint64_t offset, uint64_t maxBytes) {
   if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited)
     return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @((uint64_t)(NSDate.date.timeIntervalSince1970 * 1000)),
                      @"total_count": @0, @"offset": @(offset), @"next_offset": [NSNull null],
+                     @"inventory_identity": @"",
                      @"native_completion_observed": @YES, @"page_duration_ms": @0,
                      @"assets": @[], @"unavailable_count": @0 });
   PHFetchOptions *options = [PHFetchOptions new];
   options.predicate = [NSPredicate predicateWithFormat:@"mediaType == %d", PHAssetMediaTypeImage];
   PHFetchResult<PHAsset *> *fetch = [PHAsset fetchAssetsWithOptions:options];
+  NSString *inventoryIdentity = DSInventoryIdentity(fetch);
   uint64_t total = fetch.count;
   uint64_t started = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
   NSArray *assets = @[];
@@ -223,6 +237,7 @@ char *ds_photos_inventory_page(uint64_t offset, uint64_t maxBytes) {
   NSNumber *next = offset + assets.count < total ? @(offset + assets.count) : nil;
   return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @(completed),
                    @"total_count": @(total), @"offset": @(offset),
+                   @"inventory_identity": inventoryIdentity,
                    @"next_offset": next ?: [NSNull null], @"native_completion_observed": @YES,
                    @"page_duration_ms": @(completed - started), @"assets": assets,
                    @"unavailable_count": @(unavailable) });
