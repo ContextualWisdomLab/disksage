@@ -136,6 +136,10 @@ pub fn measure_root(
     if root_metadata.file_type().is_symlink() {
         return Err("allocation-map-root-symlink-rejected".into());
     }
+    // Classification must describe the location the kernel actually resolves. A textual
+    // `component/..` pair is not equivalent when `component` is an intermediate symlink.
+    let resolved_root = std::fs::canonicalize(root)
+        .map_err(|_| "allocation-map-root-unavailable".to_string())?;
     let device = root_metadata.dev();
     let started = Instant::now();
     let mut stack = vec![root.to_path_buf()];
@@ -197,7 +201,7 @@ pub fn measure_root(
         root: root.to_string_lossy().into_owned(),
         allocated_bytes,
         visited_entries,
-        classification: classification(root),
+        classification: classification(&resolved_root),
         evidence_complete: stop_reason.is_none(),
         stop_reason,
     })
@@ -265,6 +269,25 @@ mod tests {
         ] {
             assert_eq!(classification(Path::new(ordinary)), "user-or-application-data");
         }
+    }
+
+    #[test]
+    fn classifies_the_resolved_root_after_intermediate_symlink_parent_traversal() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Library");
+        let actual_parent = temp.path().join("ordinary");
+        let symlink_target = actual_parent.join("nested");
+        let actual_root = actual_parent.join("Mobile Documents");
+        std::fs::create_dir(&library).unwrap();
+        std::fs::create_dir_all(&symlink_target).unwrap();
+        std::fs::create_dir(&actual_root).unwrap();
+        symlink(&symlink_target, library.join("link")).unwrap();
+
+        let selected_root = library.join("link/../Mobile Documents");
+        assert_eq!(classification(&selected_root), "provider-managed");
+        let report = measure_root(&selected_root, 1, Duration::from_secs(1)).unwrap();
+        assert_ne!(report.classification, "provider-managed");
     }
 
     #[test]
