@@ -17,6 +17,10 @@ placeholders are rejected before decoding so an audit cannot hydrate them. Execu
 the same report, checks active use and exact filesystem identity, then uses DiskSage's existing atomic
 OS-Trash boundary and append-only journal. There is no permanent-delete mode.
 
+Apple Photos libraries use the separate PhotoKit boundary documented in ADR 0023. PhotoKit asset
+identifiers and resource reads replace package paths; network access is disabled during evidence
+collection, so an iCloud-only original is neither downloaded nor admitted to a deletion plan.
+
 ## References
 
 pHash. (2010). *pHash design*. https://www.phash.org/docs/design.html

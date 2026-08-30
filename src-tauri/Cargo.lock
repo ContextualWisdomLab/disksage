@@ -992,6 +992,7 @@ dependencies = [
  "base64 0.23.1",
  "blake3",
  "calamine",
+ "cc",
  "csv",
  "embed_plist",
  "fs4",

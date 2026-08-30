@@ -5,6 +5,7 @@
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import ExactPhotoReview from "./ExactPhotoReview.svelte";
+  import PhotosLibraryReview from "./PhotosLibraryReview.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -137,6 +138,7 @@
   {#if groups.length > 0 && scannedRoot}
     <ExactPhotoReview {scannedRoot} duplicateGroups={groups} />
   {/if}
+  <PhotosLibraryReview />
 
   {#if results.length > 0}
     <p>{results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 — 복원 가능합니다.</p>
