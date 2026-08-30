@@ -80,13 +80,13 @@ pub fn review_selection(
     })
 }
 
-fn review_current_selection(
+fn refresh_current_selection(
     root: &Path,
     requests: &[DevArtifact],
-    reviewed_at_ms: u64,
-) -> Result<DevArtifactApproval, String> {
+    observed_at_ms: u64,
+) -> Result<Vec<DevArtifact>, String> {
     let requested_fingerprint = selection_fingerprint(root, requests)?;
-    let current = dev_artifacts::find_artifacts(root, 0, reviewed_at_ms);
+    let current = dev_artifacts::find_artifacts(root, 0, observed_at_ms);
     let mut refreshed = Vec::with_capacity(requests.len());
     for request in requests {
         let Some(candidate) = current.iter().find(|candidate| candidate.path == request.path) else {
@@ -98,7 +98,28 @@ fn review_current_selection(
     if refreshed_fingerprint != requested_fingerprint {
         return Err("development-artifact-selection-stale".into());
     }
-    review_selection(root, &refreshed, reviewed_at_ms)
+    Ok(refreshed)
+}
+
+#[cfg(test)]
+fn review_current_selection_at(
+    root: &Path,
+    requests: &[DevArtifact],
+    observed_at_ms: u64,
+    issued_at_ms: u64,
+) -> Result<DevArtifactApproval, String> {
+    let refreshed = refresh_current_selection(root, requests, observed_at_ms)?;
+    review_selection(root, &refreshed, issued_at_ms)
+}
+
+fn review_current_selection(
+    root: &Path,
+    requests: &[DevArtifact],
+) -> Result<DevArtifactApproval, String> {
+    let observed_at_ms = crate::commands::now_ms();
+    let refreshed = refresh_current_selection(root, requests, observed_at_ms)?;
+    let issued_at_ms = crate::commands::now_ms();
+    review_selection(root, &refreshed, issued_at_ms)
 }
 
 fn rejection(requests: &[DevArtifact], code: &str) -> Vec<DevArtifactCleanResult> {
@@ -174,7 +195,7 @@ pub fn review_dev_artifacts(
     root: String,
     artifacts: Vec<DevArtifact>,
 ) -> Result<DevArtifactApproval, String> {
-    review_current_selection(Path::new(&root), &artifacts, crate::commands::now_ms())
+    review_current_selection(Path::new(&root), &artifacts)
 }
 
 #[cfg(not(coverage))]
