@@ -14,6 +14,7 @@ fn clear_report() -> ProviderGlobalSyncReport {
     ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider: CloudProvider::Onedrive,
+        observed_at_ms: 42,
         evidence_kind: "fileproviderctl-global-dump".into(),
         evidence_complete: true,
         state: ProviderGlobalSyncState::Clear,

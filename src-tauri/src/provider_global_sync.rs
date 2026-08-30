@@ -249,8 +249,7 @@ fn lock_checkpoint_transaction(
     let file = options
         .open(path)
         .map_err(|_| "provider-global-sync-checkpoint-lock-open-failed")?;
-    FileExt::lock(&file)
-        .map_err(|_| "provider-global-sync-checkpoint-lock-failed")?;
+    FileExt::lock(&file).map_err(|_| "provider-global-sync-checkpoint-lock-failed")?;
     Ok(file)
 }
 
@@ -300,7 +299,19 @@ fn load_checkpoint_document(
     .map_err(|_| "provider-global-sync-checkpoint-decode-failed")?;
     validate_probe_checkpoint(&document.checkpoint)?;
     validate_report_evidence(&document.report)?;
-    if document.checkpoint.provider != provider || document.report.provider != provider {
+    let mut report_reason_codes = document.report.blockers.clone();
+    report_reason_codes.sort();
+    report_reason_codes.dedup();
+    let report_keep_local = !(document.report.evidence_complete
+        && document.report.state == ProviderGlobalSyncState::Clear);
+    if document.checkpoint.provider != provider
+        || document.report.provider != provider
+        || document.checkpoint.observed_at_ms != document.report.observed_at_ms
+        || document.checkpoint.evidence_complete != document.report.evidence_complete
+        || document.checkpoint.state != document.report.state
+        || document.checkpoint.keep_local != report_keep_local
+        || document.checkpoint.audit_reason_codes != report_reason_codes
+    {
         return Err("provider-global-sync-checkpoint-provider-invalid".into());
     }
     Ok(Some(document))
@@ -381,8 +392,9 @@ where
         };
     if !force {
         if let Some(previous) = previous.as_ref() {
-            if !previous.checkpoint.keep_local
-                || !automatic_probe_due(&previous.checkpoint, now_ms)?
+            // A blocked result is safe to cache until its retry deadline. A clear result is only
+            // an observation, never durable authorization: every later admission must re-probe.
+            if previous.checkpoint.keep_local && !automatic_probe_due(&previous.checkpoint, now_ms)?
             {
                 return Ok(previous.report.clone());
             }
@@ -1345,7 +1357,9 @@ sync engine state:
             false,
             || {
                 probes.set(probes.get() + 1);
-                Ok(parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap())
+                let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+                report.observed_at_ms = 301_000;
+                Ok(report)
             },
         )
         .unwrap();
@@ -1353,17 +1367,21 @@ sync engine state:
         assert_eq!(fresh.state, ProviderGlobalSyncState::Clear);
         assert_eq!(probes.get(), 2);
 
-        let stopped = inspect_new_copy_admission_checkpointed_with(
+        let rechecked = inspect_new_copy_admission_checkpointed_with(
             CloudProvider::Onedrive,
             directory.path(),
-            u64::MAX,
+            302_000,
             false,
-            || -> Result<ProviderGlobalSyncReport, String> {
-                panic!("a complete clear checkpoint stops automatic polling")
+            || {
+                probes.set(probes.get() + 1);
+                let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+                report.observed_at_ms = 302_000;
+                Ok(report)
             },
         )
         .unwrap();
-        assert_eq!(stopped, fresh);
+        assert_eq!(rechecked.state, ProviderGlobalSyncState::Clear);
+        assert_eq!(probes.get(), 3);
     }
 
     #[test]
@@ -1437,6 +1455,22 @@ sync engine state:
                 .file_name()
                 .to_string_lossy()
                 .contains(".invalid-")));
+    }
+
+    #[test]
+    fn checkpoint_rejects_unbound_report_and_checkpoint_halves() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        report.observed_at_ms = 1_000;
+        let checkpoint = checkpoint_report(&report, 1_000, None).unwrap();
+        let mut document = ProviderCheckpointDocument { checkpoint, report };
+        document.report.observed_at_ms = 2_000;
+        persist_checkpoint_document(directory.path(), &document).unwrap();
+
+        assert_eq!(
+            load_checkpoint_document(directory.path(), CloudProvider::Onedrive).unwrap_err(),
+            "provider-global-sync-checkpoint-provider-invalid"
+        );
     }
 
     #[test]
