@@ -188,6 +188,7 @@ pub fn clean_dev_artifacts_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn artifact(path: &str, fingerprint: &str) -> DevArtifact {
         DevArtifact {
@@ -231,5 +232,27 @@ mod tests {
             &approval,
         );
         assert_eq!(result[0].error, "development-artifact-approval-invalid-or-stale");
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn review_command_rejects_inventory_changed_since_listing() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("fixture");
+        let target = project.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(project.join("Cargo.toml"), b"[package]\nname='fixture'\nversion='0.1.0'").unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(target.join("output.bin"), b"reviewed bytes").unwrap();
+        let listed = dev_artifacts::find_artifacts(temp.path(), 0, u64::MAX);
+        assert_eq!(listed.len(), 1);
+
+        fs::write(target.join("output.bin"), b"changed after listing").unwrap();
+
+        let result = review_dev_artifacts(temp.path().to_string_lossy().into_owned(), listed);
+        assert_eq!(
+            result.unwrap_err(),
+            "development-artifact-selection-stale"
+        );
     }
 }
