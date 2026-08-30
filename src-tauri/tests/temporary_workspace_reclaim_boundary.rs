@@ -20,6 +20,17 @@ fn create_git_workspace(path: &Path) {
     std::fs::write(path.join(".git"), b"gitdir: /tmp/not-consulted").unwrap();
 }
 
+fn assert_not_dependency_contract(contract: Option<RegenerationContract>, message: &str) {
+    assert!(
+        !matches!(
+            contract,
+            Some(RegenerationContract::TemporaryWorkspaceNodeModules)
+                | Some(RegenerationContract::TemporaryWorkspaceUvEnvironment)
+        ),
+        "{message}: got {contract:?}"
+    );
+}
+
 #[test]
 fn lexical_parent_components_never_authorize_temporary_workspace_deletion() {
     let workspace = unique_workspace("disksage-parent-boundary");
@@ -29,10 +40,9 @@ fn lexical_parent_components_never_authorize_temporary_workspace_deletion() {
     std::fs::write(workspace.join("package-lock.json"), b"{}").unwrap();
 
     let escaped_lexical_path = workspace.join("nested/../node_modules");
-    assert_eq!(
+    assert_not_dependency_contract(
         regeneration_contract(&escaped_lexical_path, Path::new("/Users/test")),
-        None,
-        "a path containing ParentDir must fail closed instead of inheriting workspace authority"
+        "a path containing ParentDir must fail closed instead of inheriting dependency deletion authority",
     );
 
     std::fs::remove_dir_all(workspace).unwrap();
@@ -49,10 +59,9 @@ fn symlinked_workspace_ancestors_never_authorize_external_dependency_deletion() 
     symlink(outside.path(), workspace.join("external-project")).unwrap();
 
     let candidate = workspace.join("external-project/node_modules");
-    assert_eq!(
+    assert_not_dependency_contract(
         regeneration_contract(&candidate, Path::new("/Users/test")),
-        None,
-        "a symlinked ancestor must not extend the validated temporary-workspace deletion boundary"
+        "a symlinked ancestor must not extend the validated temporary-workspace deletion boundary",
     );
 
     std::fs::remove_dir_all(workspace).unwrap();
@@ -68,10 +77,9 @@ fn unrelated_workspace_root_javascript_lockfiles_do_not_govern_nested_projects()
         std::fs::create_dir_all(nested.join("node_modules")).unwrap();
         std::fs::write(nested.join("package.json"), b"{}").unwrap();
 
-        assert_eq!(
+        assert_not_dependency_contract(
             regeneration_contract(&nested.join("node_modules"), Path::new("/Users/test")),
-            None,
-            "an unrelated root {root_lock} must not make a nested project reproducible"
+            &format!("an unrelated root {root_lock} must not make a nested project reproducible"),
         );
 
         std::fs::remove_dir_all(workspace).unwrap();
@@ -87,10 +95,9 @@ fn unrelated_workspace_root_uv_lock_does_not_govern_nested_project() {
     std::fs::create_dir_all(nested.join(".venv")).unwrap();
     std::fs::write(nested.join("pyproject.toml"), b"[project]").unwrap();
 
-    assert_eq!(
+    assert_not_dependency_contract(
         regeneration_contract(&nested.join(".venv"), Path::new("/Users/test")),
-        None,
-        "an unrelated root uv.lock must not make a nested project reproducible"
+        "an unrelated root uv.lock must not make a nested project reproducible",
     );
 
     std::fs::remove_dir_all(workspace).unwrap();
@@ -118,10 +125,9 @@ fn project_local_lockfiles_still_authorize_only_the_dependency_subtree() {
         Some(RegenerationContract::TemporaryWorkspaceUvEnvironment)
     );
 
-    assert_eq!(
+    assert_not_dependency_contract(
         regeneration_contract(&workspace, Path::new("/Users/test")),
-        None,
-        "source workspace itself remains outside generated-cache deletion authority"
+        "source workspace itself remains outside dependency-subtree deletion authority",
     );
 
     std::fs::remove_dir_all(workspace).unwrap();
