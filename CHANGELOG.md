@@ -14,7 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add a bounded, read-only deleted-open file audit that omits pathnames, deduplicates observed file
   identities, leaves physical reclaim unknown, and directs people to close the listed apps normally
-  before rescanning; it never terminates a process or mutates a file.
+  before rescanning; it never terminates an observed app or file holder and only terminates its
+  auxiliary `lsof` process group on timeout, without mutating a file.
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
