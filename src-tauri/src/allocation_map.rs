@@ -363,6 +363,7 @@ mod unix_bound {
         allocated_total = allocated_total.saturating_add(allocated_bytes(&root_stat));
         let mut stop_reason = None;
         let mut stack = Vec::new();
+        let mut retained_names = 0_u64;
         if is_directory(&root_stat) {
             match directory_frame(
                 root_fd,
@@ -370,7 +371,10 @@ mod unix_bound {
                 started,
                 max_duration,
             ) {
-                Ok(frame) => stack.push(frame),
+                Ok(frame) => {
+                    retained_names = u64::try_from(frame.children.len()).unwrap_or(u64::MAX);
+                    stack.push(frame);
+                }
                 Err(reason) => stop_reason = Some(reason),
             }
         }
@@ -396,6 +400,7 @@ mod unix_bound {
                 let frame = stack.last_mut().expect("non-empty traversal stack");
                 let name = frame.children[frame.next_child].clone();
                 frame.next_child += 1;
+                retained_names = retained_names.saturating_sub(1);
                 let stat = match stat_child(&frame.directory, &name) {
                     Ok(stat) => stat,
                     Err(reason) => {
@@ -431,13 +436,20 @@ mod unix_bound {
                     }
                 }
             };
+            let remaining_entries = max_entries
+                .saturating_sub(visited_entries)
+                .saturating_sub(retained_names);
             match directory_frame(
                 child_directory,
-                max_entries.saturating_sub(visited_entries),
+                remaining_entries,
                 started,
                 max_duration,
             ) {
-                Ok(frame) => stack.push(frame),
+                Ok(frame) => {
+                    retained_names = retained_names
+                        .saturating_add(u64::try_from(frame.children.len()).unwrap_or(u64::MAX));
+                    stack.push(frame);
+                }
                 Err(reason) => {
                     stop_reason = Some(reason);
                     break;
