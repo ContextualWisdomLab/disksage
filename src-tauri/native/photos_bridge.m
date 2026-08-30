@@ -3,7 +3,6 @@
 #import <Photos/Photos.h>
 
 static const NSUInteger DSMaxChunkBytes = 8 * 1024 * 1024;
-static const int64_t DSResourceTimeoutNanos = 30LL * NSEC_PER_SEC;
 static const int64_t DSAuthorizationTimeoutNanos = 5LL * 60LL * NSEC_PER_SEC;
 
 static char *DSJSON(id value) {
@@ -93,7 +92,7 @@ static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
   __block uint64_t byteCount = 0;
   __block BOOL exceeded = NO;
   __block NSError *completionError = nil;
-  PHAssetResourceDataRequestID requestID = [[PHAssetResourceManager defaultManager]
+  [[PHAssetResourceManager defaultManager]
       requestDataForAssetResource:resource
       options:options
       dataReceivedHandler:^(NSData *data) {
@@ -108,11 +107,7 @@ static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
         completionError = error;
         dispatch_semaphore_signal(done);
       }];
-  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, DSResourceTimeoutNanos)) != 0) {
-    [[PHAssetResourceManager defaultManager] cancelDataRequest:requestID];
-    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC));
-    return @{ @"state": @"unavailable", @"blocker": @"local-content-read-timed-out" };
-  }
+  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
   if (completionError) {
     return @{ @"state": @"icloud-only-or-unavailable", @"blocker": @"download-original-in-photos" };
   }
