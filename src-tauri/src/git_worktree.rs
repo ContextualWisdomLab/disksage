@@ -1682,7 +1682,9 @@ pub(crate) fn active_use_evidence_with_command_path(
                 error: Some("active-use-pid-invalid".into()),
             };
         };
-        if !is_external_process(pid, result.child_pid, std::process::id()) {
+        // The lsof probe itself is noise, but another task in this DiskSage
+        // process may legitimately hold the reviewed tree open.
+        if pid == result.child_pid {
             continue;
         }
         pids.insert(pid);
