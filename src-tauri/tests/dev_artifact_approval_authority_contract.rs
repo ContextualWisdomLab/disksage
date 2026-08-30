@@ -56,3 +56,12 @@ fn execute_flag_alone_cannot_authorize_development_artifact_cleanup() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn legacy_boolean_dev_artifact_cleanup_contract_is_absent() {
+    let commands_source = include_str!("../src/commands.rs");
+    assert!(
+        !commands_source.contains("pub fn clean_dev_artifacts("),
+        "the retired boolean-approved cleanup handler must not remain beside the selection-bound approval route"
+    );
+}
