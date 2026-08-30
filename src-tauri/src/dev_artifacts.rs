@@ -629,6 +629,22 @@ mod tests {
     }
 
     #[test]
+    fn zero_allocation_artifact_is_not_offered_for_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("empty-app");
+        fs::create_dir_all(project.join("node_modules")).unwrap();
+        fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(project.join("package-lock.json"), b"{}").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "zero-allocation generated roots cannot be executable cleanup candidates"
+        );
+    }
+
+    #[test]
     fn reports_age_without_using_it_as_cleanup_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
