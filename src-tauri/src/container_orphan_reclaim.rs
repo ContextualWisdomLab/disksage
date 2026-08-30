@@ -1381,7 +1381,10 @@ pub fn execute_container_orphan_prune(
         stdout: output.stdout,
         stderr: output.stderr,
         output_truncated: false,
-        executed: true,
+        // A non-zero exact-delete status means the runtime refused the mutation (for example,
+        // because a previously stopped container restarted). Keep the attempted command and
+        // status in the receipt, but never report the reclaim as executed.
+        executed: output.status_code == 0,
         executed_at_ms,
         before_available_bytes,
         after_available_bytes,
