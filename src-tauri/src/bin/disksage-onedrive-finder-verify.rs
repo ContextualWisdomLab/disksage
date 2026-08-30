@@ -275,6 +275,7 @@ mod tests {
             receipt_id: "a".repeat(64),
             batch_fingerprint: "b".repeat(64),
             approval_id: "c".repeat(64),
+            approval_evidence_sha256: "f".repeat(64),
             requested_at_ms: 1,
             selected_count: 1,
             total_allocated_bytes_before: 4096,
