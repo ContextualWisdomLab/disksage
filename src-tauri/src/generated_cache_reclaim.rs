@@ -426,6 +426,8 @@ fn bounded_git(path: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Collect path-free process evidence and bounded Git ownership evidence before planning.
 pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedCachePlan, String> {
+    let contract = regeneration_contract(path, home)
+        .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
     let active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
     let mut evidence = GeneratedCacheActivityEvidence {
         evidence_complete: active.evidence_complete,
