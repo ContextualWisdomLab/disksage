@@ -269,8 +269,9 @@ fn observe_tree(path: &Path) -> Result<TreeObservation, String> {
     std::thread::Builder::new()
         .name("disksage-generated-cache-audit".into())
         .spawn(move || {
-            let _ = sender.send(observe_tree_inner(&owned_path));
+            let result = observe_tree_inner(&owned_path);
             AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            let _ = sender.send(result);
         })
         .map_err(|_| {
             AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
