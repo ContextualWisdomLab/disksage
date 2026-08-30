@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "./api";
+  import * as devArtifactApi from "./devArtifactApi";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
@@ -16,6 +17,8 @@
   let busy = $state(false);
   let loadError = $state("");
   let cacheRetryMessage = $state("");
+  let devArtifactApproval: devArtifactApi.DevArtifactApproval | null = $state(null);
+  let devArtifactConfirmationPhrase = $state("");
   let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
   let podmanBusy = $state(false);
   let podmanError = $state("");
@@ -36,8 +39,14 @@
     }
   }
 
+  function invalidateDevArtifactApproval() {
+    devArtifactApproval = null;
+    devArtifactConfirmationPhrase = "";
+  }
+
   async function load() {
     loadError = "";
+    invalidateDevArtifactApproval();
     try {
       caches = await api.listCacheCandidates();
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
@@ -147,6 +156,17 @@
     return next;
   }
 
+  function toggleArtifact(path: string) {
+    selected = toggle(selected, path);
+    invalidateDevArtifactApproval();
+  }
+
+  function selectedDevArtifacts(): api.DevArtifact[] {
+    return artifacts.filter(
+      (artifact) => selected.has(artifact.path) && artifact.scan_complete && artifact.skipped === 0,
+    );
+  }
+
   let totalSelected = $derived(
     artifacts
       .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
@@ -157,12 +177,37 @@
     artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
+  async function reviewDevArtifactSelection() {
+    const selectedArtifacts = selectedDevArtifacts();
+    if (busy || selectedArtifacts.length === 0 || !scannedRoot) return;
+    busy = true;
+    loadError = "";
+    invalidateDevArtifactApproval();
+    try {
+      devArtifactApproval = await devArtifactApi.reviewDevArtifacts(scannedRoot, selectedArtifacts);
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function devArtifactExecutionReady(): boolean {
+    return !busy
+      && devArtifactApproval !== null
+      && devArtifactConfirmationPhrase.trim() === devArtifactApproval.exact_phrase
+      && selectionCount > 0;
+  }
+
   async function executeClean() {
-    // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const selectedArtifacts = artifacts.filter(
-      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
-    );
-    if (selectedArtifacts.length === 0 || !scannedRoot) return;
+    const selectedArtifacts = selectedDevArtifacts();
+    const approval = devArtifactApproval;
+    if (
+      selectedArtifacts.length === 0
+      || !scannedRoot
+      || approval === null
+      || devArtifactConfirmationPhrase.trim() !== approval.exact_phrase
+    ) return;
     const summary = selectedArtifacts.map(
       (a) => `${a.path} (로컬 ${fmtBytes(a.allocated_bytes)}, ${a.files}개)`,
     );
@@ -170,15 +215,22 @@
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (현재 로컬 사용량 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
+        "\n\n입력한 승인 문구와 선택 지문을 백엔드에서 다시 검증합니다. 휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
 
     busy = true;
     try {
-      results = await api.cleanDevArtifacts(scannedRoot, 0, selectedArtifacts, true);
+      results = await devArtifactApi.cleanDevArtifactsBound(
+        scannedRoot,
+        0,
+        selectedArtifacts,
+        approval,
+        devArtifactConfirmationPhrase.trim(),
+      );
       selected = new Set();
+      invalidateDevArtifactApproval();
       await load();
     } catch (e) {
       loadError = String(e);
@@ -232,7 +284,7 @@
             type="checkbox"
             disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
-            onchange={() => (selected = toggle(selected, a.path))}
+            onchange={() => toggleArtifact(a.path)}
           />
           {a.kind} <em>({a.project})</em>
           <span class="size">
@@ -253,8 +305,28 @@
   </ul>
 
   <div class="actions">
-    <button onclick={executeClean} disabled={busy || selectionCount === 0}>
-      {busy ? "정리 중…" : `선택 항목 휴지통으로 (로컬 ${fmtBytes(totalSelected)})`}
+    <button onclick={reviewDevArtifactSelection} disabled={busy || selectionCount === 0}>
+      {busy ? "검토 중…" : `선택 ${selectionCount}개 검토 및 승인 문구 생성`}
+    </button>
+    {#if devArtifactApproval}
+      <div class="typed-approval">
+        <p class="notice" role="status">
+          아래 승인 문구는 현재 선택 지문에만 유효합니다. 선택을 바꾸거나 새로고침하면 다시 검토해야 합니다.
+        </p>
+        <code>{devArtifactApproval.exact_phrase}</code>
+        <label>
+          정확한 승인 문구 입력
+          <input
+            bind:value={devArtifactConfirmationPhrase}
+            autocomplete="off"
+            spellcheck="false"
+            disabled={busy}
+          />
+        </label>
+      </div>
+    {/if}
+    <button onclick={executeClean} disabled={!devArtifactExecutionReady()}>
+      {busy ? "정리 중…" : `검토된 선택 항목 휴지통으로 (로컬 ${fmtBytes(totalSelected)})`}
     </button>
   </div>
 
@@ -346,6 +418,11 @@
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .actions { display: grid; gap: 0.6rem; }
+  .typed-approval { display: grid; gap: 0.5rem; max-width: 100%; }
+  .typed-approval code { overflow-wrap: anywhere; }
+  .typed-approval label { display: grid; gap: 0.25rem; }
+  .typed-approval input { width: 100%; box-sizing: border-box; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
   .podman-prune { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
   .podman-prune label { display: grid; gap: 0.25rem; }
