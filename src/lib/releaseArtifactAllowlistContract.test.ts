@@ -17,14 +17,23 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
+  'disksage-podman-storage-repair-linux-x86_64',
+  'disksage-photo-similarity-audit-linux-x86_64',
+  'disksage-shared-temp-reclaim-plan-linux-x86_64',
   'disksage-cloud-plan-windows-x86_64.exe',
   'disksage-duplicate-audit-windows-x86_64.exe',
+  'disksage-podman-storage-repair-windows-x86_64.exe',
+  'disksage-photo-similarity-audit-windows-x86_64.exe',
+  'disksage-shared-temp-reclaim-plan-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
   'disksage-cloud-local-eviction-batch-macos-arm64',
   'disksage-icloud-local-eviction-batch-macos-arm64',
   'disksage-cloud-local-inventory-macos-arm64',
   'disksage-onedrive-finder-verify-macos-arm64',
+  'disksage-podman-storage-repair-macos-arm64',
+  'disksage-photo-similarity-audit-macos-arm64',
+  'disksage-shared-temp-reclaim-plan-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 file from the source-controlled repository root. */
