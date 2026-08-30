@@ -662,6 +662,42 @@ mod tests {
     }
 
     #[test]
+    fn hard_links_inside_artifact_count_physical_allocation_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, target.join("payload-copy.bin")).unwrap();
+        let metadata = fs::metadata(&payload).unwrap();
+        let expected = allocated_bytes(&payload, &metadata).unwrap();
+        assert!(expected > 0, "fixture must consume physical allocation");
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].allocated_bytes, expected,
+            "one filesystem object must not be counted once per in-root hard-link name"
+        );
+    }
+
+    #[test]
+    fn external_hard_link_prevents_false_reclaim_offer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, tmp.path().join("cargo-app/payload-retained.bin")).unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "blocks retained by a hard link outside the generated root are not reclaimable"
+        );
+    }
+
+    #[test]
     fn unavailable_provider_root_does_not_discard_other_provider_roots() {
         let tmp = tempfile::tempdir().unwrap();
         let existing = tmp.path().join("provider-existing");
