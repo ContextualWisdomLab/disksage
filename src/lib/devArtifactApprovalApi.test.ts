@@ -60,4 +60,10 @@ describe("development artifact approval API", () => {
       confirmationPhrase: approval.exact_phrase,
     });
   });
+
+  it("treats an approval as current only before its backend expiry", () => {
+    expect(devArtifactApi.isDevArtifactApprovalCurrent(approval, 300999)).toBe(true);
+    expect(devArtifactApi.isDevArtifactApprovalCurrent(approval, 301000)).toBe(false);
+    expect(devArtifactApi.isDevArtifactApprovalCurrent(null, 1000)).toBe(false);
+  });
 });
