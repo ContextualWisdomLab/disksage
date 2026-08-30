@@ -10,7 +10,8 @@ fn nested_symlink_is_manifested_without_hiding_the_cache_target() {
     fs::write(target.join("bin").join("java"), b"generated-runtime")
         .expect("write generated runtime fixture");
     fs::create_dir(&outside).expect("create outside fixture");
-    fs::write(outside.join("keep.txt"), b"must-not-be-followed").expect("write outside fixture");
+    fs::write(outside.join("keep.txt"), b"must-not-be-followed")
+        .expect("write outside fixture");
     std::os::unix::fs::symlink(&outside, target.join("external-link"))
         .expect("create nested symlink fixture");
 
@@ -45,34 +46,40 @@ fn manifest_variable_fields_are_length_framed() {
     let target_path = cache_root.join("ab");
     fs::write(&target_path, b"generated-payload").expect("write generated cache fixture");
 
-    let targets = crate::rules::cache_targets(&cache_root).expect("enumerate cache targets");
-    assert_eq!(targets.len(), 1);
-    let target = &targets[0];
+    let catalog_targets =
+        crate::rules_catalog::cache_targets(&cache_root).expect("enumerate catalog cache targets");
+    assert_eq!(catalog_targets.len(), 1);
+    let catalog_target = &catalog_targets[0];
 
-    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
-    let reviewed_root = crate::rules::cache_metadata_fingerprint(&metadata);
-    let mut expected_stable_tree = blake3::Hasher::new();
+    let mut expected = blake3::Hasher::new();
     update_framed(
-        &mut expected_stable_tree,
+        &mut expected,
         target_path
             .file_name()
             .expect("fixture has a file name")
             .as_bytes(),
     );
-    expected_stable_tree.update(&[0]);
+    expected.update(&[0]);
+    let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
     update_framed(
-        &mut expected_stable_tree,
-        crate::rules::cache_root_relocation_metadata_fingerprint(&metadata).as_bytes(),
+        &mut expected,
+        crate::rules_catalog::cache_metadata_fingerprint(&metadata).as_bytes(),
     );
-    update_framed(&mut expected_stable_tree, target.object_id.as_bytes());
-    let expected = format!(
-        "v2:{reviewed_root}:{}",
-        expected_stable_tree.finalize().to_hex()
-    );
+    update_framed(&mut expected, catalog_target.object_id.as_bytes());
 
     assert_eq!(
-        target.manifest_fingerprint, expected,
-        "cache manifest must length-frame variable fields before hashing"
+        catalog_target.manifest_fingerprint,
+        expected.finalize().to_hex().to_string(),
+        "catalog cache manifest must length-frame variable fields before hashing"
+    );
+
+    let authority_targets =
+        crate::rules::cache_targets(&cache_root).expect("upgrade cache target authority");
+    assert_eq!(authority_targets.len(), 1);
+    assert!(
+        crate::rules::cache_manifest_components(&authority_targets[0].manifest_fingerprint)
+            .is_some(),
+        "the production cache boundary must wrap the framed catalog manifest in versioned authority"
     );
 }
 
@@ -83,10 +90,10 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
     let temp = tempfile::tempdir().expect("temporary root-metadata fixture");
     let target = temp.path().join("generated-cache");
     fs::create_dir(&target).expect("create generated cache target");
-    fs::write(target.join("payload.bin"), b"generated").expect("write generated cache payload");
+    fs::write(target.join("payload.bin"), b"generated")
+        .expect("write generated cache payload");
 
-    let reviewed = crate::rules::cache_authority_target(&target)
-        .expect("snapshot reviewed cache authority target");
+    let reviewed = crate::rules::cache_target(&target).expect("snapshot reviewed cache target");
     let before = fs::symlink_metadata(&target).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
@@ -109,8 +116,7 @@ fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
         (after.ctime(), after.ctime_nsec()),
         "fixture must produce a ctime-only root metadata transition"
     );
-    let live = crate::rules::cache_authority_target(&target)
-        .expect("snapshot live cache authority target");
+    let live = crate::rules::cache_target(&target).expect("snapshot live cache target");
     assert_eq!(reviewed.object_id, live.object_id);
     assert_eq!(reviewed.modified_ms, live.modified_ms);
     assert_ne!(
@@ -128,8 +134,7 @@ fn permanent_delete_rejects_ctime_only_root_drift() {
     fs::create_dir(&target_path).expect("create generated cache target");
     fs::write(target_path.join("payload.bin"), b"generated")
         .expect("write generated cache payload");
-    let reviewed = crate::rules::cache_authority_target(&target_path)
-        .expect("snapshot reviewed cache authority target");
+    let reviewed = crate::rules::cache_target(&target_path).expect("snapshot reviewed cache target");
     let before = fs::symlink_metadata(&target_path).expect("read reviewed root metadata");
     let original_mode = before.permissions().mode() & 0o7777;
     let temporary_mode = if original_mode & 0o100 != 0 {
