@@ -32,7 +32,8 @@ fn absolute_without_parent(path: &Path) -> bool {
 }
 
 fn default_journal_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|path| absolute_without_parent(path))
         .ok_or_else(|| "home-directory-unavailable".to_string())?;
