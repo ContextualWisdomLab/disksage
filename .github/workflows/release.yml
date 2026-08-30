@@ -33,6 +33,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            tauri_features: llm-engine
             bundles: |
               src-tauri/target/release/bundle/deb/*.deb
               src-tauri/target/release/bundle/appimage/*.AppImage
@@ -45,6 +46,7 @@ jobs:
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
           - os: windows-2022
+            tauri_features: llm-engine
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
@@ -57,16 +59,21 @@ jobs:
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit.exe
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
           - os: macos-latest
+            tauri_features: llm-engine,parallels-macos-cli
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
               src-tauri/target/release/disksage-cloud-plan-macos-arm64
               src-tauri/target/release/disksage-cloud-plan-macos-arm64.sha256
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-parallels-disk-reclaim-macos-arm64
+              src-tauri/target/release/disksage-parallels-disk-reclaim-macos-arm64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-macos-arm64
+            parallels_cli_source: src-tauri/target/release/disksage-parallels-disk-reclaim
+            parallels_cli_asset: src-tauri/target/release/disksage-parallels-disk-reclaim-macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -115,7 +122,11 @@ jobs:
           cache-targets: false
 
       - name: Tauri build (with embedded LLM)
-        run: npm run tauri -- build --features llm-engine
+        run: npm run tauri -- build --features "${{ matrix.tauri_features }}"
+
+      - name: Build macOS-only Parallels reclaim planner
+        if: matrix.os == 'macos-latest'
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --features parallels-macos-cli --bin disksage-parallels-disk-reclaim
 
       - name: Diagnose WiX MSI linker failure
         if: failure() && matrix.os == 'windows-2022'
@@ -180,6 +191,9 @@ jobs:
           }
           stage_cli "${{ matrix.cloud_cli_source }}" "${{ matrix.cloud_cli_asset }}" "usage: disksage-cloud-plan"
           stage_cli "${{ matrix.duplicate_cli_source }}" "${{ matrix.duplicate_cli_asset }}" "usage: disksage-duplicate-audit"
+          if [[ "${{ matrix.os }}" == 'macos-latest' ]]; then
+            stage_cli "${{ matrix.parallels_cli_source }}" "${{ matrix.parallels_cli_asset }}" "usage: disksage-parallels-disk-reclaim"
+          fi
 
       - name: Verify macOS DMG app signature
         if: matrix.os == 'macos-latest'
@@ -310,15 +324,16 @@ jobs:
             disksage-cloud-plan-windows-x86_64.exe \
             disksage-duplicate-audit-windows-x86_64.exe \
             disksage-cloud-plan-macos-arm64 \
-            disksage-duplicate-audit-macos-arm64; do
+            disksage-duplicate-audit-macos-arm64 \
+            disksage-parallels-disk-reclaim-macos-arm64; do
             require_exactly_one_file "$required_name"
             require_exactly_one_file "$required_name.sha256"
           done
           checksum_files=()
           checksum_file=""
           while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
-          if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+          if [[ ${#checksum_files[@]} -ne 7 ]]; then
+            printf 'Expected seven operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
             exit 1
           fi
           for checksum_file in "${checksum_files[@]}"; do
@@ -358,8 +373,8 @@ jobs:
           fi
           regular_file_count=0
           while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 18 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
+          if [[ $regular_file_count -ne 20 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 20 regular files, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 

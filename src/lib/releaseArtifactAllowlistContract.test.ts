@@ -21,6 +21,7 @@ const operationalAssetNames = [
   'disksage-duplicate-audit-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
+  'disksage-parallels-disk-reclaim-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 file from the source-controlled repository root. */
