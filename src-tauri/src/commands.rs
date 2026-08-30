@@ -192,7 +192,7 @@ pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
         .map(|(s, d)| (s.to_string(), d.to_string()))
 }
 
-/// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
+/// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나가 실패해도 나머지는 진행 (M2와 동일 원칙)
 pub fn execute_moves_inner(
     plans: &[organize::MovePlan],
     journal_path: &Path,
@@ -277,7 +277,8 @@ pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String
 fn user_rules_json(app: &AppHandle) -> String {
     use tauri::Manager;
     if let Ok(dir) = app.path().app_config_dir() {
-        if let Ok(s) = std::fs::read_to_string(dir.join("userrules.json")) {
+        let user_ttl = dir.join("ontology.ttl");
+        if let Ok(s) = std::fs::read_to_string(&user_ttl) {
             return s;
         }
     }
@@ -729,26 +730,6 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
     let jp = journal_file_path(&app)?;
     let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     Ok(clean_paths_inner(&pbufs, &jp, now_ms()))
-}
-
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn clean_dev_artifacts(
-    root: String,
-    min_age_days: u64,
-    artifacts: Vec<dev_artifacts::DevArtifact>,
-    approved: bool,
-    app: AppHandle,
-) -> Result<Vec<CleanResult>, String> {
-    let jp = journal_file_path(&app)?;
-    Ok(clean_dev_artifacts_inner(
-        &artifacts,
-        Path::new(&root),
-        min_age_days,
-        &jp,
-        now_ms(),
-        approved,
-    ))
 }
 
 #[cfg(not(coverage))]
@@ -1238,8 +1219,6 @@ pub fn inspect_cloud_provider_client_runtime(
     app: AppHandle,
 ) -> Result<provider_client_runtime::ProviderClientRuntimeSnapshot, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    // Runtime observation must remain available while a File Provider root is temporarily
-    // disconnected; this command reads the fixed provider client state, not the destination.
     Ok(provider_client_runtime::collect_provider_client_runtime(
         selected.provider,
         cloud::system_now_ms(),
@@ -1253,8 +1232,6 @@ pub fn recover_cloud_provider_client(
     app: AppHandle,
 ) -> Result<provider_recovery::ProviderRecoveryOutput, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    // Recovery targets only the verified, fixed desktop client. A disconnected root is the
-    // condition recovery is meant to repair, so destination readability is not a precondition.
     provider_recovery::recover_provider_client(selected.provider, cloud::system_now_ms())
 }
 
@@ -1280,8 +1257,6 @@ pub fn inspect_cloud_provider_global_sync(
     app: AppHandle,
 ) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    // The read-only provider dump is the evidence needed to explain an unreadable/disconnected
-    // root; requiring directory access first would hide the very blocker we need to report.
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-global-sync-icloud-specialized".into());
     }
@@ -1815,9 +1790,6 @@ fn create_cloud_candidate_receipt(
         exact_confirmation_phrase,
     )?;
     if !adopt_existing {
-        // Native File Provider copies can materialize placeholders and stage more than the source
-        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
-        // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
@@ -2194,9 +2166,7 @@ pub async fn copy_cloud_candidate(
             operation: Arc::clone(&cloud_copy_operation),
             fingerprint: metadata_fingerprint.clone(),
         };
-        // Register before taking the shared review lock so a queued copy can be cancelled.
-        // The token remains set if cancellation races with lock acquisition.
-        let result = (|| {
+        (|| {
             let _guard = cloud_review
                 .lock()
                 .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
@@ -2213,8 +2183,7 @@ pub async fn copy_cloud_candidate(
                 false,
                 Some(&cloud_copy_cancel),
             )
-        })();
-        result
+        })()
     })
     .await
     .map_err(|_| "cloud-copy-task-failed".to_string())?
