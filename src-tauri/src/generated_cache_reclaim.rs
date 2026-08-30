@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 2;
 const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
@@ -742,6 +742,36 @@ pub fn remove_regenerable_root(path: &Path, home: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(path).map_err(|_| "generated-cache-remove-failed".into())
 }
 
+fn restore_staged_root(
+    path: &Path,
+    staged: &Path,
+    staging: &Path,
+    plan_fingerprint: &str,
+) -> Result<(), String> {
+    if path.exists() {
+        let replacement = std::fs::symlink_metadata(path)
+            .map_err(|_| "generated-cache-replacement-metadata-unavailable")?;
+        if !replacement.is_dir() || replacement.file_type().is_symlink() {
+            return Err("generated-cache-replacement-boundary-unsafe".into());
+        }
+        let preserved = path.join(format!(
+            ".disksage-preserved-approved-cache-{}",
+            &plan_fingerprint[..16]
+        ));
+        if preserved.exists() {
+            return Err("generated-cache-recovery-location-occupied".into());
+        }
+        // A producer may recreate the approved root after staging. Keep that live replacement in
+        // place and move the approved tree beneath it, so neither tree is overwritten and the next
+        // exact-root audit observes both instead of leaving hidden staging data behind.
+        std::fs::rename(staged, preserved)
+            .map_err(|_| "generated-cache-staging-preserve-failed")?;
+    } else {
+        std::fs::rename(staged, path).map_err(|_| "generated-cache-staging-restore-failed")?;
+    }
+    std::fs::remove_dir(staging).map_err(|_| "generated-cache-staging-cleanup-failed".into())
+}
+
 /// Atomically stage and permanently remove the exact approved cache object.
 pub fn stage_and_remove_regenerable_root(
     plan: &GeneratedCachePlan,
@@ -780,12 +810,7 @@ pub fn stage_and_remove_regenerable_root(
         let _ = std::fs::remove_dir(&staging);
         return Err(format!("generated-cache-staging-rename-failed:{error}"));
     }
-    let restore = || {
-        if !path.exists() {
-            std::fs::rename(&staged, path).map_err(|_| "generated-cache-staging-restore-failed")?;
-        }
-        std::fs::remove_dir(&staging).map_err(|_| "generated-cache-staging-cleanup-failed")
-    };
+    let restore = || restore_staged_root(path, &staged, &staging, &plan.plan_fingerprint);
     let staged_result = (|| {
         if matches!(plan.contract, RegenerationContract::NodeCompileCache)
             && node_runtime_processes().map_or(true, |pids| !pids.is_empty())
@@ -1220,6 +1245,32 @@ mod tests {
                 &plan.plan_fingerprint[..16]
             ))
             .exists());
+    }
+
+    #[test]
+    fn recreated_root_keeps_live_replacement_and_approved_tree_visible() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("node-compile-cache");
+        let staging = temp.path().join(".disksage-generated-cache-staging-test");
+        let staged = staging.join("node-compile-cache");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("approved-cache"), b"approved").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("live-replacement"), b"live").unwrap();
+        let fingerprint = "a".repeat(64);
+
+        restore_staged_root(&root, &staged, &staging, &fingerprint).unwrap();
+
+        assert_eq!(std::fs::read(root.join("live-replacement")).unwrap(), b"live");
+        assert_eq!(
+            std::fs::read(
+                root.join(".disksage-preserved-approved-cache-aaaaaaaaaaaaaaaa")
+                    .join("approved-cache")
+            )
+            .unwrap(),
+            b"approved"
+        );
+        assert!(!staging.exists());
     }
 
     #[test]
