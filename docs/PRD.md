@@ -26,6 +26,8 @@ an observation goal, never deletion authority.
   store usage, logical candidates, and verified physical reclaim separate; missing measurements
   remain unavailable and the customer screen receives no local path or runtime diagnostic detail.
 - Worktrees and standalone clones require fresh exact Git/GitHub authority, clean and inactive
-  state, explicit approval, and no branch deletion or Git pruning.
+  state, complete and valid lease evidence, no active owner-created lease or Git worktree lock,
+  explicit approval, and no branch deletion or Git pruning. Lease expiry is supplied by its owner;
+  DiskSage never invents one.
 - All customer-visible text states what happened, what remains blocked, and the next safe action;
   it does not expose implementation boundaries.

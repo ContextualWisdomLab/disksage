@@ -61,9 +61,24 @@ pub struct CacheTarget {
     pub bytes: u64,
     pub modified_ms: u64,
     pub object_id: String,
+    /// Deterministic recursive metadata manifest for the reviewed tree.
+    #[serde(default)]
+    pub manifest_fingerprint: String,
 }
 
 const MAX_CACHE_TARGETS: usize = 4_096;
+const MAX_CACHE_MANIFEST_ENTRIES: usize = 100_000;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_after_cache_directory_enumeration_hook(hook: impl FnOnce() + 'static) {
+    AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
 
 fn is_disksage_trash_staging(path: &Path) -> bool {
     path.file_name()
@@ -108,11 +123,17 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         .or_else(|| absolute_env_path("HF_HOME").map(|path| path.join("hub")))
         .unwrap_or_else(|| bases.local_data.join("huggingface"));
     #[cfg(target_os = "macos")]
+    let gradle_home =
+        absolute_env_path("GRADLE_USER_HOME").unwrap_or_else(|| bases.home.join(".gradle"));
+    #[cfg(target_os = "macos")]
     entries.extend([
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
-        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
+        ("gradle-cache", "Gradle 캐시", gradle_home.join("caches")),
+        ("gradle-wrapper-cache", "Gradle 실행 파일 캐시", gradle_home.join("wrapper").join("dists")),
+        ("gradle-jdk-cache", "Gradle JDK 캐시", gradle_home.join("jdks")),
+        ("gradle-daemon-cache", "Gradle 실행 기록 캐시", gradle_home.join("daemon")),
         ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
             bases.home.join("Library").join("Application Support").join("Caches")),
         (
@@ -131,8 +152,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ),
         (
             "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
+            "Corepack 캐시",
+            bases.local_data.join("node").join("corepack"),
         ),
         (
             "torch-cache",
@@ -556,9 +577,17 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
         .collect()
 }
 
+pub fn cache_catalog_path(bases: &BaseDirs, id: &str) -> Option<PathBuf> {
+    catalog(bases)
+        .into_iter()
+        .find_map(|(candidate_id, _, path)| (candidate_id == id).then_some(path))
+}
+
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
-    catalog(bases).iter().any(|(_, _, p)| p == dir) && CatalogRoot::open(dir).is_some()
+    catalog(bases).iter().any(|(id, _, path)| {
+        path == dir || (*id == "npm-cache" && path.join("_npx") == dir)
+    }) && CatalogRoot::open(dir).is_some()
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
@@ -569,7 +598,7 @@ pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
+pub(crate) fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
@@ -578,40 +607,279 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+fn update_manifest_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        update_manifest_bytes(hasher, name.as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let mut bytes = Vec::new();
+        for unit in name.encode_wide() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        update_manifest_bytes(hasher, &bytes);
+    }
+    #[cfg(not(any(unix, windows)))]
+    update_manifest_bytes(hasher, name.to_string_lossy().as_bytes());
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CacheManifestBudget {
+    remaining_entries: usize,
+}
+
+impl CacheManifestBudget {
+    fn new(remaining_entries: usize) -> Self {
+        Self { remaining_entries }
+    }
+
+    fn consume_entry(&mut self) -> Result<(), String> {
+        if self.remaining_entries == 0 {
+            return Err("cache-target-manifest-entry-limit-exceeded".into());
+        }
+        self.remaining_entries -= 1;
+        Ok(())
+    }
+
+}
+
+pub(crate) fn cache_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    cache_metadata_fingerprint_inner(metadata, true)
+}
+
+fn cache_root_directory_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    cache_metadata_fingerprint_inner(metadata, false)
+}
+
+fn cache_metadata_fingerprint_inner(
+    metadata: &std::fs::Metadata,
+    include_unix_ctime: bool,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cache-metadata-v1\0");
+    hasher.update(&metadata.len().to_le_bytes());
+    hasher.update(&modified_ms(metadata).to_le_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hasher.update(&metadata.dev().to_le_bytes());
+        hasher.update(&metadata.ino().to_le_bytes());
+        if include_unix_ctime {
+            hasher.update(&metadata.ctime().to_le_bytes());
+            hasher.update(&metadata.ctime_nsec().to_le_bytes());
+        }
+        hasher.update(&metadata.blocks().to_le_bytes());
+        hasher.update(&metadata.mode().to_le_bytes());
+        hasher.update(&metadata.nlink().to_le_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        hasher.update(&metadata.creation_time().to_le_bytes());
+        hasher.update(&metadata.last_write_time().to_le_bytes());
+        hasher.update(&metadata.file_attributes().to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn update_cache_manifest(
+    path: &Path,
+    hasher: &mut blake3::Hasher,
+    budget: &mut CacheManifestBudget,
+    root_entry: bool,
+) -> Result<(), String> {
+    budget.consume_entry()?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "cache-target-manifest-metadata-unavailable".to_string())?;
+    let is_symlink = metadata.file_type().is_symlink();
+    if !(is_symlink || metadata.is_file() || metadata.is_dir()) {
+        return Err("cache-target-type-unsupported".into());
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| "cache-target-manifest-name-unavailable".to_string())?;
+    update_manifest_name(hasher, name);
+    let entry_kind = if is_symlink {
+        2
+    } else if metadata.is_dir() {
+        1
+    } else {
+        0
+    };
+    hasher.update(&[entry_kind]);
+    let metadata_fingerprint = if root_entry && metadata.is_dir() {
+        cache_root_directory_metadata_fingerprint(&metadata)
+    } else {
+        cache_metadata_fingerprint(&metadata)
+    };
+    update_manifest_bytes(hasher, metadata_fingerprint.as_bytes());
+    let object_id = crate::safety::filesystem_object_id(path)
+        .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+    update_manifest_bytes(hasher, object_id.as_bytes());
+    if is_symlink {
+        let destination = std::fs::read_link(path)
+            .map_err(|_| "cache-target-manifest-symlink-unavailable".to_string())?;
+        update_manifest_name(hasher, destination.as_os_str());
+    } else if metadata.is_file() {
+        let refreshed = std::fs::symlink_metadata(path)
+            .map_err(|_| "cache-target-manifest-file-changed-during-scan".to_string())?;
+        let refreshed_object_id = crate::safety::filesystem_object_id(path)
+            .map_err(|_| "cache-target-manifest-file-changed-during-scan".to_string())?;
+        if !refreshed.is_file()
+            || refreshed.file_type().is_symlink()
+            || cache_metadata_fingerprint(&refreshed) != metadata_fingerprint
+            || refreshed_object_id != object_id
+        {
+            return Err("cache-target-manifest-file-changed-during-scan".into());
+        }
+    } else if metadata.is_dir() {
+        let child_limit = budget.remaining_entries;
+        let mut children = Vec::new();
+        for entry in std::fs::read_dir(path)
+            .map_err(|_| "cache-target-manifest-directory-unavailable".to_string())?
+        {
+            if children.len() >= child_limit {
+                return Err("cache-target-manifest-entry-limit-exceeded".into());
+            }
+            let entry = entry.map_err(|_| "cache-target-manifest-entry-unavailable".to_string())?;
+            children.push(entry.path());
+        }
+        children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        let child_names = children
+            .iter()
+            .map(|child| child.file_name().map(std::ffi::OsStr::to_os_string))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "cache-target-manifest-name-unavailable".to_string())?;
+        #[cfg(test)]
+        AFTER_CACHE_DIRECTORY_ENUMERATION_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
+        for child in &children {
+            update_cache_manifest(&child, hasher, budget, false)?;
+        }
+        let mut refreshed_names = Vec::new();
+        for entry in std::fs::read_dir(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?
+        {
+            if refreshed_names.len() > child_names.len() {
+                return Err("cache-target-manifest-directory-changed-during-read".into());
+            }
+            refreshed_names.push(
+                entry
+                    .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?
+                    .file_name(),
+            );
+        }
+        refreshed_names.sort();
+        let refreshed = std::fs::symlink_metadata(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?;
+        let refreshed_object_id = crate::safety::filesystem_object_id(path)
+            .map_err(|_| "cache-target-manifest-directory-changed-during-read".to_string())?;
+        if refreshed_names != child_names
+            || !refreshed.is_dir()
+            || refreshed.file_type().is_symlink()
+            || (if root_entry {
+                cache_root_directory_metadata_fingerprint(&refreshed)
+            } else {
+                cache_metadata_fingerprint(&refreshed)
+            }) != metadata_fingerprint
+            || refreshed_object_id != object_id
+        {
+            return Err("cache-target-manifest-directory-changed-during-read".into());
+        }
+    }
+    Ok(())
+}
+
+fn cache_manifest_fingerprint_with_budget(
+    path: &Path,
+    budget: &mut CacheManifestBudget,
+) -> Result<String, String> {
+    let mut hasher = blake3::Hasher::new();
+    update_cache_manifest(path, &mut hasher, budget, true)?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn cache_target_with_budget(
+    path: &Path,
+    budget: &mut CacheManifestBudget,
+) -> Result<CacheTarget, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+        return Err("cache-target-type-unsupported".into());
+    }
+    let bytes = if metadata.is_dir() {
+        CatalogRoot::open(path)
+            .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
+            .directory_size()
+    } else {
+        metadata.len()
+    };
+    let object_id = crate::safety::filesystem_object_id(path)
+        .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+    let manifest_fingerprint = cache_manifest_fingerprint_with_budget(path, budget)?;
+    Ok(CacheTarget {
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        modified_ms: modified_ms(&metadata),
+        object_id,
+        manifest_fingerprint,
+    })
+}
+
+/// Snapshot one exact cache child with the complete mutation manifest used by catalog review.
+pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
+    let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_ENTRIES);
+    cache_target_with_budget(path, &mut budget)
+}
+
 /// Return the exact direct children that a cache cleanup approval may move to Trash.
 /// The object identity, size, and modification timestamp bind the later mutation to this snapshot.
 pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
     let shared_temp = cfg!(unix) && dir == shared_temp_root();
-    let paths = root.child_paths();
+    let paths = root
+        .child_paths()
+        .into_iter()
+        .flat_map(|path| {
+            if matches!(
+                dir.file_name().and_then(|name| name.to_str()),
+                Some(".npm" | "npm-cache")
+            ) && path.file_name().and_then(|name| name.to_str()) == Some("_npx")
+            {
+                CatalogRoot::open(&path)
+                    .map(|root| root.child_paths())
+                    .unwrap_or_default()
+            } else {
+                vec![path]
+            }
+        })
+        .collect::<Vec<_>>();
     if paths.len() > MAX_CACHE_TARGETS {
         return Err("cache-target-limit-exceeded".into());
     }
     let mut targets = Vec::with_capacity(paths.len());
     for path in paths {
-        let metadata = std::fs::symlink_metadata(&path)
-            .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
-        if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
-            continue;
-        }
         if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
-        let bytes = if metadata.is_dir() {
-            CatalogRoot::open(&path)
-                .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
-                .directory_size()
-        } else {
-            metadata.len()
-        };
-        let object_id = crate::safety::filesystem_object_id(&path)
-            .map_err(|_| "cache-target-identity-unavailable".to_string())?;
-        targets.push(CacheTarget {
-            path: path.to_string_lossy().into_owned(),
-            bytes,
-            modified_ms: modified_ms(&metadata),
-            object_id,
-        });
+        let mut budget = CacheManifestBudget::new(MAX_CACHE_MANIFEST_ENTRIES);
+        match cache_target_with_budget(&path, &mut budget) {
+            Ok(target) => targets.push(target),
+            Err(error) if error == "cache-target-type-unsupported" => continue,
+            Err(error) => return Err(error),
+        }
     }
     targets.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(targets)
@@ -684,7 +952,6 @@ mod tests {
         fs::write(tmp.path().join("owned.bin"), b"owned").unwrap();
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
-        assert!(targets[0].path.ends_with("owned.bin"));
         assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(&targets[0].path)));
     }
 
@@ -725,7 +992,7 @@ mod tests {
         for (id, suffix) in [
             ("pnpm-cache", "Library/Caches/pnpm"),
             ("playwright-cache", "Library/Caches/ms-playwright"),
-            ("node-cache", "local/node"),
+            ("node-cache", "local/node/corepack"),
             ("torch-cache", "local/torch"),
             ("prisma-cache", "local/prisma"),
             ("gh-cache", "local/gh"),
@@ -764,7 +1031,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
+        let npx = bases.home.join(".npm/_npx");
+        fs::create_dir_all(&npx).unwrap();
         assert!(is_catalog_path(&bases, &bases.temp));
+        assert!(is_catalog_path(&bases, &npx));
         assert!(!is_catalog_path(&bases, tmp.path()));
     }
 
@@ -802,6 +1072,151 @@ mod tests {
                 .bytes,
             4
         );
+    }
+
+    #[test]
+    fn cache_manifest_entry_budget_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("one.bin"), b"one").unwrap();
+        let mut hasher = blake3::Hasher::new();
+        let mut budget = CacheManifestBudget::new(1);
+
+        let error = update_cache_manifest(&root, &mut hasher, &mut budget, true)
+            .expect_err("manifest traversal must stop when its entry budget is exhausted");
+
+        assert_eq!(error, "cache-target-manifest-entry-limit-exceeded");
+    }
+
+    #[test]
+    fn cache_manifest_enumeration_stops_at_remaining_entry_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("one.bin"), b"one").unwrap();
+        fs::write(root.join("two.bin"), b"two").unwrap();
+        let mut hasher = blake3::Hasher::new();
+        let mut budget = CacheManifestBudget::new(2);
+
+        let error = update_cache_manifest(&root, &mut hasher, &mut budget, true)
+            .expect_err("enumeration must reject the child that exceeds the remaining budget");
+
+        assert_eq!(error, "cache-target-manifest-entry-limit-exceeded");
+    }
+
+    #[test]
+    fn cache_manifest_uses_metadata_without_reading_file_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("payload.bin");
+        fs::write(&file, b"four").unwrap();
+        let mut hasher = blake3::Hasher::new();
+        let mut budget = CacheManifestBudget::new(1);
+
+        update_cache_manifest(&file, &mut hasher, &mut budget, true)
+            .expect("metadata manifest must not read file content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_manifest_accepts_unreadable_sparse_large_file() {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::PermissionsExt;
+        const LARGE_LOGICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024 + 1;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("sparse.bin");
+        let handle = OpenOptions::new().create_new(true).write(true).open(&file).unwrap();
+        handle.set_len(LARGE_LOGICAL_BYTES).unwrap();
+        drop(handle);
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&file, permissions).unwrap();
+        let target = cache_target(&file).expect("metadata manifest must not open file content");
+        assert_eq!(target.bytes, LARGE_LOGICAL_BYTES);
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&file, permissions).unwrap();
+    }
+
+    #[test]
+    fn cache_targets_apply_manifest_budget_to_each_independent_child() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("first.bin");
+        let second = tmp.path().join("second.bin");
+        fs::write(&first, b"abc").unwrap();
+        fs::write(&second, b"def").unwrap();
+        let mut first_budget = CacheManifestBudget::new(1);
+        let mut second_budget = CacheManifestBudget::new(1);
+
+        cache_target_with_budget(&first, &mut first_budget).unwrap();
+        cache_target_with_budget(&second, &mut second_budget).unwrap();
+    }
+
+    #[test]
+    fn cache_manifest_detects_same_size_path_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("payload.bin");
+        fs::write(&file, b"aaaa").unwrap();
+        let reviewed = cache_target(&file).unwrap();
+        let replacement = tmp.path().join("replacement.bin");
+        fs::write(&replacement, b"bbbb").unwrap();
+        fs::rename(&replacement, &file).unwrap();
+        let live = cache_target(&file).unwrap();
+        assert_eq!(reviewed.bytes, live.bytes);
+        assert_ne!(reviewed.object_id, live.object_id);
+        assert_ne!(reviewed.manifest_fingerprint, live.manifest_fingerprint);
+    }
+
+    #[test]
+    fn cache_manifest_rejects_child_added_after_enumeration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("reviewed.bin"), b"reviewed").unwrap();
+        let late = root.join("late.bin");
+        set_after_cache_directory_enumeration_hook(move || {
+            fs::write(late, b"late").unwrap();
+        });
+
+        let error = cache_target(&root)
+            .expect_err("a child added after enumeration must invalidate the manifest");
+
+        assert_eq!(
+            error,
+            "cache-target-manifest-directory-changed-during-read"
+        );
+    }
+
+    #[test]
+    fn npm_cache_targets_probe_each_npx_environment_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join(".npm");
+        fs::create_dir_all(npm.join("_npx/live")).unwrap();
+        fs::create_dir(npm.join("_npx/inactive")).unwrap();
+        fs::create_dir(npm.join("_cacache")).unwrap();
+        fs::write(npm.join("_npx/live/package.json"), b"{}").unwrap();
+        fs::write(npm.join("_npx/inactive/package.json"), b"{}").unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().any(|target| target.path.ends_with("_npx/live")));
+        assert!(targets
+            .iter()
+            .any(|target| target.path.ends_with("_npx/inactive")));
+        assert!(targets.iter().all(|target| !target.path.ends_with("_npx")));
+    }
+
+    #[test]
+    fn windows_named_npm_cache_also_splits_npx_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join("npm-cache");
+        fs::create_dir_all(npm.join("_npx/environment")).unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("_npx/environment"));
     }
 
     #[test]

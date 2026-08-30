@@ -533,6 +533,225 @@ pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
 pub type StaleOpenPullRequestHeads = BTreeMap<(String, String), BTreeSet<u64>>;
 pub type PullRequestCommits = BTreeSet<String>;
 
+/// Verify that a locally available reference is still bound to an exact provider-observed OID
+/// and that `ancestor_oid` is reachable from it. The reference/OID equality makes stale remote
+/// tracking refs fail closed instead of silently authorizing cleanup.
+pub(crate) fn exact_reference_contains_commit(
+    repository_root: &Path,
+    reference: &str,
+    reference_oid: &str,
+    ancestor_oid: &str,
+    timeout_ms: u64,
+) -> Result<bool, String> {
+    validate_reference(reference)?;
+    for oid in [reference_oid, ancestor_oid] {
+        if oid.len() != 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("git-default-branch-oid-invalid".into());
+        }
+    }
+    let resolved = run_git(
+        repository_root,
+        &[
+            OsString::from("rev-parse"),
+            OsString::from("--verify"),
+            OsString::from(format!("{reference}^{{commit}}")),
+        ],
+        timeout_ms,
+        "git-default-branch-reference",
+    )?;
+    let expected_reference_oid = reference_oid.to_ascii_lowercase();
+    if resolved.status_code != Some(0)
+        || String::from_utf8(resolved.stdout)
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+            != Some(expected_reference_oid.as_str())
+    {
+        return Ok(false);
+    }
+    let ancestry = run_git(
+        repository_root,
+        &[
+            OsString::from("merge-base"),
+            OsString::from("--is-ancestor"),
+            OsString::from(ancestor_oid),
+            OsString::from(reference_oid),
+        ],
+        timeout_ms,
+        "git-default-branch-ancestry",
+    )?;
+    Ok(ancestry.status_code == Some(0))
+}
+
+pub(crate) fn is_standalone_repository_root(
+    repository_root: &Path,
+    timeout_ms: u64,
+) -> Result<bool, String> {
+    let common_dir = match resolve_common_dir(repository_root, timeout_ms) {
+        Ok(path) => path,
+        Err(error) if error == "git-common-dir-resolve-failed" => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let git_entry = repository_root.join(".git");
+    let Ok(metadata) = fs::symlink_metadata(&git_entry) else {
+        return Ok(false);
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    Ok(fs::canonicalize(&git_entry).ok().as_deref() == Some(common_dir.as_path()))
+}
+
+/// Resolve the provider's current default branch and exact OID through the authenticated GitHub
+/// CLI. The returned local reference must still be checked against this OID before use.
+pub(crate) fn github_default_branch_reference_oid(
+    repository_root: &Path,
+    timeout_ms: u64,
+) -> Result<(String, String), String> {
+    let started = Instant::now();
+    let identity = run_bounded_command(
+        "gh",
+        &[
+            OsString::from("repo"),
+            OsString::from("view"),
+            OsString::from("--json"),
+            OsString::from("nameWithOwner,defaultBranchRef"),
+            OsString::from("--jq"),
+            OsString::from("[.nameWithOwner,.defaultBranchRef.name]|@tsv"),
+        ],
+        repository_root,
+        timeout_ms,
+    )?;
+    if identity.timed_out {
+        return Err("github-default-branch-timeout".into());
+    }
+    if identity.stdout_truncated || identity.stderr_truncated {
+        return Err("github-default-branch-output-truncated".into());
+    }
+    if identity.status_code != Some(0) {
+        return Err("github-default-branch-query-failed".into());
+    }
+    let text = command_text(&identity.stdout, "github-default-branch-output-not-utf8")?;
+    let mut fields = text.trim().split('\t');
+    let repository = fields
+        .next()
+        .filter(|value| {
+            value.split('/').count() == 2
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_./".contains(&byte))
+        })
+        .ok_or_else(|| "github-default-branch-output-invalid".to_string())?;
+    let branch = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "github-default-branch-output-invalid".to_string())?;
+    if fields.next().is_some() {
+        return Err("github-default-branch-output-invalid".into());
+    }
+    validate_reference(&format!("refs/heads/{branch}"))?;
+    let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+    if remaining_ms == 0 {
+        return Err("github-default-branch-timeout".into());
+    }
+    let remote_name = matching_github_remote_name(repository_root, repository, remaining_ms)?;
+    let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+    if remaining_ms == 0 {
+        return Err("github-default-branch-timeout".into());
+    }
+    let commit = run_bounded_command(
+        "gh",
+        &[
+            OsString::from("api"),
+            OsString::from(format!("repos/{repository}/commits/{branch}")),
+            OsString::from("--jq"),
+            OsString::from(".sha"),
+        ],
+        repository_root,
+        remaining_ms,
+    )?;
+    if commit.timed_out {
+        return Err("github-default-branch-timeout".into());
+    }
+    if commit.stdout_truncated || commit.stderr_truncated {
+        return Err("github-default-branch-output-truncated".into());
+    }
+    if commit.status_code != Some(0) {
+        return Err("github-default-branch-query-failed".into());
+    }
+    let oid = command_text(&commit.stdout, "github-default-branch-output-not-utf8")?
+        .trim()
+        .to_ascii_lowercase();
+    if !is_oid(&oid) {
+        return Err("github-default-branch-output-invalid".into());
+    }
+    Ok((format!("refs/remotes/{remote_name}/{branch}"), oid))
+}
+
+fn github_slug_from_remote_url(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/').trim_end_matches(".git");
+    let path = if let Some(value) = trimmed.strip_prefix("git@github.com:") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("ssh://git@github.com/") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("https://github.com/") {
+        value
+    } else if let Some(value) = trimmed.strip_prefix("http://github.com/") {
+        value
+    } else {
+        return None;
+    };
+    let mut parts = path.split('/');
+    let owner = parts.next().filter(|part| !part.is_empty())?;
+    let repository = parts.next().filter(|part| !part.is_empty())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repository}").to_ascii_lowercase())
+}
+
+fn matching_github_remote_name(
+    repository_root: &Path,
+    repository: &str,
+    timeout_ms: u64,
+) -> Result<String, String> {
+    let output = run_git(
+        repository_root,
+        &[
+            OsString::from("config"),
+            OsString::from("--get-regexp"),
+            OsString::from(r"^remote\..*\.url$"),
+        ],
+        timeout_ms,
+        "git-remote-config",
+    )?;
+    if output.status_code != Some(0) {
+        return Err("github-default-branch-remote-unavailable".into());
+    }
+    let expected = repository.to_ascii_lowercase();
+    let mut matches = BTreeSet::new();
+    for line in command_text(&output.stdout, "git-remote-config-not-utf8")?.lines() {
+        let Some((key, url)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(remote_name) = key
+            .strip_prefix("remote.")
+            .and_then(|value| value.strip_suffix(".url"))
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        validate_reference(&format!("refs/remotes/{remote_name}/placeholder"))?;
+        if github_slug_from_remote_url(url).as_deref() == Some(expected.as_str()) {
+            matches.insert(remote_name.to_string());
+        }
+    }
+    if matches.len() != 1 {
+        return Err("github-default-branch-remote-not-unique".into());
+    }
+    Ok(matches.into_iter().next().expect("one matching remote"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PullRequestCommitMembership {
     pub completed: PullRequestCommits,
@@ -1322,13 +1541,54 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
+fn command_contains_path(command: &[u8], path: &[u8], recursive: bool) -> bool {
+    if path.is_empty() || command.len() < path.len() {
+        return false;
+    }
+    (0..=command.len() - path.len()).any(|start| {
+        let end = start + path.len();
+        command[start..end] == *path
+            && (start == 0
+                || command[start - 1].is_ascii_whitespace()
+                || command[start - 1] == b'=')
+            && (end == command.len()
+                || command[end].is_ascii_whitespace()
+                || (recursive && command[end] == b'/'))
+    })
+}
+
+#[cfg(unix)]
+fn ps_command_args() -> Vec<OsString> {
+    let mut args = Vec::with_capacity(3);
+    #[cfg(target_os = "macos")]
+    args.push(OsString::from("-ww"));
+    args.extend([OsString::from("-axo"), OsString::from("pid=,command=")]);
+    args
+}
+
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
     max_pids: usize,
     recursive: bool,
 ) -> GitWorktreeActiveUseEvidence {
-    let command_cwd = path.parent().unwrap_or(path);
+    active_use_evidence_with_command_path(path, path, timeout_ms, max_pids, recursive)
+}
+
+/// Probe handles below `object_path` while matching process arguments against `command_path`.
+///
+/// Atomic staging changes an object's pathname but not an already-started process command. Keeping
+/// these identities separate closes that rename boundary without weakening the bounded probes.
+#[cfg(unix)]
+pub(crate) fn active_use_evidence_with_command_path(
+    object_path: &Path,
+    command_path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    let command_cwd = object_path.parent().unwrap_or(object_path);
     let method = if recursive {
         "lsof-recursive-pid"
     } else {
@@ -1338,7 +1598,7 @@ pub fn active_use_evidence(
     if recursive {
         lsof_args.push(OsString::from("+D"));
     }
-    lsof_args.push(path.as_os_str().to_os_string());
+    lsof_args.push(object_path.as_os_str().to_os_string());
     let result = match run_bounded_command("lsof", &lsof_args, command_cwd, timeout_ms) {
         Ok(result) => result,
         Err(error) => {
@@ -1422,10 +1682,50 @@ pub fn active_use_evidence(
         }
         pids.insert(pid);
     }
+    let ps = match run_bounded_command("ps", &ps_command_args(), command_cwd, timeout_ms) {
+        Ok(result)
+            if !result.timed_out
+                && !result.stdout_truncated
+                && !result.stderr_truncated
+                && result.status_code == Some(0) =>
+        {
+            result
+        }
+        _ => {
+            return GitWorktreeActiveUseEvidence {
+                method: format!("{method}+ps-command"),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some("active-use-process-command-unavailable".into()),
+            };
+        }
+    };
+    let path_bytes = command_path.as_os_str().as_encoded_bytes();
+    for line in ps.stdout.split(|byte| *byte == b'\n') {
+        let line = &line[line
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(line.len())..];
+        let split = line.iter().position(|byte| byte.is_ascii_whitespace());
+        let Some(split) = split else { continue };
+        let Ok(pid) = std::str::from_utf8(&line[..split])
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or(())
+        else {
+            continue;
+        };
+        if pid != ps.child_pid && command_contains_path(&line[split..], path_bytes, recursive) {
+            pids.insert(pid);
+        }
+    }
     let results_truncated = pids.len() > max_pids;
     let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
     GitWorktreeActiveUseEvidence {
-        method: method.into(),
+        method: format!("{method}+ps-command"),
         assessed: true,
         evidence_complete: !results_truncated,
         active: !observed_pids.is_empty(),
@@ -1456,6 +1756,17 @@ pub(crate) fn active_use_evidence(
         results_truncated: false,
         error: Some("active-use-platform-unsupported".into()),
     }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn active_use_evidence_with_command_path(
+    object_path: &Path,
+    _command_path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    active_use_evidence(object_path, timeout_ms, max_pids, recursive)
 }
 
 fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
@@ -2198,13 +2509,14 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         });
         let stale_open_pull_request_head = stale_open_pull_request_numbers.is_some();
         let completed_pull_request_commit = pull_request_commits.completed.contains(&raw.head);
-        let open_pull_request_commit = pull_request_commits
-            .open
-            .get(&raw.head)
-            .is_some_and(|pull_request_numbers| {
-                stale_open_pull_request_numbers
-                    .is_none_or(|stale_numbers| !pull_request_numbers.is_subset(stale_numbers))
-            });
+        let open_pull_request_commit =
+            pull_request_commits
+                .open
+                .get(&raw.head)
+                .is_some_and(|pull_request_numbers| {
+                    stale_open_pull_request_numbers
+                        .is_none_or(|stale_numbers| !pull_request_numbers.is_subset(stale_numbers))
+                });
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
         let size = if path_valid {
             size_evidence(
@@ -3094,6 +3406,125 @@ mod tests {
     }
 
     #[test]
+    fn github_remote_resolution_accepts_renamed_unique_remote_and_rejects_ambiguity() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "upstream",
+                "https://github.com/ContextualWisdomLab/example.git",
+            ])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            matching_github_remote_name(temp.path(), "ContextualWisdomLab/example", 5_000).unwrap(),
+            "upstream"
+        );
+        assert!(Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:contextualwisdomlab/example.git",
+            ])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            matching_github_remote_name(temp.path(), "ContextualWisdomLab/example", 5_000),
+            Err("github-default-branch-remote-not-unique".into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_includes_process_command_paths_not_held_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("npx-environment");
+        fs::create_dir(&marker).unwrap();
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 20 & wait", marker.to_str().unwrap()])
+            .spawn()
+            .unwrap();
+
+        let evidence = active_use_evidence(&marker, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+        assert!(!command_contains_path(
+            b"tool /cache/env-old",
+            b"/cache/env",
+            true
+        ));
+        assert!(command_contains_path(
+            b"tool /cache/env with spaces/child",
+            b"/cache/env with spaces",
+            true,
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_probe_keeps_original_command_path_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("approved-cache");
+        let staged = temp.path().join(".disksage-stage").join("approved-cache");
+        fs::create_dir_all(&staged).unwrap();
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 20 & wait", original.to_str().unwrap()])
+            .spawn()
+            .unwrap();
+
+        let evidence =
+            active_use_evidence_with_command_path(&staged, &original, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn active_use_includes_path_beyond_default_macos_ps_width() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("long-command-environment");
+        fs::create_dir(&marker).unwrap();
+        let padding = "x".repeat(512);
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "sleep 20 & wait",
+                padding.as_str(),
+                marker.to_str().unwrap(),
+            ])
+            .spawn()
+            .unwrap();
+
+        let evidence = active_use_evidence(&marker, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+    }
+
+    #[test]
     fn closed_pull_request_evidence_binds_same_repository_branch_and_head() {
         let json = format!(
             r#"[
@@ -3164,7 +3595,10 @@ mod tests {
         let cutoff = parse_github_timestamp_ms("2026-08-01T00:00:00Z").unwrap();
         assert_eq!(
             parse_stale_open_pull_request_heads(json.as_bytes(), cutoff).unwrap(),
-            BTreeMap::from([(("refs/heads/old-local".into(), oid('a')), BTreeSet::from([1]))])
+            BTreeMap::from([(
+                ("refs/heads/old-local".into(), oid('a')),
+                BTreeSet::from([1])
+            )])
         );
         assert!(parse_github_timestamp_ms("2026-02-30T00:00:00Z").is_none());
         assert!(parse_github_timestamp_ms("2026-01-01T00:00:00+00:00").is_none());

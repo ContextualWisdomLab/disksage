@@ -4,6 +4,15 @@ use disksage_lib::podman_reclaim::{execute_podman_storage_repair, plan_podman_st
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+fn fixture_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn write_fake_podman(script: &str) -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().expect("temporary runtime directory");
@@ -183,6 +192,26 @@ exit 2
     ))
 }
 
+fn fake_layer_in_use_podman() -> (tempfile::TempDir, PathBuf) {
+    let layer_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    write_fake_podman(&format!(
+        r#"#!/bin/sh
+case " $* " in
+  *" system check --quick --repair "*)
+    echo "Error: layer is in use" >&2
+    exit 1
+    ;;
+  *" system check --quick "*)
+    echo "Damaged layer {layer_id}:"
+    echo "Error: damage detected in local storage"
+    exit 1
+    ;;
+esac
+exit 2
+"#
+    ))
+}
+
 fn single_damage_fake(layer_id: &str) -> (tempfile::TempDir, PathBuf) {
     write_fake_podman(&format!(
         r#"#!/bin/sh
@@ -207,6 +236,7 @@ fn approval_for(fake: &Path) -> String {
 
 #[test]
 fn incomplete_postcheck_never_serializes_unverified_repair_counts() {
+    let _guard = fixture_guard();
     let (_temp, fake) = fake_podman();
     let approval = approval_for(&fake);
 
@@ -257,6 +287,7 @@ fn provider_refusal_identifies_a_container_referenced_damaged_layer() {
 
 #[test]
 fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set() {
+    let _guard = fixture_guard();
     let (temp, fake) = fake_scope_drift_podman();
     let first_plan = plan_podman_storage_repair(&fake, "podman-machine-default")
         .expect("initial damaged-layer evidence");
@@ -304,6 +335,7 @@ fn native_repair_approval_matches_machine_scope_instead_of_a_stale_candidate_set
 
 #[test]
 fn a_failed_postcheck_after_mutation_still_returns_an_auditable_receipt() {
+    let _guard = fixture_guard();
     let (temp, fake) = fake_postcheck_parse_failure();
     let approval = approval_for(&fake);
 
@@ -325,6 +357,7 @@ fn a_failed_postcheck_after_mutation_still_returns_an_auditable_receipt() {
 
 #[test]
 fn a_post_spawn_capture_failure_still_returns_an_auditable_receipt() {
+    let _guard = fixture_guard();
     let (temp, fake) = fake_repair_output_failure();
     let approval = approval_for(&fake);
 
@@ -348,6 +381,7 @@ fn a_post_spawn_capture_failure_still_returns_an_auditable_receipt() {
 
 #[test]
 fn repair_counts_compare_damage_identities_instead_of_only_aggregate_counts() {
+    let _guard = fixture_guard();
     let (_temp, fake) = fake_replaced_damage_podman();
     let approval = approval_for(&fake);
 
@@ -365,7 +399,35 @@ fn repair_counts_compare_damage_identities_instead_of_only_aggregate_counts() {
 }
 
 #[test]
+fn layer_in_use_failure_remains_auditable_and_never_claims_repair() {
+    let _guard = fixture_guard();
+    let (_temp, fake) = fake_layer_in_use_podman();
+    let approval = approval_for(&fake);
+
+    let receipt = execute_podman_storage_repair(
+        &fake,
+        "podman-machine-default",
+        &approval,
+        "retain a fail-closed receipt when a damaged layer is in use",
+        6,
+    )
+    .expect("a spawned repair failure must remain auditable");
+
+    assert!(receipt.command_attempted);
+    assert_eq!(receipt.status_code, 1);
+    assert_eq!(
+        receipt.execution_issue.as_deref(),
+        Some("podman-storage-repair-command-failed")
+    );
+    assert!(!receipt.executed);
+    assert!(receipt.postcheck_complete);
+    assert_eq!(receipt.repaired_layer_records, Some(0));
+    assert_eq!(receipt.remaining_damaged_layer_records, Some(1));
+}
+
+#[test]
 fn damaged_layer_hex_casing_does_not_change_the_precheck_fingerprint() {
+    let _guard = fixture_guard();
     let lower = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
     let upper = lower.to_ascii_uppercase();
     let (_lower_temp, lower_fake) = single_damage_fake(lower);
@@ -386,6 +448,7 @@ fn damaged_layer_hex_casing_does_not_change_the_precheck_fingerprint() {
 
 #[test]
 fn storage_repair_rejects_unbounded_or_control_character_rationales_before_probe() {
+    let _guard = fixture_guard();
     let (_temp, fake) = fake_podman();
     let overlong = "x".repeat(1_001);
     assert_eq!(

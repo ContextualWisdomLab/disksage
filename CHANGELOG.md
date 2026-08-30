@@ -27,6 +27,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add owner-created durable checkout leases for agent or human work that may be idle between turns.
+  Active or invalid lease evidence vetoes clone reclamation; expiry is supplied by the owner or the
+  lease remains active until exact fingerprint-bound release, without an inferred timeout.
+- Reclaim pip downloads, Corepack's Node.js package-manager archive, and each inactive npx
+  environment through the existing identity-bound, active-use-checked regenerable-cache action.
+- Plan and execute uv's native `cache prune` without `--force`: bind the real executable and cache
+  directory, veto active or incomplete `lsof` evidence, require a fresh exact fingerprint, and
+  retain immutable approval/result records with filesystem-availability measurements.
 - Release verified OneDrive local copies through Foundation only after an exact item-and-version
   fingerprint, current upload/materialization flags, `isKeepDownloaded = 0`, no active handle, and
   attributed approval survive an immediate re-plan. Postchecks and immutable records distinguish
@@ -118,6 +126,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Branch deletion, Git pruning, detached clones, dirty clones, and implicit age thresholds remain
   prohibited. The same contract is available through a headless plan-first CLI with exact human
   confirmation and an external append-only journal.
+- Add bounded multi-root standalone-clone inventory and fresh default-branch ancestry authority.
+  Provider OID and local remote-tracking reference must match exactly; stale, dirty, active,
+  unpublished, and diverged clones remain fail-closed without any age heuristic.
 - Add an explicit operator-supplied cutoff for stale same-repository open pull-request worktrees
   (ADR-0015). GitHub creation time, state, branch, and exact head OID are refreshed before each
   removal; branches and commits remain untouched and no implicit age threshold is used.
@@ -178,6 +189,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Build cache cleanup fingerprints from complete bounded filesystem metadata instead of reading up
+  to 4 GiB of generated file content. Large and sparse cache entries remain reviewable, while exact
+  identity and metadata are revalidated immediately before any mutation.
+- Revalidate reviewed cache manifests on both sides of atomic Trash staging and restore the
+  original path when evidence changes instead of moving unreviewed contents.
+- Preserve the original approved pathname during final staged active-use probes so command-only
+  users block permanent cache and development-artifact deletion.
 - Stop descending once a marker-validated development artifact is found, avoiding a second full
   traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
 - Keep a partially failed permanent artifact deletion in its private staging location; never restore
@@ -312,9 +330,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   authority now require an explicit user opt-in.
 - Catalog the Cargo registry source tree as an explicit, identity-bound regenerable-cache target;
   keep it out of automatic cleanup because rebuilding may require network downloads.
-- Catalog the observed Node.js, PyTorch, Prisma, and GitHub CLI cache trees as identity-bound
-  manual-review targets; keep them out of automatic cleanup until their active-use and rebuild
-  contracts are independently established.
+- Catalog the observed PyTorch, Prisma, and GitHub CLI cache trees as identity-bound manual-review
+  targets; keep them out of automatic cleanup until their active-use and rebuild contracts are
+  independently established.
 - Add buyer-verifiable release artifact provenance with read-only platform build jobs, a tag-only least-privilege attestation job, exact 18-file admission including a source-bound SPDX SBOM, adjacent operational-CLI SHA-256 verification, preserved artifact namespaces, non-regular-entry rejection, and a separate publication job that cannot publish before attestation succeeds.
 - Require explicit organization-tenant authority when either the destination account scope is organization-owned or the canonical organization-sensitive review reason is present; fail closed in both frontend projection and durable Rust transfer authorization even when the ordinary review flag is absent, and regression-test contradictory signal combinations.
 - Enable an explicit fail-closed Tauri Content Security Policy to keep executable scripts and fonts local, grant production network authority only to the Tauri IPC transport, confine Vite WebSocket HMR to a separate development-only CSP, deny object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-test against null, wildcard, remote-script/style, eval, and development-authority leakage.

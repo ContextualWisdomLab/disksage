@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Recursive active-use probes for irreversible generated-tree deletion must accommodate real
+/// dependency trees while remaining bounded and fail-closed.
+pub(crate) const PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -545,6 +549,27 @@ pub fn trash_delete_if_identity_with_outcome(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_verifier(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+        |_| true,
+    )
+}
+
+fn trash_delete_if_identity_with_verifier<F>(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    evidence_matches: F,
+) -> Result<TrashDeleteOutcome, SafetyError>
+where
+    F: Fn(&Path) -> bool,
+{
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -588,6 +613,12 @@ pub fn trash_delete_if_identity_with_outcome(
 
     let mut staging_cleanup_error = None;
     let result = (|| -> Result<(), SafetyError> {
+        if !evidence_matches(path) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(
+                "reviewed contents changed; rescan before moving to Trash".into(),
+            ));
+        }
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(format!(
@@ -615,6 +646,16 @@ pub fn trash_delete_if_identity_with_outcome(
                 ))),
             };
         }
+        if !evidence_matches(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "staged contents changed; nothing was moved to Trash".into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "staged contents changed; {restore_error}"
+                ))),
+            };
+        }
         if let Err(error) = platform_trash_delete(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
@@ -632,6 +673,36 @@ pub fn trash_delete_if_identity_with_outcome(
     };
     let terminal_journal = journal_append(journal_path, &entry);
     trash_delete_outcome(result, terminal_journal, staging_cleanup_error)
+}
+
+/// Move an unchanged cache target to Trash after revalidating its complete bounded manifest on
+/// both sides of the atomic staging rename.
+pub(crate) fn trash_delete_cache_target_with_outcome(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    expected_modified_ms: u64,
+    expected_manifest_fingerprint: &str,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_verifier(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+        |candidate_path| {
+            crate::rules::cache_target(candidate_path)
+                .ok()
+                .is_some_and(|target| {
+                    target.object_id == expected_object_id
+                        && target.bytes == bytes
+                        && target.modified_ms == expected_modified_ms
+                        && target.manifest_fingerprint == expected_manifest_fingerprint
+                })
+        },
+    )
 }
 
 pub fn trash_delete_if_identity(
@@ -679,6 +750,8 @@ pub fn permanent_delete_dir_if_identity(
     path: &Path,
     expected_object_id: &str,
     bytes: u64,
+    expected_modified_ms: u64,
+    expected_manifest_fingerprint: &str,
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
@@ -709,6 +782,16 @@ pub fn permanent_delete_dir_if_identity(
             "generated directory identity changed; rescan before deletion".into(),
         ));
     }
+    let manifest_matches = |candidate_path: &Path| {
+        crate::rules::cache_target(candidate_path)
+            .ok()
+            .is_some_and(|target| {
+                target.object_id == expected_object_id
+                    && target.bytes == bytes
+                    && target.modified_ms == expected_modified_ms
+                    && target.manifest_fingerprint == expected_manifest_fingerprint
+            })
+    };
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
     })?;
@@ -727,6 +810,12 @@ pub fn permanent_delete_dir_if_identity(
         return Err(error);
     }
     let result = (|| -> Result<(), SafetyError> {
+        if !manifest_matches(path) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(
+                "generated directory manifest changed; rescan before deletion".into(),
+            ));
+        }
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(format!(
@@ -752,6 +841,37 @@ pub fn permanent_delete_dir_if_identity(
                 )),
                 Err(restore_error) => Err(SafetyError::Trash(format!(
                     "atomic staging move changed the generated directory; {restore_error}"
+                ))),
+            };
+        }
+        // The caller's probe precedes the atomic rename and therefore cannot close the final
+        // open-handle race by itself.  Once staged, the original pathname is unavailable to new
+        // users; recursively probe the exact staged object before the irreversible removal.
+        let active_use = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged,
+            path,
+            PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
+            crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+            true,
+        );
+        if !active_use.assessed || !active_use.evidence_complete || active_use.active {
+            let reason = if active_use.active {
+                "staged generated directory is still in active use"
+            } else {
+                "staged generated directory active-use evidence is incomplete"
+            };
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(format!("{reason}; nothing was deleted"))),
+                Err(restore_error) => Err(SafetyError::Trash(format!("{reason}; {restore_error}"))),
+            };
+        }
+        if !manifest_matches(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "staged generated directory manifest changed; nothing was deleted".into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "staged generated directory manifest changed; {restore_error}"
                 ))),
             };
         }
@@ -1209,10 +1329,19 @@ mod tests {
         let generated = tmp.path().join("node_modules");
         std::fs::create_dir(&generated).unwrap();
         std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
-        let object_id = filesystem_object_id(&generated).unwrap();
+        let target = crate::rules::cache_target(&generated).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap();
+        permanent_delete_dir_if_identity(
+            &generated,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            1,
+        )
+        .unwrap();
 
         assert!(!generated.exists());
         let entries = journal_recent(&journal, 2);
@@ -1225,6 +1354,62 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".disksage-trash-")));
+    }
+
+    #[test]
+    fn permanent_generated_directory_delete_rejects_a_stale_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("generated-cache");
+        std::fs::create_dir(&generated).unwrap();
+        let nested = generated.join("generated.bin");
+        std::fs::write(&nested, b"before!").unwrap();
+        let target = crate::rules::cache_target(&generated).unwrap();
+        std::fs::write(&nested, b"changed").unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let result = permanent_delete_dir_if_identity(
+            &generated,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            2,
+        );
+
+        assert!(result.is_err());
+        assert!(generated.exists());
+        let entries = journal_recent(&journal, 2);
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].outcome.contains("manifest changed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_generated_directory_delete_restores_an_open_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("generated-cache");
+        std::fs::create_dir(&generated).unwrap();
+        let open_file = std::fs::File::create(generated.join("in-use.bin")).unwrap();
+        let target = crate::rules::cache_target(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let result = permanent_delete_dir_if_identity(
+            &generated,
+            &target.object_id,
+            target.bytes,
+            target.modified_ms,
+            &target.manifest_fingerprint,
+            &journal,
+            2,
+        );
+
+        drop(open_file);
+        assert!(result.is_err());
+        assert!(generated.exists());
+        assert!(journal_recent(&journal, 2)[0]
+            .outcome
+            .contains("active use"));
     }
 
     #[test]
@@ -1698,5 +1883,33 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(std::fs::read(&dst).unwrap(), b"pre-existing");
         assert!(src.exists());
+    }
+
+    #[test]
+    fn trash_staging_restores_when_manifest_changes_at_mutation_boundary() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("reviewed-cache");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("payload.bin"), b"reviewed").unwrap();
+        let object_id = filesystem_object_id(&target).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let probes = AtomicUsize::new(0);
+
+        let error = trash_delete_if_identity_with_verifier(
+            &target,
+            &object_id,
+            8,
+            &journal,
+            77,
+            |_| probes.fetch_add(1, Ordering::SeqCst) == 0,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("staged contents changed"));
+        assert!(target.exists(), "the reviewed object must be restored");
+        assert_eq!(std::fs::read(target.join("payload.bin")).unwrap(), b"reviewed");
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
     }
 }

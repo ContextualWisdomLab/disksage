@@ -993,6 +993,7 @@ dependencies = [
  "blake3",
  "calamine",
  "csv",
+ "dirs",
  "embed_plist",
  "fs4",
  "getrandom 0.4.3",

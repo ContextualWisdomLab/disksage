@@ -14,19 +14,28 @@ lineage and must not be uploaded to a cloud provider merely to reclaim local spa
 ## Decision
 
 DiskSage exposes known cache roots through the existing cache catalog, including the macOS uv
-cache. Cleanup uses the reviewed child manifest (`path`, byte count, modification time, and object
-identity) and revalidates that manifest immediately before mutation. Active-use evidence is
+cache. Cleanup uses a complete, entry-bounded metadata manifest (relative name, file type, object
+identity, logical size, modification/change time, allocation where the platform exposes it, and
+symlink destination without traversal) and revalidates that manifest immediately before mutation.
+The manifest never opens cache file content, so large and sparse generated artifacts remain
+reviewable without turning their logical size into scan work. Active-use evidence is
 collected independently for each reviewed child with bounded, path-local `lsof` evidence
 (recursive for directories and direct for regular files):
 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
-- the operation is journaled; the normal path never permanently deletes cache content.
-- a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
+- normal cache cleanup is journaled and remains reversible through the OS Trash, including npm,
+  pip, and Corepack directory children; it does not grant an irreversible-delete authority merely
+  because a native manager can regenerate the cache;
+- a separate, explicit `--purge-proven-cache-trash` path may permanently remove only direct
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
   arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
+- the headless `--cache-id ... --permanent-cache` path may permanently remove only inactive,
+  unchanged direct children of the four catalogued Gradle regeneration roots (`caches`, wrapper
+  distributions, toolchain JDKs, and daemon records). Project files, Maven local artifacts, Gradle
+  configuration, and every non-Gradle catalog ID remain outside that irreversible exception.
 
 This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
 same cache root must not prevent reclaiming an independently inactive entry, and it must never be
@@ -35,20 +44,20 @@ treated as evidence that the inactive entry is safe without its own probe.
 ## Consequences
 
 - A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
-- Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
-- The normal operation is reversible through the OS Trash; physical space is not claimed until the
-  user empties that Trash, and APFS shared blocks may make physical reclaim smaller than logical
-  size. The explicit proven-cache purge is irreversible by design and is limited to cache data
-  already placed in Trash.
+- Changed, replaced, symlinked, unsupported, or incompletely enumerated entries fail closed before
+  they reach the OS Trash.
+- Normal cache cleanup is reversible through the OS Trash. Permanent cache deletion exists only in
+  the explicit proven-cache Trash purge, after the object is already in Trash and its known
+  structure is revalidated.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
   permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
 ## Alternatives rejected
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
-- **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is allowed only for a structurally proven cache
-  already in OS Trash through the separate explicit flag.
+- **Direct recursive deletion of live cache roots:** not reversible and creates unnecessary
+  irreversible authority. Normal active-cache cleanup therefore uses the OS Trash; permanent
+  removal is confined to the explicit, structurally proven cache-data purge after Trash staging.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -56,12 +65,14 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 When provider upload is blocked and local pressure is high, DiskSage may run the
 `clean_regenerable_caches` command without a second approval prompt for the observed regenerable
-macOS roots (npm, uv, pnpm, Adobe, Microsoft Edge, and Trivy). This is a narrow policy, not a
+macOS roots (npm, pip, Corepack/Node.js, uv, pnpm, Adobe, Microsoft Edge, Trivy, AppMap, Superset,
+and Playwright). This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
-probe target. The cache root is preserved, successful operations go to OS Trash, and a journal
-entry is written. Any child in use is reported and left untouched.
+probe target. The cache root is preserved, every successful normal cleanup goes through the
+journaled OS-Trash path (including npm, pip, and Corepack directories), and any child in use is
+reported and left untouched.
 
 The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
 `cargo-registry-source` for explicit review because it is regenerable but may require network
@@ -70,10 +81,10 @@ the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage develop
 observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
 package archives, git checkouts, all user files, and provider-managed data.
 
-The observed `~/.cache/node`, `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
+The observed `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
 catalogued as explicit manual-review targets for the same reason. Their paths are now stable
 catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CACHE_IDS`; the
-automatic action remains limited to the six incident-approved roots until each tool's rebuild and
+automatic action remains limited to the incident-approved roots until each tool's rebuild and
 active-use contract is independently established.
 
 The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
@@ -90,7 +101,7 @@ untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd5
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this
 incident, DiskSage may expose them as read-only candidates and permanently remove them only when
-the operator passes --execute --purge-proven-cache-trash. The candidate scanner accepts only the
+the operator passes `--execute --purge-proven-cache-trash`. The candidate scanner accepts only the
 known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it bounds traversal,
 rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
 for both the pending and terminal outcome. This path never empties the Trash generally and never

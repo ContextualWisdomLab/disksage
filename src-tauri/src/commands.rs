@@ -1158,7 +1158,7 @@ pub async fn plan_stale_git_clone(
     stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_clone_reclaim::GitCloneReclaimPlan, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_clone_reclaim::plan_git_clone_reclaim(
+        git_clone_reclaim::plan_git_clone_reclaim_with_default_branch(
             Path::new(&repository_root),
             &retention_references,
             include_closed_pull_requests,
@@ -1169,6 +1169,23 @@ pub async fn plan_stale_git_clone(
     })
     .await
     .map_err(|_| "git-clone-reclaim-plan-task-failed".to_string())?
+}
+
+/// Discover standalone clones under customer-selected roots without mutating filesystem state.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn inventory_standalone_git_clones(
+    roots: Vec<String>,
+) -> Result<git_clone_reclaim::CloneInventoryReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = roots.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        git_clone_reclaim::inventory_standalone_clones(
+            &roots,
+            git_clone_reclaim::CloneInventoryOptions::default(),
+        )
+    })
+    .await
+    .map_err(|_| "git-clone-inventory-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -1202,7 +1219,7 @@ pub async fn remove_stale_git_clone(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let plan = git_clone_reclaim::plan_git_clone_reclaim(
+        let plan = git_clone_reclaim::plan_git_clone_reclaim_with_default_branch(
             Path::new(&repository_root),
             &retention_references,
             include_closed_pull_requests,
@@ -1227,7 +1244,7 @@ pub async fn remove_stale_git_clone(
             &approval_path,
             &approval,
         )?;
-        let result = git_clone_reclaim::execute_git_clone_reclaim(
+        let result = git_clone_reclaim::execute_git_clone_reclaim_with_default_branch(
             &plan,
             &approval,
             &retention_references,
@@ -3788,10 +3805,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
             [
                 "npm-cache",
+                "pip-cache",
                 "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
                 "uv-cache",
+                "node-cache",
                 "trivy-cache",
                 "appmap-download-cache",
                 "superset-http-cache",
@@ -3808,10 +3827,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         for id in crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS {
             let path = match id {
                 "npm-cache" => bases.home.join(".npm"),
+                "pip-cache" => bases.home.join("Library/Caches/pip"),
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
                 "uv-cache" => bases.local_data.join("uv"),
+                "node-cache" => bases.local_data.join("node"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
                 "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
@@ -3823,7 +3844,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 10);
+        assert_eq!(results.len(), crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS.len());
         assert!(results.iter().all(|result| result.ok));
     }
 
