@@ -23,6 +23,7 @@ describe("cache cleanup execution boundary", () => {
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
     expect(backend).toContain("trash_delete_if_identity_with_outcome(");
+    expect(backend).toContain("outcome.moved_to_trash");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");
