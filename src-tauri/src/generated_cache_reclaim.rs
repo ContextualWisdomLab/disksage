@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -165,8 +164,51 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
 
 type TreeObservation = (u64, u64, String, Vec<String>);
 
-fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
+#[cfg(unix)]
+fn path_bytes(path: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn path_bytes(path: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.encode_wide().flat_map(u16::to_le_bytes).collect()
+}
+
+#[cfg(unix)]
+fn update_platform_metadata(hasher: &mut blake3::Hasher, metadata: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
+    hasher.update(&metadata.dev().to_le_bytes());
+    hasher.update(&metadata.ino().to_le_bytes());
+    hasher.update(&metadata.mode().to_le_bytes());
+    hasher.update(&metadata.uid().to_le_bytes());
+    hasher.update(&metadata.gid().to_le_bytes());
+    hasher.update(&metadata.mtime().to_le_bytes());
+    hasher.update(&metadata.mtime_nsec().to_le_bytes());
+}
+
+#[cfg(windows)]
+fn update_platform_metadata(hasher: &mut blake3::Hasher, metadata: &std::fs::Metadata) {
+    use std::os::windows::fs::MetadataExt;
+    hasher.update(&metadata.creation_time().to_le_bytes());
+    hasher.update(&metadata.last_write_time().to_le_bytes());
+    hasher.update(&metadata.file_attributes().to_le_bytes());
+    hasher.update(&metadata.file_size().to_le_bytes());
+}
+
+#[cfg(unix)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(windows)]
+fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+    metadata.len()
+}
+
+fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
@@ -192,25 +234,20 @@ fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
             return Err("generated-cache-special-file-rejected".into());
         }
         entries += 1;
-        bytes = bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        bytes = bytes.saturating_add(allocated_bytes(&metadata));
         let relative = current
             .strip_prefix(path)
             .map_err(|_| "generated-cache-relative-path-failed")?;
-        hasher.update(&(relative.as_os_str().as_bytes().len() as u64).to_le_bytes());
-        hasher.update(relative.as_os_str().as_bytes());
+        let relative_bytes = path_bytes(relative.as_os_str());
+        hasher.update(&(relative_bytes.len() as u64).to_le_bytes());
+        hasher.update(&relative_bytes);
         hasher.update(if metadata.is_dir() {
             b"directory"
         } else {
             b"file"
         });
-        hasher.update(&metadata.dev().to_le_bytes());
-        hasher.update(&metadata.ino().to_le_bytes());
-        hasher.update(&metadata.mode().to_le_bytes());
-        hasher.update(&metadata.uid().to_le_bytes());
-        hasher.update(&metadata.gid().to_le_bytes());
         hasher.update(&metadata.len().to_le_bytes());
-        hasher.update(&metadata.mtime().to_le_bytes());
-        hasher.update(&metadata.mtime_nsec().to_le_bytes());
+        update_platform_metadata(&mut hasher, &metadata);
         if current.file_name().is_some_and(|name| name == ".lock") {
             locks.push(current.to_string_lossy().into_owned());
         }
@@ -514,7 +551,6 @@ pub fn stage_and_remove_regenerable_root(
     now_ms: u64,
     approval_deadline_ms: u64,
 ) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt;
     if plan.root != path.to_string_lossy()
         || plan.contract
             != regeneration_contract(path, home).ok_or("generated-cache-removal-boundary-denied")?
@@ -531,8 +567,13 @@ pub fn stage_and_remove_regenerable_root(
         ".disksage-generated-cache-staging-{}",
         &plan.plan_fingerprint[..16]
     ));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
+    let mut staging_builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        staging_builder.mode(0o700);
+    }
+    staging_builder
         .create(&staging)
         .map_err(|_| "generated-cache-staging-create-failed")?;
     let staged = staging.join(name);
@@ -583,15 +624,22 @@ pub fn stage_and_remove_regenerable_root(
     Ok(())
 }
 
+fn create_new_private_file(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|_| "generated-cache-receipt-create-failed".to_string())
+}
+
 pub fn write_immutable_receipt(path: &Path, receipt: &GeneratedCacheReceipt) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|_| "generated-cache-receipt-create-failed".to_string())?;
+    let mut file = create_new_private_file(path)?;
     let bytes = serde_json::to_vec_pretty(receipt)
         .map_err(|_| "generated-cache-receipt-encode-failed".to_string())?;
     file.write_all(&bytes)
@@ -615,14 +663,8 @@ where
     F: FnOnce(&Path) -> Result<(), String>,
 {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     validate_execution(plan, approval, fresh, attempted_at_ms)?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(receipt_path)
-        .map_err(|_| "generated-cache-receipt-create-failed".to_string())?;
+    let mut file = create_new_private_file(receipt_path)?;
     let pending = GeneratedCachePendingReceipt {
         schema_version: GENERATED_CACHE_SCHEMA_VERSION,
         plan_fingerprint: plan.plan_fingerprint.clone(),
