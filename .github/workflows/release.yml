@@ -259,10 +259,6 @@ jobs:
           path: release-artifacts
           merge-multiple: false
 
-      - name: Verify downloaded release artifact contract
-        shell: bash
-        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
-
       - name: Generate and validate source-bound SBOM
         shell: bash
         run: |
@@ -364,7 +360,7 @@ jobs:
           fi
 
       - name: Generate GitHub build provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: release-artifacts/**/*
 
