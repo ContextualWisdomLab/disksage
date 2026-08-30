@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Keep the Podman repair regression aligned with the fail-closed unexpected-exit classification
+  already returned by the native repair boundary.
+- Recognize only the exact macOS per-user Node compile-cache root as regenerable, and retain it
+  whenever any Node.js runtime is active or the bounded process observation is incomplete. When a
+  producer recreates the root during staged revalidation, preserve both trees under the exact root
+  for the next audit. Version the expanded plan schema explicitly.
 - Recognize only DiskSage-owned Cargo target roots in macOS's per-user temporary directory as regenerable caches, while retaining neighboring application, provider, Photos, VM, Git, locked, and process-active data.
 - Exclude the reclaim CLI's direct invoking shell from command-line-only activity matches while retaining descriptor evidence and unrelated process matches.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
