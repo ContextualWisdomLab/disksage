@@ -1312,7 +1312,7 @@ fn attach_pre_copy_evidence_cohort(
             fingerprint: "0".repeat(64),
         });
     let runtime = cloud::PreCopyEvidenceObservation {
-        stream: "provider-client-runtime-evidence".into(),
+        stream: "provider-client-runtime-evidence",
         observed_at_ms: runtime.observed_at_ms,
         evidence_complete: runtime.process_observation_complete,
         fingerprint: runtime.snapshot_fingerprint_sha256.clone(),
@@ -3338,8 +3338,7 @@ mod tests {
         assert!(!valid_brew_fingerprint(&format!("{}g", "a".repeat(63))));
         assert!(valid_brew_rationale("reviewed dry-run output"));
         assert!(!valid_brew_rationale(" leading-space"));
-        assert!(!valid_brew_rationale("control\
-character"));
+        assert!(!valid_brew_rationale("control\ncharacter"));
     }
 
     #[test]
