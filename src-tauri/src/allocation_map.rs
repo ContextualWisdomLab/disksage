@@ -346,6 +346,40 @@ mod tests {
     }
 
     #[test]
+    fn traversal_stays_bound_when_canonical_target_is_replaced_after_resolution() {
+        use std::os::unix::fs::MetadataExt;
+        let temp = tempfile::tempdir().unwrap();
+        let provider_parent = temp.path().join("Library");
+        let selected_root = provider_parent.join("Mobile Documents");
+        let moved_root = temp.path().join("original-mobile-documents");
+        std::fs::create_dir_all(&selected_root).unwrap();
+        std::fs::write(selected_root.join("original.bin"), vec![0_u8; 4096]).unwrap();
+
+        let report = measure_root_with_resolution_hook(
+            &selected_root,
+            2,
+            Duration::from_secs(1),
+            || {
+                std::fs::rename(&selected_root, &moved_root).unwrap();
+                std::fs::create_dir(&selected_root).unwrap();
+                std::fs::write(selected_root.join("replacement.bin"), vec![0_u8; 1024 * 1024])
+                    .unwrap();
+            },
+        )
+        .unwrap();
+
+        let expected = std::fs::symlink_metadata(&moved_root).unwrap().blocks() * 512
+            + std::fs::symlink_metadata(moved_root.join("original.bin"))
+                .unwrap()
+                .blocks()
+                * 512;
+        assert_eq!(report.root, selected_root.to_string_lossy());
+        assert_eq!(report.classification, "provider-managed");
+        assert_eq!(report.allocated_bytes, expected);
+        assert_eq!(report.visited_entries, 2);
+    }
+
+    #[test]
     fn hard_links_do_not_double_count_allocated_blocks() {
         use std::os::unix::fs::MetadataExt;
         let temp = tempfile::tempdir().unwrap();
