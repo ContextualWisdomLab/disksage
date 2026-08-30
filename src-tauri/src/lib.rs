@@ -122,6 +122,7 @@ pub fn run() {
             cache_cleanup::clean_cache_contents,
             dev_artifact_approval::review_dev_artifacts,
             dev_artifact_approval::clean_dev_artifacts_bound,
+            commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
