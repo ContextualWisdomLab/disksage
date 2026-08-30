@@ -5,6 +5,7 @@ use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -160,7 +161,9 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         })
 }
 
-fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> {
+type TreeObservation = (u64, u64, String, Vec<String>);
+
+fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
     use std::os::unix::fs::MetadataExt;
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
@@ -240,6 +243,28 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         hasher.finalize().to_hex().to_string(),
         locks,
     ))
+}
+
+fn receive_tree_observation(
+    receiver: mpsc::Receiver<Result<TreeObservation, String>>,
+    timeout: Duration,
+) -> Result<TreeObservation, String> {
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| "generated-cache-audit-worker-timeout".to_string())?
+}
+
+/// Isolate filesystem traversal so a blocked kernel read cannot retain mutation authority.
+fn observe_tree(path: &Path) -> Result<TreeObservation, String> {
+    let owned_path = path.to_path_buf();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("disksage-generated-cache-audit".into())
+        .spawn(move || {
+            let _ = sender.send(observe_tree_inner(&owned_path));
+        })
+        .map_err(|_| "generated-cache-audit-worker-spawn-failed".to_string())?;
+    receive_tree_observation(receiver, Duration::from_millis(MAX_APPROVAL_AGE_MS))
 }
 
 pub fn plan_with_evidence(
@@ -829,5 +854,19 @@ mod tests {
             "generated-cache-content-bound-exceeded"
         );
         assert!(hashed > 4);
+    }
+
+    #[test]
+    fn stalled_audit_worker_fails_closed_without_waiting_for_sender() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = sender.send(Ok((0, 0, String::new(), Vec::new())));
+        });
+        assert_eq!(
+            receive_tree_observation(receiver, Duration::from_millis(1)).unwrap_err(),
+            "generated-cache-audit-worker-timeout"
+        );
+        worker.join().unwrap();
     }
 }
