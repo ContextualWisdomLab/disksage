@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
 };
 use std::fs;
@@ -68,8 +68,19 @@ exit 2
     )
     .expect("valid fake runtime target");
 
-    let plan = probe_container_orphans(&target);
-    assert!(plan.evidence_complete, "fixture must produce complete evidence: {plan:?}");
+    let receipts_dir = temp.path().join("receipts");
+    fs::create_dir(&receipts_dir).expect("create receipts directory");
+    let mut receipts_permissions = fs::metadata(&receipts_dir)
+        .expect("receipts directory metadata")
+        .permissions();
+    receipts_permissions.set_mode(0o700);
+    fs::set_permissions(&receipts_dir, receipts_permissions).unwrap();
+
+    let plan = probe_container_orphans_with_receipt_dir(&target, &receipts_dir);
+    assert!(
+        plan.evidence_complete,
+        "fixture must produce complete evidence: {plan:?}"
+    );
     let container_plan = plan
         .categories
         .iter()
@@ -86,7 +97,7 @@ exit 2
         approval,
         "prove restarted-container refusal",
         1,
-        &temp.path().join("receipts"),
+        &receipts_dir,
     )
     .expect("non-zero exact removal is represented in the receipt");
 
