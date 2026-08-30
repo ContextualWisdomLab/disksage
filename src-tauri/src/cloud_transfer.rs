@@ -3232,7 +3232,7 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
-    fn provider_api_receipt_survives_writer_restart_and_round_trips_identity() {
+    fn provider_api_receipt_round_trips_after_writer_values_are_dropped() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source/report.pdf");
         let cloud = temporary.path().join("cloud");
@@ -3269,6 +3269,8 @@ mod tests {
         let expected_id = receipt.receipt_id.clone();
         let receipt_path = write_provider_api_receipt(&receipt, &temporary.path().join("receipts"))
             .unwrap();
+        // This verifies durable re-open after writer-owned values are discarded. Process restart
+        // behavior belongs to the executable-level reconciliation tests, not this unit boundary.
         drop(receipt);
         drop(hashes);
 
