@@ -46,9 +46,10 @@ fn manifest_variable_fields_are_length_framed() {
     let target_path = cache_root.join("ab");
     fs::write(&target_path, b"generated-payload").expect("write generated cache fixture");
 
-    let targets = crate::rules::cache_targets(&cache_root).expect("enumerate cache targets");
-    assert_eq!(targets.len(), 1);
-    let target = &targets[0];
+    let catalog_targets =
+        crate::rules_catalog::cache_targets(&cache_root).expect("enumerate catalog cache targets");
+    assert_eq!(catalog_targets.len(), 1);
+    let catalog_target = &catalog_targets[0];
 
     let mut expected = blake3::Hasher::new();
     update_framed(
@@ -60,13 +61,25 @@ fn manifest_variable_fields_are_length_framed() {
     );
     expected.update(&[0]);
     let metadata = fs::symlink_metadata(&target_path).expect("read generated cache metadata");
-    update_framed(&mut expected, crate::rules::cache_metadata_fingerprint(&metadata).as_bytes());
-    update_framed(&mut expected, target.object_id.as_bytes());
+    update_framed(
+        &mut expected,
+        crate::rules_catalog::cache_metadata_fingerprint(&metadata).as_bytes(),
+    );
+    update_framed(&mut expected, catalog_target.object_id.as_bytes());
 
     assert_eq!(
-        target.manifest_fingerprint,
+        catalog_target.manifest_fingerprint,
         expected.finalize().to_hex().to_string(),
-        "cache manifest must length-frame variable fields before hashing"
+        "catalog cache manifest must length-frame variable fields before hashing"
+    );
+
+    let authority_targets =
+        crate::rules::cache_targets(&cache_root).expect("upgrade cache target authority");
+    assert_eq!(authority_targets.len(), 1);
+    assert!(
+        crate::rules::cache_manifest_components(&authority_targets[0].manifest_fingerprint)
+            .is_some(),
+        "the production cache boundary must wrap the framed catalog manifest in versioned authority"
     );
 }
 
