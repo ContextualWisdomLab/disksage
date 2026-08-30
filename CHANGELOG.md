@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 - Recognize only DiskSage-owned Cargo target roots in macOS's per-user temporary directory as regenerable caches, while retaining neighboring application, provider, Photos, VM, Git, locked, and process-active data.
+- Exclude the reclaim CLI's direct invoking shell from command-line-only activity matches while retaining descriptor evidence and unrelated process matches.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
   surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
 - Revalidate every selected photo group member and block the whole quarantine when a survivor or

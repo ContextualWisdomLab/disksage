@@ -1403,3 +1403,5 @@ direct per-user temporary-directory parent, Cargo lock marker, complete open-fil
 content fingerprint, fresh approval, atomic staging, and immutable receipt. Other `/private/var/folders`
 content remains read-only inventory: neither age nor size authorizes deletion, and provider, Photos, VM,
 system, active-process, locked, registered-worktree, and dirty-worktree boundaries remain fail-closed.
+The invoking shell is excluded only from command-line path matching because it necessarily carries
+the approved root as a CLI argument; any descriptor it holds remains visible through `lsof`.
