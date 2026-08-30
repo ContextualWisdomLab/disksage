@@ -1275,6 +1275,7 @@ pub fn inspect_icloud_new_copy_admission(
 #[tauri::command]
 pub fn inspect_cloud_provider_global_sync(
     cloud_root: String,
+    force: bool,
     app: AppHandle,
 ) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
@@ -1288,6 +1289,7 @@ pub fn inspect_cloud_provider_global_sync(
         selected.provider,
         &app_data_dir,
         cloud::system_now_ms(),
+        force,
     )
 }
 

@@ -600,8 +600,8 @@
     checkingProviderGlobalSync = true;
     providerGlobalSyncError = "";
     try {
-      const observedAtMs = Date.now();
-      const next = await api.inspectCloudProviderGlobalSync(root.path);
+      const next = await api.inspectCloudProviderGlobalSync(root.path, force);
+      const observedAtMs = next.observed_at_ms;
       const fingerprint = [
         next.provider,
         next.state,

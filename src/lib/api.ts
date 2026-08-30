@@ -350,7 +350,6 @@ export interface BrewCleanupPlan {
   brew_version: string;
   dry_run_output: string;
   dry_run_output_truncated: boolean;
-  observed_at_ms: number;
   plan_fingerprint: string;
   exact_approval_phrase: string;
 }
@@ -878,6 +877,7 @@ export type ProviderGlobalSyncState = "clear" | "pending" | "error" | "unavailab
 export interface ProviderGlobalSyncReport {
   schema_version: number;
   provider: Exclude<CloudProvider, "icloud">;
+  observed_at_ms: number;
   evidence_kind: string;
   evidence_complete: boolean;
   state: ProviderGlobalSyncState;
@@ -1262,8 +1262,8 @@ export const verifyCloudProviderCapacity = (cloudRoot: string) =>
 export const inspectIcloudNewCopyAdmission = () =>
   invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
 export const cancelFinderCopy = () => invoke<void>("cancel_finder_copy");
-export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
-  invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
+export const inspectCloudProviderGlobalSync = (cloudRoot: string, force = false) =>
+  invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot, force });
 export interface ProviderRecoveryOutput {
   schema_version: number;
   provider: Exclude<CloudProvider, "icloud">;

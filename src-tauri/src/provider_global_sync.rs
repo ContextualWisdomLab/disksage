@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 // macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
 // room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
@@ -48,6 +49,7 @@ impl ProviderGlobalSyncState {
 pub struct ProviderGlobalSyncReport {
     pub schema_version: u32,
     pub provider: CloudProvider,
+    pub observed_at_ms: u64,
     pub evidence_kind: String,
     pub evidence_complete: bool,
     pub state: ProviderGlobalSyncState,
@@ -167,10 +169,11 @@ pub fn checkpoint_report(
     if observed_at_ms == 0 {
         return Err("provider-global-sync-checkpoint-time-invalid".into());
     }
-    if report
-        .probe_receipt
-        .as_ref()
-        .is_some_and(|receipt| receipt.observed_at_ms != observed_at_ms)
+    if report.observed_at_ms != observed_at_ms
+        || report
+            .probe_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.observed_at_ms != report.observed_at_ms)
     {
         return Err("provider-global-sync-checkpoint-time-mismatch".into());
     }
@@ -293,22 +296,34 @@ pub(crate) fn inspect_new_copy_admission_checkpointed_with<F>(
     provider: CloudProvider,
     app_data_dir: &Path,
     now_ms: u64,
+    force: bool,
     probe: F,
 ) -> Result<ProviderGlobalSyncReport, String>
 where
     F: FnOnce() -> Result<ProviderGlobalSyncReport, String>,
 {
+    static ONEDRIVE_CHECKPOINT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static GOOGLE_DRIVE_CHECKPOINT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = match provider {
+        CloudProvider::Onedrive => ONEDRIVE_CHECKPOINT_LOCK.get_or_init(|| Mutex::new(())),
+        CloudProvider::GoogleDrive => GOOGLE_DRIVE_CHECKPOINT_LOCK.get_or_init(|| Mutex::new(())),
+        CloudProvider::Icloud => return Err("provider-global-sync-checkpoint-path-invalid".into()),
+    };
+    let _transaction = lock
+        .lock()
+        .map_err(|_| "provider-global-sync-checkpoint-lock-failed")?;
     let previous = load_checkpoint_document(app_data_dir, provider)?;
-    if let Some(previous) = previous.as_ref() {
-        if !previous.checkpoint.keep_local || !automatic_probe_due(&previous.checkpoint, now_ms)? {
-            return Ok(previous.report.clone());
+    if !force {
+        if let Some(previous) = previous.as_ref() {
+            if !previous.checkpoint.keep_local
+                || !automatic_probe_due(&previous.checkpoint, now_ms)?
+            {
+                return Ok(previous.report.clone());
+            }
         }
     }
     let report = probe()?;
-    let observed_at_ms = report
-        .probe_receipt
-        .as_ref()
-        .map_or(now_ms, |receipt| receipt.observed_at_ms);
+    let observed_at_ms = report.observed_at_ms;
     let checkpoint = checkpoint_report(
         &report,
         observed_at_ms,
@@ -328,8 +343,9 @@ pub fn inspect_new_copy_admission_checkpointed(
     provider: CloudProvider,
     app_data_dir: &Path,
     now_ms: u64,
+    force: bool,
 ) -> Result<ProviderGlobalSyncReport, String> {
-    inspect_new_copy_admission_checkpointed_with(provider, app_data_dir, now_ms, || {
+    inspect_new_copy_admission_checkpointed_with(provider, app_data_dir, now_ms, force, || {
         inspect_new_copy_admission(provider)
     })
 }
@@ -432,6 +448,7 @@ fn probe_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
         && receipt.schema_kind == PROBE_RECEIPT_SCHEMA_KIND
         && receipt.schema_version == PROBE_RECEIPT_SCHEMA_VERSION
         && receipt.observed_at_ms > 0
+        && receipt.observed_at_ms == report.observed_at_ms
         && receipt.outcome == ProviderProbeOutcome::Inconclusive
         && receipt.keep_local
         && receipt.next_action == ProviderProbeNextAction::KeepLocalAndRescan
@@ -449,6 +466,7 @@ fn probe_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
 /// blocked/inconclusive report can validate its shape without accidentally authorizing a copy.
 pub fn validate_report_evidence(report: &ProviderGlobalSyncReport) -> Result<(), String> {
     if report.schema_version != PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        || report.observed_at_ms == 0
         || report.evidence_kind != "fileproviderctl-global-dump"
         || provider_identifier(report.provider).is_none()
         || !probe_receipt_is_consistent(report)
@@ -597,9 +615,11 @@ pub fn parse_dump(
     if probe_timed_out {
         notices.push(PROBE_TIMEOUT_NOTICE.into());
     }
+    let observed_at_ms = crate::cloud::system_now_ms();
     Ok(ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider,
+        observed_at_ms,
         evidence_kind: "fileproviderctl-global-dump".into(),
         evidence_complete: !probe_timed_out,
         state,
@@ -608,9 +628,8 @@ pub fn parse_dump(
         pending_indexable_count,
         blockers,
         notices,
-        probe_receipt: probe_timed_out.then(|| {
-            inconclusive_probe_receipt(crate::cloud::system_now_ms(), PROBE_TIMEOUT_NOTICE)
-        }),
+        probe_receipt: probe_timed_out
+            .then(|| inconclusive_probe_receipt(observed_at_ms, PROBE_TIMEOUT_NOTICE)),
     })
 }
 
@@ -622,6 +641,7 @@ fn inconclusive_probe_report(
     ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider,
+        observed_at_ms,
         evidence_kind: "fileproviderctl-global-dump".into(),
         evidence_complete: false,
         state: ProviderGlobalSyncState::Unavailable,
@@ -938,7 +958,8 @@ sync engine state:
 
     #[test]
     fn quiet_dump_is_clear_without_retaining_paths() {
-        let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        report.observed_at_ms = 2_000;
         assert_eq!(report.state, ProviderGlobalSyncState::Clear);
         assert!(report.evidence_complete);
         assert!(report.blockers.is_empty());
@@ -1220,6 +1241,7 @@ sync engine state:
             CloudProvider::Onedrive,
             directory.path(),
             1_000,
+            false,
             || {
                 probes.set(probes.get() + 1);
                 Ok(inconclusive_probe_report(
@@ -1236,6 +1258,7 @@ sync engine state:
             CloudProvider::Onedrive,
             directory.path(),
             300_999,
+            false,
             || -> Result<ProviderGlobalSyncReport, String> {
                 panic!("a blocked provider must respect the persisted backoff")
             },
@@ -1248,6 +1271,7 @@ sync engine state:
             CloudProvider::Onedrive,
             directory.path(),
             301_000,
+            false,
             || {
                 probes.set(probes.get() + 1);
                 Ok(parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap())
@@ -1262,6 +1286,7 @@ sync engine state:
             CloudProvider::Onedrive,
             directory.path(),
             u64::MAX,
+            false,
             || -> Result<ProviderGlobalSyncReport, String> {
                 panic!("a complete clear checkpoint stops automatic polling")
             },
@@ -1271,8 +1296,87 @@ sync engine state:
     }
 
     #[test]
+    fn forced_refresh_bypasses_a_clear_checkpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let clear = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            1_000,
+            false,
+            || {
+                let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+                report.observed_at_ms = 1_000;
+                Ok(report)
+            },
+        )
+        .unwrap();
+        assert_eq!(clear.state, ProviderGlobalSyncState::Clear);
+        let forced = inspect_new_copy_admission_checkpointed_with(
+            CloudProvider::Onedrive,
+            directory.path(),
+            2_000,
+            true,
+            || {
+                let mut report = parse_dump(
+                    CloudProvider::Onedrive,
+                    "com.microsoft.OneDrive.FileProvider\nsync engine state:\n+ upload progress: 1/2\n",
+                )
+                .unwrap();
+                report.observed_at_ms = 2_000;
+                Ok(report)
+            },
+        )
+        .unwrap();
+        assert_eq!(forced.state, ProviderGlobalSyncState::Pending);
+        assert_eq!(forced.observed_at_ms, 2_000);
+    }
+
+    #[test]
+    fn concurrent_forced_checks_preserve_checkpoint_lineage() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let directory = tempfile::tempdir().unwrap();
+        let directory_path = directory.path();
+        let sequence = Arc::new(AtomicU64::new(1_000));
+        std::thread::scope(|scope| {
+            let handles = (0..2)
+                .map(|_| {
+                    let sequence = Arc::clone(&sequence);
+                    scope.spawn(move || {
+                        inspect_new_copy_admission_checkpointed_with(
+                            CloudProvider::Onedrive,
+                            directory_path,
+                            10_000,
+                            true,
+                            || {
+                                let observed_at_ms = sequence.fetch_add(1_000, Ordering::SeqCst);
+                                Ok(inconclusive_probe_report(
+                                    CloudProvider::Onedrive,
+                                    observed_at_ms,
+                                    "provider-global-sync-probe-timeout",
+                                ))
+                            },
+                        )
+                        .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                assert!(!handle.join().unwrap().evidence_complete);
+            }
+        });
+        let document = load_checkpoint_document(directory.path(), CloudProvider::Onedrive)
+            .unwrap()
+            .unwrap();
+        assert_eq!(document.checkpoint.observation_count, 2);
+        assert_eq!(document.checkpoint.observed_at_ms, 2_000);
+    }
+
+    #[test]
     fn clear_global_checkpoint_stops_polling_without_granting_eviction() {
-        let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        report.observed_at_ms = 2_000;
         let checkpoint = checkpoint_report(&report, 2_000, None).unwrap();
 
         assert!(!checkpoint.keep_local);
@@ -1283,13 +1387,14 @@ sync engine state:
 
     #[test]
     fn checkpoint_rejects_provider_or_time_drift() {
-        let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        report.observed_at_ms = 2_000;
         let first = checkpoint_report(&report, 2_000, None).unwrap();
         assert_eq!(
             checkpoint_report(&report, 2_000, Some(&first)).unwrap_err(),
             "provider-global-sync-checkpoint-lineage-invalid"
         );
-        let google = parse_dump(
+        let mut google = parse_dump(
             CloudProvider::GoogleDrive,
             &QUIET_DUMP.replace(
                 "com.microsoft.OneDrive.FileProvider",
@@ -1297,6 +1402,7 @@ sync engine state:
             ),
         )
         .unwrap();
+        google.observed_at_ms = 3_000;
         assert_eq!(
             checkpoint_report(&google, 3_000, Some(&first)).unwrap_err(),
             "provider-global-sync-checkpoint-lineage-invalid"
