@@ -1,5 +1,6 @@
 use disksage_lib::generated_cache_reclaim::{
     approve, audit, execute_and_record, stage_and_remove_regenerable_root,
+    MAX_APPROVAL_AGE_MS,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -165,7 +166,17 @@ fn run() -> Result<(), String> {
         &fresh,
         attempted_at_ms,
         &receipt_path,
-        |path| stage_and_remove_regenerable_root(&plan, path, &home, attempted_at_ms),
+        |path| {
+            stage_and_remove_regenerable_root(
+                &plan,
+                path,
+                &home,
+                attempted_at_ms,
+                approval
+                    .approved_at_ms
+                    .saturating_add(MAX_APPROVAL_AGE_MS),
+            )
+        },
     )?;
     println!(
         "{}",

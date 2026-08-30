@@ -4,12 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
-const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
+static AUDIT_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -107,9 +110,13 @@ fn hash_reader_bounded<R: Read>(
     hasher: &mut blake3::Hasher,
     hashed_bytes: &mut u64,
     limit: u64,
+    deadline: Option<Instant>,
 ) -> Result<(), String> {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         let read = reader
             .read(&mut buffer)
             .map_err(|_| "generated-cache-file-unreadable".to_string())?;
@@ -162,6 +169,8 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         })
 }
 
+type TreeObservation = (u64, u64, String, Vec<String>);
+
 #[cfg(unix)]
 fn path_bytes(path: &std::ffi::OsStr) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
@@ -206,7 +215,7 @@ fn allocated_bytes(_metadata: &std::fs::Metadata) -> Result<u64, String> {
     Err("generated-cache-allocation-evidence-unsupported-platform".into())
 }
 
-fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> {
+fn observe_tree_inner(path: &Path) -> Result<TreeObservation, String> {
     let mut stack = vec![path.to_path_buf()];
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
@@ -214,7 +223,12 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
     let mut hashed_content_bytes = 0_u64;
     let mut locks = Vec::new();
     let mut hasher = blake3::Hasher::new();
+    // An audit that outlives the approval-validity window cannot produce usable authority.
+    let deadline = Instant::now() + Duration::from_millis(MAX_APPROVAL_AGE_MS);
     while let Some(current) = stack.pop() {
+        if Instant::now() >= deadline {
+            return Err("generated-cache-audit-time-bound-exceeded".into());
+        }
         if entries >= MAX_ENTRIES {
             return Err("generated-cache-entry-limit".into());
         }
@@ -270,6 +284,7 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
                 &mut hasher,
                 &mut hashed_content_bytes,
                 MAX_HASHED_CONTENT_BYTES,
+                Some(deadline),
             )?;
         } else {
             let mut children = std::fs::read_dir(&current)
@@ -286,6 +301,39 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         hasher.finalize().to_hex().to_string(),
         locks,
     ))
+}
+
+fn receive_tree_observation(
+    receiver: mpsc::Receiver<Result<TreeObservation, String>>,
+    timeout: Duration,
+) -> Result<TreeObservation, String> {
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| "generated-cache-audit-worker-timeout".to_string())?
+}
+
+/// Isolate filesystem traversal so a blocked kernel read cannot retain mutation authority.
+fn observe_tree(path: &Path) -> Result<TreeObservation, String> {
+    if AUDIT_WORKER_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("generated-cache-audit-worker-busy".into());
+    }
+    let owned_path = path.to_path_buf();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("disksage-generated-cache-audit".into())
+        .spawn(move || {
+            let result = observe_tree_inner(&owned_path);
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            let _ = sender.send(result);
+        })
+        .map_err(|_| {
+            AUDIT_WORKER_ACTIVE.store(false, Ordering::Release);
+            "generated-cache-audit-worker-spawn-failed".to_string()
+        })?;
+    receive_tree_observation(receiver, Duration::from_millis(MAX_APPROVAL_AGE_MS))
 }
 
 pub fn plan_with_evidence(
@@ -520,6 +568,7 @@ pub fn stage_and_remove_regenerable_root(
     path: &Path,
     home: &Path,
     now_ms: u64,
+    approval_deadline_ms: u64,
 ) -> Result<(), String> {
     if plan.root != path.to_string_lossy()
         || plan.contract
@@ -543,7 +592,8 @@ pub fn stage_and_remove_regenerable_root(
         use std::os::unix::fs::DirBuilderExt;
         staging_builder.mode(0o700);
     }
-    staging_builder.create(&staging)
+    staging_builder
+        .create(&staging)
         .map_err(|_| "generated-cache-staging-create-failed")?;
     let staged = staging.join(name);
     if let Err(error) = std::fs::rename(path, &staged) {
@@ -571,6 +621,13 @@ pub fn stage_and_remove_regenerable_root(
             || active_after_hash.active
         {
             return Err("generated-cache-staged-active-use".into());
+        }
+        let current_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "generated-cache-clock-unavailable")?
+            .as_millis() as u64;
+        if current_ms > approval_deadline_ms {
+            return Err("generated-cache-approval-expired-before-removal".into());
         }
         std::fs::remove_dir_all(&staged)
             .map_err(|_| "generated-cache-remove-failed".to_string())?;
@@ -887,7 +944,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("model.bin"), b"regenerable").unwrap();
         let plan = plan_with_evidence(&root, home, inactive(), 1).unwrap();
-        stage_and_remove_regenerable_root(&plan, &root, home, 2).unwrap();
+        stage_and_remove_regenerable_root(&plan, &root, home, 2, u64::MAX).unwrap();
         assert!(!root.exists());
         assert!(!home
             .join(".cache")
@@ -904,9 +961,23 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         let mut hashed = 0;
         assert_eq!(
-            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4).unwrap_err(),
+            hash_reader_bounded(&mut reader, &mut hasher, &mut hashed, 4, None).unwrap_err(),
             "generated-cache-content-bound-exceeded"
         );
         assert!(hashed > 4);
+    }
+
+    #[test]
+    fn stalled_audit_worker_fails_closed_without_waiting_for_sender() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = sender.send(Ok((0, 0, String::new(), Vec::new())));
+        });
+        assert_eq!(
+            receive_tree_observation(receiver, Duration::from_millis(1)).unwrap_err(),
+            "generated-cache-audit-worker-timeout"
+        );
+        worker.join().unwrap();
     }
 }
