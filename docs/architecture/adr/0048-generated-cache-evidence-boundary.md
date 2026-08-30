@@ -6,6 +6,10 @@ Accepted
 
 ## Decision
 
+The process-path probe excludes both its child probe PID and the current DiskSage PID. Otherwise
+the CLI's own `--root` argument would classify every inspected cache as active. External processes
+whose handles or command paths enter the cache remain blockers.
+
 DiskSage admits only exact cache roots with a named regeneration contract. It never infers safety
 from a directory name, age, or size. Recursive open-process evidence, tool locks, and temporary Git
 ownership evidence must be complete and inactive. Registered, dirty, or live temporary workspaces
