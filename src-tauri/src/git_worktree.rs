@@ -1567,6 +1567,11 @@ fn ps_command_args() -> Vec<OsString> {
 }
 
 #[cfg(unix)]
+fn is_external_process(pid: u32, probe_pid: u32, disksage_pid: u32) -> bool {
+    pid != probe_pid && pid != disksage_pid
+}
+
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -1677,6 +1682,8 @@ pub(crate) fn active_use_evidence_with_command_path(
                 error: Some("active-use-pid-invalid".into()),
             };
         };
+        // The lsof probe itself is noise, but another task in this DiskSage
+        // process may legitimately hold the reviewed tree open.
         if pid == result.child_pid {
             continue;
         }
@@ -1718,7 +1725,9 @@ pub(crate) fn active_use_evidence_with_command_path(
         else {
             continue;
         };
-        if pid != ps.child_pid && command_contains_path(&line[split..], path_bytes, recursive) {
+        if is_external_process(pid, ps.child_pid, std::process::id())
+            && command_contains_path(&line[split..], path_bytes, recursive)
+        {
             pids.insert(pid);
         }
     }
@@ -3478,6 +3487,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn active_use_pid_filter_excludes_probe_and_disksage_processes() {
+        assert!(!is_external_process(41, 41, 42));
+        assert!(!is_external_process(42, 41, 42));
+        assert!(is_external_process(43, 41, 42));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn staged_probe_keeps_original_command_path_identity() {
         let temp = tempfile::tempdir().unwrap();
         let original = temp.path().join("approved-cache");
@@ -3488,8 +3505,7 @@ mod tests {
             .spawn()
             .unwrap();
 
-        let evidence =
-            active_use_evidence_with_command_path(&staged, &original, 5_000, 64, true);
+        let evidence = active_use_evidence_with_command_path(&staged, &original, 5_000, 64, true);
         let _ = child.kill();
         let _ = child.wait();
 
