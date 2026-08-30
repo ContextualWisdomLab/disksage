@@ -5,6 +5,9 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Package the Podman repair, photo-similarity, and shared-temporary-space CLIs on every supported
+  release platform; retain completed OneDrive Finder postchecks when a later item is unavailable;
+  and keep all scanned siblings visible when exactly one file appears after a directory scan.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
   surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
 - Revalidate every selected photo group member and block the whole quarantine when a survivor or

@@ -100,12 +100,32 @@ fn node_view_after_snapshot(
     after_snapshot();
     let captured_file_manifest =
         crate::scanner::directory_file_manifest_from_entries(&directory_entries);
+    let expected_file_manifest = res
+        .directory_file_manifests
+        .get(&display_path)
+        .or_else(|| res.directory_file_manifests.get(&canonical_path));
     let complete_file_manifest_matches = !res.cancelled
-        && res
-            .directory_file_manifests
-            .get(&display_path)
-            .or_else(|| res.directory_file_manifests.get(&canonical_path))
+        && expected_file_manifest
             .is_some_and(|expected| captured_file_manifest.as_ref() == Some(expected));
+    let single_new_file = if !res.cancelled && !complete_file_manifest_matches {
+        captured_file_manifest.as_ref().and_then(|captured| {
+            expected_file_manifest.and_then(|expected| {
+                directory_entries.iter().find_map(|entry| {
+                    let file_type = entry.file_type().ok()?;
+                    if file_type.is_symlink() || !file_type.is_file() {
+                        return None;
+                    }
+                    let size = entry.metadata().ok()?.len();
+                    (crate::scanner::manifest_without_file(captured, &entry.file_name(), size)
+                        .as_ref()
+                        == Some(expected))
+                    .then(|| entry.path())
+                })
+            })
+        })
+    } else {
+        None
+    };
     let mut entries = Vec::new();
     for entry in directory_entries {
         let Ok(file_type) = entry.file_type() else {
@@ -122,7 +142,11 @@ fn node_view_after_snapshot(
             };
             (size, true)
         } else if file_type.is_file() {
+            if !complete_file_manifest_matches && single_new_file.as_ref() == Some(&entry_path) {
+                continue;
+            }
             if !complete_file_manifest_matches
+                && single_new_file.is_none()
                 && !res.admitted_files.contains(&display_entry_path)
                 && !res.admitted_files.contains(&entry_path)
             {
@@ -282,6 +306,23 @@ mod tests {
             .all(|entry| entry.name != "post-scan.bin"));
     }
 
+    #[test]
+    fn one_post_scan_file_does_not_hide_large_scanned_directory() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..1_100 {
+            std::fs::write(root.path().join(format!("scanned-{index:04}.bin")), b"x").unwrap();
+        }
+        let result = scan(root.path());
+        std::fs::write(root.path().join("post-scan.bin"), b"new").unwrap();
+
+        let view = node_view(&result, root.path()).unwrap();
+        assert_eq!(view.entries.len(), 1_100);
+        assert!(view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "post-scan.bin"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn unix_socket_is_not_returned_when_regular_file_manifest_matches() {
@@ -296,7 +337,10 @@ mod tests {
         let view = node_view(&result, root.path()).unwrap();
 
         assert!(view.entries.iter().any(|entry| entry.name == "regular.bin"));
-        assert!(view.entries.iter().all(|entry| entry.name != "service.sock"));
+        assert!(view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "service.sock"));
     }
 
     #[test]

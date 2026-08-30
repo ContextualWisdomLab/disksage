@@ -40,10 +40,22 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-linux-x86_64.sha256
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64
+              src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64
+              src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64
           - os: windows-2022
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
@@ -52,10 +64,22 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe.sha256
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe
+              src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe
+              src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan.exe
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit.exe
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair.exe
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit.exe
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan.exe
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe
           - os: macos-latest
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
@@ -71,6 +95,12 @@ jobs:
               src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64.sha256
               src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
               src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-macos-arm64
+              src-tauri/target/release/disksage-podman-storage-repair-macos-arm64.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64
+              src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
@@ -83,6 +113,12 @@ jobs:
             cloud_local_inventory_cli_asset: src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64
             onedrive_finder_verify_cli_source: src-tauri/target/release/disksage-onedrive-finder-verify
             onedrive_finder_verify_cli_asset: src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-macos-arm64
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -161,6 +197,8 @@ jobs:
         run: >-
           cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
           --bin disksage-cloud-plan --bin disksage-duplicate-audit
+          --bin disksage-podman-storage-repair
+          --bin disksage-photo-similarity-audit --bin disksage-shared-temp-reclaim-plan
 
       - name: Build macOS cloud-local inventory and planners
         if: matrix.os == 'macos-latest'
@@ -204,6 +242,9 @@ jobs:
           }
           stage_cli "${{ matrix.cloud_cli_source }}" "${{ matrix.cloud_cli_asset }}" "usage: disksage-cloud-plan"
           stage_cli "${{ matrix.duplicate_cli_source }}" "${{ matrix.duplicate_cli_asset }}" "usage: disksage-duplicate-audit"
+          stage_cli "${{ matrix.podman_repair_cli_source }}" "${{ matrix.podman_repair_cli_asset }}" "Usage: disksage-podman-storage-repair"
+          stage_cli "${{ matrix.photo_similarity_cli_source }}" "${{ matrix.photo_similarity_cli_asset }}" "Usage: disksage-photo-similarity-audit"
+          stage_cli "${{ matrix.shared_temp_cli_source }}" "${{ matrix.shared_temp_cli_asset }}" "Usage: disksage-shared-temp-reclaim-plan"
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
             stage_cli "${{ matrix.eviction_batch_cli_source }}" "${{ matrix.eviction_batch_cli_asset }}" "--manifest ABSOLUTE_JSON"
             stage_cli "${{ matrix.icloud_eviction_batch_cli_source }}" "${{ matrix.icloud_eviction_batch_cli_asset }}" "usage: disksage-icloud-local-eviction-batch"
