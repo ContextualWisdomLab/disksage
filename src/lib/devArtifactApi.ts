@@ -8,6 +8,11 @@ export interface DevArtifactApproval {
   exact_phrase: string;
 }
 
+export const isDevArtifactApprovalCurrent = (
+  approval: DevArtifactApproval | null,
+  nowMs: number,
+): approval is DevArtifactApproval => approval !== null && nowMs < approval.expires_at_ms;
+
 export const reviewDevArtifacts = (root: string, artifacts: DevArtifact[]) =>
   invoke<DevArtifactApproval>("review_dev_artifacts", { root, artifacts });
 
