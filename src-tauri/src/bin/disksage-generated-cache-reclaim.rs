@@ -1,6 +1,5 @@
 use disksage_lib::generated_cache_reclaim::{
-    approve, audit, execute_and_record, stage_and_remove_regenerable_root,
-    MAX_APPROVAL_AGE_MS,
+    approve, audit, execute_and_record, stage_and_remove_regenerable_root, MAX_APPROVAL_AGE_MS,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -175,9 +174,7 @@ fn run() -> Result<(), String> {
                 path,
                 &home,
                 attempted_at_ms,
-                approval
-                    .approved_at_ms
-                    .saturating_add(MAX_APPROVAL_AGE_MS),
+                approval.approved_at_ms.saturating_add(MAX_APPROVAL_AGE_MS),
             )
         },
     )?;
@@ -192,7 +189,14 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = run() {
+    #[cfg(unix)]
+    let result = disksage_lib::git_worktree::with_ignored_command_pid(
+        unsafe { libc::getppid() as u32 },
+        run,
+    );
+    #[cfg(not(unix))]
+    let result = run();
+    if let Err(error) = result {
         eprintln!("disksage-generated-cache-reclaim: {error}");
         std::process::exit(2);
     }

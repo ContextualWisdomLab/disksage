@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -176,21 +176,29 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
 }
 
 fn disksage_temporary_cargo_target(path: &Path) -> Option<RegenerationContract> {
-    let temp_root = std::env::temp_dir();
-    let name = path.file_name()?.to_str()?;
-    if path.parent() != Some(temp_root.as_path())
-        || !name.starts_with("disksage-eviction-cli-duplicate-singletons-")
-        || name
-            .strip_prefix("disksage-eviction-cli-duplicate-singletons-")?
-            .is_empty()
+    #[cfg(not(target_os = "macos"))]
     {
+        let _ = path;
         return None;
     }
-    let lock_metadata = std::fs::symlink_metadata(path.join("debug/.cargo-lock")).ok()?;
-    if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
-        return None;
+    #[cfg(target_os = "macos")]
+    {
+        let temp_root = std::env::temp_dir();
+        let name = path.file_name()?.to_str()?;
+        if path.parent() != Some(temp_root.as_path())
+            || !name.starts_with("disksage-eviction-cli-duplicate-singletons-")
+            || name
+                .strip_prefix("disksage-eviction-cli-duplicate-singletons-")?
+                .is_empty()
+        {
+            return None;
+        }
+        let lock_metadata = std::fs::symlink_metadata(path.join("debug/.cargo-lock")).ok()?;
+        if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
+            return None;
+        }
+        Some(RegenerationContract::DiskSageTemporaryCargoTarget)
     }
-    Some(RegenerationContract::DiskSageTemporaryCargoTarget)
 }
 
 type TreeObservation = (u64, u64, String, Vec<String>);
@@ -780,6 +788,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn disksage_owned_temporary_cargo_target_is_regenerable_but_neighbors_are_not() {
         let temp_root = std::env::temp_dir();
@@ -801,6 +810,17 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn disksage_temporary_cargo_target_contract_is_unavailable_off_macos() {
+        assert_eq!(
+            disksage_temporary_cargo_target(Path::new(
+                "/tmp/disksage-eviction-cli-duplicate-singletons-test"
+            )),
+            None
+        );
     }
 
     #[test]

@@ -1567,12 +1567,29 @@ fn ps_command_args() -> Vec<OsString> {
 }
 
 #[cfg(unix)]
-fn is_external_process(pid: u32, probe_pid: u32, disksage_pid: u32, parent_pid: u32) -> bool {
-    // The invoking shell necessarily contains the reviewed path in DiskSage's CLI arguments.
-    // It is control-plane context, not a consumer of the tree; lsof evidence still detects any
-    // descriptor it actually holds. Excluding only the direct parent keeps unrelated processes
-    // fail-closed while avoiding a self-created command-line false positive.
-    pid != probe_pid && pid != disksage_pid && pid != parent_pid
+fn is_external_process(
+    pid: u32,
+    probe_pid: u32,
+    disksage_pid: u32,
+    ignored_command_pid: Option<u32>,
+) -> bool {
+    pid != probe_pid && pid != disksage_pid && Some(pid) != ignored_command_pid
+}
+
+#[cfg(unix)]
+thread_local! {
+    static IGNORED_COMMAND_PID: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run one CLI-owned probe scope while ignoring only its invoking shell's command line.
+#[cfg(unix)]
+pub fn with_ignored_command_pid<T>(pid: u32, operation: impl FnOnce() -> T) -> T {
+    IGNORED_COMMAND_PID.with(|ignored| {
+        let previous = ignored.replace(Some(pid));
+        let result = operation();
+        ignored.set(previous);
+        result
+    })
 }
 
 #[cfg(unix)]
@@ -1715,7 +1732,7 @@ pub(crate) fn active_use_evidence_with_command_path(
         }
     };
     let path_bytes = command_path.as_os_str().as_encoded_bytes();
-    let parent_pid = unsafe { libc::getppid() as u32 };
+    let ignored_command_pid = IGNORED_COMMAND_PID.with(std::cell::Cell::get);
     for line in ps.stdout.split(|byte| *byte == b'\n') {
         let line = &line[line
             .iter()
@@ -1730,7 +1747,7 @@ pub(crate) fn active_use_evidence_with_command_path(
         else {
             continue;
         };
-        if is_external_process(pid, ps.child_pid, std::process::id(), parent_pid)
+        if is_external_process(pid, ps.child_pid, std::process::id(), ignored_command_pid)
             && command_contains_path(&line[split..], path_bytes, recursive)
         {
             pids.insert(pid);
@@ -3493,10 +3510,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn active_use_pid_filter_excludes_probe_and_disksage_processes() {
-        assert!(!is_external_process(41, 41, 42, 43));
-        assert!(!is_external_process(42, 41, 42, 43));
-        assert!(!is_external_process(43, 41, 42, 43));
-        assert!(is_external_process(44, 41, 42, 43));
+        assert!(!is_external_process(41, 41, 42, Some(43)));
+        assert!(!is_external_process(42, 41, 42, Some(43)));
+        assert!(!is_external_process(43, 41, 42, Some(43)));
+        assert!(is_external_process(43, 41, 42, None));
+        assert!(is_external_process(44, 41, 42, Some(43)));
     }
 
     #[cfg(unix)]
