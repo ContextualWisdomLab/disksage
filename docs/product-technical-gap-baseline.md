@@ -1203,6 +1203,18 @@ runner's private workspace temp root instead of weakening the shared production 
   child PIDs. External handle and command-path matches remain fail-closed. Focused regression proof
   covers all three PID relationships.
 
+## 2026-08-30 bounded whole-home allocation mapping
+
+- Recursive `du` probes of the full home, Pictures/Documents/Downloads, and repository clones did
+  not finish within a 90-second operator observation and were cancelled without mutation. Targeted
+  metadata scans measured Mobile Documents at 41,275,700 KiB, Application Support at 44,091,144
+  KiB, Group Containers at 16,582,836 KiB, and `/private/var` at 25,965,024 KiB. Provider, Photos,
+  VM, system database, and dirty worktree areas remain preservation boundaries.
+- `disksage-allocation-map` replaces the unbounded manual probe with caller-explicit entry and
+  duration budgets, allocated-block accounting, same-device traversal, symlink non-following, and
+  explicit incomplete stop evidence. `/private/var/folders` is classified as per-user cache and
+  temporary storage rather than generic system data, but this read-only label grants no cleanup.
+
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.

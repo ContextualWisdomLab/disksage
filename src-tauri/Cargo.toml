@@ -116,6 +116,10 @@ path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
 
 [[bin]]
+name = "disksage-allocation-map"
+path = "src/bin/disksage-allocation-map.rs"
+
+[[bin]]
 name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
 

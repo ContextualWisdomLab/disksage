@@ -3,6 +3,7 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 pub mod archive_git_tree;
+pub mod allocation_map;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
