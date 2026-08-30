@@ -91,6 +91,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(providerApiBody).toMatch(
       /copyingFingerprint = candidate\.metadata_fingerprint;[\s\S]*?cancellableCopyActive = true;/,
     );
+    expect(providerApiBody).toContain("isCloudCopyCancelled(e)");
+    expect(providerApiBody).toContain("클라우드 복사를 취소했습니다. 원본은 유지됩니다.");
     expect(adoptBody).toMatch(
       /copyingFingerprint = candidate\.metadata_fingerprint;[\s\S]*?cancellableCopyActive = false;/,
     );

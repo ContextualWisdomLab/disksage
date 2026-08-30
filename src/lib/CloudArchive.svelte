@@ -432,7 +432,9 @@
       );
       objectId = copied.provider_object_id ?? "";
     } catch (e) {
-      loadError = boundedCloudArchiveErrorMessage("provider-api-copy", e);
+      loadError = isCloudCopyCancelled(e)
+        ? "클라우드 복사를 취소했습니다. 원본은 유지됩니다."
+        : boundedCloudArchiveErrorMessage("provider-api-copy", e);
     } finally {
       copyingFingerprint = "";
       cancellableCopyActive = false;
