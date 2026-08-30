@@ -632,6 +632,19 @@ fn remove_if_storage_identity(
         let _ = std::fs::remove_dir(&staging_dir);
         return recovery.and(Err("duplicate-reclaim-candidate-content-changed".into()));
     }
+    match active_duplicate_candidates(std::slice::from_ref(&staged)) {
+        Ok(active) if active.contains(&staged) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err("duplicate-reclaim-active-during-staging".into()));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err(error));
+        }
+    }
     if let Err(error) = std::fs::remove_file(&staged) {
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
