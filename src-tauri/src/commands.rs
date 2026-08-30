@@ -7,6 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
+const PROVIDER_API_COPY_DEADLINE_SECS: u64 = 30 * 60;
+
+#[cfg(not(coverage))]
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(not(coverage))]
@@ -1943,6 +1946,8 @@ fn create_cloud_candidate_provider_api_receipt(
     exact_confirmation_phrase: &str,
     approval_rationale: &str,
     app: &AppHandle,
+    cancel: &AtomicBool,
+    deadline: Instant,
 ) -> Result<CloudCopyOutput, String> {
     use tauri::Manager;
     if metadata_fingerprint.len() != 64
@@ -2014,6 +2019,7 @@ fn create_cloud_candidate_provider_api_receipt(
         copied_at_ms,
     )?;
     let access_token = provider_oauth::refreshed_access_token(&connection_path, &selected)?;
+    let control = provider_api_write::ProviderUploadControl::new(cancel, deadline);
     let upload = provider_api_write::upload_file(
         selected.provider,
         Path::new(&selected.path),
@@ -2021,7 +2027,27 @@ fn create_cloud_candidate_provider_api_receipt(
         Path::new(&candidate.src),
         candidate.bytes,
         access_token.as_str(),
-    )?;
+        &control,
+    );
+    let upload = match upload {
+        Ok(upload) => upload,
+        Err(error) => {
+            let failure_dir = app.path().app_data_dir()
+                .map_err(|_| "app-data-directory-unavailable".to_string())?
+                .join("cloud-copy-failures");
+            let journal_error = cloud_transfer::record_copy_failure(
+                candidate,
+                cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+                &error,
+                cloud::system_now_ms(),
+                &failure_dir,
+            ).err();
+            return Err(match journal_error {
+                Some(journal_error) => format!("{error};{journal_error}"),
+                None => error,
+            });
+        }
+    };
     if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
     {
         let cleanup = provider_api_write::delete_uploaded_object(
@@ -2233,7 +2259,37 @@ pub async fn copy_cloud_candidate_via_provider_api(
     state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
+    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
+    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
+        struct ProviderCopyReset {
+            cancel: Arc<AtomicBool>,
+            operation: Arc<Mutex<Option<String>>>,
+            fingerprint: String,
+        }
+        impl Drop for ProviderCopyReset {
+            fn drop(&mut self) {
+                self.cancel.store(false, Ordering::SeqCst);
+                if let Ok(mut active) = self.operation.lock() {
+                    if active.as_deref() == Some(self.fingerprint.as_str()) { *active = None; }
+                }
+            }
+        }
+        {
+            let mut active = cloud_copy_operation.lock()
+                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            if active.is_some() { return Err("cloud-copy-already-active".to_string()); }
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            *active = Some(metadata_fingerprint.clone());
+        }
+        let _reset = ProviderCopyReset {
+            cancel: Arc::clone(&cloud_copy_cancel),
+            operation: Arc::clone(&cloud_copy_operation),
+            fingerprint: metadata_fingerprint.clone(),
+        };
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(PROVIDER_API_COPY_DEADLINE_SECS))
+            .ok_or_else(|| "cloud-copy-deadline-unavailable".to_string())?;
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
@@ -2247,6 +2303,8 @@ pub async fn copy_cloud_candidate_via_provider_api(
             &exact_confirmation_phrase,
             &approval_rationale,
             &app,
+            &cloud_copy_cancel,
+            deadline,
         )
     })
     .await

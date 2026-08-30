@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Bound provider-API cloud copies to the active cancellation operation and one command-owned
+  overall deadline. Uploads check the bound before and between chunks and after provider success,
+  clean resumable sessions or completed objects on bounded exits, and journal failures before
+  returning an actionable error.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
