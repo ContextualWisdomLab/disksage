@@ -23,6 +23,11 @@ say what to do next, while stable reason codes and evidence kinds remain availab
   allocation bytes in unique, completed action receipts. Incomplete receipts cannot claim bytes.
 - Customer-facing status leads with the next action. Evidence kinds, reason codes, and other
   implementation diagnostics appear only under an explicitly opened audit-detail disclosure.
+- Automatic third-party provider rechecks persist a path-free, fingerprinted checkpoint. Blocked
+  or inconclusive observations become due after the already documented five-minute safety interval;
+  a monotonic observation counter and timestamp bind the next checkpoint. A clear global queue
+  stops automatic polling, but it is only permission to perform a fresh item-specific check and is
+  never local-eviction authority.
 
 ## Consequences
 
@@ -38,6 +43,10 @@ and customers can act without interpreting internal evidence terminology.
   admits concurrent writers and copy-on-write or snapshot effects.
 - Showing reason codes in the primary status was rejected because they do not tell a customer what
   safe action to take.
+- Polling a busy provider continuously was rejected because repeated full queue dumps add readers
+  during the condition being diagnosed. Treating a clear global queue as item readiness was rejected
+  because it does not prove upload, identity, content, conflict, active-use, or eviction capability
+  for any particular file.
 
 ## Evidence
 

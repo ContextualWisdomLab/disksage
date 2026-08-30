@@ -7,6 +7,7 @@
 
 use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
 // room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
@@ -16,6 +17,9 @@ const PROBE_TIMEOUT_MARKER: &str = "provider-global-sync-probe-timeout: yes";
 const PROBE_TIMEOUT_NOTICE: &str = "provider-global-sync-probe-timeout";
 const PROBE_RECEIPT_SCHEMA_KIND: &str = "disksage.provider-probe-receipt";
 const PROBE_RECEIPT_SCHEMA_VERSION: u32 = 1;
+const AUTOMATIC_PROBE_BACKOFF_MS: u64 = 5 * 60 * 1_000;
+const PROBE_CHECKPOINT_SCHEMA_KIND: &str = "disksage.provider-global-sync-checkpoint";
+const PROBE_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -68,6 +72,25 @@ pub struct ProviderProbeReceipt {
     pub audit_reason_codes: Vec<String>,
 }
 
+/// Path-free checkpoint for bounded automatic provider re-observation.
+///
+/// A clear global queue permits a later item-specific check; it never authorizes local eviction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderGlobalSyncCheckpoint {
+    pub schema_kind: String,
+    pub schema_version: u32,
+    pub provider: CloudProvider,
+    pub observation_count: u64,
+    pub observed_at_ms: u64,
+    pub evidence_complete: bool,
+    pub state: ProviderGlobalSyncState,
+    pub keep_local: bool,
+    pub next_automatic_probe_at_ms: Option<u64>,
+    pub audit_reason_codes: Vec<String>,
+    pub checkpoint_fingerprint_sha256: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderProbeOutcome {
@@ -81,6 +104,111 @@ pub enum ProviderProbeNextAction {
 }
 
 pub const PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION: u32 = 1;
+
+fn checkpoint_fingerprint(checkpoint: &ProviderGlobalSyncCheckpoint) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"disksage.provider-global-sync-checkpoint/v1\0");
+    hash.update(checkpoint.provider.as_str().as_bytes());
+    hash.update(checkpoint.observation_count.to_be_bytes());
+    hash.update(checkpoint.observed_at_ms.to_be_bytes());
+    hash.update([checkpoint.evidence_complete as u8]);
+    hash.update(checkpoint.state.as_str().as_bytes());
+    hash.update([checkpoint.keep_local as u8]);
+    hash.update(
+        checkpoint
+            .next_automatic_probe_at_ms
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for reason in &checkpoint.audit_reason_codes {
+        hash.update((reason.len() as u64).to_be_bytes());
+        hash.update(reason.as_bytes());
+    }
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+pub fn validate_probe_checkpoint(checkpoint: &ProviderGlobalSyncCheckpoint) -> Result<(), String> {
+    let blocked =
+        !(checkpoint.evidence_complete && checkpoint.state == ProviderGlobalSyncState::Clear);
+    if checkpoint.schema_kind != PROBE_CHECKPOINT_SCHEMA_KIND
+        || checkpoint.schema_version != PROBE_CHECKPOINT_SCHEMA_VERSION
+        || checkpoint.observation_count == 0
+        || checkpoint.observed_at_ms == 0
+        || checkpoint.keep_local != blocked
+        || blocked != checkpoint.next_automatic_probe_at_ms.is_some()
+        || checkpoint.next_automatic_probe_at_ms.is_some_and(|next| {
+            next != checkpoint
+                .observed_at_ms
+                .saturating_add(AUTOMATIC_PROBE_BACKOFF_MS)
+        })
+        || checkpoint.audit_reason_codes.len() > 32
+        || checkpoint
+            .audit_reason_codes
+            .iter()
+            .any(|reason| !probe_reason_code_is_valid(reason))
+        || checkpoint_fingerprint(checkpoint) != checkpoint.checkpoint_fingerprint_sha256
+    {
+        return Err("provider-global-sync-checkpoint-invalid".into());
+    }
+    Ok(())
+}
+
+pub fn checkpoint_report(
+    report: &ProviderGlobalSyncReport,
+    observed_at_ms: u64,
+    previous: Option<&ProviderGlobalSyncCheckpoint>,
+) -> Result<ProviderGlobalSyncCheckpoint, String> {
+    validate_report_evidence(report)?;
+    if observed_at_ms == 0 {
+        return Err("provider-global-sync-checkpoint-time-invalid".into());
+    }
+    let observation_count = if let Some(previous) = previous {
+        validate_probe_checkpoint(previous)?;
+        if previous.provider != report.provider || observed_at_ms <= previous.observed_at_ms {
+            return Err("provider-global-sync-checkpoint-lineage-invalid".into());
+        }
+        previous
+            .observation_count
+            .checked_add(1)
+            .ok_or_else(|| "provider-global-sync-checkpoint-count-overflow".to_string())?
+    } else {
+        1
+    };
+    let keep_local = !(report.evidence_complete && report.state == ProviderGlobalSyncState::Clear);
+    let mut audit_reason_codes = report.blockers.clone();
+    audit_reason_codes.sort();
+    audit_reason_codes.dedup();
+    let mut checkpoint = ProviderGlobalSyncCheckpoint {
+        schema_kind: PROBE_CHECKPOINT_SCHEMA_KIND.into(),
+        schema_version: PROBE_CHECKPOINT_SCHEMA_VERSION,
+        provider: report.provider,
+        observation_count,
+        observed_at_ms,
+        evidence_complete: report.evidence_complete,
+        state: report.state,
+        keep_local,
+        next_automatic_probe_at_ms: keep_local
+            .then(|| observed_at_ms.saturating_add(AUTOMATIC_PROBE_BACKOFF_MS)),
+        audit_reason_codes,
+        checkpoint_fingerprint_sha256: String::new(),
+    };
+    checkpoint.checkpoint_fingerprint_sha256 = checkpoint_fingerprint(&checkpoint);
+    validate_probe_checkpoint(&checkpoint)?;
+    Ok(checkpoint)
+}
+
+pub fn automatic_probe_due(
+    checkpoint: &ProviderGlobalSyncCheckpoint,
+    now_ms: u64,
+) -> Result<bool, String> {
+    validate_probe_checkpoint(checkpoint)?;
+    Ok(checkpoint
+        .next_automatic_probe_at_ms
+        .is_some_and(|next| now_ms >= next))
+}
 
 fn provider_identifier(provider: CloudProvider) -> Option<&'static str> {
     match provider {
@@ -176,7 +304,8 @@ fn probe_receipt_is_consistent(report: &ProviderGlobalSyncReport) -> bool {
         && !receipt.audit_reason_codes.is_empty()
         && receipt.audit_reason_codes.len() <= 16
         && receipt.audit_reason_codes.iter().all(|reason| {
-            probe_reason_code_is_valid(reason) && report.blockers.iter().any(|blocker| blocker == reason)
+            probe_reason_code_is_valid(reason)
+                && report.blockers.iter().any(|blocker| blocker == reason)
         })
 }
 
@@ -252,14 +381,15 @@ pub fn parse_dump(
         has_item_not_found |= marker_lower.contains("code=-1005")
             || marker_lower.contains("itemnotfound")
             || marker.contains("파일이 존재하지 않습니다");
-        has_local_disk_full |= contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
-            || marker_lower.contains("enospc")
-            || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "osstatus ", "-34")
-            || marker_lower.contains("no space left on device")
-            || marker_lower.contains("disk full");
+        has_local_disk_full |=
+            contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
+                || marker_lower.contains("enospc")
+                || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "osstatus ", "-34")
+                || marker_lower.contains("no space left on device")
+                || marker_lower.contains("disk full");
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
@@ -865,7 +995,9 @@ sync engine state:
             "provider-global-sync-evidence-incomplete"
         );
         assert!(report.notices.contains(&PROBE_TIMEOUT_NOTICE.into()));
-        let receipt = report.probe_receipt.expect("partial timeout must carry its receipt");
+        let receipt = report
+            .probe_receipt
+            .expect("partial timeout must carry its receipt");
         assert_eq!(receipt.outcome, ProviderProbeOutcome::Inconclusive);
         assert!(receipt.keep_local);
         assert_eq!(receipt.audit_reason_codes, vec![PROBE_TIMEOUT_NOTICE]);
@@ -903,6 +1035,61 @@ sync engine state:
         assert_eq!(
             require_new_copy_admission(&report).unwrap_err(),
             "provider-global-sync-evidence-invalid"
+        );
+    }
+
+    #[test]
+    fn blocked_probe_checkpoint_backs_off_and_preserves_lineage() {
+        let report = inconclusive_probe_report(
+            CloudProvider::Onedrive,
+            1_000,
+            "provider-global-sync-probe-timeout",
+        );
+        let first = checkpoint_report(&report, 1_000, None).unwrap();
+        assert!(first.keep_local);
+        assert_eq!(first.observation_count, 1);
+        assert_eq!(first.next_automatic_probe_at_ms, Some(301_000));
+        assert!(!automatic_probe_due(&first, 300_999).unwrap());
+        assert!(automatic_probe_due(&first, 301_000).unwrap());
+
+        let second = checkpoint_report(&report, 301_000, Some(&first)).unwrap();
+        assert_eq!(second.observation_count, 2);
+        assert_ne!(
+            first.checkpoint_fingerprint_sha256,
+            second.checkpoint_fingerprint_sha256
+        );
+    }
+
+    #[test]
+    fn clear_global_checkpoint_stops_polling_without_granting_eviction() {
+        let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        let checkpoint = checkpoint_report(&report, 2_000, None).unwrap();
+
+        assert!(!checkpoint.keep_local);
+        assert_eq!(checkpoint.next_automatic_probe_at_ms, None);
+        assert!(!automatic_probe_due(&checkpoint, u64::MAX).unwrap());
+        assert!(checkpoint.audit_reason_codes.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_rejects_provider_or_time_drift() {
+        let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+        let first = checkpoint_report(&report, 2_000, None).unwrap();
+        assert_eq!(
+            checkpoint_report(&report, 2_000, Some(&first)).unwrap_err(),
+            "provider-global-sync-checkpoint-lineage-invalid"
+        );
+        let google = parse_dump(
+            CloudProvider::GoogleDrive,
+            &QUIET_DUMP.replace(
+                "com.microsoft.OneDrive.FileProvider",
+                "com.google.drivefs.fpext",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            checkpoint_report(&google, 3_000, Some(&first)).unwrap_err(),
+            "provider-global-sync-checkpoint-lineage-invalid"
         );
     }
 
