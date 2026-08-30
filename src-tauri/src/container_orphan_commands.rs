@@ -1,8 +1,22 @@
 use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+fn ensure_container_receipt_dir(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        std::fs::create_dir(dir)
+            .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "orphan-receipt-directory-permission-failed".to_string())?;
+        }
+    }
+    Ok(())
+}
 
 fn container_receipt_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -10,16 +24,7 @@ fn container_receipt_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?
         .join("container-orphan-receipts");
-    if !dir.exists() {
-        std::fs::create_dir(&dir)
-            .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|_| "orphan-receipt-directory-permission-failed".to_string())?;
-        }
-    }
+    ensure_container_receipt_dir(&dir)?;
     Ok(dir)
 }
 
@@ -476,6 +481,20 @@ pub fn execute_container_orphan_prune(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_directory_creation_handles_missing_app_data_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp
+            .path()
+            .join("not-created-yet")
+            .join("app-data")
+            .join("container-orphan-receipts");
+
+        ensure_container_receipt_dir(&receipt_dir).unwrap();
+
+        assert!(receipt_dir.is_dir());
+    }
 
     #[test]
     fn command_inputs_fail_closed_without_reflecting_untrusted_tokens() {
