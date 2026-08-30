@@ -22,13 +22,15 @@ fn value(args: &[String], flag: &str) -> Result<String, String> {
 }
 
 fn output_requires_failure_exit(output: &serde_json::Value) -> bool {
-    let result = output.get("result");
+    let Some(result) = output.get("result") else {
+        return false;
+    };
     result
-        .and_then(|value| value.get("execution_succeeded"))
+        .get("execution_succeeded")
         .and_then(serde_json::Value::as_bool)
         != Some(true)
         || result
-            .and_then(|value| value.get("verification_complete"))
+            .get("verification_complete")
             .and_then(serde_json::Value::as_bool)
             != Some(true)
         || output
@@ -147,6 +149,15 @@ mod tests {
             "result_record_error": null,
         });
         assert!(output_requires_failure_exit(&output));
+    }
+
+    #[test]
+    fn successful_planning_without_execution_result_exits_zero() {
+        let output = serde_json::json!({
+            "schema_version": 1,
+            "action": "plan-parallels-disk-reclaim",
+        });
+        assert!(!output_requires_failure_exit(&output));
     }
 
     #[test]
