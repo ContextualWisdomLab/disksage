@@ -11,6 +11,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Return a bounded, path-free keep-local receipt when a native provider probe times out or returns
   no output; separate shared APFS movement from completed action-attributable receipt totals, and
   keep customer guidance action-first while moving evidence codes into audit details.
+- Checkpoint third-party provider queue observations with a tamper-evident lineage counter and a
+  five-minute automatic recheck boundary while blocked; a clear global queue stops polling but
+  still requires a fresh item-specific sync and eviction check.
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.

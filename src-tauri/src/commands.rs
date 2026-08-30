@@ -1275,6 +1275,7 @@ pub fn inspect_icloud_new_copy_admission(
 #[tauri::command]
 pub fn inspect_cloud_provider_global_sync(
     cloud_root: String,
+    force: bool,
     app: AppHandle,
 ) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
@@ -1283,7 +1284,13 @@ pub fn inspect_cloud_provider_global_sync(
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-global-sync-icloud-specialized".into());
     }
-    provider_global_sync::inspect_new_copy_admission(selected.provider)
+    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    provider_global_sync::inspect_new_copy_admission_checkpointed(
+        selected.provider,
+        &app_data_dir,
+        cloud::system_now_ms(),
+        force,
+    )
 }
 
 #[cfg(not(coverage))]
@@ -1472,7 +1479,19 @@ fn cloud_plan_for_inputs(
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
         (health, None)
     } else {
-        let global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        let global_sync = app
+            .path()
+            .app_data_dir()
+            .ok()
+            .and_then(|app_data_dir| {
+                provider_global_sync::inspect_new_copy_admission_checkpointed(
+                    selected.provider,
+                    &app_data_dir,
+                    cloud::system_now_ms(),
+                    true,
+                )
+                .ok()
+            });
         provider_global_sync::attach_new_copy_admission_notice(
             &mut report.notices,
             global_sync.as_ref(),

@@ -1590,6 +1590,7 @@ mod tests {
         let blocked_sync = ProviderGlobalSyncReport {
             schema_version: provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
             provider: CloudProvider::Onedrive,
+            observed_at_ms: 1,
             evidence_kind: "fileproviderctl-global-dump".into(),
             evidence_complete: true,
             state: ProviderGlobalSyncState::Pending,

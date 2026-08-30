@@ -39,6 +39,31 @@ fn successful_provider_dump_terminates_private_group_before_reader_join() {
     );
 }
 
+#[test]
+fn cloud_planning_uses_the_persisted_provider_checkpoint_backoff() {
+    let source = include_str!("../src/commands.rs");
+    let planning = source
+        .split_once("fn cloud_plan_for_inputs(")
+        .expect("cloud planning boundary must exist")
+        .1
+        .split_once("fn authenticated_capacity_snapshot(")
+        .expect("cloud planning boundary must end before capacity helper")
+        .0;
+
+    assert!(
+        planning.contains("inspect_new_copy_admission_checkpointed("),
+        "planning must reuse the persisted provider checkpoint and its automatic backoff"
+    );
+    assert!(
+        planning.contains("cloud::system_now_ms(),\n                    true,"),
+        "planning is an admission boundary and must force fresh provider evidence"
+    );
+    assert!(
+        !planning.contains("inspect_new_copy_admission(selected.provider)"),
+        "planning must not bypass checkpoint backoff with a direct provider dump"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminated() {
