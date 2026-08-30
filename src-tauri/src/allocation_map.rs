@@ -121,6 +121,8 @@ pub fn measure_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn bounds_entries_and_never_follows_symlinks() {
@@ -145,17 +147,112 @@ mod tests {
 
     #[test]
     fn classifies_provider_vm_and_per_user_var_boundaries() {
+        for path in [
+            "/Users/test/Library/Mobile Documents",
+            "/Users/test/Library/CloudStorage",
+        ] {
+            assert_eq!(classification(Path::new(path)), "provider-managed", "{path}");
+        }
+        for path in [
+            "/Users/test/Parallels",
+            "/Users/test/.colima",
+            "/Users/test/.local/share/containers/podman",
+        ] {
+            assert_eq!(
+                classification(Path::new(path)),
+                "virtual-machine-managed",
+                "{path}"
+            );
+        }
         assert_eq!(
-            classification(Path::new("/Users/test/Library/Mobile Documents")),
-            "provider-managed"
-        );
-        assert_eq!(
-            classification(Path::new("/Users/test/Parallels")),
-            "virtual-machine-managed"
-        );
-        assert_eq!(
-            classification(Path::new("/private/var/folders/aa/token/T")),
+            classification(Path::new("/private/var/folders")),
             "user-cache-and-temporary"
         );
+        assert_eq!(
+            classification(Path::new("/Users/test/album.photoslibrary-notes")),
+            "user-or-application-data"
+        );
+    }
+
+    #[test]
+    fn hard_links_do_not_double_count_allocated_blocks() {
+        use std::os::unix::fs::MetadataExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let first = root.join("first.bin");
+        let second = root.join("second.bin");
+        std::fs::write(&first, vec![0_u8; 4096]).unwrap();
+        std::fs::hard_link(&first, &second).unwrap();
+
+        let root_bytes = std::fs::symlink_metadata(&root).unwrap().blocks() * 512;
+        let file_bytes = std::fs::symlink_metadata(&first).unwrap().blocks() * 512;
+        assert!(file_bytes > 0);
+        let report = measure_root(&root, 3, Duration::from_secs(1)).unwrap();
+
+        assert_eq!(report.visited_entries, 3);
+        assert_eq!(report.allocated_bytes, root_bytes + file_bytes);
+        assert!(report.evidence_complete);
+    }
+
+    struct CountingPaths {
+        calls: Rc<Cell<usize>>,
+        remaining: usize,
+    }
+
+    impl Iterator for CountingPaths {
+        type Item = std::io::Result<PathBuf>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.calls.set(self.calls.get() + 1);
+            if self.remaining == 0 {
+                return None;
+            }
+            self.remaining -= 1;
+            Some(Ok(PathBuf::from(format!("child-{}", self.remaining))))
+        }
+    }
+
+    #[test]
+    fn directory_enumeration_stops_after_remaining_budget_plus_overflow_probe() {
+        let calls = Rc::new(Cell::new(0));
+        let iterator = CountingPaths {
+            calls: calls.clone(),
+            remaining: 10_000,
+        };
+        let started = Instant::now();
+
+        let error = collect_children_within_budget(
+            iterator,
+            3,
+            started,
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "entry-limit-reached");
+        assert!(calls.get() <= 4, "enumerated {} entries", calls.get());
+    }
+
+    #[test]
+    fn directory_iterator_error_marks_evidence_incomplete() {
+        let iterator = vec![
+            Ok(PathBuf::from("readable")),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture entry denied",
+            )),
+        ]
+        .into_iter();
+
+        let error = collect_children_within_budget(
+            iterator,
+            8,
+            Instant::now(),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "directory-entry-unreadable");
     }
 }
