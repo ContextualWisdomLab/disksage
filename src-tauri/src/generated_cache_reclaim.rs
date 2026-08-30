@@ -171,10 +171,14 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         }
         let metadata = std::fs::symlink_metadata(&current)
             .map_err(|_| "generated-cache-metadata-unavailable".to_string())?;
-        if metadata.file_type().is_symlink() {
-            return Err("generated-cache-symlink-rejected".into());
+        let is_symlink = metadata.file_type().is_symlink();
+        // The allowlisted cache root itself must remain a real directory. Symlinks below that
+        // root are ordinary cache entries: fingerprint the link text without resolving or
+        // traversing it, so a link can never extend the deletion boundary.
+        if current == path && is_symlink {
+            return Err("generated-cache-root-symlink-rejected".into());
         }
-        if !metadata.is_dir() && !metadata.is_file() {
+        if !metadata.is_dir() && !metadata.is_file() && !is_symlink {
             return Err("generated-cache-special-file-rejected".into());
         }
         entries += 1;
@@ -184,7 +188,9 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
             .map_err(|_| "generated-cache-relative-path-failed")?;
         hasher.update(&(relative.as_os_str().as_bytes().len() as u64).to_le_bytes());
         hasher.update(relative.as_os_str().as_bytes());
-        hasher.update(if metadata.is_dir() {
+        hasher.update(if is_symlink {
+            b"symlink"
+        } else if metadata.is_dir() {
             b"directory"
         } else {
             b"file"
@@ -200,7 +206,13 @@ fn observe_tree(path: &Path) -> Result<(u64, u64, String, Vec<String>), String> 
         if current.file_name().is_some_and(|name| name == ".lock") {
             locks.push(current.to_string_lossy().into_owned());
         }
-        if metadata.is_file() {
+        if is_symlink {
+            let target = std::fs::read_link(&current)
+                .map_err(|_| "generated-cache-symlink-unreadable".to_string())?;
+            let target_bytes = target.as_os_str().as_bytes();
+            hasher.update(&(target_bytes.len() as u64).to_le_bytes());
+            hasher.update(target_bytes);
+        } else if metadata.is_file() {
             estimated_content_bytes = estimated_content_bytes
                 .checked_add(metadata.len())
                 .ok_or("generated-cache-content-bound-exceeded")?;
@@ -601,6 +613,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
@@ -658,6 +671,41 @@ mod tests {
             .blockers
             .contains(&"temporary-workspace-specialized-executor-required".into()));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_child_symlink_is_fingerprinted_without_following_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/uv");
+        let outside = temp.path().join("customer-data");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&outside, b"must not be read or traversed").unwrap();
+        symlink(&outside, root.join("cached-link")).unwrap();
+
+        let before = plan_with_evidence(&root, home, inactive(), 1).unwrap();
+        std::fs::write(&outside, b"changed outside content").unwrap();
+        let after = plan_with_evidence(&root, home, inactive(), 2).unwrap();
+
+        assert_eq!(before.content_fingerprint, after.content_fingerprint);
+        assert_eq!(before.allocated_bytes, after.allocated_bytes);
+        assert_eq!(before.entry_count, 2);
+    }
+
+    #[test]
+    fn allowlisted_root_symlink_remains_denied() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let outside = temp.path().join("outside-cache");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(home.join(".cache")).unwrap();
+        let root = home.join(".cache/uv");
+        symlink(&outside, &root).unwrap();
+
+        assert_eq!(
+            plan_with_evidence(&root, home, inactive(), 1).unwrap_err(),
+            "generated-cache-root-symlink-rejected"
+        );
     }
 
     #[test]
