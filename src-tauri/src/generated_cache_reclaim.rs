@@ -27,6 +27,12 @@ pub enum RegenerationContract {
     /// Cargo target directory created by a DiskSage-owned test/CLI process under macOS's
     /// per-user temporary directory. Cargo regenerates it from the source inputs.
     DiskSageTemporaryCargoTarget,
+    /// JavaScript dependencies below a temporary Git workspace, reproducible from a package
+    /// manifest and an exact package-manager lockfile that remain outside the removed subtree.
+    TemporaryWorkspaceNodeModules,
+    /// Python environment below a temporary Git workspace, reproducible from pyproject.toml and
+    /// uv.lock that remain outside the removed subtree.
+    TemporaryWorkspaceUvEnvironment,
     TemporaryGitWorkspace,
 }
 
@@ -162,6 +168,7 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
         .or_else(|| disksage_temporary_cargo_target(path))
+        .or_else(|| temporary_workspace_artifact_contract(path))
         .or_else(|| {
             #[cfg(unix)]
             {
@@ -173,6 +180,62 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
                 None
             }
         })
+}
+
+fn temporary_workspace_root(path: &Path) -> Option<std::path::PathBuf> {
+    let temp_root = std::env::temp_dir();
+    let relative = path.strip_prefix(&temp_root).ok()?;
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let first = match relative.components().next()? {
+        std::path::Component::Normal(value) => value,
+        _ => return None,
+    };
+    let workspace = temp_root.join(first);
+    if workspace == path || !path.starts_with(&workspace) {
+        return None;
+    }
+    let canonical_workspace = std::fs::canonicalize(&workspace).ok()?;
+    let canonical_parent = std::fs::canonicalize(path.parent()?).ok()?;
+    if !canonical_parent.starts_with(&canonical_workspace) {
+        return None;
+    }
+    let git_marker = std::fs::symlink_metadata(canonical_workspace.join(".git")).ok()?;
+    if git_marker.file_type().is_symlink() || !(git_marker.is_file() || git_marker.is_dir()) {
+        return None;
+    }
+    Some(workspace)
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+fn temporary_workspace_artifact_contract(path: &Path) -> Option<RegenerationContract> {
+    temporary_workspace_root(path)?;
+    let parent = path.parent()?;
+    match path.file_name()?.to_str()? {
+        "node_modules"
+            if is_regular_file(&parent.join("package.json"))
+                && ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"]
+                    .iter()
+                    .any(|name| is_regular_file(&parent.join(name))) =>
+        {
+            Some(RegenerationContract::TemporaryWorkspaceNodeModules)
+        }
+        ".venv"
+            if is_regular_file(&parent.join("pyproject.toml"))
+                && is_regular_file(&parent.join("uv.lock")) =>
+        {
+            Some(RegenerationContract::TemporaryWorkspaceUvEnvironment)
+        }
+        _ => None,
+    }
 }
 
 fn disksage_temporary_cargo_target(path: &Path) -> Option<RegenerationContract> {
@@ -392,7 +455,15 @@ pub fn plan_with_evidence(
     if !activity.open_pids.is_empty() || activity.live_cwd_present {
         blockers.push("process-active".into());
     }
-    if !activity.tool_lock_paths.is_empty() {
+    // uv-created environments contain persistent zero-byte `.lock` metadata (including
+    // vendored setuptools metadata).  A pathname is not an active advisory lock.  Runtime use
+    // remains fail-closed through the independently collected open-PID/live-CWD evidence.
+    if !activity.tool_lock_paths.is_empty()
+        && !matches!(
+            contract,
+            RegenerationContract::TemporaryWorkspaceUvEnvironment
+        )
+    {
         blockers.push("tool-lock-present".into());
     }
     if matches!(contract, RegenerationContract::TemporaryGitWorkspace)
@@ -474,20 +545,29 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
+    let git_probe = match contract {
+        RegenerationContract::TemporaryGitWorkspace => Some(path.to_path_buf()),
+        RegenerationContract::TemporaryWorkspaceNodeModules
+        | RegenerationContract::TemporaryWorkspaceUvEnvironment => temporary_workspace_root(path),
+        _ => None,
+    };
+    if let Some(git_probe) = git_probe {
+        let git_probe = std::fs::canonicalize(&git_probe).unwrap_or(git_probe);
         match bounded_git(
-            path,
+            &git_probe,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         ) {
             Ok(common) => {
                 evidence.git_common_dir = Some(common.trim().into());
                 evidence.git_worktree_registered =
-                    bounded_git(path, &["worktree", "list", "--porcelain"]).is_ok_and(|output| {
-                        output
-                            .lines()
-                            .any(|line| line.strip_prefix("worktree ") == path.to_str())
-                    });
-                evidence.git_dirty = bounded_git(path, &["status", "--porcelain=v1"])
+                    bounded_git(&git_probe, &["worktree", "list", "--porcelain"]).is_ok_and(
+                        |output| {
+                            output
+                                .lines()
+                                .any(|line| line.strip_prefix("worktree ") == git_probe.to_str())
+                        },
+                    );
+                evidence.git_dirty = bounded_git(&git_probe, &["status", "--porcelain=v1"])
                     .map_or(true, |output| !output.is_empty());
             }
             Err(_) => evidence.evidence_complete = false,
@@ -645,15 +725,25 @@ pub fn stage_and_remove_regenerable_root(
         std::fs::remove_dir(&staging).map_err(|_| "generated-cache-staging-cleanup-failed")
     };
     let staged_result = (|| {
-        let active = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        let active = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active.assessed || !active.evidence_complete || active.active {
             return Err("generated-cache-staged-active-use".to_string());
         }
         let (_, _, fingerprint, locks) = observe_tree(&staged)?;
-        if fingerprint != plan.content_fingerprint || !locks.is_empty() {
+        if fingerprint != plan.content_fingerprint
+            || (!locks.is_empty()
+                && !matches!(
+                    plan.contract,
+                    RegenerationContract::TemporaryWorkspaceUvEnvironment
+                ))
+        {
             return Err("generated-cache-staged-manifest-mismatch".into());
         }
-        let active_after_hash = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        let active_after_hash = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active_after_hash.assessed
             || !active_after_hash.evidence_complete
             || active_after_hash.active
@@ -810,6 +900,54 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn locked_temporary_workspace_artifacts_are_admitted_without_admitting_source() {
+        let temp_root = std::env::temp_dir();
+        let nonce = format!("{}-{}", std::process::id(), crate::cloud::system_now_ms());
+        let workspace = temp_root.join(format!("disksage-workspace-artifact-test-{nonce}"));
+        std::fs::create_dir_all(workspace.join("services/api/.venv")).unwrap();
+        std::fs::create_dir_all(workspace.join("node_modules")).unwrap();
+        std::fs::write(workspace.join(".git"), b"gitdir: /tmp/not-consulted").unwrap();
+        std::fs::write(workspace.join("package.json"), b"{}").unwrap();
+        std::fs::write(workspace.join("package-lock.json"), b"{}").unwrap();
+        std::fs::write(workspace.join("services/api/pyproject.toml"), b"[project]").unwrap();
+        std::fs::write(workspace.join("services/api/uv.lock"), b"version = 1").unwrap();
+        std::fs::write(workspace.join("services/api/.venv/.lock"), b"").unwrap();
+        std::fs::create_dir_all(
+            workspace.join("services/api/.venv/lib/python/site-packages/vendor/.lock"),
+        )
+        .unwrap();
+        assert_eq!(
+            regeneration_contract(&workspace.join("node_modules"), Path::new("/Users/test")),
+            Some(RegenerationContract::TemporaryWorkspaceNodeModules)
+        );
+        assert_eq!(
+            regeneration_contract(
+                &workspace.join("services/api/.venv"),
+                Path::new("/Users/test")
+            ),
+            Some(RegenerationContract::TemporaryWorkspaceUvEnvironment)
+        );
+        assert_eq!(
+            regeneration_contract(&workspace, Path::new("/Users/test")),
+            None
+        );
+        let environment = workspace.join("services/api/.venv");
+        let plan =
+            plan_with_evidence(&environment, Path::new("/Users/test"), inactive(), 1).unwrap();
+        assert_eq!(plan.activity.tool_lock_paths.len(), 2);
+        assert!(plan.blockers.is_empty());
+        let mut active = inactive();
+        active.open_pids.push(42);
+        assert!(
+            plan_with_evidence(&environment, Path::new("/Users/test"), active, 2)
+                .unwrap()
+                .blockers
+                .contains(&"process-active".into())
+        );
+        std::fs::remove_dir_all(workspace).unwrap();
     }
 
     #[cfg(not(target_os = "macos"))]
