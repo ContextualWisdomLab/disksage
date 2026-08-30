@@ -1,7 +1,8 @@
 //! Bounded, read-only allocated-block inventory for customer-selected roots.
 
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -14,40 +15,103 @@ pub struct AllocationMapEntry {
     pub stop_reason: Option<&'static str>,
 }
 
+fn normal_components(path: &Path) -> Vec<&std::ffi::OsStr> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .collect()
+}
+
+fn contains_component_sequence(components: &[&std::ffi::OsStr], sequence: &[&str]) -> bool {
+    !sequence.is_empty()
+        && components.windows(sequence.len()).any(|window| {
+            window
+                .iter()
+                .zip(sequence)
+                .all(|(component, expected)| *component == std::ffi::OsStr::new(expected))
+        })
+}
+
+fn contains_component(components: &[&std::ffi::OsStr], expected: &str) -> bool {
+    components
+        .iter()
+        .any(|component| *component == std::ffi::OsStr::new(expected))
+}
+
 fn classification(path: &Path) -> &'static str {
-    let value = path.to_string_lossy();
-    if value.contains("/Library/Mobile Documents/")
-        || value.ends_with("/Library/Mobile Documents")
-        || value.contains("/Library/CloudStorage/")
-        || value.contains("/Library/Application Support/OneDrive")
-        || value.contains("/Library/Application Support/FileProvider")
-        || value.contains("/Library/Application Support/CloudDocs")
+    let components = normal_components(path);
+    if contains_component_sequence(&components, &["Library", "Mobile Documents"])
+        || contains_component_sequence(&components, &["Library", "CloudStorage"])
+        || contains_component_sequence(
+            &components,
+            &["Library", "Application Support", "OneDrive"],
+        )
+        || contains_component_sequence(
+            &components,
+            &["Library", "Application Support", "FileProvider"],
+        )
+        || contains_component_sequence(
+            &components,
+            &["Library", "Application Support", "CloudDocs"],
+        )
     {
         "provider-managed"
-    } else if value.contains(".photoslibrary") || value.contains(".photolibrary") {
+    } else if components.iter().any(|component| {
+        let value = component.to_string_lossy();
+        value.ends_with(".photoslibrary") || value.ends_with(".photolibrary")
+    }) {
         "photos-managed"
-    } else if value.contains("/Parallels/")
-        || value.ends_with("/Parallels")
-        || value.contains("/.colima/")
-        || value.contains("/containers/podman/")
-        || value.contains("/private/var/vm")
+    } else if contains_component(&components, "Parallels")
+        || contains_component(&components, ".colima")
+        || contains_component_sequence(&components, &["containers", "podman"])
+        || contains_component_sequence(&components, &["private", "var", "vm"])
     {
         "virtual-machine-managed"
-    } else if value.contains("/private/var/folders/") {
+    } else if contains_component_sequence(&components, &["private", "var", "folders"])
+    {
         "user-cache-and-temporary"
-    } else if value.contains("/Caches/")
-        || value.ends_with("/Caches")
-        || value.contains("/.cache/")
-        || value.ends_with("/.cache")
+    } else if contains_component(&components, "Caches") || contains_component(&components, ".cache")
     {
         "cache"
-    } else if value.ends_with("/target")
-        || value.ends_with("/node_modules")
-        || value.contains("/.cargo/registry")
+    } else if path.file_name().is_some_and(|name| {
+        name == std::ffi::OsStr::new("target") || name == std::ffi::OsStr::new("node_modules")
+    }) || contains_component_sequence(&components, &[".cargo", "registry"])
     {
         "generated"
     } else {
         "user-or-application-data"
+    }
+}
+
+fn collect_children_within_budget<I>(
+    mut entries: I,
+    remaining_entries: u64,
+    started: Instant,
+    max_duration: Duration,
+) -> Result<Vec<PathBuf>, &'static str>
+where
+    I: Iterator<Item = std::io::Result<PathBuf>>,
+{
+    let mut children = Vec::new();
+    loop {
+        if started.elapsed() >= max_duration {
+            return Err("duration-limit-reached");
+        }
+        match entries.next() {
+            None => {
+                children.sort();
+                return Ok(children);
+            }
+            Some(Err(_)) => return Err("directory-entry-unreadable"),
+            Some(Ok(path)) => {
+                if children.len() as u64 >= remaining_entries {
+                    return Err("entry-limit-reached");
+                }
+                children.push(path);
+            }
+        }
     }
 }
 
@@ -69,6 +133,7 @@ pub fn measure_root(
     let device = root_metadata.dev();
     let started = Instant::now();
     let mut stack = vec![root.to_path_buf()];
+    let mut allocated_identities = HashSet::new();
     let mut allocated_bytes = 0_u64;
     let mut visited_entries = 0_u64;
     let mut stop_reason = None;
@@ -92,19 +157,33 @@ pub fn measure_root(
             continue;
         }
         visited_entries += 1;
-        allocated_bytes = allocated_bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        if allocated_identities.insert((metadata.dev(), metadata.ino())) {
+            allocated_bytes = allocated_bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        }
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            let mut children = match std::fs::read_dir(&path) {
-                Ok(entries) => entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.path())
-                    .collect::<Vec<PathBuf>>(),
+            let queued_entries = u64::try_from(stack.len()).unwrap_or(u64::MAX);
+            let remaining_entries = max_entries
+                .saturating_sub(visited_entries)
+                .saturating_sub(queued_entries);
+            let entries = match std::fs::read_dir(&path) {
+                Ok(entries) => entries,
                 Err(_) => {
                     stop_reason = Some("directory-unreadable");
                     break;
                 }
             };
-            children.sort();
+            let children = match collect_children_within_budget(
+                entries.map(|entry| entry.map(|value| value.path())),
+                remaining_entries,
+                started,
+                max_duration,
+            ) {
+                Ok(children) => children,
+                Err(reason) => {
+                    stop_reason = Some(reason);
+                    break;
+                }
+            };
             stack.extend(children.into_iter().rev());
         }
     }
