@@ -1405,3 +1405,11 @@ content remains read-only inventory: neither age nor size authorizes deletion, a
 system, active-process, locked, registered-worktree, and dirty-worktree boundaries remain fail-closed.
 The invoking shell is excluded only from command-line path matching because it necessarily carries
 the approved root as a CLI argument; any descriptor it holds remains visible through `lsof`.
+# Temporary workspace build artifacts
+
+DiskSage can now treat a temporary Git workspace's dependency subtree as a separate generated
+object. Eligibility requires a direct per-user temporary workspace with a non-symlink Git marker,
+an exact artifact name, and manifests plus package-manager lockfiles outside the candidate subtree.
+The plan records workspace registration and dirty state but never removes the workspace or source;
+open-file, live-command, lock, content-fingerprint, fresh-approval, atomic-stage, and immutable-receipt
+boundaries remain mandatory for each dependency subtree.

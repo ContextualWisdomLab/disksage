@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Reclaim only lockfile-reproducible `node_modules` and uv `.venv` subtrees inside temporary Git workspaces, preserving the complete repository and all dirty source changes.
+
 - Recognize only DiskSage-owned Cargo target roots in macOS's per-user temporary directory as regenerable caches, while retaining neighboring application, provider, Photos, VM, Git, locked, and process-active data.
 - Exclude the reclaim CLI's direct invoking shell from command-line-only activity matches while retaining descriptor evidence and unrelated process matches.
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
