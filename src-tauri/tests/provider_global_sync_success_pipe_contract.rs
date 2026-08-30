@@ -55,6 +55,10 @@ fn cloud_planning_uses_the_persisted_provider_checkpoint_backoff() {
         "planning must reuse the persisted provider checkpoint and its automatic backoff"
     );
     assert!(
+        planning.contains("cloud::system_now_ms(),\n                    true,"),
+        "planning is an admission boundary and must force fresh provider evidence"
+    );
+    assert!(
         !planning.contains("inspect_new_copy_admission(selected.provider)"),
         "planning must not bypass checkpoint backoff with a direct provider dump"
     );

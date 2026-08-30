@@ -392,9 +392,10 @@ where
         };
     if !force {
         if let Some(previous) = previous.as_ref() {
-            // A blocked result is safe to cache until its retry deadline. A clear result is only
-            // an observation, never durable authorization: every later admission must re-probe.
-            if previous.checkpoint.keep_local && !automatic_probe_due(&previous.checkpoint, now_ms)?
+            // Passive status polling reuses clear evidence and blocked evidence before its retry
+            // deadline. Admission callers pass `force=true` and always obtain fresh evidence.
+            if !previous.checkpoint.keep_local
+                || !automatic_probe_due(&previous.checkpoint, now_ms)?
             {
                 return Ok(previous.report.clone());
             }
@@ -1367,21 +1368,18 @@ sync engine state:
         assert_eq!(fresh.state, ProviderGlobalSyncState::Clear);
         assert_eq!(probes.get(), 2);
 
-        let rechecked = inspect_new_copy_admission_checkpointed_with(
+        let stopped = inspect_new_copy_admission_checkpointed_with(
             CloudProvider::Onedrive,
             directory.path(),
             302_000,
             false,
-            || {
-                probes.set(probes.get() + 1);
-                let mut report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
-                report.observed_at_ms = 302_000;
-                Ok(report)
+            || -> Result<ProviderGlobalSyncReport, String> {
+                panic!("passive polling must reuse a clear checkpoint")
             },
         )
         .unwrap();
-        assert_eq!(rechecked.state, ProviderGlobalSyncState::Clear);
-        assert_eq!(probes.get(), 3);
+        assert_eq!(stopped, fresh);
+        assert_eq!(probes.get(), 2);
     }
 
     #[test]

@@ -1488,7 +1488,7 @@ fn cloud_plan_for_inputs(
                     selected.provider,
                     &app_data_dir,
                     cloud::system_now_ms(),
-                    false,
+                    true,
                 )
                 .ok()
             });
