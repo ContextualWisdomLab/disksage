@@ -138,6 +138,10 @@ name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-podman-storage-repair"
+path = "src/bin/disksage-podman-storage-repair.rs"
+
+[[bin]]
 name = "disksage-shared-temp-reclaim-plan"
 path = "src/bin/disksage-shared-temp-reclaim-plan.rs"
 

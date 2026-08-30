@@ -23,6 +23,10 @@ case " $* " in
     printf '[{{"ID":"{container_id}","State":"exited","Names":["stale"]}}]\n'
     exit 0
     ;;
+  *" container inspect {container_id} "*)
+    printf '[{{"Id":"{container_id}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]\n'
+    exit 0
+    ;;
   *" images "*)
     echo '[]'
     exit 0
@@ -82,6 +86,7 @@ exit 2
         approval,
         "prove restarted-container refusal",
         1,
+        &temp.path().join("receipts"),
     )
     .expect("non-zero exact removal is represented in the receipt");
 
