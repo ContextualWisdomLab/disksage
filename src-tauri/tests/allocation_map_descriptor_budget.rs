@@ -1,0 +1,60 @@
+#[cfg(unix)]
+mod unix_regressions {
+    use disksage_lib::allocation_map::measure_root;
+    use std::io;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::time::Duration;
+
+    #[test]
+    fn nested_generated_roots_keep_generated_classification() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("target").join("nested");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let report = measure_root(&root, 1, Duration::from_secs(1)).unwrap();
+
+        assert_eq!(report.classification, "generated");
+        assert!(report.evidence_complete);
+    }
+
+    #[test]
+    fn wide_directory_scan_does_not_hold_one_descriptor_per_sibling() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        const SIBLINGS: u64 = 96;
+        for index in 0..SIBLINGS {
+            std::fs::create_dir(root.join(format!("child-{index:03}"))).unwrap();
+        }
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_disksage-allocation-map"));
+        command
+            .arg((SIBLINGS + 1).to_string())
+            .arg("10000")
+            .arg(&root);
+        unsafe {
+            command.pre_exec(|| {
+                let limit = libc::rlimit {
+                    rlim_cur: 32,
+                    rlim_max: 32,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "allocation map failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reports: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(reports[0]["evidence_complete"], true);
+        assert_eq!(reports[0]["visited_entries"], SIBLINGS + 1);
+        assert!(reports[0]["stop_reason"].is_null());
+    }
+}
