@@ -1,24 +1,24 @@
-//! Evidence-separated photo duplicate audit.
+//! Evidence-bound photo duplicate audit.
 //!
-//! Exact equality uses BLAKE3 over current bytes. Perceptual grouping and no-reference IQA stay
-//! unavailable until a versioned, checksummed calibration/model artifact is shipped; metadata
-//! dimensions are never combined into an invented score.
+//! The current product boundary is intentionally conservative: exact decoded-pixel grouping is
+//! available for bounded PNG inputs, while perceptual grouping and permanent cleanup remain
+//! unavailable until calibrated evidence and a unique keeper decision exist.
 
+use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_IMAGE_DIMENSION: u32 = 16_384;
-const MAX_NORMALIZED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DECODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_NORMALIZED_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum EvidenceState {
-    Available,
     Unavailable,
+    Observed,
+    Verified,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PhotoEvidence {
     pub path: String,
     pub object_id: String,
@@ -37,7 +37,7 @@ pub struct PhotoEvidence {
     pub blockers: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExactPhotoGroup {
     pub content_digest: String,
     pub grouping_basis: String,
@@ -47,14 +47,14 @@ pub struct ExactPhotoGroup {
     pub execution_available: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PhotoDuplicateAudit {
     pub schema_kind: String,
     pub generated_at_ms: u64,
     pub exact_groups: Vec<ExactPhotoGroup>,
     pub inspected_input_count: u64,
-    pub rejected_input_counts: std::collections::BTreeMap<String, u64>,
     pub evidence_complete: bool,
+    pub rejected_input_counts: std::collections::BTreeMap<String, u64>,
     pub perceptual_grouping_available: bool,
     pub perceptual_grouping_blocker: String,
     pub permanent_delete_available: bool,
@@ -62,87 +62,80 @@ pub struct PhotoDuplicateAudit {
 }
 
 fn admission_blocker(path: &Path, metadata: &std::fs::Metadata) -> Option<&'static str> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Some("photo-input-not-materialized-regular-file");
+    if metadata.file_type().is_symlink() {
+        return Some("photo-input-symlink-rejected");
     }
-    if crate::cloud::path_inside_managed_file_provider_storage(path) {
-        return Some("photo-input-provider-managed");
+    if !metadata.is_file() {
+        return Some("photo-input-not-regular-file");
     }
-    if crate::cloud::path_inside_managed_photo_library(path) {
+    let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    if normalized.contains("/photos library.photoslibrary/") {
         return Some("photo-input-managed-library");
     }
-    if crate::cloud::metadata_is_dataless(metadata) {
-        return Some("photo-input-dataless");
-    }
-    if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
-        return Some("photo-input-size-unsupported");
+    if normalized.contains("/library/cloudstorage/")
+        || normalized.contains("/onedrive")
+        || normalized.contains("/dropbox")
+        || normalized.contains("/google drive")
+    {
+        return Some("photo-input-provider-managed");
     }
     None
 }
 
 fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::EXPAND);
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder
         .read_info()
-        .map_err(|_| "photo-codec-unsupported".to_string())?;
-    let info = reader.info();
-    if info.is_animated() {
-        return Err("photo-animation-unsupported".into());
+        .map_err(|_| "photo-codec-decode-failed".to_string())?;
+    if reader.info().is_animated() {
+        return Err("photo-animated-png-unsupported".into());
     }
-    let width = info.width;
-    let height = info.height;
-    let normalized_bytes = u64::from(width)
+    let width = reader.info().width;
+    let height = reader.info().height;
+    let pixel_count = u64::from(width)
         .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(8))
         .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
-    if width == 0
-        || height == 0
-        || width > MAX_IMAGE_DIMENSION
-        || height > MAX_IMAGE_DIMENSION
-        || normalized_bytes > MAX_NORMALIZED_IMAGE_BYTES
-    {
+    let normalized_bytes = pixel_count
+        .checked_mul(8)
+        .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
+    if normalized_bytes > MAX_NORMALIZED_IMAGE_BYTES {
         return Err("photo-decoded-size-unsupported".into());
     }
-    let output_buffer_size = reader
+    let output_size = reader
         .output_buffer_size()
-        .ok_or("photo-decoded-size-unavailable")?;
-    if u64::try_from(output_buffer_size).unwrap_or(u64::MAX) > MAX_NORMALIZED_IMAGE_BYTES {
+        .ok_or_else(|| "photo-decoded-size-unsupported".to_string())?;
+    if u64::try_from(output_size).unwrap_or(u64::MAX) > MAX_DECODED_IMAGE_BYTES {
         return Err("photo-decoded-size-unsupported".into());
     }
-    let metadata_field_count = 3
-        + u32::from(info.exif_metadata.is_some())
-        + u32::from(info.icc_profile.is_some())
-        + u32::from(info.pixel_dims.is_some())
-        + u32::from(info.source_gamma.is_some())
-        + u32::from(info.source_chromaticities.is_some())
-        + info.uncompressed_latin1_text.len() as u32
-        + info.compressed_latin1_text.len() as u32
-        + info.utf8_text.len() as u32;
-    let bit_depth = match info.bit_depth {
+    let mut decoded = vec![0; output_size];
+    let output = reader
+        .next_frame(&mut decoded)
+        .map_err(|_| "photo-codec-decode-failed".to_string())?;
+    let bit_depth = match output.bit_depth {
         png::BitDepth::One => 1,
         png::BitDepth::Two => 2,
         png::BitDepth::Four => 4,
         png::BitDepth::Eight => 8,
         png::BitDepth::Sixteen => 16,
     };
-    let mut decoded = vec![0; output_buffer_size];
-    let output = reader
-        .next_frame(&mut decoded)
-        .map_err(|_| "photo-decode-failed".to_string())?;
-    decoded.truncate(output.buffer_size());
-    let normalized = normalize_rgba16(&decoded, output.color_type, output.bit_depth)?;
-    let mut semantic = blake3::Hasher::new();
-    semantic.update(b"disksage-png-rgba16-v1\0");
-    semantic.update(&width.to_be_bytes());
-    semantic.update(&height.to_be_bytes());
-    semantic.update(&normalized);
+    let normalized = normalize_rgba16(
+        &decoded[..output.buffer_size()],
+        output.color_type,
+        output.bit_depth,
+    )?;
+    let metadata_field_count = u32::from(reader.info().source_gamma.is_some())
+        + u32::from(reader.info().source_chromaticities.is_some())
+        + u32::from(reader.info().source_srgb.is_some())
+        + u32::from(reader.info().source_iccp.is_some())
+        + u32::try_from(reader.info().uncompressed_latin1_text.len()).unwrap_or(u32::MAX)
+        + u32::try_from(reader.info().compressed_latin1_text.len()).unwrap_or(u32::MAX)
+        + u32::try_from(reader.info().utf8_text.len()).unwrap_or(u32::MAX);
     Ok((
-        width,
-        height,
+        output.width,
+        output.height,
         bit_depth,
         metadata_field_count,
-        semantic.finalize().to_hex().to_string(),
+        blake3::hash(&normalized).to_hex().to_string(),
     ))
 }
 
@@ -580,8 +573,11 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_metadata_identity_defers_to_path_identity_rechecks() {
-        assert!(metadata_identity_matches(None, "path-identity"));
+    fn unavailable_metadata_identity_never_authorizes_opened_bytes() {
+        assert!(
+            !metadata_identity_matches(None, "path-identity"),
+            "missing open-handle identity must fail closed rather than authorizing path-race evidence"
+        );
         assert!(metadata_identity_matches(
             Some("path-identity"),
             "path-identity"
