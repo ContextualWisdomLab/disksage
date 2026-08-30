@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -436,7 +436,10 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
+    if matches!(
+        regeneration_contract(path, home),
+        Some(RegenerationContract::TemporaryGitWorkspace)
+    ) {
         match bounded_git(
             path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
