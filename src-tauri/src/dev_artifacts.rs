@@ -655,7 +655,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = find_artifacts(tmp.path(), 3_650, 1);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
 
         assert_eq!(found.len(), 2);
         assert!(found
