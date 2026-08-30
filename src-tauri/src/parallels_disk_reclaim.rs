@@ -104,6 +104,9 @@ pub struct ParallelsDiskReclaimPlan {
     pub physical_bytes: u64,
     pub reclaimable_bytes: Option<u64>,
     pub snapshots_absent: bool,
+    pub snapshot_count: Option<u32>,
+    pub configured_disk_count: Option<u32>,
+    pub selected_disk_registered: bool,
     pub observed_at_ms: u64,
     pub active_use: crate::git_worktree::GitWorktreeActiveUseEvidence,
     pub blockers: Vec<String>,
@@ -156,6 +159,8 @@ struct VmRecord {
     status: String,
     #[serde(rename = "Home", alias = "home")]
     home: String,
+    #[serde(rename = "Hardware", alias = "hardware", default)]
+    hardware: Option<serde_json::Value>,
 }
 
 fn trusted_executable(path: &Path) -> bool {
@@ -350,23 +355,48 @@ fn compactable_bytes(output: &str) -> Result<u64, String> {
         .ok_or_else(|| "parallels-compact-info-overflow".into())
 }
 
-fn snapshots_absent(output: &str) -> Result<bool, String> {
+fn snapshot_count(output: &str) -> Result<Option<u32>, String> {
+    if output.trim().is_empty() {
+        return Ok(None);
+    }
     let value: serde_json::Value =
         serde_json::from_str(output).map_err(|_| "parallels-snapshot-json-invalid".to_string())?;
     match value {
-        serde_json::Value::Array(items) => Ok(items.is_empty()),
+        serde_json::Value::Array(items) => u32::try_from(items.len())
+            .map(Some)
+            .map_err(|_| "parallels-snapshot-count-overflow".into()),
         serde_json::Value::Object(mut object) => {
             let snapshots = object
                 .remove("Snapshots")
                 .or_else(|| object.remove("snapshots"))
                 .ok_or_else(|| "parallels-snapshot-json-shape-unknown".to_string())?;
-            snapshots
+            let items = snapshots
                 .as_array()
-                .map(|items| items.is_empty())
-                .ok_or_else(|| "parallels-snapshot-json-shape-unknown".into())
+                .ok_or_else(|| "parallels-snapshot-json-shape-unknown".to_string())?;
+            u32::try_from(items.len())
+                .map(Some)
+                .map_err(|_| "parallels-snapshot-count-overflow".into())
         }
         _ => Err("parallels-snapshot-json-shape-unknown".into()),
     }
+}
+
+fn configured_disk_evidence(vm: &VmRecord, selected_disk: &Path) -> (Option<u32>, bool) {
+    let Some(hardware) = vm.hardware.as_ref().and_then(serde_json::Value::as_object) else {
+        return (None, false);
+    };
+    let disks = hardware
+        .iter()
+        .filter(|(name, value)| name.starts_with("hdd") && value.is_object())
+        .collect::<Vec<_>>();
+    let selected = disks.iter().any(|(_, value)| {
+        value
+            .get("image")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|path| std::fs::canonicalize(path).ok())
+            .is_some_and(|path| path == selected_disk)
+    });
+    (u32::try_from(disks.len()).ok(), selected)
 }
 
 fn fingerprint(values: &[&str], numbers: &[u64]) -> String {
@@ -396,6 +426,8 @@ fn blocked_plan(
     observed_at_ms: u64,
     active_use: crate::git_worktree::GitWorktreeActiveUseEvidence,
     blockers: Vec<String>,
+    configured_disk_count: Option<u32>,
+    selected_disk_registered: bool,
 ) -> Result<ParallelsDiskReclaimPlan, String> {
     let (logical_bytes, physical_bytes) = tree_allocation(disk)?;
     let bundle_identity = identity(bundle, bundle_meta);
@@ -433,6 +465,19 @@ fn blocked_plan(
             active_use.results_truncated as u64,
         ],
     );
+    let next_action = if blockers
+        .iter()
+        .any(|blocker| blocker == "parallels-selected-disk-not-registered")
+    {
+        "선택한 디스크가 이 VM에 연결되어 있지 않습니다. Parallels의 하드웨어 설정에서 디스크 연결을 확인한 뒤 다시 검사하세요."
+    } else if blockers
+        .iter()
+        .any(|blocker| blocker == "parallels-configured-disk-evidence-incomplete")
+    {
+        "VM 디스크 연결 상태를 확인하지 못했습니다. Parallels를 연 뒤 다시 검사하세요. 확인 전에는 디스크를 그대로 유지하세요."
+    } else {
+        "VM을 완전히 종료하고 사용 중인 앱을 닫은 뒤 다시 검사하세요."
+    };
     Ok(ParallelsDiskReclaimPlan {
         schema_kind: "disksage.parallels-disk-reclaim-plan/v1".into(),
         schema_version: 1,
@@ -449,11 +494,14 @@ fn blocked_plan(
         physical_bytes,
         reclaimable_bytes: None,
         snapshots_absent: false,
+        snapshot_count: None,
+        configured_disk_count,
+        selected_disk_registered,
         observed_at_ms,
         active_use,
         blockers,
         execution_available: false,
-        next_action: "VM을 완전히 종료하고 사용 중인 앱을 닫은 뒤 다시 검사하세요.".into(),
+        next_action: next_action.into(),
         plan_fingerprint,
         exact_approval_phrase: None,
     })
@@ -516,6 +564,12 @@ pub fn plan_with_runner(
         return Err("parallels-vm-bundle-mismatch".into());
     }
     let mut blockers = Vec::new();
+    let (configured_disk_count, selected_disk_registered) = configured_disk_evidence(vm, &disk);
+    if configured_disk_count.is_none() {
+        blockers.push("parallels-configured-disk-evidence-incomplete".into());
+    } else if !selected_disk_registered {
+        blockers.push("parallels-selected-disk-not-registered".into());
+    }
     if !vm.status.eq_ignore_ascii_case("stopped") {
         blockers.push("parallels-vm-must-be-stopped".into());
     }
@@ -534,6 +588,8 @@ pub fn plan_with_runner(
             observed_at_ms,
             active_use,
             blockers,
+            configured_disk_count,
+            selected_disk_registered,
         )?);
     }
     let snapshot_output = runner.run(
@@ -541,8 +597,11 @@ pub fn plan_with_runner(
         &["snapshot-list", vm_id, "--json"],
         "parallels-snapshot-list",
     )?;
-    let no_snapshots = snapshots_absent(&snapshot_output)?;
-    if !no_snapshots {
+    let snapshot_count = snapshot_count(&snapshot_output)?;
+    let no_snapshots = snapshot_count == Some(0);
+    if snapshot_count.is_none() {
+        blockers.push("parallels-snapshot-evidence-incomplete".into());
+    } else if !no_snapshots {
         blockers.push("parallels-snapshots-must-be-removed".into());
     }
     let info = runner.run(
@@ -593,12 +652,17 @@ pub fn plan_with_runner(
             active_use.active as u64,
             active_use.results_truncated as u64,
             no_snapshots as u64,
+            snapshot_count.unwrap_or(u32::MAX) as u64,
+            configured_disk_count.unwrap_or(u32::MAX) as u64,
+            selected_disk_registered as u64,
         ],
     );
     let execution_available = blockers.is_empty() && reclaimable > 0;
     let exact_approval_phrase =
         execution_available.then(|| format!("DiskSage Parallels compact 승인 {fp}"));
-    let next_action = if !no_snapshots {
+    let next_action = if snapshot_count.is_none() {
+        "스냅샷 상태를 확인하지 못했습니다. Parallels를 연 뒤 다시 검사하세요. 확인 전에는 디스크를 그대로 유지하세요."
+    } else if !no_snapshots {
         "Parallels에서 필요한 상태를 백업하고 보존할 스냅샷을 확인하세요. 압축하려면 사용자가 직접 스냅샷을 정리한 뒤 다시 검사하세요. DiskSage는 스냅샷을 삭제하지 않습니다."
     } else if reclaimable == 0 {
         "확보 가능한 공간이 없습니다. VM을 그대로 유지하세요."
@@ -621,6 +685,9 @@ pub fn plan_with_runner(
         physical_bytes: physical,
         reclaimable_bytes: Some(reclaimable),
         snapshots_absent: no_snapshots,
+        snapshot_count,
+        configured_disk_count,
+        selected_disk_registered,
         observed_at_ms,
         active_use,
         blockers,
@@ -699,6 +766,9 @@ fn executable_plan_fingerprint(plan: &ParallelsDiskReclaimPlan) -> Option<String
             plan.active_use.active as u64,
             plan.active_use.results_truncated as u64,
             plan.snapshots_absent as u64,
+            plan.snapshot_count.unwrap_or(u32::MAX) as u64,
+            plan.configured_disk_count.unwrap_or(u32::MAX) as u64,
+            plan.selected_disk_registered as u64,
         ],
     ))
 }
@@ -800,6 +870,11 @@ fn same_execution_object(
         && approved.reclaimable_bytes == live.reclaimable_bytes
         && approved.snapshots_absent
         && live.snapshots_absent
+        && approved.snapshot_count == Some(0)
+        && live.snapshot_count == Some(0)
+        && approved.configured_disk_count == live.configured_disk_count
+        && approved.selected_disk_registered
+        && live.selected_disk_registered
         && live.active_use.assessed
         && live.active_use.evidence_complete
         && !live.active_use.active

@@ -34,6 +34,14 @@ only after emitting that receipt. Any pre-execution drift aborts before the nati
 DiskSage never deletes snapshots, stops a VM, moves a bundle, or claims the estimate as recovered
 capacity.
 
+The detailed native VM inventory must also prove that the selected `.hdd` is a configured hardware
+disk. A second `.hdd` found by walking the bundle is not evidence that it is unused, and age or size
+does not change that conclusion. DiskSage records the configured disk count and selected-disk match;
+an unregistered disk remains review-only. Snapshot output is similarly three-state: an exact count,
+including zero, is evidence; an empty command response is inconclusive. In that state DiskSage keeps
+the disk local and asks the customer to open Parallels and rescan. Snapshot deletion remains a manual
+Parallels decision because a snapshot can be the only retained recovery state.
+
 ## References
 
 Parallels International GmbH. (2022). *Parallels Desktop for Mac Business and Pro Editions:

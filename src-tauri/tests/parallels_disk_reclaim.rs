@@ -12,6 +12,8 @@ struct FakeRunner {
 }
 
 struct SnapshotRunner(FakeRunner);
+struct BlankSnapshotRunner(FakeRunner);
+struct UnregisteredDiskRunner(FakeRunner);
 struct FailingCompactRunner(FakeRunner);
 
 impl ParallelsCommandRunner for FailingCompactRunner {
@@ -42,6 +44,40 @@ impl ParallelsCommandRunner for SnapshotRunner {
     }
 }
 
+impl ParallelsCommandRunner for BlankSnapshotRunner {
+    fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String> {
+        if args.first() == Some(&"snapshot-list") {
+            Ok(String::new())
+        } else {
+            self.0.run(executable, args, label)
+        }
+    }
+
+    fn permits_injected_executables(&self) -> bool {
+        true
+    }
+}
+
+impl ParallelsCommandRunner for UnregisteredDiskRunner {
+    fn run(&self, _: &Path, args: &[&str], _: &str) -> Result<String, String> {
+        match args.first().copied() {
+            Some("list") => Ok(serde_json::json!([{
+                "ID": "vm-123",
+                "Name": "Work Windows",
+                "Status": "stopped",
+                "Home": self.0.home,
+                "Hardware": {"hdd0": {"enabled": true, "image": "/not/the/selected/disk.hdd"}},
+            }])
+            .to_string()),
+            _ => self.0.run(Path::new("ignored"), args, "ignored"),
+        }
+    }
+
+    fn permits_injected_executables(&self) -> bool {
+        true
+    }
+}
+
 impl ParallelsCommandRunner for FakeRunner {
     fn run(&self, _: &Path, args: &[&str], _: &str) -> Result<String, String> {
         match args.first().copied() {
@@ -50,6 +86,7 @@ impl ParallelsCommandRunner for FakeRunner {
                 "Name": "Work Windows",
                 "Status": "stopped",
                 "Home": self.home,
+                "Hardware": {"hdd0": {"enabled": true, "image": format!("{}/Work Windows-0.hdd", self.home)}},
             }])
             .to_string()),
             Some("snapshot-list") => Ok("[]".into()),
@@ -112,6 +149,9 @@ fn stopped_vm_fake_cli_reports_exact_48_mib_and_authorizes_exact_execution() {
     assert!(plan.execution_available);
     assert!(plan.blockers.is_empty());
     assert!(plan.snapshots_absent);
+    assert_eq!(plan.snapshot_count, Some(0));
+    assert_eq!(plan.configured_disk_count, Some(1));
+    assert!(plan.selected_disk_registered);
     assert!(plan.exact_approval_phrase.is_some());
 }
 
@@ -246,6 +286,72 @@ fn snapshots_and_expired_approval_fail_closed() {
     let phrase = plan.exact_approval_phrase.clone().unwrap();
     let error = approve(&plan, &phrase, 301_001, "human:test", "VM backup verified").unwrap_err();
     assert_eq!(error, "parallels-plan-stale");
+}
+
+#[test]
+fn blank_snapshot_output_is_a_reviewable_keep_local_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let prlctl = root.join("prlctl");
+    let disk_tool = root.join("prl_disk_tool");
+    std::fs::write(&prlctl, b"fake").unwrap();
+    std::fs::write(&disk_tool, b"fake").unwrap();
+    let bundle = root.join("Work Windows.pvm");
+    let disk = bundle.join("Work Windows-0.hdd");
+    std::fs::create_dir_all(&disk).unwrap();
+    let plan = plan_with_runner(
+        &BlankSnapshotRunner(FakeRunner {
+            home: bundle.to_string_lossy().into_owned(),
+        }),
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        1_000,
+        inactive(),
+    )
+    .unwrap();
+
+    assert_eq!(plan.snapshot_count, None);
+    assert!(!plan.execution_available);
+    assert!(plan
+        .blockers
+        .contains(&"parallels-snapshot-evidence-incomplete".into()));
+    assert!(plan.next_action.contains("다시 검사"));
+    assert!(plan.next_action.contains("그대로 유지"));
+}
+
+#[test]
+fn disk_missing_from_native_hardware_inventory_never_becomes_executable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let prlctl = root.join("prlctl");
+    let disk_tool = root.join("prl_disk_tool");
+    std::fs::write(&prlctl, b"fake").unwrap();
+    std::fs::write(&disk_tool, b"fake").unwrap();
+    let bundle = root.join("Work Windows.pvm");
+    let disk = bundle.join("Work Windows-0.hdd");
+    std::fs::create_dir_all(&disk).unwrap();
+    let plan = plan_with_runner(
+        &UnregisteredDiskRunner(FakeRunner {
+            home: bundle.to_string_lossy().into_owned(),
+        }),
+        &prlctl,
+        &disk_tool,
+        "vm-123",
+        &bundle,
+        &disk,
+        1_000,
+        inactive(),
+    )
+    .unwrap();
+
+    assert!(!plan.selected_disk_registered);
+    assert!(!plan.execution_available);
+    assert!(plan
+        .blockers
+        .contains(&"parallels-selected-disk-not-registered".into()));
 }
 
 #[test]
