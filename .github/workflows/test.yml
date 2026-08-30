@@ -16,6 +16,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
