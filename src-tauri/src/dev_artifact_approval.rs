@@ -255,6 +255,24 @@ mod tests {
         assert_eq!(result[0].error, "development-artifact-approval-invalid-or-stale");
     }
 
+    #[test]
+    fn freshness_scan_time_does_not_consume_approval_lifetime() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("fixture");
+        let target = project.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(project.join("Cargo.toml"), b"[package]\nname='fixture'\nversion='0.1.0'").unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(target.join("output.bin"), b"reviewed bytes").unwrap();
+        let listed = dev_artifacts::find_artifacts(temp.path(), 0, u64::MAX);
+        assert_eq!(listed.len(), 1);
+
+        let approval = review_current_selection_at(temp.path(), &listed, 10, 25).unwrap();
+
+        assert_eq!(approval.reviewed_at_ms, 25);
+        assert_eq!(approval.expires_at_ms, 25 + MAX_REVIEW_AGE_MS);
+    }
+
     #[cfg(not(coverage))]
     #[test]
     fn review_command_rejects_inventory_changed_since_listing() {
