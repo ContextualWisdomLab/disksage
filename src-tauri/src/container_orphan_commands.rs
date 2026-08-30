@@ -6,7 +6,7 @@ use tauri::Manager;
 
 fn ensure_container_receipt_dir(dir: &Path) -> Result<(), String> {
     if !dir.exists() {
-        std::fs::create_dir(dir)
+        std::fs::create_dir_all(dir)
             .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
         #[cfg(unix)]
         {
