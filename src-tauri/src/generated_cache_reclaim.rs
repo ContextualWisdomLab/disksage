@@ -150,7 +150,7 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
         .or_else(|| {
-            path.starts_with("/private/tmp")
+            path.starts_with(crate::rules::shared_temp_root())
                 .then_some(RegenerationContract::TemporaryGitWorkspace)
         })
 }
@@ -381,7 +381,7 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if path.starts_with("/private/tmp") {
+    if path.starts_with(crate::rules::shared_temp_root()) {
         match bounded_git(
             path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
