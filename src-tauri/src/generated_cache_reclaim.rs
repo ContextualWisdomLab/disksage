@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -13,6 +13,8 @@ const MAX_ENTRIES: u64 = 200_000;
 const MAX_HASHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 pub const MAX_APPROVAL_AGE_MS: u64 = 15 * 60 * 1_000;
 static AUDIT_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_AUDIT_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -342,6 +344,10 @@ pub fn plan_with_evidence(
     mut activity: GeneratedCacheActivityEvidence,
     observed_at_ms: u64,
 ) -> Result<GeneratedCachePlan, String> {
+    // Unit tests exercise a process-global single-worker safety boundary in parallel. Serialize
+    // those calls so an unrelated test cannot consume another test's worker authority.
+    #[cfg(test)]
+    let _test_audit_serial = TEST_AUDIT_SERIAL.lock().unwrap();
     if !path.is_absolute() || !home.is_absolute() || deny_boundary(path) {
         return Err("generated-cache-boundary-denied".into());
     }
@@ -426,6 +432,8 @@ fn bounded_git(path: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Collect path-free process evidence and bounded Git ownership evidence before planning.
 pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedCachePlan, String> {
+    let contract = regeneration_contract(path, home)
+        .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
     let active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
     let mut evidence = GeneratedCacheActivityEvidence {
         evidence_complete: active.evidence_complete,
@@ -436,10 +444,7 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
-    if matches!(
-        regeneration_contract(path, home),
-        Some(RegenerationContract::TemporaryGitWorkspace)
-    ) {
+    if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
         match bounded_git(
             path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],

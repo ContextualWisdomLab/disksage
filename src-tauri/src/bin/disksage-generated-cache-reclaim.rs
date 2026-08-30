@@ -104,13 +104,16 @@ fn fixed_home() -> Result<PathBuf, String> {
 }
 
 fn fixed_receipt_path(home: &Path, fingerprint: &str, now_ms: u64) -> Result<PathBuf, String> {
+    #[cfg(unix)]
     use std::os::unix::fs::DirBuilderExt;
     let directory = home.join(
         "Library/Application Support/com.contextualwisdomlab.disksage/generated-cache-receipts",
     );
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
         .create(&directory)
         .map_err(|_| "generated-cache-receipt-directory-create-failed")?;
     let canonical = std::fs::canonicalize(&directory)
