@@ -13,20 +13,26 @@ if [[ ! -d "$artifact_root" ]]; then
   exit 1
 fi
 
-# Require exactly one regular file matching a path-scoped release artifact pattern.
+# Require exactly one regular bundle file directly inside its matrix-defined bundle directory.
 require_exactly_one_path() {
-  local path_pattern="$1" label="$2" count=0
-  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(find "$artifact_root" -type f -path "$path_pattern" -print0)
+  local directory="$1" file_pattern="$2" label="$3" count=0
+  if [[ -d "$artifact_root/$directory" ]]; then
+    while IFS= read -r -d '' _; do count=$((count + 1)); done < <(
+      find "$artifact_root/$directory" -mindepth 1 -maxdepth 1 -type f -name "$file_pattern" -print0
+    )
+  fi
   if [[ $count -ne 1 ]]; then
     printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
     exit 1
   fi
 }
 
-# Require exactly one named operational artifact inside its platform-scoped directory.
+# Require exactly one named operational artifact directly inside its platform-scoped directory.
 require_exactly_one_file() {
   local directory="$1" file_name="$2" count=0
-  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(find "$artifact_root/$directory" -type f -name "$file_name" -print0)
+  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(
+    find "$artifact_root/$directory" -mindepth 1 -maxdepth 1 -type f -name "$file_name" -print0
+  )
   if [[ $count -ne 1 ]]; then
     printf 'Expected exactly one release artifact named %s in %s, found %s.\n' "$file_name" "$directory" "$count" >&2
     exit 1
@@ -57,11 +63,11 @@ if [[ -n "$unexpected_entry" ]]; then
   exit 1
 fi
 
-require_exactly_one_path "$artifact_root/${expected_dirs[0]}/bundle/deb/*.deb" 'Debian bundle'
-require_exactly_one_path "$artifact_root/${expected_dirs[0]}/bundle/appimage/*.AppImage" 'AppImage bundle'
-require_exactly_one_path "$artifact_root/${expected_dirs[1]}/bundle/msi/*.msi" 'Windows MSI bundle'
-require_exactly_one_path "$artifact_root/${expected_dirs[1]}/bundle/nsis/*.exe" 'Windows NSIS bundle'
-require_exactly_one_path "$artifact_root/${expected_dirs[2]}/bundle/dmg/*.dmg" 'macOS DMG bundle'
+require_exactly_one_path "${expected_dirs[0]}/bundle/deb" '*.deb' 'Debian bundle'
+require_exactly_one_path "${expected_dirs[0]}/bundle/appimage" '*.AppImage' 'AppImage bundle'
+require_exactly_one_path "${expected_dirs[1]}/bundle/msi" '*.msi' 'Windows MSI bundle'
+require_exactly_one_path "${expected_dirs[1]}/bundle/nsis" '*.exe' 'Windows NSIS bundle'
+require_exactly_one_path "${expected_dirs[2]}/bundle/dmg" '*.dmg' 'macOS DMG bundle'
 
 require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64
 require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64.sha256
