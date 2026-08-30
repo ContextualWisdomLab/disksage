@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const GENERATED_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -24,6 +24,9 @@ pub enum RegenerationContract {
     HomebrewBootsnap,
     UvPackageCache,
     PlaywrightBrowserDownload,
+    /// Cargo target directory created by a DiskSage-owned test/CLI process under macOS's
+    /// per-user temporary directory. Cargo regenerates it from the source inputs.
+    DiskSageTemporaryCargoTarget,
     TemporaryGitWorkspace,
 }
 
@@ -158,6 +161,7 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
     pairs
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
+        .or_else(|| disksage_temporary_cargo_target(path))
         .or_else(|| {
             #[cfg(unix)]
             {
@@ -169,6 +173,32 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
                 None
             }
         })
+}
+
+fn disksage_temporary_cargo_target(path: &Path) -> Option<RegenerationContract> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let temp_root = std::env::temp_dir();
+        let name = path.file_name()?.to_str()?;
+        if path.parent() != Some(temp_root.as_path())
+            || !name.starts_with("disksage-eviction-cli-duplicate-singletons-")
+            || name
+                .strip_prefix("disksage-eviction-cli-duplicate-singletons-")?
+                .is_empty()
+        {
+            return None;
+        }
+        let lock_metadata = std::fs::symlink_metadata(path.join("debug/.cargo-lock")).ok()?;
+        if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
+            return None;
+        }
+        Some(RegenerationContract::DiskSageTemporaryCargoTarget)
+    }
 }
 
 type TreeObservation = (u64, u64, String, Vec<String>);
@@ -756,6 +786,41 @@ mod tests {
             assert!(plan.blockers.is_empty());
             assert!(plan.dry_run);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn disksage_owned_temporary_cargo_target_is_regenerable_but_neighbors_are_not() {
+        let temp_root = std::env::temp_dir();
+        let nonce = format!("{}-{}", std::process::id(), crate::cloud::system_now_ms());
+        let root = temp_root.join(format!(
+            "disksage-eviction-cli-duplicate-singletons-{nonce}"
+        ));
+        std::fs::create_dir_all(root.join("debug")).unwrap();
+        std::fs::write(root.join("debug/.cargo-lock"), b"").unwrap();
+        assert_eq!(
+            regeneration_contract(&root, Path::new("/Users/test")),
+            Some(RegenerationContract::DiskSageTemporaryCargoTarget)
+        );
+        assert_eq!(
+            regeneration_contract(
+                &temp_root.join(format!("customer-data-{nonce}")),
+                Path::new("/Users/test")
+            ),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn disksage_temporary_cargo_target_contract_is_unavailable_off_macos() {
+        assert_eq!(
+            disksage_temporary_cargo_target(Path::new(
+                "/tmp/disksage-eviction-cli-duplicate-singletons-test"
+            )),
+            None
+        );
     }
 
     #[test]
