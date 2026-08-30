@@ -733,26 +733,6 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
 
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn clean_dev_artifacts(
-    root: String,
-    min_age_days: u64,
-    artifacts: Vec<dev_artifacts::DevArtifact>,
-    approved: bool,
-    app: AppHandle,
-) -> Result<Vec<CleanResult>, String> {
-    let jp = journal_file_path(&app)?;
-    Ok(clean_dev_artifacts_inner(
-        &artifacts,
-        Path::new(&root),
-        min_age_days,
-        &jp,
-        now_ms(),
-        approved,
-    ))
-}
-
-#[cfg(not(coverage))]
-#[tauri::command]
 pub fn recent_operations(
     limit: usize,
     app: AppHandle,
@@ -3358,7 +3338,8 @@ mod tests {
         assert!(!valid_brew_fingerprint(&format!("{}g", "a".repeat(63))));
         assert!(valid_brew_rationale("reviewed dry-run output"));
         assert!(!valid_brew_rationale(" leading-space"));
-        assert!(!valid_brew_rationale("control\ncharacter"));
+        assert!(!valid_brew_rationale("control\
+character"));
     }
 
     #[test]
