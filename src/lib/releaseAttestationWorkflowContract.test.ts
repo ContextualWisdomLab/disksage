@@ -19,7 +19,21 @@ describe("release attestation workflow contract", () => {
     expect(checkoutIndex).toBeGreaterThanOrEqual(0);
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
-    expect(attestJob).toContain("expected exactly 26 regular files");
+    expect(attestJob).toContain("expected exactly 32 regular files");
+  });
+
+  it("ships the cleanup executables exposed by this release line", () => {
+    const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
+
+    for (const executable of [
+      "disksage-podman-storage-repair",
+      "disksage-photo-similarity-audit",
+      "disksage-shared-temp-reclaim-plan",
+    ]) {
+      expect(workflow).toContain(`--bin ${executable}`);
+      expect(workflow).toContain(`${executable}-macos-arm64`);
+      expect(workflow).toContain(`${executable}-macos-arm64.sha256`);
+    }
   });
 
   it("binds Cargo SBOM metadata to the shipped Rust manifest", () => {
