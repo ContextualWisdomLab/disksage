@@ -77,12 +77,12 @@ pub fn parse_lsof_nul(output: &[u8], capture_truncated: bool) -> DeletedOpenAudi
         }
         *file_started = false;
         record_count += 1;
-        if file_type.is_none() {
+        if record_count > MAX_RECORDS {
+            evidence_complete = false;
+        } else if file_type.is_none() {
             evidence_complete = false;
         } else if file_type.as_deref() != Some("REG") {
             // Non-regular descriptors do not represent held filesystem file capacity.
-        } else if record_count > MAX_RECORDS {
-            evidence_complete = false;
         } else if let (Some(pid), Some(device), Some(inode), Some(bytes)) =
             (process_id, device.take(), inode.take(), size.take())
         {
@@ -340,6 +340,17 @@ mod tests {
         assert_eq!(report.observed_file_count, 0);
         assert_eq!(report.observed_logical_bytes, 0);
         assert!(report.processes.is_empty());
+    }
+
+    #[test]
+    fn non_regular_descriptors_still_obey_record_bound() {
+        let mut output = b"p10\0cWorker\0".to_vec();
+        for descriptor in 0..=MAX_RECORDS {
+            output.extend_from_slice(format!("f{descriptor}\0tPIPE\0").as_bytes());
+        }
+        let report = parse_lsof_nul(&output, false);
+        assert!(!report.evidence_complete);
+        assert_eq!(report.observed_file_count, 0);
     }
 
     #[test]

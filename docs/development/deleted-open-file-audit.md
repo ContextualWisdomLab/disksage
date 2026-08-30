@@ -12,8 +12,10 @@ complete while local capacity remains occupied.
 - caps captured output and record count, and fails evidence completeness closed;
 - tells the person to close the listed apps normally and scan again.
 
-The audit never kills a process, removes a file, or counts its logical total toward verified
-physical recovery. A later APFS observation remains a separate shared-volume measurement.
+The audit never terminates an observed application or file holder, removes a file, or counts its
+logical total toward verified physical recovery. If the bounded observation times out, DiskSage
+terminates only its auxiliary `lsof` process group. A later APFS observation remains a separate
+shared-volume measurement.
 
 ## Reference
 
