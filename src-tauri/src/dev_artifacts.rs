@@ -94,6 +94,20 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
 }
 
+fn cargo_target_cache(path: &Path) -> bool {
+    std::fs::read_to_string(path.join("CACHEDIR.TAG")).is_ok_and(|tag| {
+        tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
+            && tag.contains("cache directory tag created by cargo")
+    }) && path.join(".rustc_info.json").is_file()
+        && path.join("debug").is_dir()
+}
+
+fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    artifact_kind(name)
+        .map(|(kind, markers)| (*kind, *markers))
+        .or_else(|| cargo_target_cache(path).then_some(("cargo-target-cache", &[])))
+}
+
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
@@ -356,7 +370,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let Some((_, markers)) = artifact_kind(&name) else {
+        let Some((_, markers)) = detected_artifact_kind(path, &name) else {
             continue;
         };
         let parent = path.parent().unwrap_or(root);
@@ -394,7 +408,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 return None;
             }
             let name = path.file_name()?.to_string_lossy().into_owned();
-            let (kind, _) = artifact_kind(&name)?;
+            let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
             Some(DevArtifact {
@@ -817,6 +831,24 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, ".venv314");
+    }
+
+    #[test]
+    fn discovers_standalone_cargo_target_cache_by_native_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("wardnet-pr95-target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
     }
 
     #[test]

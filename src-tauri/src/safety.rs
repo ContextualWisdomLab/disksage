@@ -6,7 +6,23 @@ pub const PROTECTED_PATH_MARKER: &str = ".disksage-protected";
 /// Binds a tree to a class IRI in the bundled safety ontology; retained classes veto cleanup.
 pub const ONTOLOGY_CLASS_MARKER: &str = ".disksage-ontology-class";
 
+fn sidecar(path: &Path, suffix: &str) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    Some(path.with_file_name(format!("{name}{suffix}")))
+}
+
 pub fn is_explicitly_protected(path: &Path) -> bool {
+    if sidecar(path, PROTECTED_PATH_MARKER).is_some_and(|marker| marker.is_file()) {
+        return true;
+    }
+    if let Some(binding) = sidecar(path, ONTOLOGY_CLASS_MARKER).filter(|marker| marker.exists()) {
+        return std::fs::read_to_string(binding)
+            .map_err(|_| ())
+            .and_then(|class_id| {
+                crate::ontology::bundled_class_requires_retention(class_id.trim()).map_err(|_| ())
+            })
+            .unwrap_or(true);
+    }
     path.ancestors().any(|ancestor| {
         if ancestor.join(PROTECTED_PATH_MARKER).is_file() {
             return true;
@@ -984,6 +1000,23 @@ mod tests {
 
         assert!(is_explicitly_protected(&business.join("customer.db")));
         assert!(is_protected(&business.join("customer.db")));
+    }
+
+    #[test]
+    fn ontology_sidecar_protects_only_its_bound_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let export = tmp.path().join("crm-export.sql");
+        let unrelated = tmp.path().join("cache.bin");
+        std::fs::write(&export, b"crm").unwrap();
+        std::fs::write(&unrelated, b"cache").unwrap();
+        std::fs::write(
+            sidecar(&export, ONTOLOGY_CLASS_MARKER).unwrap(),
+            "https://disksage.app/ontology#CustomerRelationshipManagementData\n",
+        )
+        .unwrap();
+
+        assert!(is_protected(&export));
+        assert!(!is_protected(&unrelated));
     }
 
     #[cfg(unix)]
