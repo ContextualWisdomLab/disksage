@@ -95,17 +95,24 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 }
 
 fn cargo_target_cache(path: &Path) -> bool {
-    std::fs::read_to_string(path.join("CACHEDIR.TAG")).is_ok_and(|tag| {
+    let tagged = std::fs::read_to_string(path.join("CACHEDIR.TAG")).is_ok_and(|tag| {
         tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
             && tag.contains("cache directory tag created by cargo")
-    }) && path.join(".rustc_info.json").is_file()
-        && path.join("debug").is_dir()
+    }) && path.join(".rustc_info.json").is_file();
+    let debug = path.join("debug");
+    debug.is_dir()
+        && (tagged
+            || (path.file_name().is_some_and(|name| name == "target")
+                && debug.join("deps").is_dir()
+                && debug.join("build").is_dir()
+                && debug.join("incremental").is_dir()))
 }
 
 fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
-    artifact_kind(name)
-        .map(|(kind, markers)| (*kind, *markers))
-        .or_else(|| cargo_target_cache(path).then_some(("cargo-target-cache", &[])))
+    if cargo_target_cache(path) {
+        return Some(("cargo-target-cache", &[]));
+    }
+    artifact_kind(name).map(|(kind, markers)| (*kind, *markers))
 }
 
 fn age_days(path: &Path, now_ms: u64) -> u64 {
@@ -844,6 +851,38 @@ mod tests {
         )
         .unwrap();
         fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn discovers_named_target_cache_without_project_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn discovers_named_target_cache_by_cargo_debug_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        for child in ["deps", "build", "incremental"] {
+            fs::create_dir_all(target.join("debug").join(child)).unwrap();
+        }
 
         let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
 
