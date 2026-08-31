@@ -437,6 +437,28 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().into()
     }
 
+    #[test]
+    fn approval_freshness_is_rechecked_at_mutation_boundary() {
+        let approval = GitCloneReclaimApproval {
+            version: GIT_CLONE_RECLAIM_VERSION,
+            approval_id: "approval".into(),
+            plan_fingerprint: "plan".into(),
+            exact_approval_phrase: "phrase".into(),
+            approved_at_ms: 100,
+            approved_by: "human:test".into(),
+            rationale: "reviewed".into(),
+        };
+        assert!(ensure_git_clone_approval_fresh(&approval, 100 + MAX_APPROVAL_AGE_MS).is_ok());
+        assert_eq!(
+            ensure_git_clone_approval_fresh(&approval, 101 + MAX_APPROVAL_AGE_MS).unwrap_err(),
+            "git-clone-execution-approval-invalid-or-stale"
+        );
+        assert_eq!(
+            ensure_git_clone_approval_fresh(&approval, 99).unwrap_err(),
+            "git-clone-execution-approval-invalid-or-stale"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn exact_closed_pr_head_authorizes_only_clean_inactive_single_clone() {
