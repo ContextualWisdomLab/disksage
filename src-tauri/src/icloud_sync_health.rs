@@ -1010,16 +1010,16 @@ fn parse_file_provider_activity_output(
                 .contains("excluded from sync under root")
         })
         .count() as u64;
-    let active_upload_count = output
-        .lines()
-        .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
-        .count() as u64;
-    let active_download_count = output
-        .lines()
-        .filter(|line| line.to_ascii_lowercase().contains("download progress:"))
-        .count() as u64;
     let active_upload_progress_millionths = progress_millionths(output, "upload progress:");
     let active_download_progress_millionths = progress_millionths(output, "download progress:");
+    // fileproviderctl always emits aggregate progress-object headers, including while idle. Only a
+    // provider-reported incomplete fraction is evidence of an active transfer.
+    let active_upload_count = u64::from(
+        active_upload_progress_millionths.is_some_and(|progress| progress < 1_000_000),
+    );
+    let active_download_count = u64::from(
+        active_download_progress_millionths.is_some_and(|progress| progress < 1_000_000),
+    );
     let mut notices = if command_succeeded {
         vec!["icloud-file-provider-dump-observed".into()]
     } else {
@@ -2385,6 +2385,22 @@ mod tests {
             .notices
             .contains(&"icloud-file-provider-active-download".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_does_not_treat_idle_progress_headers_as_active() {
+        let evidence = parse_file_provider_activity_output(
+            "+ upload progress: <NSProgress aggregate>\n\
+             + download progress: <NSProgress aggregate>\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.active_upload_count, 0);
+        assert_eq!(evidence.active_download_count, 0);
+        assert_eq!(evidence.active_upload_progress_millionths, None);
+        assert_eq!(evidence.active_download_progress_millionths, None);
     }
 
     #[test]
