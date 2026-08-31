@@ -21,6 +21,15 @@ mod cloud {
 }
 
 #[cfg(unix)]
+mod safety {
+    use std::path::Path;
+
+    pub(crate) fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
+        Ok(path.to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(unix)]
 #[path = "../src/rules.rs"]
 mod production_rules;
 
