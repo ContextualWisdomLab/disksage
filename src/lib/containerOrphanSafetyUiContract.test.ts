@@ -20,6 +20,14 @@ describe("Container orphan cleanup safety UX", () => {
     );
   });
 
+  it("describes BuildKit cleanup as exact reviewed-ID deletion", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+
+    expect(source).toContain("승인된 BuildKit 캐시 ID 집합");
+    expect(source).toContain("그 항목만 정리합니다");
+    expect(source).not.toContain("전체 미사용 빌드 캐시 정리");
+  });
+
   it("gates execution behind exact phrase and non-empty rationale", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const start = source.indexOf("function pruneReady(");
