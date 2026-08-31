@@ -30,6 +30,34 @@ fn parse_category(value: &str) -> Result<OrphanCategory, String> {
     }
 }
 
+fn ensure_cli_execution_authority(runtime: ContainerRuntimeKind) -> Result<(), String> {
+    match runtime {
+        ContainerRuntimeKind::DockerNative => {
+            Err("docker-native-cli-execution-requires-authority-binding".into())
+        }
+        ContainerRuntimeKind::DockerColimaContext => {
+            Err("docker-context-cli-execution-requires-immutable-authority".into())
+        }
+        ContainerRuntimeKind::PodmanMachine => Ok(()),
+    }
+}
+
+fn suppress_unexecutable_docker_plan(
+    mut plan: disksage_lib::container_orphan_reclaim::ContainerOrphanPlan,
+    runtime: ContainerRuntimeKind,
+) -> disksage_lib::container_orphan_reclaim::ContainerOrphanPlan {
+    if matches!(
+        runtime,
+        ContainerRuntimeKind::DockerNative | ContainerRuntimeKind::DockerColimaContext
+    ) {
+        for category in &mut plan.categories {
+            category.approval_phrase = None;
+            category.prune_command = None;
+        }
+    }
+    plan
+}
+
 fn run() -> Result<(), String> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let help_count = raw_args
@@ -145,12 +173,8 @@ fn run() -> Result<(), String> {
         }
         _ => {}
     }
-    if execute.is_some() && runtime == ContainerRuntimeKind::DockerNative {
-        // The desktop IPC contract binds Docker-native approval to the effective DOCKER_CONTEXT /
-        // DOCKER_HOST authority. This standalone CLI cannot safely reproduce that private
-        // authority boundary, so destructive native-Docker execution remains fail-closed while
-        // read-only inspection stays available.
-        return Err("docker-native-cli-execution-requires-authority-binding".into());
+    if execute.is_some() {
+        ensure_cli_execution_authority(runtime)?;
     }
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
@@ -196,18 +220,11 @@ fn run() -> Result<(), String> {
             "--confirm and --rationale require --execute\n{USAGE}"
         ));
     }
-    let mut plan = sanitize_plan(receipt_dir.as_ref().map_or_else(
+    let plan = sanitize_plan(receipt_dir.as_ref().map_or_else(
         || disksage_lib::container_orphan_reclaim::probe_container_orphans(&target),
         |dir| probe_container_orphans_with_receipt_dir(&target, dir),
     ));
-    if runtime == ContainerRuntimeKind::DockerNative {
-        // Native Docker desktop approval is bound to the effective Docker authority by the Tauri
-        // IPC boundary. This standalone CLI deliberately cannot reproduce that private authority
-        // proof, so its read-only evidence must not publish a phrase that cannot be executed.
-        for category in &mut plan.categories {
-            category.approval_phrase = None;
-        }
-    }
+    let plan = suppress_unexecutable_docker_plan(plan, runtime);
     if pretty {
         println!(
             "{}",
@@ -232,6 +249,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use disksage_lib::container_orphan_reclaim::{
+        ContainerOrphanPlan, OrphanCandidateEvidence, OrphanCategoryPlan, RuntimeHealthEvidence,
+    };
 
     #[test]
     fn cli_exposes_every_backend_orphan_category() {
@@ -247,5 +267,54 @@ mod tests {
             OrphanCategory::BuildCache
         );
         assert!(parse_category("all").is_err());
+    }
+
+    #[test]
+    fn cli_rejects_mutable_docker_context_execution_before_runtime_access() {
+        assert_eq!(
+            ensure_cli_execution_authority(ContainerRuntimeKind::DockerNative).unwrap_err(),
+            "docker-native-cli-execution-requires-authority-binding"
+        );
+        assert_eq!(
+            ensure_cli_execution_authority(ContainerRuntimeKind::DockerColimaContext).unwrap_err(),
+            "docker-context-cli-execution-requires-immutable-authority"
+        );
+        assert!(ensure_cli_execution_authority(ContainerRuntimeKind::PodmanMachine).is_ok());
+    }
+
+    #[test]
+    fn read_only_docker_cli_plan_exposes_no_mutation_authority() {
+        let plan = ContainerOrphanPlan {
+            schema_kind: "disksage.container-orphan-plan",
+            schema_version: 1,
+            platform: "test",
+            evidence_complete: true,
+            elapsed_ms: 1,
+            runtime: RuntimeHealthEvidence {
+                kind: ContainerRuntimeKind::DockerColimaContext,
+                display_name: "docker colima".into(),
+                healthy: true,
+                detail_issue: None,
+            },
+            categories: vec![OrphanCategoryPlan {
+                category: OrphanCategory::Container,
+                evidence_complete: true,
+                issue: None,
+                evidence: Some(OrphanCandidateEvidence {
+                    total_records: 1,
+                    candidate_records: 1,
+                    candidate_size_sum_bytes: None,
+                    candidate_set_sha256: "a".repeat(64),
+                }),
+                approval_phrase: Some("unsafe approval".into()),
+                prune_command: Some(vec!["container".into(), "rm".into()]),
+            }],
+            issues: vec![],
+            receipt_directory_sha256: None,
+        };
+
+        let plan = suppress_unexecutable_docker_plan(plan, ContainerRuntimeKind::DockerColimaContext);
+        assert!(plan.categories[0].approval_phrase.is_none());
+        assert!(plan.categories[0].prune_command.is_none());
     }
 }
