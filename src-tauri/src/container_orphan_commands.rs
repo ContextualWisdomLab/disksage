@@ -296,11 +296,18 @@ fn runtime_kinds_for_docker_authority(
     };
 
     let mut kinds = Vec::with_capacity(3);
-    if matches!(authority, Ok(DockerAmbientAuthority::Host(_))) {
-        kinds.push(DockerNative);
+    match authority {
+        Ok(DockerAmbientAuthority::Host(_)) | Ok(DockerAmbientAuthority::Default) => {
+            kinds.push(DockerNative);
+        }
+        Ok(DockerAmbientAuthority::Context(context)) if context != "colima" => {
+            kinds.push(DockerNative);
+        }
+        Ok(DockerAmbientAuthority::Context(_)) | Err(_) => {}
     }
-    // Named Docker contexts remain visible through the explicit Colima read-only target, but do
-    // not acquire destructive authority. Podman remains independent of Docker ambient authority.
+    // An ambient default or non-Colima context is useful read-only evidence even when it cannot
+    // safely authorize deletion. Explicit Colima remains a separate read-only target, and Podman
+    // remains independent of Docker ambient authority.
     kinds.push(DockerColimaContext);
     kinds.push(PodmanMachine);
     kinds
@@ -376,9 +383,9 @@ fn suppress_context_mutation_authority(
 
 /// Probes every supported container runtime target read-only and audits all orphan categories.
 /// An explicit DOCKER_HOST may acquire mutation authority because every later command is pinned to
-/// that exact endpoint. Named/default Docker contexts and the explicit Colima context remain
-/// read-only because a context name is mutable and cannot safely authorize a later delete without
-/// a private immutable context/TLS snapshot.
+/// that exact endpoint. Named/default Docker contexts remain visible as read-only native audits;
+/// the explicit Colima context remains read-only because mutable context names cannot safely
+/// authorize a later delete without a private immutable context/TLS snapshot.
 #[tauri::command(async)]
 pub fn inspect_container_orphans(
     app: tauri::AppHandle,
@@ -393,7 +400,10 @@ pub fn inspect_container_orphans(
         .into_iter()
         .filter_map(|kind| {
             let target = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-                pinned_docker_target(pinned_docker_authority.as_ref().ok()?).ok()?
+                match pinned_docker_authority.as_ref() {
+                    Ok(authority) => pinned_docker_target(authority).ok()?,
+                    Err(_) => target_for_kind(kind).ok()?,
+                }
             } else {
                 target_for_kind(kind).ok()?
             };
@@ -405,8 +415,10 @@ pub fn inspect_container_orphans(
             ));
             match kind {
                 container_orphan_reclaim::ContainerRuntimeKind::DockerNative => {
-                    let authority = pinned_docker_authority.as_ref().ok()?;
-                    Some(bind_docker_authority_plan(plan, authority))
+                    match pinned_docker_authority.as_ref() {
+                        Ok(authority) => Some(bind_docker_authority_plan(plan, authority)),
+                        Err(_) => Some(suppress_context_mutation_authority(plan)),
+                    }
                 }
                 container_orphan_reclaim::ContainerRuntimeKind::DockerColimaContext => {
                     Some(suppress_context_mutation_authority(plan))
