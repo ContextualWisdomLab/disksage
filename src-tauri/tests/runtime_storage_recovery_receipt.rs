@@ -73,8 +73,8 @@ fn successful_stop_with_failed_start_returns_partial_recovery_receipt() {
         assert_eq!(receipt.start_status_code, 42);
         assert!(!receipt.guest_reachable_after_recovery);
         assert!(
-            receipt.executed,
-            "executed records that the approved recovery mutation crossed the stop boundary"
+            !receipt.executed,
+            "executed remains the full stop/start completion flag while the receipt preserves the partial shutdown mutation"
         );
         return;
     }
