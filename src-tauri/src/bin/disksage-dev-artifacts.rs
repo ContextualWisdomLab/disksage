@@ -265,4 +265,19 @@ mod tests {
             "--permanent requires --execute"
         );
     }
+
+    #[test]
+    fn permanent_deletion_requires_bound_confirmation_and_rationale() {
+        let root = std::env::temp_dir();
+        assert_eq!(
+            parse_args(&[
+                "--root".into(),
+                root.to_string_lossy().into_owned(),
+                "--execute".into(),
+                "--permanent".into(),
+            ])
+            .unwrap_err(),
+            "--permanent requires --confirm and --rationale"
+        );
+    }
 }
