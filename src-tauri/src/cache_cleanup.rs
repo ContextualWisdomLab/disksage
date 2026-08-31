@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::{commands::CleanResult, rules, safety};
 
@@ -39,6 +40,13 @@ const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
 // Large package caches need longer than the interactive worktree probe while retaining the same
 // recursive open-handle evidence and fail-closed timeout behavior.
 const CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS: u64 = 30_000;
+
+fn remaining_probe_timeout_ms(elapsed: Duration) -> Option<u64> {
+    Duration::from_millis(CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS)
+        .checked_sub(elapsed)
+        .and_then(|remaining| u64::try_from(remaining.as_millis()).ok())
+        .filter(|remaining| *remaining > 0)
+}
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -273,17 +281,25 @@ pub(crate) fn clean_cache_contents_inner(
         return Err("cache-cleanup-targets-stale".into());
     }
 
+    let probe_started = Instant::now();
     Ok(expected
         .into_iter()
         .map(|target| {
+            let Some(probe_timeout_ms) = remaining_probe_timeout_ms(probe_started.elapsed()) else {
+                return CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: "cache-target-active-use-evidence-incomplete".into(),
+                };
+            };
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
-            // reclaiming unrelated, inactive cache archives in the same catalog root.
+            // reclaiming unrelated archives, within one bounded operation-wide evidence budget.
             let recursive = std::fs::symlink_metadata(&target.path)
                 .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS,
+                probe_timeout_ms,
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );
@@ -401,6 +417,16 @@ mod tests {
             local_data: root.join("local"),
             home: root.join("home"),
         }
+    }
+
+    #[test]
+    fn active_use_probe_budget_is_operation_wide() {
+        assert_eq!(remaining_probe_timeout_ms(Duration::ZERO), Some(30_000));
+        assert_eq!(
+            remaining_probe_timeout_ms(Duration::from_secs(29)),
+            Some(1_000)
+        );
+        assert_eq!(remaining_probe_timeout_ms(Duration::from_secs(30)), None);
     }
 
     #[test]

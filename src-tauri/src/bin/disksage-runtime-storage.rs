@@ -1,4 +1,5 @@
 use disksage_lib::runtime_storage::{self, RuntimeStorageKind};
+use std::ffi::OsString;
 
 const USAGE: &str = "Usage: disksage-runtime-storage --runtime <colima|podman-machine> [--execute --confirm EXACT_PHRASE --rationale TEXT]";
 
@@ -10,8 +11,18 @@ fn runtime(value: &str) -> Result<RuntimeStorageKind, String> {
     }
 }
 
+fn utf8_args(raw: impl IntoIterator<Item = OsString>) -> Result<Vec<String>, String> {
+    raw.into_iter()
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "invalid argument encoding".into())
+        })
+        .collect()
+}
+
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = utf8_args(std::env::args_os().skip(1))?;
     if raw.as_slice() == ["--help"] || raw.as_slice() == ["-h"] {
         println!("{USAGE}");
         return Ok(());
@@ -56,6 +67,9 @@ fn run() -> Result<(), String> {
             "{}",
             serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
         );
+        if !output.executed || output.status_code != 0 {
+            return Err("runtime-storage-trim-failed".into());
+        }
     } else {
         if confirm.is_some() || rationale.is_some() {
             return Err(format!(
@@ -93,5 +107,16 @@ mod tests {
             RuntimeStorageKind::PodmanMachine
         );
         assert!(runtime("docker").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_arguments_fail_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert_eq!(
+            utf8_args([OsString::from_vec(vec![0xff])]).unwrap_err(),
+            "invalid argument encoding"
+        );
     }
 }
