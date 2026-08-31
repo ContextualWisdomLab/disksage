@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { executeRuntimeStorageMutation } from "./runtimeStorageMaintenanceFlow";
+import {
+  executeRuntimeStorageMutation,
+  runtimeStorageRecoverySucceeded,
+} from "./runtimeStorageMaintenanceFlow";
 
 describe("runtime storage post-mutation flow", () => {
   it("preserves a successful mutation receipt and invalidates approval when refresh fails", async () => {
@@ -39,5 +42,31 @@ describe("runtime storage post-mutation flow", () => {
 
     expect(invalidateApproval).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("runtime storage recovery outcome", () => {
+  it("does not report recovery success when restart completed but the guest is still unreachable", () => {
+    expect(
+      runtimeStorageRecoverySucceeded({
+        executed: true,
+        guest_reachable_after_recovery: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("reports recovery success only after a completed restart and a reachable guest", () => {
+    expect(
+      runtimeStorageRecoverySucceeded({
+        executed: true,
+        guest_reachable_after_recovery: true,
+      }),
+    ).toBe(true);
+    expect(
+      runtimeStorageRecoverySucceeded({
+        executed: false,
+        guest_reachable_after_recovery: true,
+      }),
+    ).toBe(false);
   });
 });
