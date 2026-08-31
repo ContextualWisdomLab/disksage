@@ -22,6 +22,7 @@ mod userrules;
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
+pub use safety::{bind_retained_ontology_class, filesystem_object_id, is_protected};
 #[cfg(all(test, unix))]
 mod safety_non_utf8_tests;
 #[cfg(all(test, target_os = "macos"))]

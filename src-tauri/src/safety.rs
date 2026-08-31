@@ -12,6 +12,52 @@ fn sidecar(path: &Path, suffix: &str) -> Option<PathBuf> {
     Some(path.with_file_name(name))
 }
 
+/// Adds an ontology-backed deletion veto to one existing file or directory.
+pub fn bind_retained_ontology_class(path: &Path, class_id: &str) -> Result<PathBuf, String> {
+    if !path.is_absolute() || class_id.is_empty() || class_id.len() > 2_048 {
+        return Err("ontology-protection-binding-invalid".into());
+    }
+    if !crate::ontology::bundled_class_requires_retention(class_id)
+        .map_err(|_| "ontology-protection-class-unknown".to_string())?
+    {
+        return Err("ontology-protection-class-not-retained".into());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+        return Err("ontology-protection-target-unsafe".into());
+    }
+    let marker = if metadata.is_dir() {
+        path.join(ONTOLOGY_CLASS_MARKER)
+    } else {
+        sidecar(path, ONTOLOGY_CLASS_MARKER)
+            .ok_or_else(|| "ontology-protection-target-unsafe".to_string())?
+    };
+    if marker.exists() {
+        let existing = std::fs::read_to_string(&marker)
+            .map_err(|_| "ontology-protection-binding-unreadable".to_string())?;
+        return (existing.trim() == class_id)
+            .then_some(marker)
+            .ok_or_else(|| "ontology-protection-binding-conflict".to_string());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    use std::io::Write as _;
+    let mut file = options
+        .open(&marker)
+        .map_err(|_| "ontology-protection-binding-create-failed".to_string())?;
+    file.write_all(class_id.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "ontology-protection-binding-write-failed".to_string())?;
+    Ok(marker)
+}
+
 pub fn is_explicitly_protected(path: &Path) -> bool {
     if sidecar(path, PROTECTED_PATH_MARKER).is_some_and(|marker| marker.is_file()) {
         return true;
