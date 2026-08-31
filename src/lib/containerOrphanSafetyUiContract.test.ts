@@ -31,6 +31,20 @@ describe("Container orphan cleanup safety UX", () => {
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
   });
 
+  it("prevents inspect and prune from overlapping", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const inspectStart = source.indexOf("async function inspect()");
+    const inspectEnd = source.indexOf("async function prune(", inspectStart);
+    const inspectBody = source.slice(inspectStart, inspectEnd);
+    const pruneReadyStart = source.indexOf("function pruneReady(");
+    const pruneReadyEnd = source.indexOf("async function inspect()", pruneReadyStart);
+    const pruneReadyBody = source.slice(pruneReadyStart, pruneReadyEnd);
+
+    expect(inspectBody).toContain("if (busy || pruneBusyKey !== null) return;");
+    expect(pruneReadyBody).toContain("if (busy || phrase === null || pruneBusyKey !== null) return false;");
+    expect(source).toContain("disabled={busy || pruneBusyKey !== null}");
+  });
+
   it("requires deliberate re-entry instead of revealing the destructive approval phrase in the input", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const markup = source.slice(source.indexOf("</script>"));
