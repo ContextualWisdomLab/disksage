@@ -21,7 +21,12 @@ fn stable_issue(raw: &str) -> String {
 
 fn public_command_shape(category: OrphanCategory, has_candidates: bool) -> Vec<String> {
     if category == OrphanCategory::BuildCache {
-        return Vec::new();
+        let mut command = vec!["buildx".into(), "prune".into(), "--all".into()];
+        if has_candidates {
+            command.extend(["--filter".into(), "id~=^(<candidate-set>)$".into()]);
+        }
+        command.push("--force".into());
+        return command;
     }
     let mut command = vec![category.as_str().to_string(), "rm".to_string()];
     if has_candidates {
@@ -196,13 +201,23 @@ mod tests {
     }
 
     #[test]
-    fn build_cache_public_command_has_no_mutation_authority() {
-        assert!(public_command_shape(OrphanCategory::BuildCache, true).is_empty());
+    fn build_cache_public_command_exposes_only_exact_candidate_shape() {
+        assert_eq!(
+            public_command_shape(OrphanCategory::BuildCache, true),
+            vec![
+                "buildx",
+                "prune",
+                "--all",
+                "--filter",
+                "id~=^(<candidate-set>)$",
+                "--force"
+            ]
+        );
     }
 
     #[cfg(unix)]
     #[test]
-    fn approval_is_removed_even_when_internal_mutation_command_is_missing() {
+    fn approval_is_retained_only_with_exact_public_mutation_shape() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().unwrap();
@@ -229,7 +244,7 @@ mod tests {
             .find(|category| category.category == OrphanCategory::BuildCache)
             .unwrap();
         assert!(build_cache.approval_phrase.is_some());
-        build_cache.prune_command = None;
+        assert!(build_cache.prune_command.is_some());
 
         let sanitized = sanitize_plan(plan);
         let build_cache = sanitized
@@ -237,8 +252,22 @@ mod tests {
             .iter()
             .find(|category| category.category == OrphanCategory::BuildCache)
             .unwrap();
-        assert!(build_cache.approval_phrase.is_none());
-        assert!(build_cache.prune_command.is_none());
+        assert!(build_cache.approval_phrase.is_some());
+        assert_eq!(
+            build_cache.prune_command.as_deref(),
+            Some(
+                [
+                    "buildx",
+                    "prune",
+                    "--all",
+                    "--filter",
+                    "id~=^(<candidate-set>)$",
+                    "--force"
+                ]
+                .map(str::to_string)
+                .as_slice()
+            )
+        );
     }
 
     #[test]

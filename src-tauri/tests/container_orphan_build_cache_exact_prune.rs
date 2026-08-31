@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[test]
-fn build_cache_inventory_cannot_cross_into_runtime_mutation() {
+fn build_cache_prune_targets_only_the_freshly_reviewed_record_id() {
     let temp = tempfile::tempdir().unwrap();
     let receipt_dir = temp.path().join("receipts");
     std::fs::create_dir(&receipt_dir).unwrap();
@@ -20,15 +20,16 @@ fn build_cache_inventory_cannot_cross_into_runtime_mutation() {
         r#"#!/bin/sh
 printf '%s\n' "$*" >> '{}'
 case "$*" in
-  *" info") exit 0 ;;
+  "info") exit 0 ;;
   *"container ps"*) exit 0 ;;
-  *" images "*) exit 0 ;;
+  "images "*) exit 0 ;;
   *"volume ls"*) exit 0 ;;
   *"network ls"*) exit 0 ;;
   *"buildx du --format json"*)
     printf '%s\n' '{{"ID":"cache123","Reclaimable":true}}'
     exit 0
     ;;
+  *"buildx prune --all --filter id~=^(cache123)$ --force") exit 0 ;;
   *)
     printf '%s\n' "unexpected command: $*" >&2
     exit 23
@@ -53,7 +54,7 @@ esac
         .categories
         .iter()
         .find(|category| category.category == OrphanCategory::BuildCache)
-        .expect("BuildKit cache category remains readable on Docker");
+        .expect("BuildKit cache category must be audited for Docker");
     assert_eq!(
         build_cache
             .evidence
@@ -63,25 +64,35 @@ esac
         1
     );
 
-    let error = execute_container_orphan_prune(
+    let phrase = build_cache
+        .approval_phrase
+        .as_deref()
+        .expect("fresh exact candidate set must be approvable");
+
+    let execution = execute_container_orphan_prune(
         &target,
         OrphanCategory::BuildCache,
-        build_cache.approval_phrase.as_deref().unwrap_or("not-authorized"),
+        phrase,
         "Reviewed the exact BuildKit cache record.",
         1_800_000_000_000,
         &receipt_dir,
     )
-    .expect_err("BuildKit cache must stay read-only without an exact identity delete primitive");
-    assert_eq!(error, "orphan-prune-build-cache-exact-delete-unavailable");
+    .expect("exact BuildKit record deletion should be supported");
+    assert_eq!(execution.status_code, 0);
+    assert!(execution.executed);
 
     let log = std::fs::read_to_string(&log_path).unwrap();
     assert!(
-        log.lines()
-            .any(|line| line.ends_with("buildx du --format json")),
-        "BuildKit inventory command missing from log: {log}"
+        log.lines().any(|line| {
+            line.ends_with("buildx prune --all --filter id~=^(cache123)$ --force")
+        }),
+        "exact prune command missing from log: {log}"
     );
     assert!(
-        !log.lines().any(|line| line.contains("buildx prune")),
-        "BuildKit audit must never cross into prune execution: {log}"
+        !log.lines().any(|line| {
+            line.contains("buildx prune --all --force")
+                || (line.contains("buildx prune --all") && !line.contains("--filter id~="))
+        }),
+        "unfiltered category-wide prune must never run: {log}"
     );
 }

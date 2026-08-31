@@ -47,6 +47,7 @@ pub const MAX_CATEGORY_RECORDS: usize = 4_096;
 /// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
 /// supported host, including Windows command-line limits and 200-byte volume/network names.
 const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
+const MAX_BUILD_CACHE_FILTER_BYTES: usize = 24 * 1024;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -709,7 +710,7 @@ fn parse_buildx_reclaimable_ids(output: &str) -> Result<(u64, Vec<String>), Stri
             ids.push(id);
         }
     }
-    Ok((total, bounded_exact_candidate_ids(ids)?))
+    Ok((total, bounded_build_cache_candidate_ids(ids)?))
 }
 
 /// Parse the exact byte sizes returned by `docker image inspect` for the already-authorized
@@ -1149,6 +1150,38 @@ fn bounded_exact_candidate_ids(mut candidate_ids: Vec<String>) -> Result<Vec<Str
     Ok(candidate_ids)
 }
 
+fn bounded_build_cache_candidate_ids(
+    mut candidate_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    candidate_ids.sort_unstable();
+    if candidate_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("duplicate-candidate-id".to_string());
+    }
+    let filter_bytes = candidate_ids.iter().try_fold(8usize, |total, id| {
+        total
+            .checked_add(id.len())
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "build-cache-filter-size-overflow".to_string())
+    })?;
+    if filter_bytes > MAX_BUILD_CACHE_FILTER_BYTES {
+        return Err("build-cache-filter-exceeds-bound".to_string());
+    }
+    Ok(candidate_ids)
+}
+
+fn build_cache_id_filter(candidate_ids: &[String]) -> Result<String, String> {
+    if candidate_ids.is_empty() {
+        return Err("orphan-prune-empty-candidate-set".into());
+    }
+    if candidate_ids.iter().any(|id| {
+        id.is_empty() || id.len() > 128 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }) {
+        return Err("build-cache-id-invalid".into());
+    }
+    let candidate_ids = bounded_build_cache_candidate_ids(candidate_ids.to_vec())?;
+    Ok(format!("id~=^({})$", candidate_ids.join("|")))
+}
+
 fn redacted_exact_delete_command(
     prefix: &[String],
     category: OrphanCategory,
@@ -1156,7 +1189,11 @@ fn redacted_exact_delete_command(
 ) -> Vec<String> {
     let mut command = prefix.to_vec();
     if category == OrphanCategory::BuildCache {
-        command.extend(["buildx".into(), "prune".into(), "--all".into(), "--force".into()]);
+        command.extend(["buildx".into(), "prune".into(), "--all".into()]);
+        if has_candidates {
+            command.extend(["--filter".into(), "id~=^(<candidate-set>)$".into()]);
+        }
+        command.push("--force".into());
         return command;
     }
     command.extend(
@@ -1645,7 +1682,12 @@ fn audit_category(
                 )
             }
         };
-        Ok((evidence, bounded_exact_candidate_ids(candidate_ids)?))
+        let candidate_ids = if category == OrphanCategory::BuildCache {
+            bounded_build_cache_candidate_ids(candidate_ids)?
+        } else {
+            bounded_exact_candidate_ids(candidate_ids)?
+        };
+        Ok((evidence, candidate_ids))
     })();
     match outcome {
         Ok((evidence, candidate_ids)) => {
@@ -1753,9 +1795,6 @@ pub fn execute_container_orphan_prune(
     executed_at_ms: u64,
     receipt_dir: &Path,
 ) -> Result<ContainerOrphanPruneExecution, String> {
-    if category == OrphanCategory::BuildCache {
-        return Err("orphan-prune-build-cache-exact-delete-unavailable".into());
-    }
     if executed_at_ms == 0 {
         return Err("orphan-prune-time-invalid".into());
     }
@@ -1799,7 +1838,15 @@ pub fn execute_container_orphan_prune(
     let before_available_bytes = host_available_bytes(executed_at_ms);
     let mut owned_args: Vec<String> = prefix.iter().skip(1).cloned().collect();
     if category == OrphanCategory::BuildCache {
-        owned_args.extend(["buildx".into(), "prune".into(), "--all".into(), "--force".into()]);
+        let filter = build_cache_id_filter(&plan.candidate_ids)?;
+        owned_args.extend([
+            "buildx".into(),
+            "prune".into(),
+            "--all".into(),
+            "--filter".into(),
+            filter,
+            "--force".into(),
+        ]);
     } else {
         owned_args.extend(
             category
@@ -2512,6 +2559,35 @@ mod tests {
         assert_eq!(
             bounded_exact_candidate_ids(ids).unwrap_err(),
             "exact-delete-candidate-count-exceeds-bound"
+        );
+    }
+
+    #[test]
+    fn build_cache_candidates_are_bounded_by_filter_bytes() {
+        let ids: Vec<String> = (0..260).map(|index| format!("cache{index:04}")).collect();
+        assert_eq!(bounded_build_cache_candidate_ids(ids).unwrap().len(), 260);
+        let oversized: Vec<String> = (0..MAX_CATEGORY_RECORDS)
+            .map(|index| format!("{index:0128}"))
+            .collect();
+        assert_eq!(
+            bounded_build_cache_candidate_ids(oversized).unwrap_err(),
+            "build-cache-filter-exceeds-bound"
+        );
+    }
+
+    #[test]
+    fn build_cache_filter_is_anchored_to_reviewed_ids() {
+        assert_eq!(
+            build_cache_id_filter(&["abc123".into(), "def456".into()]).unwrap(),
+            "id~=^(abc123|def456)$"
+        );
+        assert_eq!(
+            build_cache_id_filter(&[]).unwrap_err(),
+            "orphan-prune-empty-candidate-set"
+        );
+        assert_eq!(
+            build_cache_id_filter(&["abc.*".into()]).unwrap_err(),
+            "build-cache-id-invalid"
         );
     }
 
