@@ -189,6 +189,11 @@ mod tests {
     }
 
     #[test]
+    fn build_cache_public_command_has_no_mutation_authority() {
+        assert!(public_command_shape(OrphanCategory::BuildCache, true).is_empty());
+    }
+
+    #[test]
     fn malformed_issue_tokens_fall_back_without_reflection() {
         assert_eq!(stable_issue("Bad Token:/secret"), FALLBACK_ISSUE);
         assert_eq!(stable_issue(""), FALLBACK_ISSUE);
