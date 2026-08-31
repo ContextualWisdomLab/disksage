@@ -511,6 +511,7 @@ struct VolumeRecord {
 
 const DISKSAGE_OWNER_LABEL: &str = "io.contextualwisdomlab.disksage.owner";
 const DISKSAGE_RECLAIMABLE_LABEL: &str = "io.contextualwisdomlab.disksage.reclaimable";
+const DISKSAGE_BUSINESS_DATA_LABEL: &str = "io.contextualwisdomlab.disksage.business-data";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VolumeOwnershipEvidence {
@@ -852,6 +853,10 @@ fn parse_volume_ownership(
         .iter()
         .any(|(key, _)| key.starts_with("com.docker.compose."));
     let explicitly_reclaimable = !compose_owned
+        && labels
+            .get(DISKSAGE_BUSINESS_DATA_LABEL)
+            .and_then(Value::as_str)
+            != Some("true")
         && labels.get(DISKSAGE_OWNER_LABEL).and_then(Value::as_str) == Some("disksage")
         && labels
             .get(DISKSAGE_RECLAIMABLE_LABEL)
@@ -2170,6 +2175,13 @@ mod tests {
         let unlabeled = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":null}]"#;
         assert!(
             !parse_volume_ownership(unlabeled, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
+
+        let business = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true","io.contextualwisdomlab.disksage.business-data":"true"}}]"#;
+        assert!(
+            !parse_volume_ownership(business, "cache-vol")
                 .unwrap()
                 .explicitly_reclaimable
         );

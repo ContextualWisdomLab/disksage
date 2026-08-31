@@ -329,6 +329,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
 
     while let Some(entry) = walker.next() {
         let Ok(e) = entry else { continue };
+        if crate::safety::is_explicitly_protected(e.path()) {
+            if e.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
         if e.depth() > 0 && !scanner::keep_entry(&e) {
             if e.file_type().is_dir() {
                 walker.skip_current_dir();

@@ -1,6 +1,29 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// An explicit manual keep boundary inherited by every descendant.
+pub const PROTECTED_PATH_MARKER: &str = ".disksage-protected";
+/// Binds a tree to a class IRI in the bundled safety ontology; retained classes veto cleanup.
+pub const ONTOLOGY_CLASS_MARKER: &str = ".disksage-ontology-class";
+
+pub fn is_explicitly_protected(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        if ancestor.join(PROTECTED_PATH_MARKER).is_file() {
+            return true;
+        }
+        let binding = ancestor.join(ONTOLOGY_CLASS_MARKER);
+        if !binding.exists() {
+            return false;
+        }
+        std::fs::read_to_string(binding)
+            .map_err(|_| ())
+            .and_then(|class_id| {
+                crate::ontology::bundled_class_requires_retention(class_id.trim()).map_err(|_| ())
+            })
+            .unwrap_or(true)
+    })
+}
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -129,6 +152,9 @@ pub fn is_protected(path: &Path) -> bool {
     // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
     if is_home_root(path, home.as_deref()) {
+        return true;
+    }
+    if is_explicitly_protected(path) {
         return true;
     }
     #[cfg(windows)]
@@ -929,6 +955,35 @@ mod tests {
     fn allows_ordinary_deep_paths() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_protected(&tmp.path().join("node_modules")));
+    }
+
+    #[test]
+    fn explicit_marker_protects_its_directory_and_descendants_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let protected = tmp.path().join("crm");
+        let sibling = tmp.path().join("cache");
+        std::fs::create_dir_all(protected.join("exports")).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(protected.join(PROTECTED_PATH_MARKER), []).unwrap();
+
+        assert!(is_protected(&protected));
+        assert!(is_protected(&protected.join("exports/customer.db")));
+        assert!(!is_protected(&sibling));
+    }
+
+    #[test]
+    fn ontology_retention_binding_is_an_inherited_delete_veto() {
+        let tmp = tempfile::tempdir().unwrap();
+        let business = tmp.path().join("business-data");
+        std::fs::create_dir_all(&business).unwrap();
+        std::fs::write(
+            business.join(ONTOLOGY_CLASS_MARKER),
+            "https://disksage.app/ontology#CustomerRelationshipManagementData\n",
+        )
+        .unwrap();
+
+        assert!(is_explicitly_protected(&business.join("customer.db")));
+        assert!(is_protected(&business.join("customer.db")));
     }
 
     #[cfg(unix)]

@@ -397,6 +397,7 @@ export interface OntoClass {
   equivalents: string[];
   disjoints: string[];
   target_folder: string | null;
+  deletion_policy: string | null;
 }
 export interface Ontology {
   classes: OntoClass[];
