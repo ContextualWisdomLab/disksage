@@ -1422,10 +1422,63 @@ pub fn active_use_evidence(
         }
         pids.insert(pid);
     }
+    let path_text = match path.to_str() {
+        Some(path) => path,
+        None => {
+            return GitWorktreeActiveUseEvidence {
+                method: "lsof-recursive-pid+ps-argv".into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some("active-use-path-not-utf8".into()),
+            };
+        }
+    };
+    let ps_args = [
+        OsString::from("-ww"),
+        OsString::from("-axo"),
+        OsString::from("pid=,command="),
+    ];
+    let ps = match run_bounded_command("ps", &ps_args, command_cwd, timeout_ms) {
+        Ok(result)
+            if !result.timed_out
+                && !result.stdout_truncated
+                && !result.stderr_truncated
+                && result.status_code == Some(0) =>
+        {
+            result
+        }
+        _ => {
+            return GitWorktreeActiveUseEvidence {
+                method: "lsof-recursive-pid+ps-argv".into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some("active-use-process-argv-unavailable".into()),
+            };
+        }
+    };
+    for line in String::from_utf8_lossy(&ps.stdout).lines() {
+        let trimmed = line.trim_start();
+        let Some((raw_pid, command)) = trimmed.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if command.contains(path_text) {
+            if let Ok(pid) = raw_pid.parse::<u32>() {
+                if pid != ps.child_pid {
+                    pids.insert(pid);
+                }
+            }
+        }
+    }
     let results_truncated = pids.len() > max_pids;
     let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
     GitWorktreeActiveUseEvidence {
-        method: method.into(),
+        method: format!("{method}+ps-argv"),
         assessed: true,
         evidence_complete: !results_truncated,
         active: !observed_pids.is_empty(),
@@ -3088,6 +3141,31 @@ pub fn write_immutable_worktree_record<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_detects_closed_script_path_in_process_arguments() {
+        let temporary = tempfile::tempdir().unwrap();
+        let artifact = temporary.path().join("node_modules");
+        std::fs::create_dir(&artifact).unwrap();
+        let mut child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "while :; do sleep 1; done",
+                artifact.to_str().unwrap(),
+            ])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let evidence = active_use_evidence(&artifact, 5_000, 64, true);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&child.id()), "{evidence:?}");
+    }
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
