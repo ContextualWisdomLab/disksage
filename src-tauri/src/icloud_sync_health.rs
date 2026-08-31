@@ -40,7 +40,7 @@ const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 #[cfg(target_os = "macos")]
 // fileproviderctl prints global sync-engine progress after the per-item detail section. Keep the
 // probe bounded, but allow enough time to observe that active-transfer evidence before failing.
-const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(60);
+const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(90);
 #[cfg(target_os = "macos")]
 // Keep the sync summary and a larger bounded provider-error window together; iCloud places
 // filename/root exclusion diagnostics after the aggregate summary in large dumps.
@@ -51,7 +51,7 @@ static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
 pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
-pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 3;
+pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 4;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
@@ -150,6 +150,12 @@ pub struct IcloudFileProviderActivityEvidence {
     pub materialization_failure_count: u64,
     #[serde(default)]
     pub staged_item_missing_count: u64,
+    /// Aggregate stale provider operation errors; no item identifiers or paths are retained.
+    #[serde(default)]
+    pub stale_error_count: u64,
+    /// Oldest relative age among `stale_error_count`, bounded by the native dump sample.
+    #[serde(default)]
+    pub oldest_stale_error_age_ms: Option<u64>,
     /// Aggregate provider errors where iCloud excludes an item because of its filename.
     #[serde(default)]
     pub sync_excluded_filename_count: u64,
@@ -183,6 +189,10 @@ pub fn validate_file_provider_activity_evidence(
         || evidence
             .active_download_progress_millionths
             .is_some_and(|value| value > 1_000_000)
+        || ((evidence.stale_error_count == 0) != evidence.oldest_stale_error_age_ms.is_none())
+        || evidence
+            .oldest_stale_error_age_ms
+            .is_some_and(|age| age < FILE_PROVIDER_STALE_ERROR_AGE_MS)
     {
         return Err("icloud-file-provider-activity-shape-invalid".into());
     }
@@ -972,9 +982,6 @@ fn parse_file_provider_activity_output(
             || lower.contains("create-item")
             || lower.contains("createitembasedontemplate")
     };
-    let is_stale_age = |line: &&str| {
-        relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
-    };
     let is_provider_error = |line: &&str| {
         let lower = line.to_ascii_lowercase();
         lower.contains("error:")
@@ -988,14 +995,22 @@ fn parse_file_provider_activity_output(
         let lower = line.to_ascii_lowercase();
         lower.contains("docid(") || is_provider_operation(line)
     };
-    let stale_error_observed = provider_lines.iter().any(|line| {
-        is_provider_operation(line) && is_stale_age(line) && is_provider_error(line)
-    }) || provider_lines.windows(2).any(|record| {
-        is_provider_operation(&record[0])
+    let mut stale_error_ages_ms = provider_lines
+        .iter()
+        .filter(|line| is_provider_operation(line) && is_provider_error(line))
+        .filter_map(|line| relative_age_ms(line))
+        .filter(|age| *age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+        .collect::<Vec<_>>();
+    stale_error_ages_ms.extend(provider_lines.windows(2).filter_map(|record| {
+        (is_provider_operation(&record[0])
             && !is_provider_record_start(&record[1])
-            && is_stale_age(&record[1])
-            && (is_provider_error(&record[0]) || is_provider_error(&record[1]))
-    });
+            && (is_provider_error(&record[0]) || is_provider_error(&record[1])))
+        .then(|| relative_age_ms(record[1]))
+        .flatten()
+        .filter(|age| *age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+    }));
+    let stale_error_count = stale_error_ages_ms.len() as u64;
+    let oldest_stale_error_age_ms = stale_error_ages_ms.into_iter().max();
     let sync_excluded_filename_count = output
         .lines()
         .filter(|line| {
@@ -1046,7 +1061,7 @@ fn parse_file_provider_activity_output(
     if item_locked {
         notices.push("icloud-file-provider-item-locked-observed".into());
     }
-    if stale_error_observed {
+    if stale_error_count > 0 {
         notices.push("icloud-file-provider-stale-error-observed".into());
     }
     if sync_excluded_filename_count > 0 {
@@ -1071,6 +1086,8 @@ fn parse_file_provider_activity_output(
         no_progress_create_count,
         materialization_failure_count,
         staged_item_missing_count,
+        stale_error_count,
+        oldest_stale_error_age_ms,
         sync_excluded_filename_count,
         sync_excluded_root_count,
         active_upload_count,
@@ -2455,6 +2472,8 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+        assert_eq!(evidence.stale_error_count, 2);
+        assert_eq!(evidence.oldest_stale_error_age_ms, Some(14_940_000));
         let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
             .unwrap();
         report.file_provider_activity = Some(evidence);
@@ -2477,6 +2496,15 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+        assert_eq!(evidence.stale_error_count, 1);
+        assert_eq!(evidence.oldest_stale_error_age_ms, Some(14_940_000));
+    }
+
+    #[test]
+    fn file_provider_activity_rejects_inconsistent_stale_error_aggregate() {
+        let mut evidence = parse_file_provider_activity_output("", 42, true, false, false);
+        evidence.stale_error_count = 1;
+        assert!(validate_file_provider_activity_evidence(&evidence).is_err());
     }
 
     #[test]

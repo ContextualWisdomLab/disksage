@@ -102,6 +102,11 @@ path = "src/bin/disksage-icloud-sync-health.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-icloud-provider-recovery"
+path = "src/bin/disksage-icloud-provider-recovery.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]

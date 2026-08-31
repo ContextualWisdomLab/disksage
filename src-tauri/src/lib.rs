@@ -73,6 +73,7 @@ mod duplicate_audit_implementation;
 #[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
+pub mod icloud_provider_recovery;
 pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
