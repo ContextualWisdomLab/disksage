@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 const HELPER_ENV: &str = "DISKSAGE_RUNTIME_STORAGE_RECOVERY_HELPER";
+const START_FAIL_ENV: &str = "DISKSAGE_RUNTIME_STORAGE_START_FAIL";
 
 #[test]
 fn completed_restart_is_recorded_even_when_reachability_remains_unavailable() {
@@ -35,7 +36,75 @@ fn completed_restart_is_recorded_even_when_reachability_remains_unavailable() {
     }
 
     let temp = tempfile::tempdir().expect("temporary fake runtime directory");
-    let colima = temp.path().join("colima");
+    write_fake_colima(temp.path());
+    let isolated_path = isolated_path_with(temp.path());
+
+    let status = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("--exact")
+        .arg("completed_restart_is_recorded_even_when_reachability_remains_unavailable")
+        .arg("--nocapture")
+        .env(HELPER_ENV, "1")
+        .env("PATH", isolated_path)
+        .status()
+        .expect("run isolated recovery regression");
+
+    assert!(status.success(), "isolated production-boundary regression failed");
+}
+
+#[test]
+fn successful_stop_with_failed_start_returns_partial_recovery_receipt() {
+    if std::env::var_os(HELPER_ENV).is_some() {
+        let plan = disksage_lib::runtime_storage::inspect()
+            .into_iter()
+            .find(|plan| plan.runtime == disksage_lib::runtime_storage::RuntimeStorageKind::Colima)
+            .expect("Colima plan");
+        let phrase = plan
+            .recovery_approval_phrase
+            .as_deref()
+            .expect("unreachable running guest should offer recovery");
+        let receipt = disksage_lib::runtime_storage::execute_recovery(
+            disksage_lib::runtime_storage::RuntimeStorageKind::Colima,
+            phrase,
+            "Preserve evidence that shutdown completed even when the approved restart command fails.",
+        )
+        .expect("a completed shutdown is a mutation and must return a structured receipt");
+
+        assert_eq!(receipt.stop_status_code, 0);
+        assert_eq!(receipt.start_status_code, 42);
+        assert!(!receipt.guest_reachable_after_recovery);
+        assert!(
+            receipt.executed,
+            "executed records that the approved recovery mutation crossed the stop boundary"
+        );
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("temporary fake runtime directory");
+    write_fake_colima(temp.path());
+    let isolated_path = isolated_path_with(temp.path());
+
+    let status = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("--exact")
+        .arg("successful_stop_with_failed_start_returns_partial_recovery_receipt")
+        .arg("--nocapture")
+        .env(HELPER_ENV, "1")
+        .env(START_FAIL_ENV, "1")
+        .env("PATH", isolated_path)
+        .status()
+        .expect("run isolated partial-recovery regression");
+
+    assert!(status.success(), "partial-recovery receipt regression failed");
+}
+
+fn isolated_path_with(directory: &std::path::Path) -> std::ffi::OsString {
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![directory.to_path_buf()];
+    path_entries.extend(std::env::split_paths(&current_path));
+    std::env::join_paths(path_entries).expect("isolated PATH")
+}
+
+fn write_fake_colima(directory: &std::path::Path) {
+    let colima = directory.join("colima");
     fs::write(
         &colima,
         r#"#!/bin/sh
@@ -48,7 +117,12 @@ case "${1:-}" in
     ;;
   ssh) exit 1 ;;
   stop) exit 0 ;;
-  start) exit 0 ;;
+  start)
+    if [ "${DISKSAGE_RUNTIME_STORAGE_START_FAIL:-}" = "1" ]; then
+      exit 42
+    fi
+    exit 0
+    ;;
   *) exit 98 ;;
 esac
 "#,
@@ -59,20 +133,4 @@ esac
         .permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&colima, permissions).expect("make fake runtime executable");
-
-    let current_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut path_entries = vec![temp.path().to_path_buf()];
-    path_entries.extend(std::env::split_paths(&current_path));
-    let isolated_path = std::env::join_paths(path_entries).expect("isolated PATH");
-
-    let status = Command::new(std::env::current_exe().expect("current test executable"))
-        .arg("--exact")
-        .arg("completed_restart_is_recorded_even_when_reachability_remains_unavailable")
-        .arg("--nocapture")
-        .env(HELPER_ENV, "1")
-        .env("PATH", isolated_path)
-        .status()
-        .expect("run isolated recovery regression");
-
-    assert!(status.success(), "isolated production-boundary regression failed");
 }
