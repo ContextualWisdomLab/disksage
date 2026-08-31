@@ -244,6 +244,23 @@ fn reachability_from_probe(result: Result<(i32, String, String, bool), String>) 
     result.ok().map(|output| output.0 == 0)
 }
 
+fn colima_running_status(stdout: &str) -> Option<bool> {
+    let value = serde_json::from_str::<serde_json::Value>(stdout).ok()?;
+    if let Some(status) = value.get("status").and_then(serde_json::Value::as_str) {
+        return Some(status.eq_ignore_ascii_case("running"));
+    }
+    let object = value.as_object()?;
+    ["display_name", "runtime", "driver"]
+        .iter()
+        .all(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        })
+        .then_some(true)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -318,15 +335,8 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                         (stdout.trim().eq_ignore_ascii_case("running"), true)
                     }
                     RuntimeStorageKind::Colima => {
-                        let parsed = serde_json::from_str::<serde_json::Value>(&stdout).ok();
-                        let status = parsed
-                            .as_ref()
-                            .and_then(|value| value.get("status"))
-                            .and_then(serde_json::Value::as_str);
-                        (
-                            status.is_some_and(|value| value.eq_ignore_ascii_case("running")),
-                            status.is_some(),
-                        )
+                        let running = colima_running_status(&stdout);
+                        (running.unwrap_or(false), running.is_some())
                     }
                 };
                 if runtime == RuntimeStorageKind::Colima && !state_valid {
@@ -575,6 +585,23 @@ mod tests {
         let plan = inspect_runtime(RuntimeStorageKind::Colima, 42);
         assert!(!plan.host_compaction_supported);
         assert!(plan.exact_approval_phrase.is_none() || plan.guest_running == Some(true));
+    }
+
+    #[test]
+    fn colima_status_accepts_legacy_and_current_native_json() {
+        assert_eq!(colima_running_status(r#"{"status":"Running"}"#), Some(true));
+        assert_eq!(
+            colima_running_status(r#"{"status":"Stopped"}"#),
+            Some(false)
+        );
+        assert_eq!(
+            colima_running_status(
+                r#"{"display_name":"colima","runtime":"docker","driver":"macOS Virtualization.Framework"}"#
+            ),
+            Some(true)
+        );
+        assert_eq!(colima_running_status(r#"{"runtime":"docker"}"#), None);
+        assert_eq!(colima_running_status("not-json"), None);
     }
 
     #[test]
