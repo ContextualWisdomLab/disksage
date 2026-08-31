@@ -39,7 +39,7 @@
     image: "태그가 붙은 이미지는 삭제되지 않고, 참조하는 컨테이너가 없는 태그 없는 이미지만 대상입니다.",
     volume: "컨테이너가 참조하는 볼륨은 대상에서 제외됩니다.",
     network: "기본 네트워크(bridge·host·none 등)와 컨테이너가 붙어 있는 네트워크는 제외됩니다.",
-    build_cache: "실행 직전 회수 가능 집합이 승인 fingerprint와 같을 때만 Docker의 전체 미사용 빌드 캐시 정리를 실행합니다.",
+    build_cache: "실행 직전 승인된 BuildKit 캐시 ID 집합을 다시 확인하고, 그 항목만 정리합니다.",
   };
 
   function planKey(plan: api.ContainerOrphanPlan): string {
