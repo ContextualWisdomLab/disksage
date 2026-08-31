@@ -1753,6 +1753,9 @@ pub fn execute_container_orphan_prune(
     executed_at_ms: u64,
     receipt_dir: &Path,
 ) -> Result<ContainerOrphanPruneExecution, String> {
+    if category == OrphanCategory::BuildCache {
+        return Err("orphan-prune-build-cache-exact-delete-unavailable".into());
+    }
     if executed_at_ms == 0 {
         return Err("orphan-prune-time-invalid".into());
     }

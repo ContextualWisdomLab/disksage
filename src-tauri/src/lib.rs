@@ -63,42 +63,8 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
-#[path = "container_orphan_reclaim.rs"]
-mod container_orphan_reclaim_implementation;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
-pub mod container_orphan_reclaim {
-    pub use crate::container_orphan_reclaim_implementation::{
-        probe_container_orphans, probe_container_orphans_with_receipt_dir, probe_runtime_health,
-        ContainerOrphanPlan, ContainerOrphanPruneExecution, ContainerRuntimeKind,
-        ContainerRuntimeTarget, OrphanCandidateEvidence, OrphanCategory, OrphanCategoryPlan,
-        RuntimeHealthEvidence, CONTAINER_ORPHAN_SCHEMA_KIND, MAX_CATEGORY_RECORDS,
-        MAX_NETWORK_CANDIDATES,
-    };
-    pub(crate) use crate::container_orphan_reclaim_implementation::{
-        resolve_docker_context_fingerprint, resolve_docker_context_host,
-    };
-
-    pub fn execute_container_orphan_prune(
-        target: &ContainerRuntimeTarget,
-        category: OrphanCategory,
-        confirmation_phrase: &str,
-        rationale: &str,
-        executed_at_ms: u64,
-        receipt_dir: &std::path::Path,
-    ) -> Result<ContainerOrphanPruneExecution, String> {
-        if category == OrphanCategory::BuildCache {
-            return Err("orphan-prune-build-cache-exact-delete-unavailable".into());
-        }
-        crate::container_orphan_reclaim_implementation::execute_container_orphan_prune(
-            target,
-            category,
-            confirmation_phrase,
-            rationale,
-            executed_at_ms,
-            receipt_dir,
-        )
-    }
-}
+pub mod container_orphan_reclaim;
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
 pub mod container_orphan_public;
 #[path = "duplicate_audit.rs"]
