@@ -122,7 +122,7 @@ impl ContainerRuntimeTarget {
     }
 
     /// Pins Docker-native commands to one resolved daemon endpoint.
-    pub(crate) fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
+    pub fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
         if host.is_empty()
             || host.len() > MAX_DOCKER_HOST_BYTES
             || host.chars().any(char::is_control)
