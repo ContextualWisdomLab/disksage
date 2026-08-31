@@ -7,8 +7,9 @@ pub const PROTECTED_PATH_MARKER: &str = ".disksage-protected";
 pub const ONTOLOGY_CLASS_MARKER: &str = ".disksage-ontology-class";
 
 fn sidecar(path: &Path, suffix: &str) -> Option<PathBuf> {
-    let name = path.file_name()?.to_str()?;
-    Some(path.with_file_name(format!("{name}{suffix}")))
+    let mut name = path.file_name()?.to_os_string();
+    name.push(suffix);
+    Some(path.with_file_name(name))
 }
 
 pub fn is_explicitly_protected(path: &Path) -> bool {
@@ -1328,7 +1329,7 @@ mod tests {
     #[test]
     fn journal_append_heals_torn_tail() {
         let tmp = tempfile::tempdir().unwrap();
-        let jp = tmp.path().join("j.jsonl");
+        let jp = tmp.path().join("journal.jsonl");
         std::fs::write(&jp, "{\"torn\":").unwrap();
         journal_append(
             &jp,
