@@ -95,10 +95,14 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 }
 
 fn cargo_target_cache(path: &Path) -> bool {
-    let tagged = std::fs::read_to_string(path.join("CACHEDIR.TAG")).is_ok_and(|tag| {
-        tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
-            && tag.contains("cache directory tag created by cargo")
-    }) && path.join(".rustc_info.json").is_file();
+    let tag_path = path.join("CACHEDIR.TAG");
+    let tagged = std::fs::metadata(&tag_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(tag_path).is_ok_and(|tag| {
+            tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
+                && tag.contains("cache directory tag created by cargo")
+        })
+        && path.join(".rustc_info.json").is_file();
     let debug = path.join("debug");
     debug.is_dir()
         && (tagged
@@ -888,6 +892,19 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn ignores_oversized_standalone_cargo_cache_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("standalone-cache");
+        fs::create_dir_all(cache.join("debug")).unwrap();
+        fs::write(cache.join(".rustc_info.json"), "{}").unwrap();
+        let mut tag = "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n".to_owned();
+        tag.push_str(&"x".repeat(65_536));
+        fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
