@@ -4,20 +4,23 @@
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
 use disksage_lib::cache_cleanup::{
-    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+    clean_regenerable_caches_headless, proven_cache_trash_candidates, prune_uv_cache_headless,
+    purge_proven_cache_trash,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash | --prune-uv-cache] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
 inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+only structurally proven cache directories already in OS Trash. --prune-uv-cache runs uv's native\n\
+in-use-aware dangling cache prune without force.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
     purge_proven_cache_trash: bool,
+    prune_uv_cache: bool,
     journal_path: PathBuf,
 }
 
@@ -68,12 +71,14 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
 
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
+    let mut prune_uv_cache = false;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
+            Some("--prune-uv-cache") => prune_uv_cache = true,
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
                     args.next()
@@ -88,9 +93,13 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
+    if purge_proven_cache_trash && prune_uv_cache {
+        return Err("cache cleanup actions are mutually exclusive".into());
+    }
     Ok(Some(Args {
         execute,
         purge_proven_cache_trash,
+        prune_uv_cache,
         journal_path,
     }))
 }
@@ -142,6 +151,19 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         );
         return Ok(());
     }
+    if args.prune_uv_cache {
+        let result = prune_uv_cache_headless(&args.journal_path, now_ms())?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "executed": true,
+                "prune_uv_cache": true,
+                "journal_path": args.journal_path,
+                "result": result
+            })
+        );
+        return Ok(());
+    }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
         "{}",
@@ -172,11 +194,8 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 
@@ -197,5 +216,19 @@ mod tests {
             .unwrap();
         assert!(!args.execute);
         assert!(args.purge_proven_cache_trash);
+        assert!(!args.prune_uv_cache);
+    }
+
+    #[test]
+    fn uv_prune_is_explicit_and_exclusive() {
+        let args = parse_args([OsString::from("--prune-uv-cache")])
+            .unwrap()
+            .unwrap();
+        assert!(args.prune_uv_cache);
+        assert!(parse_args([
+            OsString::from("--prune-uv-cache"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .is_err());
     }
 }

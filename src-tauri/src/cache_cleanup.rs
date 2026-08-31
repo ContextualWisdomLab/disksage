@@ -25,7 +25,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 11] = [
     "playwright-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 12] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 13] = [
     "_cacache",
     "v11",
     "Default",
@@ -37,6 +37,7 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 12] = [
     "sdists-v9",
     "builds-v0",
     "git-v0",
+    "archive-v0",
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
@@ -71,6 +72,195 @@ pub struct CacheTrashPurgeResult {
     pub signature: String,
     pub purged: bool,
     pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UvCachePruneResult {
+    pub cache_path: String,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+    pub observed_reduction_bytes: u64,
+    pub status_code: i32,
+    pub executed: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn fixed_uv_path() -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for link in ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"] {
+        let Ok(path) = std::fs::canonicalize(link) else {
+            continue;
+        };
+        let allowed = path.starts_with("/opt/homebrew/Cellar/uv/")
+            || path.starts_with("/usr/local/Cellar/uv/");
+        let metadata = std::fs::symlink_metadata(&path).ok();
+        if allowed
+            && metadata.is_some_and(|metadata| {
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.permissions().mode() & 0o111 != 0
+            })
+        {
+            return Ok(path);
+        }
+    }
+    Err("uv-cache-prune-executable-unavailable".into())
+}
+
+#[cfg(target_os = "macos")]
+fn private_uv_copy(source_path: &Path) -> Result<tempfile::TempDir, String> {
+    use std::io::{Seek, SeekFrom};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let mut source = std::fs::File::open(source_path)
+        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
+    let opened = source
+        .metadata()
+        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
+    let current = std::fs::symlink_metadata(source_path)
+        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
+    if !opened.is_file()
+        || !current.is_file()
+        || current.file_type().is_symlink()
+        || opened.dev() != current.dev()
+        || opened.ino() != current.ino()
+    {
+        return Err("uv-cache-prune-executable-identity-changed".into());
+    }
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
+    let directory = tempfile::Builder::new()
+        .prefix("disksage-uv-")
+        .tempdir()
+        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
+    let destination = directory.path().join("uv");
+    let mut copy = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
+    std::io::copy(&mut source, &mut copy)
+        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
+    copy.sync_all()
+        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
+    Ok(directory)
+}
+
+#[cfg(target_os = "macos")]
+fn run_private_uv_prune(executable: &Path, cache: &Path) -> Result<i32, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::thread;
+
+    let mut command = Command::new(executable);
+    command
+        .args(["cache", "prune", "--cache-dir"])
+        .arg(cache)
+        .args(["--no-config", "--no-progress"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "uv-cache-prune-spawn-failed".to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.code().unwrap_or(-1)),
+            Ok(None) if Instant::now() >= deadline => {
+                unsafe {
+                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("uv-cache-prune-timeout".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => {
+                unsafe {
+                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("uv-cache-prune-wait-failed".into());
+            }
+        }
+    }
+}
+
+/// Run uv's native dangling-entry prune without `--force`, from a private copy of the verified
+/// Homebrew executable. uv retains environments that are still in use.
+pub fn prune_uv_cache_headless(
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<UvCachePruneResult, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (journal_path, now_ms);
+        return Err("uv-cache-prune-unsupported-platform".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+        let cache = rules::cache_candidates(&bases)
+            .into_iter()
+            .find(|candidate| candidate.id == "uv-cache" && candidate.exists)
+            .map(|candidate| PathBuf::from(candidate.path))
+            .ok_or("uv-cache-prune-cache-unavailable")?;
+        let mut entries = 0;
+        let bytes_before = bounded_tree_size(&cache, &mut entries, true)?;
+        let source = fixed_uv_path()?;
+        let private = private_uv_copy(&source)?;
+        let mut journal = safety::JournalEntry {
+            ts_ms: now_ms,
+            op: "uv_cache_prune".into(),
+            path: cache.to_string_lossy().into_owned(),
+            bytes: bytes_before,
+            outcome: "pending".into(),
+        };
+        safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
+        let status_code = match run_private_uv_prune(&private.path().join("uv"), &cache) {
+            Ok(status_code) => status_code,
+            Err(error) => {
+                journal.outcome = format!("error:{error}");
+                safety::journal_append(journal_path, &journal)
+                    .map_err(|journal_error| journal_error.to_string())?;
+                return Err(error);
+            }
+        };
+        let mut entries = 0;
+        let bytes_after = bounded_tree_size(&cache, &mut entries, true)?;
+        journal.outcome = if status_code == 0 {
+            "ok"
+        } else {
+            "error:uv-exit-nonzero"
+        }
+        .into();
+        safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
+        Ok(UvCachePruneResult {
+            cache_path: cache.to_string_lossy().into_owned(),
+            bytes_before,
+            bytes_after,
+            observed_reduction_bytes: bytes_before.saturating_sub(bytes_after),
+            status_code,
+            executed: true,
+        })
+    }
 }
 
 fn direct_child_is_dir(path: &Path, name: &str) -> bool {
@@ -114,6 +304,34 @@ fn edge_code_sign_clone_name(name: &str) -> bool {
     suffix.len() == 6
         && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
         && collision.is_none_or(native_trash_collision_suffix)
+}
+
+fn looks_like_uv_archive_cache(path: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    let mut seen = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Ok(metadata) = entry.path().symlink_metadata() else {
+            return false;
+        };
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || name.len() != 16
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        {
+            return false;
+        }
+        seen = true;
+    }
+    seen
 }
 
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
@@ -178,6 +396,7 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         {
             "uv-git-cache"
         }
+        "archive-v0" if looks_like_uv_archive_cache(path) => "uv-archive-cache",
         "db" if direct_child_is_file(path, "trivy.db")
             && direct_child_is_file(path, "metadata.json") =>
         {
@@ -240,8 +459,11 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
             continue;
         };
         let mut count = 0;
-        let Ok(bytes) = bounded_tree_size(&path, &mut count, signature == "edge-code-sign-clone")
-        else {
+        let Ok(bytes) = bounded_tree_size(
+            &path,
+            &mut count,
+            matches!(signature, "edge-code-sign-clone" | "uv-archive-cache"),
+        ) else {
             continue;
         };
         candidates.push(CacheTrashCandidate {
@@ -585,6 +807,53 @@ mod tests {
         let candidates = proven_cache_trash_candidates(tmp.path());
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].signature, "uv-git-cache");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proven_uv_archive_cache_requires_native_keys_and_never_follows_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join(".Trash/archive-v0");
+        let entry = archive.join("Ab12_-cdEF34ghIJ");
+        fs::create_dir_all(&entry).unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, entry.join("linked-package")).unwrap();
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "uv-archive-cache");
+        assert_eq!(candidates[0].bytes, 0);
+
+        let results =
+            purge_proven_cache_trash(tmp.path(), &tmp.path().join("journal.jsonl"), 9).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
+
+        let invalid = tmp.path().join(".Trash/archive-v0");
+        fs::create_dir_all(invalid.join("not-a-native-key!")).unwrap();
+        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_uv_prune_uses_only_fixed_non_force_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let executable = tmp.path().join("uv");
+        fs::write(
+            &executable,
+            b"#!/bin/sh\n[ \"$1\" = cache ] && [ \"$2\" = prune ] && [ \"$3\" = --cache-dir ] && [ \"$5\" = --no-config ] && [ \"$6\" = --no-progress ]\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let cache = tmp.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+
+        assert_eq!(run_private_uv_prune(&executable, &cache).unwrap(), 0);
     }
 
     #[test]
