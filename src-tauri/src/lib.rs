@@ -22,6 +22,8 @@ mod userrules;
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
+#[cfg(all(test, unix))]
+mod safety_non_utf8_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
 #[cfg(all(test, unix))]
