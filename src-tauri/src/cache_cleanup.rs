@@ -25,7 +25,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 11] = [
     "playwright-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 13] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 15] = [
     "_cacache",
     "v11",
     "Default",
@@ -39,6 +39,8 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 13] = [
     "git-v0",
     "archive-v0",
     "db",
+    "com.apple.CloudDocs.iCloudDriveFileProvider",
+    "fileprovider-fpck",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
 // Large package caches need longer than the interactive worktree probe while retaining the same
@@ -334,6 +336,68 @@ fn looks_like_uv_archive_cache(path: &Path) -> bool {
     seen
 }
 
+fn is_uuid_name(name: &str) -> bool {
+    name.len() == 36
+        && name.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn fileprovider_sqlite_triplet(path: &Path, prefix: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    let mut names = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    let Some(database) = names.iter().find(|name| {
+        name.starts_with(prefix) && !name.ends_with("-wal") && !name.ends_with("-shm")
+    }) else {
+        return false;
+    };
+    let suffix = database.strip_prefix(prefix).unwrap_or(database);
+    let valid_name = if prefix.is_empty() {
+        suffix.get(0..36).is_some_and(is_uuid_name) && suffix.as_bytes().get(36) == Some(&b'-')
+    } else {
+        suffix.strip_suffix(".db").is_some_and(|stem| {
+            !stem.is_empty()
+                && stem
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'-')
+        })
+    };
+    valid_name
+        && names.len() == 3
+        && direct_child_is_file(path, database)
+        && direct_child_is_file(path, &format!("{database}-wal"))
+        && direct_child_is_file(path, &format!("{database}-shm"))
+}
+
+fn looks_like_fileprovider_temporary_item(path: &Path, cloud_docs: bool) -> bool {
+    let Ok(mut entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    let Some(Ok(account)) = entries.next() else {
+        return false;
+    };
+    if entries.next().is_some()
+        || !is_uuid_name(&account.file_name().to_string_lossy())
+        || !account
+            .path()
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        return false;
+    }
+    fileprovider_sqlite_triplet(&account.path(), if cloud_docs { "database-" } else { "" })
+}
+
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
     if edge_code_sign_clone_name(name) {
         let bundle = path.join("Microsoft Edge.app.bundle");
@@ -401,6 +465,14 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
             && direct_child_is_file(path, "metadata.json") =>
         {
             "trivy-database-cache"
+        }
+        "com.apple.CloudDocs.iCloudDriveFileProvider"
+            if looks_like_fileprovider_temporary_item(path, true) =>
+        {
+            "fileprovider-cloud-docs-temporary-sqlite"
+        }
+        "fileprovider-fpck" if looks_like_fileprovider_temporary_item(path, false) => {
+            "fileprovider-fpck-temporary-sqlite"
         }
         _ => return None,
     };
@@ -549,9 +621,15 @@ pub(crate) fn clean_cache_contents_inner(
     sort_targets(&mut expected);
     let mut current = rules::cache_targets(dir)?;
     sort_targets(&mut current);
-    if current != expected {
+    if expected.iter().any(|target| !current.contains(target)) {
         return Err("cache-cleanup-targets-stale".into());
     }
+    expected.sort_by(|left, right| {
+        right
+            .bytes
+            .cmp(&left.bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
 
     let probe_started = Instant::now();
     Ok(expected
@@ -647,6 +725,51 @@ pub fn clean_regenerable_caches_headless(
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     serde_json::to_value(clean_regenerable_caches_inner(&bases, journal_path, now_ms))
         .map_err(|error| error.to_string())
+}
+
+/// Return a fresh exact-child snapshot for one fixed catalog cache ID.
+pub fn plan_catalog_cache_headless(cache_id: &str) -> Result<serde_json::Value, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    let candidate = rules::cache_candidates(&bases)
+        .into_iter()
+        .find(|candidate| candidate.id == cache_id)
+        .ok_or("cache-catalog-id-unknown")?;
+    let targets = if candidate.exists {
+        rules::cache_targets(Path::new(&candidate.path))?
+    } else {
+        Vec::new()
+    };
+    Ok(serde_json::json!({ "candidate": candidate, "targets": targets }))
+}
+
+/// Re-audit and move only one fixed catalog cache's unchanged, inactive children to OS Trash.
+pub fn clean_catalog_cache_headless(
+    cache_id: &str,
+    target_object_id: Option<&str>,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    let candidate = rules::cache_candidates(&bases)
+        .into_iter()
+        .find(|candidate| candidate.id == cache_id && candidate.exists)
+        .ok_or("cache-catalog-target-unavailable")?;
+    let path = PathBuf::from(&candidate.path);
+    let mut targets = rules::cache_targets(&path)?;
+    if let Some(object_id) = target_object_id {
+        targets.retain(|target| target.object_id == object_id);
+        if targets.len() != 1 {
+            return Err("cache-catalog-target-object-id-unavailable".into());
+        }
+    }
+    serde_json::to_value(clean_cache_contents_inner(
+        &bases,
+        &path,
+        &targets,
+        journal_path,
+        now_ms,
+    )?)
+    .map_err(|error| error.to_string())
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
@@ -792,6 +915,31 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn proven_fileprovider_temporary_sqlite_requires_exact_triplet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        let cloud = trash.join("com.apple.CloudDocs.iCloudDriveFileProvider");
+        let account = cloud.join("75876723-DC8F-4F53-9282-AE20BDB9034C");
+        fs::create_dir_all(&account).unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            fs::write(
+                account.join(format!("database-1788164997-554161.db{suffix}")),
+                b"x",
+            )
+            .unwrap();
+        }
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].signature,
+            "fileprovider-cloud-docs-temporary-sqlite"
+        );
+
+        fs::write(account.join("business.db"), b"keep").unwrap();
+        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
     }
 
     #[test]

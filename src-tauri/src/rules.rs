@@ -109,6 +109,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         .unwrap_or_else(|| bases.local_data.join("huggingface"));
     #[cfg(target_os = "macos")]
     entries.extend([
+        (
+            "fileprovider-temporary-items",
+            "macOS FileProvider 임시 진단 데이터",
+            bases.temp.join("com.apple.fileproviderd").join("TemporaryItems"),
+        ),
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
