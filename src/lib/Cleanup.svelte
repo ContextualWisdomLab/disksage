@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { runtimeStorageRecoverySucceeded } from "./runtimeStorageMaintenanceFlow";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -392,10 +393,11 @@
           {/if}
         {/if}
         {#if runtimeStorageRecoveryExecutions[plan.runtime]}
+          {@const recoveryExecution = runtimeStorageRecoveryExecutions[plan.runtime]}
           <p class="notice" role="status">
-            {runtimeStorageRecoveryExecutions[plan.runtime].executed
+            {runtimeStorageRecoverySucceeded(recoveryExecution)
               ? "연결을 복구했습니다. 저장 공간을 다시 확인하세요."
-              : "연결 복구가 완료되지 않았습니다. 실행 중인 작업을 확인하세요."}
+              : "연결 복구가 완료되지 않았습니다. 실행 중인 작업과 게스트 연결 상태를 확인하세요."}
           </p>
         {/if}
       </div>
