@@ -54,7 +54,7 @@ const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
 pub enum ContainerRuntimeKind {
     /// Plain `docker` against the default context / local socket.
     DockerNative,
-    /// `docker --context colima` against a Colima-managed socket.
+    /// `docker --context colima` for Colima-managed Docker sockets.
     DockerColimaContext,
     /// `podman --connection <machine>` against a running Podman machine.
     PodmanMachine,
@@ -357,7 +357,9 @@ pub struct ContainerOrphanPlan {
 }
 
 /// Execution receipt for one approved prune. Mirrors the Podman dangling-image receipt
-/// shape so downstream consumers can treat both uniformly.
+/// shape so downstream consumers can treat both uniformly. `executed` records that the exact
+/// destructive command was started; `status_code` separately records whether it completed
+/// successfully, so a nonzero multi-target result cannot erase evidence of a partial mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerOrphanPruneExecution {
     pub schema_version: u32,

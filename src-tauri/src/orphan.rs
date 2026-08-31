@@ -102,6 +102,9 @@ pub struct OrphanCleanupItemResult {
     pub attempted: bool,
     pub moved_to_trash: bool,
     pub error: Option<String>,
+    /// Post-move audit or staging notice. This is separate from a failed move.
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,14 +266,14 @@ pub fn move_to_trash(
     let mut items = Vec::with_capacity(prepared.len());
     let mut moved_count = 0usize;
     for candidate in prepared {
-        let result = match crate::safety::trash_delete_if_identity(
+        let result = match crate::safety::trash_delete_if_identity_with_outcome(
             &candidate.path,
             &candidate.object_id,
             candidate.bytes,
             journal_path,
             now_ms,
         ) {
-            Ok(()) => {
+            Ok(outcome) if outcome.moved_to_trash => {
                 moved_count += 1;
                 OrphanCleanupItemResult {
                     candidate_id: candidate.candidate_id.clone(),
@@ -278,14 +281,24 @@ pub fn move_to_trash(
                     attempted: true,
                     moved_to_trash: true,
                     error: None,
+                    warning: crate::safety::trash_delete_outcome_warning(&outcome),
                 }
             }
+            Ok(_) => OrphanCleanupItemResult {
+                candidate_id: candidate.candidate_id.clone(),
+                bytes: candidate.bytes,
+                attempted: true,
+                moved_to_trash: false,
+                error: Some("orphan-trash-operation-failed".into()),
+                warning: None,
+            },
             Err(_) => OrphanCleanupItemResult {
                 candidate_id: candidate.candidate_id.clone(),
                 bytes: candidate.bytes,
                 attempted: true,
                 moved_to_trash: false,
                 error: Some("orphan-trash-operation-failed".into()),
+                warning: None,
             },
         };
         items.push(result);
@@ -1205,5 +1218,22 @@ mod tests {
             "orphan-candidate-metadata-changed"
         );
         assert!(caches.exists());
+    }
+
+    #[test]
+    fn completed_orphan_move_serializes_warning_without_failure() {
+        let result = OrphanCleanupItemResult {
+            candidate_id: "candidate-1".into(),
+            bytes: 4096,
+            attempted: true,
+            moved_to_trash: true,
+            error: None,
+            warning: Some("terminal audit record unavailable".into()),
+        };
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["moved_to_trash"], true);
+        assert!(value["error"].is_null());
+        assert_eq!(value["warning"], "terminal audit record unavailable");
     }
 }

@@ -25,6 +25,10 @@ fn runtime_storage_execution_serialization_omits_guest_output() {
         rationale: "operator approved trim".into(),
         volume_comparison: None,
         volume_evidence_error: None,
+        runtime_image_allocated_bytes_before: Some(9),
+        runtime_image_allocated_bytes_after: Some(7),
+        runtime_image_reclaimed_bytes: Some(2),
+        runtime_image_evidence_error: None,
     };
 
     let json = serde_json::to_string(&execution).expect("runtime storage execution serializes");
@@ -35,4 +39,5 @@ fn runtime_storage_execution_serialization_omits_guest_output() {
     assert!(!json.contains(secret_stderr));
     assert!(json.contains("\"status_code\":17"));
     assert!(json.contains("\"output_truncated\":true"));
+    assert!(json.contains("\"runtime_image_reclaimed_bytes\":2"));
 }

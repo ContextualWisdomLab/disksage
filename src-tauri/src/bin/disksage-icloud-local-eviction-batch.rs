@@ -6,7 +6,8 @@
 use disksage_lib::cloud::{self, CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction_batch::{
     approve_icloud_local_eviction_batch, execute_icloud_local_eviction_batch,
-    plan_icloud_local_eviction_batch, IcloudLocalEvictionBatchPlan, IcloudLocalEvictionBatchResult,
+    plan_icloud_local_eviction_batch, prepare_onedrive_finder_assistance,
+    IcloudLocalEvictionBatchPlan, IcloudLocalEvictionBatchResult, OnedriveFinderAssistanceReceipt,
     MAX_BATCH_ITEMS,
 };
 use serde::Deserialize;
@@ -23,6 +24,7 @@ struct Args {
     cloud_root: PathBuf,
     manifest: PathBuf,
     execute: bool,
+    finder_assistance: bool,
     approved_batch_fingerprint: Option<String>,
     confirm_batch_fingerprint: Option<String>,
     approved_by: Option<String>,
@@ -33,7 +35,7 @@ struct Args {
 fn usage() -> String {
     format!(
         "usage: {} --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON \
-         [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 \
+         [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 \
          --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         env!("CARGO_BIN_NAME")
     )
@@ -60,6 +62,7 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut manifest = None;
     let mut execute = false;
+    let mut finder_assistance = false;
     let mut approved_batch_fingerprint = None;
     let mut confirm_batch_fingerprint = None;
     let mut approved_by = None;
@@ -72,7 +75,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--manifest") => {
                 if manifest.is_some() {
@@ -86,12 +93,21 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 }
                 execute = true;
             }
+            Some("--finder-assistance") => {
+                if finder_assistance {
+                    return Err("--finder-assistance는 한 번만 지정할 수 있음".into());
+                }
+                finder_assistance = true;
+            }
             Some("--approved-batch-fingerprint") => {
                 if approved_batch_fingerprint.is_some() {
                     return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                approved_batch_fingerprint =
-                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
+                approved_batch_fingerprint = Some(text_value(
+                    args,
+                    &mut index,
+                    "--approved-batch-fingerprint",
+                )?)
             }
             Some("--confirm-batch-fingerprint") => {
                 if confirm_batch_fingerprint.is_some() {
@@ -116,7 +132,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
             Some(_) => return Err("알 수 없는 인자".into()),
@@ -145,6 +165,9 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     if !execute && execution_fields.iter().any(|present| *present) {
         return Err("실행 전용 인자는 --execute와 함께 사용해야 함".into());
     }
+    if finder_assistance && !execute {
+        return Err("--finder-assistance는 --execute와 함께 사용해야 함".into());
+    }
     if record_dir
         .as_ref()
         .is_some_and(|directory| !directory.is_absolute())
@@ -155,6 +178,7 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
         cloud_root,
         manifest,
         execute,
+        finder_assistance,
         approved_batch_fingerprint,
         confirm_batch_fingerprint,
         approved_by,
@@ -213,7 +237,11 @@ fn validate_control_locations(
     Ok(())
 }
 
-fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
+fn select_root_for_binary<'a>(
+    roots: &'a [CloudRoot],
+    requested: &Path,
+    binary_name: &str,
+) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
         .filter(|root| cloud::cloud_root_path_matches(Path::new(&root.path), requested))
@@ -221,16 +249,25 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     match matches.as_slice() {
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
         [only]
-            if matches!(
-                only.provider,
-                CloudProvider::Icloud | CloudProvider::Onedrive
-            ) =>
+            if only.provider == CloudProvider::Icloud
+                || (binary_name == "disksage-cloud-local-eviction-batch"
+                    && only.provider == CloudProvider::Onedrive) =>
         {
             Ok(*only)
+        }
+        [only]
+            if binary_name == "disksage-icloud-local-eviction-batch"
+                && only.provider == CloudProvider::Onedrive =>
+        {
+            Err("icloud-named-cli-provider-unsupported".into())
         }
         [_] => Err("로컬 보관 해제를 지원하는 클라우드 루트가 필요함".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
+}
+
+fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
+    select_root_for_binary(roots, requested, env!("CARGO_BIN_NAME"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -386,6 +423,34 @@ struct ExecuteOutput {
     result: RedactedBatchResult,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct FinderAssistanceOutput {
+    action: &'static str,
+    mutation_executed: bool,
+    individual_paths_redacted: bool,
+    batch_approval_id: String,
+    receipt_id: String,
+    selected_count: u32,
+    total_allocated_bytes_before: u64,
+    customer_next_action: String,
+}
+
+fn redact_finder_assistance(
+    approval_id: String,
+    receipt: OnedriveFinderAssistanceReceipt,
+) -> FinderAssistanceOutput {
+    FinderAssistanceOutput {
+        action: "select-onedrive-items-for-free-up-space",
+        mutation_executed: false,
+        individual_paths_redacted: true,
+        batch_approval_id: approval_id,
+        receipt_id: receipt.receipt_id,
+        selected_count: receipt.selected_count,
+        total_allocated_bytes_before: receipt.total_allocated_bytes_before,
+        customer_next_action: receipt.customer_next_action,
+    }
+}
+
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
@@ -447,6 +512,20 @@ fn run() -> Result<(), String> {
         approved_by,
         rationale,
     )?;
+    if args.finder_assistance {
+        if root.provider != CloudProvider::Onedrive {
+            return Err("finder-assistance-requires-onedrive".into());
+        }
+        let receipt = prepare_onedrive_finder_assistance(
+            &root,
+            &plan,
+            &approval,
+            confirmation,
+            record_dir,
+            cloud::system_now_ms(),
+        )?;
+        return print_json(&redact_finder_assistance(approval.approval_id, receipt));
+    }
     let result = execute_icloud_local_eviction_batch(
         &root,
         &plan,
@@ -528,6 +607,19 @@ mod tests {
             TEST_RECORD_DIR.into(),
         ]);
         assert!(parse_args(&complete).unwrap().execute);
+        let mut fallback = complete;
+        fallback.push("--finder-assistance".into());
+        let parsed = parse_args(&fallback).unwrap();
+        assert!(parsed.execute);
+        assert!(parsed.finder_assistance);
+
+        let mut plan_only_fallback = partial;
+        plan_only_fallback.retain(|value| value != "--execute");
+        plan_only_fallback.push("--finder-assistance".into());
+        assert_eq!(
+            parse_args(&plan_only_fallback).unwrap_err(),
+            "--finder-assistance는 --execute와 함께 사용해야 함"
+        );
     }
 
     #[test]
@@ -537,6 +629,33 @@ mod tests {
         let error = parse_args(&[sensitive.into()]).unwrap_err();
         assert_eq!(error, "알 수 없는 인자");
         assert!(!error.contains(sensitive));
+    }
+
+    #[test]
+    fn icloud_named_binary_rejects_onedrive_while_generic_binary_accepts_it() {
+        let root = CloudRoot {
+            id: "onedrive-personal".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: TEST_CLOUD_ROOT.into(),
+            readable: true,
+            access_issue: None,
+        };
+        let roots = [root];
+        let requested = Path::new(TEST_CLOUD_ROOT);
+
+        assert_eq!(
+            select_root_for_binary(&roots, requested, "disksage-icloud-local-eviction-batch")
+                .unwrap_err(),
+            "icloud-named-cli-provider-unsupported"
+        );
+        assert_eq!(
+            select_root_for_binary(&roots, requested, "disksage-cloud-local-eviction-batch")
+                .unwrap()
+                .provider,
+            CloudProvider::Onedrive
+        );
     }
 
     #[test]
@@ -667,14 +786,19 @@ mod tests {
                     logical_bytes: 10,
                     allocated_bytes: 20,
                     filesystem_modified_ms: 1,
+                    filesystem_device_id: 1,
+                    filesystem_inode: 1,
                     observed_at_ms: 1,
                     icloud_state: IcloudLocalState {
                         observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
                         is_ubiquitous: true,
                         is_uploaded: true,
                         is_uploading: false,
+                        upload_error_present: false,
                         is_downloading: false,
+                        download_error_present: false,
                         downloading_status_current: true,
+                        downloading_status_not_downloaded: false,
                         has_unresolved_conflicts: false,
                         is_excluded_from_sync: false,
                         is_sync_paused: Some(false),

@@ -1,6 +1,6 @@
 # ADR-0016: Bound shared temporary storage cleanup to ownership evidence
 
-**Status:** Accepted
+**Status:** Accepted (amended)
 **Date:** 2026-08-28
 
 ## Context
@@ -26,6 +26,13 @@ The shared root itself, foreign/system-owned trees, linked objects, and incomple
 remain protected. The candidate's displayed bytes are the sum of the ownership-qualified children,
 not an estimate for the whole shared directory. No age threshold or quality heuristic is used.
 
+For permanent physical reclaim, ownership alone is insufficient. DiskSage records advisory
+lifecycle evidence only for a top-level directory sealed by its producer. Permanent execution and
+human approval remain disabled: a same-user marker cannot authenticate the producer, while
+path-based APIs cannot atomically combine final tree revalidation, deletion, journal durability,
+and receipt durability. The shared root and every child therefore remain non-mutation targets in
+this v1 contract.
+
 ## Consequences
 
 - `/tmp`/`/private/tmp` space is visible as a separate reclaim domain and can be reclaimed through
@@ -34,13 +41,17 @@ not an estimate for the whole shared directory. No age threshold or quality heur
   large or old.
 - Ownership traversal adds bounded inspection work; over-limit or unreadable trees remain visible
   only as unresolved shared temporary space.
+- A DiskSage producer can mark completed temporary output for advisory inspection without relying
+  on age. The marker never grants deletion authority.
 
 ## Alternatives rejected
 
 - **Expose only the process temporary directory:** hides the incident's shared temporary bytes.
 - **Allow every child under `/tmp`:** grants a shared system directory deletion authority.
 - **Delete by age or filename:** uses a heuristic without proving ownership or active use.
-- **Permanently delete temporary entries:** bypasses the existing reversible, journaled Trash path.
+- **Permanently delete arbitrary temporary entries:** rejected. Permanent reclaim is limited to a
+  producer-sealed completion lifecycle, fresh exact fingerprint approval, identity journal, and
+  immutable receipt.
 
 ## References
 

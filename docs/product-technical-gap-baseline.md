@@ -11,6 +11,14 @@ queued or stale status.
 
 ## 2026-08-29 OneDrive local-space recovery observation
 
+- Production use of Foundation ubiquitous-item eviction on anonymized OneDrive files retained
+  uploaded cloud items and reduced local allocation from about 83.46 GB to 21.13 GB; host APFS
+  availability increased by about 61 GiB. DiskSage now admits that path only for a bounded regular
+  file whose fresh File Provider item-and-version fingerprint, upload/current/conflict/policy
+  flags, active-use probe, and exact approval all match immediately before execution. A dataless
+  apparent 10 GB file correctly contributes zero reclaim. Mixed folders, active readers, changed
+  versions, and stale approvals remain blocked.
+
 - A metadata-only inventory completed across 277,410 entries and found 118 locally materialized
   candidates totaling 62,060,163,072 allocated bytes. A fresh plan after provider drift retained
   110 eligible items totaling 58,836,140,032 allocated bytes and excluded eight items; private
@@ -20,9 +28,11 @@ queued or stale status.
   Files On-Demand eviction, observes the primary app separately from its resident File Provider
   helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
   client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
-- The remaining acceptance proof is a successful vendor `/unpin` on a freshly replanned item,
-  immutable result recording, and observed allocation reduction. Until then the measured 58.8 GB
-  is opportunity, not reclaimed capacity.
+- The vendor `/unpin` command and cross-provider `NSFileProviderManager` identity probe remain
+  rejected boundaries: their earlier failures cannot prove eviction. The subsequent Foundation
+  FileManager observations supply the missing execution and post-allocation evidence without using
+  either vendor-private commands or cloud-object deletion. Finder remains a customer-controlled
+  fallback when a freshly approved native request fails.
 
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
@@ -78,10 +88,10 @@ queued or stale status.
 | Domain | What DiskSage may propose | Required proof before mutation | Explicitly out of scope |
 | --- | --- | --- | --- |
 | Cloud/local duplicate | Copy or adopt an already-present cloud object, then evict only the local copy | Provider item identity, content digest, sync attestation, current local identity, and fresh headroom | Deleting a local placeholder or treating `is_uploaded=false` as uploaded |
-| Exact duplicate photos/files | Keep one user-selected member and move the others to Trash | Stable content digest, complete metadata probe, source recheck, and per-group confirmation | Perceptual/near-duplicate deletion or “best quality” guessed from names |
+| Duplicate photos/files | Keep one user-selected member and move the others to Trash | Exact copies require stable content identity; non-identical candidates require DCT perceptual evidence, measured dimensions/bit depth/compression preservation, fresh source identity, and one explicit survivor per group | Automatic perceptual-duplicate deletion or “best quality” guessed from names |
 | Podman/Docker | Remove only stopped, unreferenced resources proven by a runtime re-audit | Runtime inventory, reference/label evidence, size evidence, and exact approval | Removing active volumes, BuildKit state, or raw VM images |
 | Colima/Podman VM storage | Run bounded guest `fstrim` while the guest is running | Fresh runtime state, fixed command, exact phrase, and bounded output receipt | `qemu-img`, sparse-file truncation, VM stop/delete, or host allocation claims |
-| Shared temporary storage (`/tmp` or macOS `/private/tmp`) | Show and move only current-user-owned, non-linked temporary children to OS Trash | Real-directory root, complete ownership walk, active-use evidence, exact object identity, and per-item journal | Other-user/system-owned trees, symlinks, and deleting the shared root itself |
+| Shared temporary storage (`/tmp` or macOS `/private/tmp`) | Show current-user-owned children and advisory lifecycle evidence for top-level DiskSage artifacts; permanent execution is disabled | Real-directory root, sealed object identity, bounded tree fingerprint, ownership and active-use evidence, and explicit execution-disabled blocker | Same-user marker as producer authentication, age/name-only authority, symlinks, active references, database/worktree data, journal/receipt races, and deleting the shared root or any child |
 | Git worktrees | Remove a clean, inactive secondary worktree whose exact head is no longer retained | Fresh Git registration/status/size/open-file evidence and, for PR authority, same-repository state + head OID | Branch deletion, `git prune`, fork worktrees, dirty/active worktrees, or age-only deletion |
 | Standalone Git clones | Move a clean, inactive, single-worktree clone on an exact closed or operator-cutoff stale-open PR head to OS Trash | Fresh same-repository GitHub branch + head OID, retained-reference comparison, recursive active-use check, internal Git directory, object identity, and exact approval | Branch deletion, `git prune`, fork/detached/dirty/active clones, external Git directories, or implicit age thresholds |
 
@@ -100,7 +110,7 @@ never converted into a deletion estimate by a heuristic.
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
 | P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
 | P0 | A 300 GB target cannot be met by cache pruning alone; VM-backed stores and user data need separate measured plans. | Current host observations show only tens of GB in proven regenerable/runtime candidates, while DaisyDisk’s large Application Support/Mobile Documents totals are not deletion authority. | Dashboard reports measured reclaimable bytes by domain, requires provider confirmation before local eviction, and leaves the remainder explicitly unresolved. |
-| P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | Exact-content duplicate audit can prove byte identity; non-identical images need dimensions, codec, and metadata evidence plus a human choice. | Group exact matches automatically, show measured image evidence when available, keep one selected original, and never delete a non-identical photo automatically. |
+| P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | The perceptual-photo audit now groups distinct-content candidates using Zauner DCT pHash, exact aspect ratio, and the published pHash Hamming bound; it shows resolution, bit depth, format, compression preservation, and an unweighted Pareto rationale. | Completed in source: managed libraries are excluded, every group requires an explicit survivor, execution re-audits identity and moves only non-survivors to OS Trash with receipts, and no automatic or permanent deletion exists. Runtime review against the user's external photo folders remains a separate operational action. |
 | P1 | A stale PR worktree may point at a branch that is still open, so age alone is not deletion authority. | The worktree audit already binds same-repository closed/merged PR head OIDs and protects dirty, active, detached, fork, locked, and retained-tip worktrees. | Require an explicit cutoff and fresh same-repository PR state before proposing an old open-PR worktree; preserve the branch/commit and remove only a clean, inactive worktree after exact approval. |
 | P1 | A standalone clone on a closed or explicitly old open PR head was invisible because the worktree remover always preserves its primary checkout. | The standalone-clone plan now reuses exact Git/GitHub worktree evidence, requires one clean inactive checkout and an internal Git directory, then revalidates identity before Trash. | App commands return a measured plan and execute only its exact approval; the original path disappears, branch and Git maintenance commands are untouched, and physical reclaim remains pending until Trash is emptied. |
 
@@ -109,13 +119,19 @@ never converted into a deletion estimate by a heuristic.
 | Priority | Gap | Current state | Smallest next proof |
 | --- | --- | --- | --- |
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
+| P0 | iCloud local-copy eviction needs an exact production plan and runtime receipt. | A 2026-08-29 15:53 +0900 public Foundation snapshot found 61 uploaded, current, idle, conflict/error-free local copies totaling 2,955,091,968 allocated bytes; 10 additional items totaling 632,115,200 bytes reported the iCloud server unavailable and remain blocked. The cohort changed during observation; the aggregate audit opened no content and emitted no mutation fingerprint. | Merge the public per-item evidence path, generate a fresh exact-head batch fingerprint, obtain attributed approval, then require retained uploaded ubiquitous identity, `notDownloaded` status, reduced allocation, and secondary APFS before/after evidence. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
+| P0 | Shared `/tmp` physical reclaim remains unavailable. | DiskSage can inventory current-user top-level artifacts and record advisory completion evidence, but permanent execution and approval deliberately fail closed because same-user markers do not authenticate producers and path APIs do not atomically bind final revalidation, deletion, journal durability, and receipt durability. This PR therefore recovers zero bytes from `/tmp`. | Implement an OS-enforced producer authority plus descriptor-relative, race-resistant tree mutation and a deletion protocol whose durable intent and outcome survive receipt failure; keep every `/tmp` child non-mutable until those proofs pass adversarial reality tests. |
 | P1 | The central hourly development/review loop is live; the repository-local advisory path remains manual-only. | The repository-local `.github/workflows/hourly-product-loop.yml` remains `workflow_dispatch`-only because its contextual-orchestrator call is advisory. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *`; scheduled run [`32986653461`](https://github.com/ContextualWisdomLab/.github/actions/runs/32986653461) completed successfully on central head `e00bd7964f332b69cf7b430b0cb5ad486eef8258`, following four other successful scheduled runs. | Retain successful scheduled receipts, read-only repository permissions, exact-head binding, and no provider-secret import or foreign-repository mutation; verify the local advisory receipt only when manually configured. |
 | P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `6f424af` on `feat/provider-sync-dynamic-goals`; its required checks reset after the provider-dump pipe repair and the prior review decision remains stale `CHANGES_REQUESTED`. The orphan cleanup follow-up is PR #245, initially implemented at `3d2406c` and subsequently extended with provider-sync and cleanup-refresh safety fixes. Both remain protected and unmerged pending exact-head review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
 | P1 | VM guest free space and host image allocation are conflated by runtime tools. | Podman/Colima logical reclaim values do not prove APFS allocation; raw image rewriting is unsafe while a VM is active. | Runtime maintenance plan offers bounded guest `fstrim`, records before/after host observations, and reports host-image compaction as unsupported without a native proof. |
+| P0 | Release artifacts omitted the exact cloud-local eviction batch planner needed to reproduce provider-safe local-space evidence. | The release matrix now builds, help-probes, checksums, exact-set validates, and provenance-attests `disksage-cloud-local-eviction-batch` on macOS. Linux and Windows artifacts remain excluded because their provider-local observation paths are unsupported. Pull-request artifacts remain unattested and cannot authorize execution. | Require exact-head hosted packaging checks, then regenerate the read-only OneDrive plan from the matching macOS artifact; keep human approval and Finder action as separate later boundaries. |
+| P0 | OneDrive Finder assistance could report local-space verification from allocation reduction alone, and its verifier was absent from release artifacts. | Verification now also requires fresh upload, download, conflict, pause, trash, and File Provider identity evidence. The macOS verifier is help-probed, checksummed, exact-set validated, and provenance-attested. | Wait for OneDrive synchronization to complete, then rerun verification from the matching exact-head release artifact. |
+| P0 | The iCloud-specific public Foundation planner existed in source but was absent from installable release evidence. | The release matrix now builds, help-probes, checksums, exact-set validates, and provenance-attests `disksage-icloud-local-eviction-batch-macos-arm64`; Linux and Windows intentionally ship only the provider-generic planner. | After both stacked changes merge and exact-head macOS packaging is green, generate a fresh read-only production plan and retain its fingerprint; execution still requires a later exact human approval. |
+| P0 | The release planner artifact lacked the matching read-only cloud-local inventory producer, so an exact-head plan could not be regenerated without compiling source or reusing stale evidence. | The macOS release matrix now builds, help-probes, checksums, exact-set validates, and provenance-attests `disksage-cloud-local-inventory-macos-arm64` alongside both batch planners. | Require exact-head hosted packaging checks, then use that artifact to generate a fresh inventory and plan; predecessor manifests remain invalid and execution still requires exact fingerprint approval. |
 | P2 | Figma design source is not part of the current change. | No visual redesign or Figma artifact was introduced in this baseline. | If a product UI redesign is approved, record the Figma File ID in a new ADR before implementation. |
 
 ## Architecture and decision linkage
@@ -1113,15 +1129,36 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 OneDrive native local-eviction boundary
 
+- Exact release lineage `9c010252fccbf92256ef1d19ffae063ea060becc` produced a macOS artifact ZIP
+  with SHA-256 `c6d2125684237adfa00c1ebef63b38179f7d40561c5f38e768526d0208968af8`.
+  Redacted receipt `disksage-cloud-live-20260829-9c010252` used a mode-0700 directory and
+  mode-0600 files; no private filesystem or cloud path is retained here.
+- The complete bounded iCloud inventory at `1787997809914` ms visited 126 entries and 122
+  files, emitted 120 candidates totaling 20,860,424,192 allocated bytes, and had no issue or
+  truncation. Its plan at `1787997836117` ms admitted zero items and zero allocated bytes,
+  fingerprint `5208ab891669fc55ae6be9265614f0e18b722cd67656d3872689081926856336`, with
+  `no-planned-items`. Receipt SHA-256 values are
+  `5fc603ccc4c0d7de505b38d6bff2262f435eb67ee87c61be6184795b703fce0a` (inventory)
+  and `2954393d0cd6f4dbc6b952dd729009fe44067a4371983af0dd96bd2205c578ce` (plan).
+- The complete OneDrive traversal at `1787997897288` ms visited 277,410 entries and
+  242,891 files. Its allocation-descending top 128 represented 9,792,589,824 allocated
+  bytes; result truncation means this is not whole-root authority. The plan at
+  `1787997919065` ms admitted all 128 emitted items totaling 5,272,006,656 allocated bytes,
+  fingerprint `ad0118c3316579e768df8de2e1942b8109c76e92381b4346b2824e146e01b80a`, with
+  the human-approval blocker. Receipt SHA-256 values are
+  `46f26c492c190129c7378e61be6aa447441819131ce4022133e03a580f415127` (inventory)
+  and `a09ae25b256ac66e0297bf8d9bf81a471857dc8b8116aafc2e20b99d548bf5c1` (plan).
+  These are read-only observations; no eviction or other mutation occurred.
+
 - The selected OneDrive root is a registered macOS File Provider domain. A bounded native status
   probe reported the root uploaded, current, unpaused, untrashed, and eligible for the provider's
   unpin action; its allocated subtree remains roughly 32 GiB. Presence in `CloudStorage` alone is
   not used as upload or eviction authority.
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
   receipt, and post-allocation verification contract for individual OneDrive files. Execution
-  uses exact item evidence, gracefully stops the verified OneDrive app,
-  uses Microsoft's `/unpin` Files On-Demand command, and restarts the client. Exact File Provider
-  item evidence replaces the optional `/getpin` query. It does
+  uses exact item evidence and Foundation's local-only ubiquitous-item eviction. Immediately
+  before that call, DiskSage re-resolves every mutable sync/policy gate plus exact item/version
+  identity. Exact File Provider evidence replaces vendor-command inference. It does
   not require OAuth and never deletes the visible cloud item.
 - The same evidence contract now supports bounded OneDrive batches through the provider-neutral
   `disksage-cloud-local-eviction-batch` CLI. Sync-incomplete items are excluded by index, every
@@ -1132,6 +1169,17 @@ runner's private workspace temp root instead of weakening the shared production 
   complete its bounded graceful quit, so no item was evicted. A physical-space receipt from the
   live provider remains open; the 300 GB goal is not
   claimed complete.
+- A later live batch found five uploaded, current, idle, provider-evictable Mplus videos totaling
+  11,397,992,448 allocated bytes. Their NFC manifest spelling initially failed against the NFD
+  File Provider root; the shared containment boundary now accepts only component-wise canonical
+  equivalents and still rejects sibling roots. After that fix all five received exact item
+  authority, but OneDrive's signed `/unpin` process reported `Failed operation=2` with native
+  status `-2` for the first item while returning process status zero. DiskSage detected the failure,
+  recorded the attempted batch, halted before item two, and reclaimed zero bytes. Replacing the
+  obsolete vendor command motivated the current Foundation boundary; exact-head execution and
+  post-allocation verification remain a P0 acceptance gap.
+  the approved cloud items remain intact and locally materialized until that native path passes
+  post-allocation verification.
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
@@ -1223,3 +1271,47 @@ runner's private workspace temp root instead of weakening the shared production 
   independently confirms the storage inconsistency. DiskSage therefore records no prune or
   physical gain until an explicit native storage-repair plan preserves running-container and
   data-volume dependencies, rechecks integrity, and regenerates the orphan fingerprint.
+- That native plan subsequently fingerprinted 129 damaged layers and executed the non-forced
+  Podman repair. Fresh postcheck evidence shows 128 repaired and one dependent damaged layer
+  retained. Native guest trim then reduced the sparse raw-image allocation from 44,208,422,912
+  bytes to about 20.3 GiB; the bounded host observation increased APFS availability by
+  22,816,916 KiB. The remaining stopped container and its volumes stay preserved because neither
+  exact container removal nor non-forced repair can safely unlink its damaged writable layer.
+
+## 2026-08-29 perceptual photo evidence
+
+- A read-only audit of the user-owned `Pictures` root completed with fingerprint
+  `22c1fbfaa1f5bbb06c99ee7d693f40f1c3277b8951be2b3c36aab221daee9518`: 58 entries were
+  observed, 45 local photos decoded, one managed Photos Library pruned before descent, zero
+  dataless cloud placeholders read, and zero evidence gaps recorded.
+- Five distinct-content PNG files formed two exact-aspect-ratio DCT pHash candidate groups. The
+  first group contained three 8-bit lossless variants with maximum pairwise Hamming distance 4;
+  the 4,408×6,616 member uniquely Pareto-dominated the 2,204×3,308 and 551×827 variants and is shown
+  as a review recommendation, not deletion authority. The two lower-resolution encoded files total
+  172,074 logical bytes.
+- The second group contained two 9,921×14,031, 8-bit lossless variants with maximum pairwise
+  Hamming distance 4. Their measured preservation dimensions are equal, so file-size difference is
+  not converted into a quality claim and no survivor is recommended. Direct image/metadata review
+  and an explicit survivor selection remain required.
+- The audit performed no mutation. Quarantine planning cannot begin without one survivor per group;
+  execution additionally requires the exact plan phrase, fresh full re-audit, inactive files, and
+  unchanged filesystem identities before any non-survivor moves to OS Trash.
+
+## 2026-08-29 Google Drive local-allocation boundary
+
+- A metadata-only audit detected four registered Google Drive File Provider roots: two personal,
+  one shared, and one organization root. Two bounded roots completed without evidence gaps; the
+  larger personal root remained incomplete after 11,732 entries because 22 entries could not meet
+  the metadata policy, and the shared root remained incomplete after 194 entries with eight entry
+  errors. No file content was opened or materialized.
+- At the 1 MiB allocation floor, all four roots produced zero local-copy candidates and zero
+  allocated candidate bytes. At the zero-byte reporting floor, only the incomplete personal scan
+  emitted candidates: 59 metadata-sized items totaling 319,488 allocated bytes. This is neither
+  meaningful reclaim nor complete-root eviction evidence.
+- The provider-generic batch planner rejects the Google Drive root before planning because its
+  public Foundation eligibility and postcondition contract has not been verified. DiskSage keeps
+  this fail-closed boundary: it emits no eligibility claim or executable fingerprint, and it does
+  not broaden the OneDrive/iCloud executor merely because Google Drive uses File Provider. The
+  private mode-0700/0600 receipt is identified as
+  `disksage-google-drive-live-20260829-e53df609`; no customer path or provider identifier is
+  recorded here, and no mutation occurred.

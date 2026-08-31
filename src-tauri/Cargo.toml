@@ -39,6 +39,11 @@ path = "src/bin/disksage-duplicate-audit.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-photo-similarity-audit"
+path = "src/bin/disksage-photo-similarity-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-icloud-local-eviction"
 path = "src/bin/disksage-icloud-local-eviction.rs"
 required-features = ["cloud-cli"]
@@ -133,6 +138,14 @@ name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-podman-storage-repair"
+path = "src/bin/disksage-podman-storage-repair.rs"
+
+[[bin]]
+name = "disksage-shared-temp-reclaim-plan"
+path = "src/bin/disksage-shared-temp-reclaim-plan.rs"
+
+[[bin]]
 name = "disksage-container-orphan-plan"
 path = "src/bin/disksage-container-orphan-plan.rs"
 
@@ -189,6 +202,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 memchr = "2.8.3"
 infer = "0.22.0"
 png = "0.18.1"
+image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "tiff", "webp"] }
 mail-parser = "0.11.5"
 libc = "0.2"
 mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "4f9276b6fe6063f86c4cd4453fb72a13f3f6db11", default-features = false }

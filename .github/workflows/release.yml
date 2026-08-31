@@ -40,10 +40,22 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-linux-x86_64.sha256
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
               src-tauri/target/release/disksage-duplicate-audit-linux-x86_64.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64
+              src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64
+              src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-linux-x86_64
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-linux-x86_64
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-linux-x86_64
           - os: windows-2022
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
@@ -52,10 +64,22 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe.sha256
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
               src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe
+              src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe
+              src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan.exe
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit.exe
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-windows-x86_64.exe
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair.exe
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-windows-x86_64.exe
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit.exe
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-windows-x86_64.exe
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan.exe
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-windows-x86_64.exe
           - os: macos-latest
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
@@ -63,10 +87,38 @@ jobs:
               src-tauri/target/release/disksage-cloud-plan-macos-arm64.sha256
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64
               src-tauri/target/release/disksage-duplicate-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
+              src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64.sha256
+              src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64
+              src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64.sha256
+              src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64
+              src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64.sha256
+              src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
+              src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64.sha256
+              src-tauri/target/release/disksage-podman-storage-repair-macos-arm64
+              src-tauri/target/release/disksage-podman-storage-repair-macos-arm64.sha256
+              src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64
+              src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64.sha256
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64
+              src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64.sha256
             cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-macos-arm64
+            eviction_batch_cli_source: src-tauri/target/release/disksage-cloud-local-eviction-batch
+            eviction_batch_cli_asset: src-tauri/target/release/disksage-cloud-local-eviction-batch-macos-arm64
+            icloud_eviction_batch_cli_source: src-tauri/target/release/disksage-icloud-local-eviction-batch
+            icloud_eviction_batch_cli_asset: src-tauri/target/release/disksage-icloud-local-eviction-batch-macos-arm64
+            cloud_local_inventory_cli_source: src-tauri/target/release/disksage-cloud-local-inventory
+            cloud_local_inventory_cli_asset: src-tauri/target/release/disksage-cloud-local-inventory-macos-arm64
+            onedrive_finder_verify_cli_source: src-tauri/target/release/disksage-onedrive-finder-verify
+            onedrive_finder_verify_cli_asset: src-tauri/target/release/disksage-onedrive-finder-verify-macos-arm64
+            podman_repair_cli_source: src-tauri/target/release/disksage-podman-storage-repair
+            podman_repair_cli_asset: src-tauri/target/release/disksage-podman-storage-repair-macos-arm64
+            photo_similarity_cli_source: src-tauri/target/release/disksage-photo-similarity-audit
+            photo_similarity_cli_asset: src-tauri/target/release/disksage-photo-similarity-audit-macos-arm64
+            shared_temp_cli_source: src-tauri/target/release/disksage-shared-temp-reclaim-plan
+            shared_temp_cli_asset: src-tauri/target/release/disksage-shared-temp-reclaim-plan-macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -145,6 +197,16 @@ jobs:
         run: >-
           cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
           --bin disksage-cloud-plan --bin disksage-duplicate-audit
+          --bin disksage-podman-storage-repair
+          --bin disksage-photo-similarity-audit --bin disksage-shared-temp-reclaim-plan
+
+      - name: Build macOS cloud-local inventory and planners
+        if: matrix.os == 'macos-latest'
+        run: >-
+          cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
+          --bin disksage-cloud-local-eviction-batch
+          --bin disksage-icloud-local-eviction-batch --bin disksage-cloud-local-inventory
+          --bin disksage-onedrive-finder-verify
 
       - name: Stage and verify operational CLIs
         shell: bash
@@ -170,7 +232,7 @@ jobs:
               cat "$help_stderr" >&2
               return 1
             fi
-            grep -F "$usage_marker" "$help_stdout"
+            grep -F -- "$usage_marker" "$help_stdout"
             if command -v sha256sum >/dev/null 2>&1; then
               (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
             else
@@ -180,6 +242,15 @@ jobs:
           }
           stage_cli "${{ matrix.cloud_cli_source }}" "${{ matrix.cloud_cli_asset }}" "usage: disksage-cloud-plan"
           stage_cli "${{ matrix.duplicate_cli_source }}" "${{ matrix.duplicate_cli_asset }}" "usage: disksage-duplicate-audit"
+          stage_cli "${{ matrix.podman_repair_cli_source }}" "${{ matrix.podman_repair_cli_asset }}" "Usage: disksage-podman-storage-repair"
+          stage_cli "${{ matrix.photo_similarity_cli_source }}" "${{ matrix.photo_similarity_cli_asset }}" "Usage: disksage-photo-similarity-audit"
+          stage_cli "${{ matrix.shared_temp_cli_source }}" "${{ matrix.shared_temp_cli_asset }}" "Usage: disksage-shared-temp-reclaim-plan"
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            stage_cli "${{ matrix.eviction_batch_cli_source }}" "${{ matrix.eviction_batch_cli_asset }}" "--manifest ABSOLUTE_JSON"
+            stage_cli "${{ matrix.icloud_eviction_batch_cli_source }}" "${{ matrix.icloud_eviction_batch_cli_asset }}" "usage: disksage-icloud-local-eviction-batch"
+            stage_cli "${{ matrix.cloud_local_inventory_cli_source }}" "${{ matrix.cloud_local_inventory_cli_asset }}" "usage: disksage-cloud-local-inventory"
+            stage_cli "${{ matrix.onedrive_finder_verify_cli_source }}" "${{ matrix.onedrive_finder_verify_cli_asset }}" "usage: disksage-onedrive-finder-verify"
+          fi
 
       - name: Verify macOS DMG app signature
         if: matrix.os == 'macos-latest'
@@ -259,6 +330,18 @@ jobs:
           path: release-artifacts
           merge-multiple: false
 
+      - name: Verify release artifact checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/verify-release-artifacts.sh release-artifacts "$GITHUB_RUN_ATTEMPT"
+          regular_file_count=0
+          while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
+          if [[ $regular_file_count -ne 43 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 43 regular files before SBOM generation, found %s.\n' "$regular_file_count" >&2
+            exit 1
+          fi
+
       - name: Generate and validate source-bound SBOM
         shell: bash
         run: |
@@ -275,78 +358,18 @@ jobs:
           node scripts/ci/generate-release-sbom.mjs \
             --validate release-artifacts/sbom/disksage.spdx.json
 
-      - name: Verify release artifact checksums
+      - name: Verify post-SBOM release artifact set
         shell: bash
         run: |
           set -euo pipefail
-          require_exactly_one_path() {
-            local path_pattern="$1" label="$2" count=0
-            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
-            if [[ $count -ne 1 ]]; then
-              printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
-              exit 1
-            fi
-          }
-          require_exactly_one_file() {
-            local file_name="$1" count=0
-            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
-            if [[ $count -ne 1 ]]; then
-              printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
-              exit 1
-            fi
-          }
-          require_exactly_one_path '*/bundle/deb/*.deb' 'Debian bundle'
-          require_exactly_one_path '*/bundle/appimage/*.AppImage' 'AppImage bundle'
-          require_exactly_one_path '*/bundle/msi/*.msi' 'Windows MSI bundle'
-          require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'
-          require_exactly_one_path '*/bundle/dmg/*.dmg' 'macOS DMG bundle'
-          for required_name in \
-            disksage-cloud-plan-linux-x86_64 \
-            disksage-duplicate-audit-linux-x86_64 \
-            disksage-cloud-plan-windows-x86_64.exe \
-            disksage-duplicate-audit-windows-x86_64.exe \
-            disksage-cloud-plan-macos-arm64 \
-            disksage-duplicate-audit-macos-arm64; do
-            require_exactly_one_file "$required_name"
-            require_exactly_one_file "$required_name.sha256"
-          done
-          checksum_files=()
-          checksum_file=""
-          while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
-          if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+          sbom_files=()
+          sbom_file=""
+          while IFS= read -r -d '' sbom_file; do sbom_files+=("$sbom_file"); done < <(find release-artifacts -type f -name 'disksage.spdx.json' -print0)
+          if [[ ${#sbom_files[@]} -ne 1 ]]; then
+            printf 'Expected exactly one release SBOM, found %s.\n' "${#sbom_files[@]}" >&2
             exit 1
           fi
-          for checksum_file in "${checksum_files[@]}"; do
-            checksum_dir="$(dirname "$checksum_file")"
-            checksum_name="$(basename "$checksum_file")"
-            expected_asset_name="${checksum_name%.sha256}"
-            checksum_line="" line="" line_count=0
-            while IFS= read -r line || [[ -n "$line" ]]; do
-              line_count=$((line_count + 1))
-              checksum_line="$line"
-            done <"$checksum_file"
-            if [[ $line_count -ne 1 ]]; then
-              printf 'Checksum file %s must contain exactly one record.\n' "$checksum_name" >&2
-              exit 1
-            fi
-            recorded_digest="" recorded_name="" extra_field=""
-            read -r recorded_digest recorded_name extra_field <<<"$checksum_line"
-            if [[ ! "$recorded_digest" =~ ^[0-9a-fA-F]{64}$ ]] || [[ "$recorded_name" != "$expected_asset_name" ]] || [[ -n "$extra_field" ]]; then
-              printf 'Checksum file %s must reference its adjacent operational CLI %s exactly once.\n' "$checksum_name" "$expected_asset_name" >&2
-              exit 1
-            fi
-            if command -v sha256sum >/dev/null 2>&1; then
-              (cd "$checksum_dir" && sha256sum --check "$checksum_name")
-            elif command -v shasum >/dev/null 2>&1; then
-              (cd "$checksum_dir" && shasum -a 256 --check "$checksum_name")
-            else
-              printf 'No SHA-256 checksum verifier is available.\n' >&2
-              exit 1
-            fi
-          done
-          require_exactly_one_file disksage.spdx.json
-          node "$GITHUB_WORKSPACE/scripts/ci/generate-release-sbom.mjs" --validate "$(find release-artifacts -type f -name 'disksage.spdx.json' -print -quit)"
+          node "$GITHUB_WORKSPACE/scripts/ci/generate-release-sbom.mjs" --validate "${sbom_files[0]}"
           unexpected_entry="$(find release-artifacts -mindepth 1 ! -type d ! -type f -print -quit)"
           if [[ -n "$unexpected_entry" ]]; then
             printf 'Unexpected release artifact entries: non-regular path %s is not publishable.\n' "$unexpected_entry" >&2
@@ -354,8 +377,8 @@ jobs:
           fi
           regular_file_count=0
           while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 18 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
+          if [[ $regular_file_count -ne 44 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 44 regular files after SBOM generation, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 

@@ -16,6 +16,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
@@ -25,22 +37,11 @@ jobs:
         with:
           workspaces: src-tauri
           cache-targets: false
-      - name: Rust tests (includes unix symlink test)
+      - name: Rust, cloud, and archive proof tests
         env:
           # Mutation fixtures must live outside the globally protected shared /tmp tree.
           TMPDIR: ${{ runner.temp }}
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Headless cloud planner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
-      - name: Exact duplicate audit tests
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
-      - name: Extraction-free archive tree proof tests
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli,archive-cli
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20.19.0
@@ -55,6 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Windows absolute-home regression
         shell: pwsh
@@ -70,6 +72,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install build deps (llama.cpp native + tauri)
         run: |
           sudo apt-get update
