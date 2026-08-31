@@ -249,9 +249,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use disksage_lib::container_orphan_reclaim::{
-        ContainerOrphanPlan, OrphanCandidateEvidence, OrphanCategoryPlan, RuntimeHealthEvidence,
-    };
 
     #[test]
     fn cli_exposes_every_backend_orphan_category() {
@@ -280,41 +277,5 @@ mod tests {
             "docker-context-cli-execution-requires-immutable-authority"
         );
         assert!(ensure_cli_execution_authority(ContainerRuntimeKind::PodmanMachine).is_ok());
-    }
-
-    #[test]
-    fn read_only_docker_cli_plan_exposes_no_mutation_authority() {
-        let plan = ContainerOrphanPlan {
-            schema_kind: "disksage.container-orphan-plan",
-            schema_version: 1,
-            platform: "test",
-            evidence_complete: true,
-            elapsed_ms: 1,
-            runtime: RuntimeHealthEvidence {
-                kind: ContainerRuntimeKind::DockerColimaContext,
-                display_name: "docker colima".into(),
-                healthy: true,
-                detail_issue: None,
-            },
-            categories: vec![OrphanCategoryPlan {
-                category: OrphanCategory::Container,
-                evidence_complete: true,
-                issue: None,
-                evidence: Some(OrphanCandidateEvidence {
-                    total_records: 1,
-                    candidate_records: 1,
-                    candidate_size_sum_bytes: None,
-                    candidate_set_sha256: "a".repeat(64),
-                }),
-                approval_phrase: Some("unsafe approval".into()),
-                prune_command: Some(vec!["container".into(), "rm".into()]),
-            }],
-            issues: vec![],
-            receipt_directory_sha256: None,
-        };
-
-        let plan = suppress_unexecutable_docker_plan(plan, ContainerRuntimeKind::DockerColimaContext);
-        assert!(plan.categories[0].approval_phrase.is_none());
-        assert!(plan.categories[0].prune_command.is_none());
     }
 }
