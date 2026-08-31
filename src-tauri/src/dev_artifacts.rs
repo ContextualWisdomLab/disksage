@@ -103,13 +103,7 @@ fn cargo_target_cache(path: &Path) -> bool {
                 && tag.contains("cache directory tag created by cargo")
         })
         && path.join(".rustc_info.json").is_file();
-    let debug = path.join("debug");
-    debug.is_dir()
-        && (tagged
-            || (path.file_name().is_some_and(|name| name == "target")
-                && debug.join("deps").is_dir()
-                && debug.join("build").is_dir()
-                && debug.join("incremental").is_dir()))
+    tagged && path.join("debug").is_dir()
 }
 
 fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
@@ -881,17 +875,15 @@ mod tests {
     }
 
     #[test]
-    fn discovers_named_target_cache_by_cargo_debug_layout() {
+    fn ignores_named_target_layout_without_cargo_authority() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("target");
         for child in ["deps", "build", "incremental"] {
             fs::create_dir_all(target.join("debug").join(child)).unwrap();
         }
+        fs::write(target.join("customer-owned.sqlite"), b"business data").unwrap();
 
-        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert_eq!(artifacts.len(), 1);
-        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
