@@ -261,7 +261,7 @@ fn run_bounded_output(program: &Path, args: &[&str]) -> Result<(), String> {
         }
     };
     capture
-        .seek(SeekFrom::Start(0))
+        .seek(std::io::SeekFrom::Start(0))
         .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
     let mut output = Vec::new();
     capture
@@ -553,6 +553,16 @@ mod tests {
             .unwrap_err(),
             "onedrive-files-on-demand-command-failed"
         );
+    }
+
+    #[test]
+    fn concurrently_started_onedrive_is_not_owned_by_maintenance_stop() {
+        assert_eq!(
+            ensure_onedrive_stop_authority(false, true).unwrap_err(),
+            "provider-recovery-runtime-started-concurrently"
+        );
+        assert!(ensure_onedrive_stop_authority(false, false).is_ok());
+        assert!(ensure_onedrive_stop_authority(true, true).is_ok());
     }
 
     #[cfg(all(target_os = "macos", not(coverage)))]
