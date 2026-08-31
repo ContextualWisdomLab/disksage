@@ -290,7 +290,7 @@ fn launch_provider(path: &Path) -> Result<(), String> {
 }
 
 /// Invoke OneDrive's documented Files On-Demand command while its sync app is stopped, then
-/// always restart the verified app. This changes only the selected local materialization state.
+/// restore the verified app only when it was running before the maintenance operation.
 #[cfg(all(target_os = "macos", not(coverage)))]
 pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutcome, String> {
     let app = app_path(CloudProvider::Onedrive)?;
@@ -324,14 +324,21 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
         }
         run_bounded_output(&executable, &["/unpin", path])
     })();
-    let restart = launch_provider(&app).and_then(|_| {
-        std::thread::sleep(Duration::from_secs(1));
-        match runtime_observation(CloudProvider::Onedrive, 0) {
-            Some(true) => Ok(()),
-            Some(false) => Err("provider-client-runtime-not-observed-after-restart".into()),
-            None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
-        }
-    });
+    let restart = crate::provider_runtime_state::restore_after_temporary_stop(
+        primary_runtime_observed,
+        || {
+            launch_provider(&app).and_then(|_| {
+                std::thread::sleep(Duration::from_secs(1));
+                match runtime_observation(CloudProvider::Onedrive, 0) {
+                    Some(true) => Ok(()),
+                    Some(false) => {
+                        Err("provider-client-runtime-not-observed-after-restart".into())
+                    }
+                    None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
+                }
+            })
+        },
+    );
     finish_onedrive_unpin(operation, restart)
 }
 
