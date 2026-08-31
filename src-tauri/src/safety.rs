@@ -548,6 +548,42 @@ pub fn trash_delete_if_identity(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
+    trash_delete_if_identity_with_catalog_root(
+        path,
+        None,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )
+}
+
+pub(crate) fn trash_delete_if_identity_in_catalog_root(
+    path: &Path,
+    catalog_root: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    trash_delete_if_identity_with_catalog_root(
+        path,
+        Some(catalog_root),
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )
+}
+
+fn trash_delete_if_identity_with_catalog_root(
+    path: &Path,
+    catalog_root: Option<&Path>,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -556,12 +592,19 @@ pub fn trash_delete_if_identity(
     }
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let catalog_authorized = catalog_root.is_some_and(|root| {
+        std::fs::symlink_metadata(root).is_ok_and(|metadata| {
+            metadata.is_dir() && !metadata.file_type().is_symlink()
+        }) && std::fs::canonicalize(root)
+            .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
+            && !is_explicitly_protected(&guard_path)
+    });
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    if !shared_temp_authorized && is_protected(&guard_path) {
+    if !shared_temp_authorized && !catalog_authorized && is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -1165,6 +1208,25 @@ mod tests {
         assert!(victim.exists());
         assert!(original.exists());
         assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[test]
+    fn catalog_root_authority_never_overrides_an_explicit_protection_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("catalog");
+        let victim = root.join("regenerable-cache");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(root.join(PROTECTED_PATH_MARKER), []).unwrap();
+        let expected = filesystem_object_id(&victim).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = trash_delete_if_identity_in_catalog_root(
+            &victim, &root, &expected, 0, &journal, 1,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert!(victim.exists());
+        assert!(journal_recent(&journal, 10).is_empty());
     }
 
     #[test]

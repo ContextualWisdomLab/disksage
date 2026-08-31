@@ -190,6 +190,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
         ),
     ]);
+    #[cfg(target_os = "macos")]
+    if let Some(session_root) = bases.temp.parent() {
+        entries.push((
+            "edge-code-sign-clones",
+            "Microsoft Edge code-sign 임시 복제본",
+            session_root
+                .join("X")
+                .join("com.microsoft.edgemac.code_sign_clone"),
+        ));
+    }
 
     // `/tmp` is a symlink on macOS; use `/private/tmp` so the root itself is a real directory.
     // Shared temporary cleanup is limited to current-user-owned, non-linked trees below.
@@ -659,6 +669,17 @@ mod tests {
         assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            cands
+                .iter()
+                .find(|candidate| candidate.id == "edge-code-sign-clones")
+                .unwrap()
+                .path,
+            tmp.path()
+                .join("X/com.microsoft.edgemac.code_sign_clone")
+                .to_string_lossy()
+        );
     }
 
     #[cfg(unix)]

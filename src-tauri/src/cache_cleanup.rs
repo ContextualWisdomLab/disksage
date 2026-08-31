@@ -11,11 +11,12 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 10] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 11] = [
     "npm-cache",
     "pnpm-cache",
     "adobe-cache",
     "edge-cache",
+    "edge-code-sign-clones",
     "uv-cache",
     "trivy-cache",
     "appmap-download-cache",
@@ -103,7 +104,29 @@ fn proven_cache_base_name(name: &str) -> Option<&str> {
     })
 }
 
+fn edge_code_sign_clone_name(name: &str) -> bool {
+    let (base, collision) = name
+        .split_once(' ')
+        .map_or((name, None), |(base, suffix)| (base, Some(suffix)));
+    let Some(suffix) = base.strip_prefix("code_sign_clone.") else {
+        return false;
+    };
+    suffix.len() == 6
+        && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        && collision.is_none_or(native_trash_collision_suffix)
+}
+
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
+    if edge_code_sign_clone_name(name) {
+        let bundle = path.join("Microsoft Edge.app.bundle");
+        let contents = bundle.join("Contents");
+        return (direct_child_is_dir(path, "Microsoft Edge.app.bundle")
+            && direct_child_is_dir(&bundle, "Contents")
+            && direct_child_is_dir(&contents, "MacOS")
+            && direct_child_is_dir(&contents, "_CodeSignature")
+            && direct_child_is_file(&contents, "Info.plist"))
+        .then_some("edge-code-sign-clone");
+    }
     let base_name = proven_cache_base_name(name)?;
     let signature = match base_name {
         "_cacache"
@@ -165,7 +188,11 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
     Some(signature)
 }
 
-fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
+fn bounded_tree_size(
+    path: &Path,
+    entries: &mut usize,
+    allow_unfollowed_symlinks: bool,
+) -> Result<u64, String> {
     *entries = entries.saturating_add(1);
     if *entries > MAX_CACHE_TRASH_ENTRIES {
         return Err("cache-trash-entry-limit-exceeded".into());
@@ -173,7 +200,9 @@ fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|_| "cache-trash-stat-failed".to_string())?;
     if metadata.file_type().is_symlink() {
-        return Err("cache-trash-symlink-rejected".into());
+        return allow_unfollowed_symlinks
+            .then_some(0)
+            .ok_or_else(|| "cache-trash-symlink-rejected".into());
     }
     if metadata.is_file() {
         return Ok(metadata.len());
@@ -184,7 +213,11 @@ fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
     let mut total = 0u64;
     for entry in std::fs::read_dir(path).map_err(|_| "cache-trash-read-dir-failed".to_string())? {
         let entry = entry.map_err(|_| "cache-trash-read-entry-failed".to_string())?;
-        total = total.saturating_add(bounded_tree_size(&entry.path(), entries)?);
+        total = total.saturating_add(bounded_tree_size(
+            &entry.path(),
+            entries,
+            allow_unfollowed_symlinks,
+        )?);
     }
     Ok(total)
 }
@@ -199,7 +232,7 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if proven_cache_base_name(&name).is_none() {
+        if proven_cache_base_name(&name).is_none() && !edge_code_sign_clone_name(&name) {
             continue;
         }
         let path = entry.path();
@@ -207,7 +240,8 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
             continue;
         };
         let mut count = 0;
-        let Ok(bytes) = bounded_tree_size(&path, &mut count) else {
+        let Ok(bytes) = bounded_tree_size(&path, &mut count, signature == "edge-code-sign-clone")
+        else {
             continue;
         };
         candidates.push(CacheTrashCandidate {
@@ -326,8 +360,9 @@ pub(crate) fn clean_cache_contents_inner(
                     error: error.into(),
                 };
             }
-            match safety::trash_delete_if_identity(
+            match safety::trash_delete_if_identity_in_catalog_root(
                 Path::new(&target.path),
+                dir,
                 &target.object_id,
                 target.bytes,
                 journal_path,
@@ -582,6 +617,37 @@ mod tests {
         assert!(candidates.iter().any(|candidate| {
             candidate.name == "wheels-v6 14-56-42-563" && candidate.signature == "uv-wheel-cache"
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edge_code_sign_clone_signature_purges_without_following_bundle_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        let clone = trash.join("code_sign_clone.Ab12zZ");
+        let contents = clone.join("Microsoft Edge.app.bundle/Contents");
+        fs::create_dir_all(contents.join("MacOS")).unwrap();
+        fs::create_dir(contents.join("_CodeSignature")).unwrap();
+        fs::write(contents.join("Info.plist"), b"plist").unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, contents.join("Frameworks")).unwrap();
+
+        for invalid in ["code_sign_clone.short", "code_sign_clone.Ab12zZ.old"] {
+            fs::create_dir_all(trash.join(invalid)).unwrap();
+        }
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "edge-code-sign-clone");
+
+        let results =
+            purge_proven_cache_trash(tmp.path(), &tmp.path().join("journal.jsonl"), 8).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert!(!clone.exists());
+        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
     }
 
     #[cfg(unix)]
