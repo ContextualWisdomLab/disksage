@@ -63,20 +63,18 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+#[path = "container_orphan_reclaim.rs"]
+mod container_orphan_reclaim_implementation;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim {
-    mod implementation {
-        include!("container_orphan_reclaim.rs");
-    }
-
-    pub use implementation::{
+    pub use crate::container_orphan_reclaim_implementation::{
         probe_container_orphans, probe_container_orphans_with_receipt_dir, probe_runtime_health,
         ContainerOrphanPlan, ContainerOrphanPruneExecution, ContainerRuntimeKind,
         ContainerRuntimeTarget, OrphanCandidateEvidence, OrphanCategory, OrphanCategoryPlan,
         RuntimeHealthEvidence, CONTAINER_ORPHAN_SCHEMA_KIND, MAX_CATEGORY_RECORDS,
         MAX_NETWORK_CANDIDATES,
     };
-    pub(crate) use implementation::{
+    pub(crate) use crate::container_orphan_reclaim_implementation::{
         resolve_docker_context_fingerprint, resolve_docker_context_host,
     };
 
@@ -91,7 +89,7 @@ pub mod container_orphan_reclaim {
         if category == OrphanCategory::BuildCache {
             return Err("orphan-prune-build-cache-exact-delete-unavailable".into());
         }
-        implementation::execute_container_orphan_prune(
+        crate::container_orphan_reclaim_implementation::execute_container_orphan_prune(
             target,
             category,
             confirmation_phrase,
