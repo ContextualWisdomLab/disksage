@@ -269,6 +269,8 @@ pub enum OrphanCategory {
     Volume,
     /// Custom networks with no attached container endpoint.
     Network,
+    /// BuildKit records currently reported as reclaimable by `docker buildx du`.
+    BuildCache,
 }
 
 impl OrphanCategory {
@@ -278,6 +280,7 @@ impl OrphanCategory {
             Self::Image => "image",
             Self::Volume => "volume",
             Self::Network => "network",
+            Self::BuildCache => "build_cache",
         }
     }
 
@@ -287,6 +290,7 @@ impl OrphanCategory {
             Self::Image => "disksage.container-image-orphans.v1",
             Self::Volume => "disksage.container-volume-orphans.v1",
             Self::Network => "disksage.container-network-orphans.v1",
+            Self::BuildCache => "disksage.container-build-cache.v1",
         }
     }
 
@@ -296,6 +300,7 @@ impl OrphanCategory {
             Self::Image => ["image", "rm"],
             Self::Volume => ["volume", "rm"],
             Self::Network => ["network", "rm"],
+            Self::BuildCache => ["buildx", "prune"],
         }
     }
 }
@@ -685,6 +690,25 @@ fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> 
             normalize_hex_id(&raw_id, "image")
         })
         .collect()
+}
+
+fn parse_buildx_reclaimable_ids(output: &str) -> Result<(u64, Vec<String>), String> {
+    let values = split_json_envelopes(output)?;
+    if values.len() > MAX_CATEGORY_RECORDS {
+        return Err("record-count-exceeds-bound".to_string());
+    }
+    let total = u64::try_from(values.len()).map_err(|_| "record-count-overflow".to_string())?;
+    let mut ids = Vec::new();
+    for value in values {
+        if value.get("Reclaimable").and_then(Value::as_bool) == Some(true) {
+            let id = string_field(&value, &["ID"])?;
+            if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                return Err("build-cache-id-invalid".into());
+            }
+            ids.push(id);
+        }
+    }
+    Ok((total, bounded_exact_candidate_ids(ids)?))
 }
 
 /// Parse the exact byte sizes returned by `docker image inspect` for the already-authorized
@@ -1126,6 +1150,10 @@ fn redacted_exact_delete_command(
     has_candidates: bool,
 ) -> Vec<String> {
     let mut command = prefix.to_vec();
+    if category == OrphanCategory::BuildCache {
+        command.extend(["buildx".into(), "prune".into(), "--all".into(), "--force".into()]);
+        return command;
+    }
     command.extend(
         category
             .exact_delete_subcommand()
@@ -1374,6 +1402,10 @@ fn audit_category(
             OrphanCategory::Network => {
                 args.extend(["network", "ls", "--no-trunc", "--format", "json"]);
             }
+            OrphanCategory::BuildCache if target.kind.is_docker() => {
+                args.extend(["buildx", "du", "--format", "json"]);
+            }
+            OrphanCategory::BuildCache => return Err("build-cache-docker-only".into()),
         }
         let output = command_text(
             &target.binary_path,
@@ -1599,6 +1631,14 @@ fn audit_category(
                     candidate_ids,
                 )
             }
+            OrphanCategory::BuildCache => {
+                let (total, candidate_ids) = parse_buildx_reclaimable_ids(&output)?;
+                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &ids, None)?),
+                    candidate_ids,
+                )
+            }
         };
         Ok((evidence, bounded_exact_candidate_ids(candidate_ids)?))
     })();
@@ -1646,8 +1686,10 @@ pub fn probe_container_orphans_with_receipt_dir(
             OrphanCategory::Image,
             OrphanCategory::Volume,
             OrphanCategory::Network,
+            OrphanCategory::BuildCache,
         ]
         .into_iter()
+        .filter(|category| target.kind.is_docker() || *category != OrphanCategory::BuildCache)
         .map(|category| audit_category(target, category, receipt_identity.as_deref()))
         .collect()
     } else {
@@ -1748,13 +1790,17 @@ pub fn execute_container_orphan_prune(
 
     let before_available_bytes = host_available_bytes(executed_at_ms);
     let mut owned_args: Vec<String> = prefix.iter().skip(1).cloned().collect();
-    owned_args.extend(
-        category
-            .exact_delete_subcommand()
-            .into_iter()
-            .map(str::to_string),
-    );
-    owned_args.extend(plan.candidate_ids.iter().cloned());
+    if category == OrphanCategory::BuildCache {
+        owned_args.extend(["buildx".into(), "prune".into(), "--all".into(), "--force".into()]);
+    } else {
+        owned_args.extend(
+            category
+                .exact_delete_subcommand()
+                .into_iter()
+                .map(str::to_string),
+        );
+        owned_args.extend(plan.candidate_ids.iter().cloned());
+    }
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
     let label = format!("orphan-prune-{}", category.as_str());
     let output = mutation_capture_result(
@@ -2460,6 +2506,7 @@ mod tests {
         assert_eq!(OrphanCategory::Image.as_str(), "image");
         assert_eq!(OrphanCategory::Volume.as_str(), "volume");
         assert_eq!(OrphanCategory::Network.as_str(), "network");
+        assert_eq!(OrphanCategory::BuildCache.as_str(), "build_cache");
         assert_eq!(
             OrphanCategory::Container.exact_delete_subcommand(),
             ["container", "rm"]
@@ -2484,5 +2531,17 @@ mod tests {
             ContainerRuntimeKind::PodmanMachine.as_str(),
             "podman-machine"
         );
+    }
+
+    #[test]
+    fn buildx_inventory_selects_only_reclaimable_records() {
+        let output = concat!(
+            r#"{"ID":"abc123","Reclaimable":true}"#,
+            "\n",
+            r#"{"ID":"kept456","Reclaimable":false}"#,
+        );
+        let (total, ids) = parse_buildx_reclaimable_ids(output).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(ids, vec!["abc123"]);
     }
 }

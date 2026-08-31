@@ -91,6 +91,7 @@ fn parse_category(value: &str) -> Result<container_orphan_reclaim::OrphanCategor
         "image" => Ok(container_orphan_reclaim::OrphanCategory::Image),
         "volume" => Ok(container_orphan_reclaim::OrphanCategory::Volume),
         "network" => Ok(container_orphan_reclaim::OrphanCategory::Network),
+        "build_cache" => Ok(container_orphan_reclaim::OrphanCategory::BuildCache),
         _ => Err("unknown-orphan-category".into()),
     }
 }

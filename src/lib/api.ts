@@ -308,7 +308,7 @@ export type ContainerRuntimeKind =
   | "docker-colima-context"
   | "podman-machine";
 
-export type OrphanCategory = "container" | "image" | "volume" | "network";
+export type OrphanCategory = "container" | "image" | "volume" | "network" | "build_cache";
 
 export interface ContainerOrphanPlan {
   schema_kind: "disksage.container-orphan-plan";
