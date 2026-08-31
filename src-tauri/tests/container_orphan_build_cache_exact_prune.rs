@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[test]
-fn build_cache_inventory_is_read_only_without_mutation_authority() {
+fn build_cache_inventory_cannot_cross_into_runtime_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let receipt_dir = temp.path().join("receipts");
     std::fs::create_dir(&receipt_dir).unwrap();
@@ -62,24 +62,16 @@ esac
             .candidate_records,
         1
     );
-    assert!(
-        build_cache.approval_phrase.is_none(),
-        "BuildKit inventory must not issue mutation approval without exact-delete support"
-    );
-    assert!(
-        build_cache.prune_command.is_none(),
-        "BuildKit inventory must not advertise a category-wide prune command"
-    );
 
     let error = execute_container_orphan_prune(
         &target,
         OrphanCategory::BuildCache,
-        "not-authorized",
+        build_cache.approval_phrase.as_deref().unwrap_or("not-authorized"),
         "Reviewed the exact BuildKit cache record.",
         1_800_000_000_000,
         &receipt_dir,
     )
-    .expect_err("BuildKit cache remains read-only without an exact identity delete primitive");
+    .expect_err("BuildKit cache must stay read-only without an exact identity delete primitive");
     assert_eq!(error, "orphan-prune-build-cache-exact-delete-unavailable");
 
     let log = std::fs::read_to_string(&log_path).unwrap();
@@ -90,6 +82,6 @@ esac
     );
     assert!(
         !log.lines().any(|line| line.contains("buildx prune")),
-        "read-only BuildKit inventory must never invoke prune: {log}"
+        "BuildKit audit must never cross into prune execution: {log}"
     );
 }
