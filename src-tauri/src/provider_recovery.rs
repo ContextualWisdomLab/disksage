@@ -93,23 +93,19 @@ fn ensure_onedrive_stop_authority(
 enum OneDriveQuitWaitDecision {
     Stopped,
     ContinueWaiting,
-    RequestGracefulTerm,
     TimedOut,
 }
 
 fn onedrive_quit_wait_decision(
     current_runtime_observed: bool,
     deadline_reached: bool,
-    graceful_term_requested: bool,
 ) -> OneDriveQuitWaitDecision {
     if !current_runtime_observed {
         OneDriveQuitWaitDecision::Stopped
-    } else if !deadline_reached {
-        OneDriveQuitWaitDecision::ContinueWaiting
-    } else if graceful_term_requested {
+    } else if deadline_reached {
         OneDriveQuitWaitDecision::TimedOut
     } else {
-        OneDriveQuitWaitDecision::RequestGracefulTerm
+        OneDriveQuitWaitDecision::ContinueWaiting
     }
 }
 
@@ -344,23 +340,16 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
         request_quit("OneDrive")?;
     }
     let operation = (|| {
-        let mut deadline = Instant::now() + Duration::from_secs(10);
-        let mut graceful_term_requested = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let current_runtime_observed = require_primary_runtime_observation(CloudProvider::Onedrive)?;
             ensure_onedrive_stop_authority(primary_runtime_observed, current_runtime_observed)?;
             match onedrive_quit_wait_decision(
                 current_runtime_observed,
                 Instant::now() >= deadline,
-                graceful_term_requested,
             ) {
                 OneDriveQuitWaitDecision::Stopped => break,
                 OneDriveQuitWaitDecision::ContinueWaiting => {}
-                OneDriveQuitWaitDecision::RequestGracefulTerm => {
-                    request_graceful_term("OneDrive")?;
-                    graceful_term_requested = true;
-                    deadline = Instant::now() + Duration::from_secs(10);
-                }
                 OneDriveQuitWaitDecision::TimedOut => {
                     return Err("provider-recovery-quit-timeout".into());
                 }
@@ -613,7 +602,7 @@ mod tests {
     #[test]
     fn onedrive_unpin_timeout_never_escalates_name_only_runtime_evidence() {
         assert_eq!(
-            onedrive_quit_wait_decision(true, true, false),
+            onedrive_quit_wait_decision(true, true),
             OneDriveQuitWaitDecision::TimedOut
         );
     }
