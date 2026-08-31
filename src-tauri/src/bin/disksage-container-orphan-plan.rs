@@ -19,6 +19,17 @@ fn next_utf8_argument(
         .map_err(|_| invalid_message.to_string())
 }
 
+fn parse_category(value: &str) -> Result<OrphanCategory, String> {
+    match value {
+        "container" => Ok(OrphanCategory::Container),
+        "image" => Ok(OrphanCategory::Image),
+        "volume" => Ok(OrphanCategory::Volume),
+        "network" => Ok(OrphanCategory::Network),
+        "build_cache" => Ok(OrphanCategory::BuildCache),
+        _ => Err(format!("unsupported category\n{USAGE}")),
+    }
+}
+
 fn run() -> Result<(), String> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let help_count = raw_args
@@ -89,21 +100,11 @@ fn run() -> Result<(), String> {
                 if execute.is_some() {
                     return Err(format!("--execute may be supplied once\n{USAGE}"));
                 }
-                execute = Some(
-                    match next_utf8_argument(
-                        &mut args,
-                        "--execute requires a category",
-                        "--execute requires a UTF-8 category",
-                    )?
-                    .as_str()
-                    {
-                        "container" => OrphanCategory::Container,
-                        "image" => OrphanCategory::Image,
-                        "volume" => OrphanCategory::Volume,
-                        "network" => OrphanCategory::Network,
-                        _ => return Err(format!("unsupported category\n{USAGE}")),
-                    },
-                );
+                execute = Some(parse_category(&next_utf8_argument(
+                    &mut args,
+                    "--execute requires a category",
+                    "--execute requires a UTF-8 category",
+                )?)?);
             }
             Some("--confirm") if confirmation.is_none() => {
                 confirmation = Some(next_utf8_argument(
@@ -225,5 +226,26 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_exposes_every_backend_orphan_category() {
+        assert_eq!(
+            parse_category("container").unwrap(),
+            OrphanCategory::Container
+        );
+        assert_eq!(parse_category("image").unwrap(), OrphanCategory::Image);
+        assert_eq!(parse_category("volume").unwrap(), OrphanCategory::Volume);
+        assert_eq!(parse_category("network").unwrap(), OrphanCategory::Network);
+        assert_eq!(
+            parse_category("build_cache").unwrap(),
+            OrphanCategory::BuildCache
+        );
+        assert!(parse_category("all").is_err());
     }
 }
