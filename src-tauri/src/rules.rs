@@ -272,6 +272,18 @@ impl CatalogRoot {
             return None;
         }
 
+        // Ancestor symlinks/reparse points may resolve a lexically safe catalog path into a
+        // managed File Provider tree. Resolve only after binding the directory handle, then open
+        // the resolved path and require it to identify that same object before trusting the
+        // resolved provider boundary. A concurrent pathname swap therefore fails closed.
+        let resolved_path = std::fs::canonicalize(path).ok()?;
+        let resolved = open_directory_handle(&resolved_path)?;
+        if handle != resolved
+            || crate::cloud::path_inside_managed_file_provider_storage(&resolved_path)
+        {
+            return None;
+        }
+
         Some(Self {
             handle,
             display_path: path.to_path_buf(),
