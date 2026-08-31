@@ -71,6 +71,13 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
+fn is_uv_git_cache_trash_name(name: &str) -> bool {
+    name == "git-v0"
+        || name.strip_prefix("git-v0 ").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
     let signature = match name {
         "_cacache"
@@ -113,10 +120,10 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
                 });
             has_build.then_some("uv-build-cache")?
         }
-        "git-v0"
-            if direct_child_is_dir(path, "locks")
-                && direct_child_is_dir(path, "checkouts")
-                && direct_child_is_dir(path, "db") =>
+        name if is_uv_git_cache_trash_name(name)
+            && direct_child_is_dir(path, "locks")
+            && direct_child_is_dir(path, "checkouts")
+            && direct_child_is_dir(path, "db") =>
         {
             "uv-git-cache"
         }
@@ -164,7 +171,8 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) && !is_uv_git_cache_trash_name(&name)
+        {
             continue;
         }
         let path = entry.path();
@@ -496,6 +504,23 @@ mod tests {
         fs::create_dir(git.join("db")).unwrap();
         let candidates = proven_cache_trash_candidates(tmp.path());
         assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "uv-git-cache");
+    }
+
+    #[test]
+    fn proven_uv_git_cache_accepts_only_native_trash_collision_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        for name in ["git-v0 2", "git-v0-old", "git-v0 2 old", "git-v01"] {
+            let git = trash.join(name);
+            fs::create_dir_all(git.join("locks")).unwrap();
+            fs::create_dir(git.join("checkouts")).unwrap();
+            fs::create_dir(git.join("db")).unwrap();
+        }
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "git-v0 2");
         assert_eq!(candidates[0].signature, "uv-git-cache");
     }
 
