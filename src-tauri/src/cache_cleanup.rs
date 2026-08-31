@@ -24,11 +24,13 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 10] = [
     "playwright-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 10] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 12] = [
     "_cacache",
     "v11",
     "Default",
     "simple-v21",
+    "simple-v22",
+    "simple-v24",
     "typequest",
     "wheels-v6",
     "sdists-v9",
@@ -82,15 +84,28 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
-fn is_uv_git_cache_trash_name(name: &str) -> bool {
-    name == "git-v0"
-        || name.strip_prefix("git-v0 ").is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-        })
+fn native_trash_collision_suffix(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && (suffix.bytes().all(|byte| byte.is_ascii_digit())
+            || suffix.split('-').map(str::len).eq([2, 2, 2, 3])
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'-'))
+}
+
+fn proven_cache_base_name(name: &str) -> Option<&str> {
+    PROVEN_CACHE_TRASH_NAMES.iter().copied().find(|base| {
+        name == *base
+            || name
+                .strip_prefix(base)
+                .and_then(|suffix| suffix.strip_prefix(' '))
+                .is_some_and(native_trash_collision_suffix)
+    })
 }
 
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
-    let signature = match name {
+    let base_name = proven_cache_base_name(name)?;
+    let signature = match base_name {
         "_cacache"
             if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
         {
@@ -107,7 +122,9 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         {
             "edge-profile-cache"
         }
-        "simple-v21" if direct_child_is_dir(path, "pypi") => "uv-simple-index-cache",
+        "simple-v21" | "simple-v22" | "simple-v24" if direct_child_is_dir(path, "pypi") => {
+            "uv-simple-index-cache"
+        }
         "typequest" if direct_child_is_dir(path, "common") && direct_child_is_dir(path, ".2") => {
             "uv-typequest-cache"
         }
@@ -131,10 +148,10 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
                 });
             has_build.then_some("uv-build-cache")?
         }
-        name if is_uv_git_cache_trash_name(name)
-            && direct_child_is_dir(path, "locks")
-            && direct_child_is_dir(path, "checkouts")
-            && direct_child_is_dir(path, "db") =>
+        "git-v0"
+            if direct_child_is_dir(path, "locks")
+                && direct_child_is_dir(path, "checkouts")
+                && direct_child_is_dir(path, "db") =>
         {
             "uv-git-cache"
         }
@@ -182,8 +199,7 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) && !is_uv_git_cache_trash_name(&name)
-        {
+        if proven_cache_base_name(&name).is_none() {
             continue;
         }
         let path = entry.path();
@@ -537,10 +553,16 @@ mod tests {
     }
 
     #[test]
-    fn proven_uv_git_cache_accepts_only_native_trash_collision_names() {
+    fn proven_cache_accepts_only_native_trash_collision_names() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = tmp.path().join(".Trash");
-        for name in ["git-v0 2", "git-v0-old", "git-v0 2 old", "git-v01"] {
+        for name in [
+            "git-v0 2",
+            "git-v0 14-56-42-563",
+            "git-v0-old",
+            "git-v0 2 old",
+            "git-v01",
+        ] {
             let git = trash.join(name);
             fs::create_dir_all(git.join("locks")).unwrap();
             fs::create_dir(git.join("checkouts")).unwrap();
@@ -548,9 +570,18 @@ mod tests {
         }
 
         let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].name, "git-v0 2");
-        assert_eq!(candidates[0].signature, "uv-git-cache");
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.signature == "uv-git-cache"));
+
+        let wheels = trash.join("wheels-v6 14-56-42-563");
+        fs::create_dir_all(wheels.join("pypi")).unwrap();
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates.iter().any(|candidate| {
+            candidate.name == "wheels-v6 14-56-42-563" && candidate.signature == "uv-wheel-cache"
+        }));
     }
 
     #[cfg(unix)]
