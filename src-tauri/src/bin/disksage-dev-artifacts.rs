@@ -457,12 +457,12 @@ mod tests {
             object_id: "object-a".into(),
             age_days: 30,
         };
-        let first = permanent_approval_phrase(root, Some("target"), 30, &[candidate.clone()])
+        let first = permanent_approval_phrase(&root, Some("target"), 30, &[candidate.clone()])
             .unwrap();
         let mut changed = candidate;
         changed.object_id = "object-b".into();
-        let second = permanent_approval_phrase(root, Some("target"), 30, &[changed]).unwrap();
+        let second = permanent_approval_phrase(&root, Some("target"), 30, &[changed]).unwrap();
         assert_ne!(first, second);
-        assert!(permanent_approval_phrase(root, Some("target"), 30, &[]).is_none());
+        assert!(permanent_approval_phrase(&root, Some("target"), 30, &[]).is_none());
     }
 }
