@@ -106,6 +106,8 @@ pub mod provider_api_write;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
 pub mod provider_recovery;
+/// Preserves provider-client running/stopped state across temporary maintenance stops.
+pub mod provider_runtime_state;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
