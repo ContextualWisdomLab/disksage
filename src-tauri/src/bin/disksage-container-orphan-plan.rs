@@ -1,4 +1,4 @@
-use disksage_lib::container_orphan_public::sanitize_plan;
+use disksage_lib::container_orphan_public::{ensure_mutation_category_authority, sanitize_plan};
 use disksage_lib::container_orphan_reclaim::{
     execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
@@ -173,8 +173,9 @@ fn run() -> Result<(), String> {
         }
         _ => {}
     }
-    if execute.is_some() {
+    if let Some(category) = execute {
         ensure_cli_execution_authority(runtime)?;
+        ensure_mutation_category_authority(category)?;
     }
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
