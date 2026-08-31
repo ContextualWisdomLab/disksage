@@ -770,16 +770,16 @@ exit 41
     #[test]
     fn docker_current_context_parser_is_bounded_and_exact() {
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":\"colima\"}"#).as_deref(),
+            parse_docker_current_context(br#"{"currentContext":"colima"}"#).as_deref(),
             Some("colima")
         );
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":\"desktop-linux\"}"#).as_deref(),
+            parse_docker_current_context(br#"{"currentContext":"desktop-linux"}"#).as_deref(),
             Some("desktop-linux")
         );
         assert_eq!(parse_docker_current_context(b"not-json"), None);
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":12}"#),
+            parse_docker_current_context(br#"{"currentContext":12}"#),
             None
         );
         assert_eq!(
