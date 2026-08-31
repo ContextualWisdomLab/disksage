@@ -560,6 +560,27 @@ mod tests {
     }
 
     #[test]
+    fn default_and_non_colima_contexts_keep_native_audit_visible_read_only() {
+        use container_orphan_reclaim::ContainerRuntimeKind::{
+            DockerColimaContext, DockerNative, PodmanMachine,
+        };
+
+        for authority in [
+            Ok(DockerAmbientAuthority::Default),
+            Ok(DockerAmbientAuthority::Context("desktop-linux".to_string())),
+        ] {
+            assert_eq!(
+                runtime_kinds_for_docker_authority(&authority),
+                vec![DockerNative, DockerColimaContext, PodmanMachine]
+            );
+            assert_eq!(
+                pin_docker_authority(&docker_binary(), authority.as_ref().unwrap()).unwrap_err(),
+                IMMUTABLE_CONTEXT_REQUIRED
+            );
+        }
+    }
+
+    #[test]
     fn named_contexts_are_read_only_and_do_not_duplicate_colima_target() {
         use container_orphan_reclaim::ContainerRuntimeKind::{DockerColimaContext, PodmanMachine};
 
@@ -737,16 +758,16 @@ exit 41
     #[test]
     fn docker_current_context_parser_is_bounded_and_exact() {
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":"colima"}"#).as_deref(),
+            parse_docker_current_context(br#"{\"currentContext\":\"colima\"}"#).as_deref(),
             Some("colima")
         );
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":"desktop-linux"}"#).as_deref(),
+            parse_docker_current_context(br#"{\"currentContext\":\"desktop-linux\"}"#).as_deref(),
             Some("desktop-linux")
         );
         assert_eq!(parse_docker_current_context(b"not-json"), None);
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":12}"#),
+            parse_docker_current_context(br#"{\"currentContext\":12}"#),
             None
         );
         assert_eq!(
