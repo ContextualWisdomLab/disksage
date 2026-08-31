@@ -37,18 +37,16 @@ pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
     plan.runtime.display_name = plan.runtime.kind.as_str().to_string();
     for category in &mut plan.categories {
         category.issue = category.issue.as_deref().map(stable_issue);
-        if category.prune_command.is_some() {
-            let has_candidates = category
-                .evidence
-                .as_ref()
-                .is_some_and(|evidence| evidence.candidate_records > 0);
-            let public_command = public_command_shape(category.category, has_candidates);
-            if public_command.is_empty() {
-                category.prune_command = None;
-                category.approval_phrase = None;
-            } else {
-                category.prune_command = Some(public_command);
-            }
+        let has_candidates = category
+            .evidence
+            .as_ref()
+            .is_some_and(|evidence| evidence.candidate_records > 0);
+        let public_command = public_command_shape(category.category, has_candidates);
+        if public_command.is_empty() {
+            category.prune_command = None;
+            category.approval_phrase = None;
+        } else if category.prune_command.is_some() {
+            category.prune_command = Some(public_command);
         }
     }
     let mut issues = plan
