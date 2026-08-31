@@ -461,12 +461,15 @@ pub fn execute_recovery(
     if stop.0 != 0 {
         return Err("runtime-storage-recovery-stop-failed".into());
     }
-    let start = run_bounded_with_timeout(&binary, start_args, RECOVERY_TIMEOUT)?;
-    if start.0 != 0 {
-        return Err("runtime-storage-recovery-start-failed".into());
-    }
-    let live = inspect_runtime(runtime, now_ms());
-    let reachable = live.guest_reachable == Some(true);
+    // Once stop succeeds, the approved operation has already mutated runtime state. Preserve
+    // that fact as a structured receipt even when the restart command itself fails or times out.
+    let start = run_bounded_with_timeout(&binary, start_args, RECOVERY_TIMEOUT)
+        .unwrap_or_else(|_| (-1, String::new(), String::new(), false));
+    let reachable = if start.0 == 0 {
+        inspect_runtime(runtime, now_ms()).guest_reachable == Some(true)
+    } else {
+        false
+    };
     Ok(RuntimeStorageRecoveryExecution {
         schema_kind: "disksage.runtime-storage-recovery-execution",
         schema_version: SCHEMA_VERSION,
