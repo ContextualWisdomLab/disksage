@@ -23,7 +23,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 10] = [
     "playwright-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 10] = [
     "_cacache",
     "v11",
     "Default",
@@ -32,6 +32,7 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "wheels-v6",
     "sdists-v9",
     "builds-v0",
+    "git-v0",
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
@@ -111,6 +112,13 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
                         && direct_child_is_file(&child, "pyvenv.cfg")
                 });
             has_build.then_some("uv-build-cache")?
+        }
+        "git-v0"
+            if direct_child_is_dir(path, "locks")
+                && direct_child_is_dir(path, "checkouts")
+                && direct_child_is_dir(path, "db") =>
+        {
+            "uv-git-cache"
         }
         "db" if direct_child_is_file(path, "trivy.db")
             && direct_child_is_file(path, "metadata.json") =>
@@ -474,6 +482,21 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn proven_uv_git_cache_requires_all_native_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        let git = trash.join("git-v0");
+        fs::create_dir_all(git.join("locks")).unwrap();
+        fs::create_dir(git.join("checkouts")).unwrap();
+        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
+
+        fs::create_dir(git.join("db")).unwrap();
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "uv-git-cache");
     }
 
     #[cfg(unix)]
