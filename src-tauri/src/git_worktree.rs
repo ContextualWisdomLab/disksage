@@ -1469,7 +1469,7 @@ pub fn active_use_evidence(
         };
         if command.contains(path_text) {
             if let Ok(pid) = raw_pid.parse::<u32>() {
-                if pid != ps.child_pid {
+                if pid != ps.child_pid && pid != std::process::id() {
                     pids.insert(pid);
                 }
             }
