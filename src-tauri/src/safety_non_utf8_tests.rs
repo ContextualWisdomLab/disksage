@@ -6,7 +6,11 @@ fn non_utf8_sidecar_marker_still_vetoes_cleanup() {
     let tmp = tempfile::tempdir().expect("create safety fixture");
     let invalid_name = OsString::from_vec(vec![b'c', b'r', b'm', 0xff]);
     let protected_path = tmp.path().join(&invalid_name);
-    std::fs::create_dir(&protected_path).expect("create non-UTF8 fixture directory");
+    match std::fs::create_dir(&protected_path) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => return,
+        Err(error) => panic!("create non-UTF8 fixture directory: {error}"),
+    }
 
     let mut marker_name = invalid_name;
     marker_name.push(crate::safety::PROTECTED_PATH_MARKER);
