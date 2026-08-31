@@ -89,6 +89,30 @@ fn ensure_onedrive_stop_authority(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OneDriveQuitWaitDecision {
+    Stopped,
+    ContinueWaiting,
+    RequestGracefulTerm,
+    TimedOut,
+}
+
+fn onedrive_quit_wait_decision(
+    current_runtime_observed: bool,
+    deadline_reached: bool,
+    graceful_term_requested: bool,
+) -> OneDriveQuitWaitDecision {
+    if !current_runtime_observed {
+        OneDriveQuitWaitDecision::Stopped
+    } else if !deadline_reached {
+        OneDriveQuitWaitDecision::ContinueWaiting
+    } else if graceful_term_requested {
+        OneDriveQuitWaitDecision::TimedOut
+    } else {
+        OneDriveQuitWaitDecision::RequestGracefulTerm
+    }
+}
+
 /// Request Finder to cancel its active copy/materialization dialog without touching any provider
 /// daemon, cloud object, or source file. The fixed AppleScript sends only Escape; it accepts no
 /// user-provided script, path, or process identifier.
@@ -325,16 +349,21 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
         loop {
             let current_runtime_observed = require_primary_runtime_observation(CloudProvider::Onedrive)?;
             ensure_onedrive_stop_authority(primary_runtime_observed, current_runtime_observed)?;
-            if !current_runtime_observed {
-                break;
-            }
-            if Instant::now() >= deadline {
-                if graceful_term_requested {
+            match onedrive_quit_wait_decision(
+                current_runtime_observed,
+                Instant::now() >= deadline,
+                graceful_term_requested,
+            ) {
+                OneDriveQuitWaitDecision::Stopped => break,
+                OneDriveQuitWaitDecision::ContinueWaiting => {}
+                OneDriveQuitWaitDecision::RequestGracefulTerm => {
+                    request_graceful_term("OneDrive")?;
+                    graceful_term_requested = true;
+                    deadline = Instant::now() + Duration::from_secs(10);
+                }
+                OneDriveQuitWaitDecision::TimedOut => {
                     return Err("provider-recovery-quit-timeout".into());
                 }
-                request_graceful_term("OneDrive")?;
-                graceful_term_requested = true;
-                deadline = Instant::now() + Duration::from_secs(10);
             }
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -579,6 +608,14 @@ mod tests {
         );
         assert!(ensure_onedrive_stop_authority(false, false).is_ok());
         assert!(ensure_onedrive_stop_authority(true, true).is_ok());
+    }
+
+    #[test]
+    fn onedrive_unpin_timeout_never_escalates_name_only_runtime_evidence() {
+        assert_eq!(
+            onedrive_quit_wait_decision(true, true, false),
+            OneDriveQuitWaitDecision::TimedOut
+        );
     }
 
     #[cfg(all(target_os = "macos", not(coverage)))]
