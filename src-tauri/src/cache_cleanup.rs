@@ -36,6 +36,9 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 10] = [
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
+// Large package caches need longer than the interactive worktree probe while retaining the same
+// recursive open-handle evidence and fail-closed timeout behavior.
+const CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS: u64 = 30_000;
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -280,7 +283,7 @@ pub(crate) fn clean_cache_contents_inner(
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS,
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );
