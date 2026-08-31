@@ -33,6 +33,7 @@ const MAX_RATIONALE_BYTES: usize = 1_000;
 const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
 const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
+const GITHUB_SEARCH_INTERVAL_MS: u64 = 2_100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -984,57 +985,42 @@ pub fn github_pull_request_commit_membership(
         .into_iter()
         .collect::<Vec<_>>();
     let mut membership = PullRequestCommitMembership::default();
-    const SEARCH_CONCURRENCY: usize = 8;
     let mut discovered = Vec::new();
-    for chunk in heads.chunks(SEARCH_CONCURRENCY) {
+    for (index, head) in heads.iter().enumerate() {
         let timeout_ms = remaining();
         if timeout_ms == 0 {
             return Err("github-pr-commit-search-timeout".into());
         }
-        let results = thread::scope(|scope| {
-            let workers = chunk
-                .iter()
-                .map(|head| {
-                    let args = vec![
-                        OsString::from("search"),
-                        OsString::from("prs"),
-                        OsString::from(head),
-                        OsString::from("--repo"),
-                        OsString::from(repository),
-                        OsString::from("--limit"),
-                        OsString::from("101"),
-                        OsString::from("--json"),
-                        OsString::from("number,state,repository"),
-                    ];
-                    scope.spawn(move || {
-                        run_bounded_command("gh", &args, repository_root, timeout_ms)
-                            .map(|result| (head.clone(), result))
-                    })
-                })
-                .collect::<Vec<_>>();
-            workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .map_err(|_| "github-pr-commit-search-worker-failed".to_string())
-                        .and_then(|result| result)
-                })
-                .collect::<Result<Vec<_>, String>>()
-        })?;
-        for (head, result) in results {
-            if result.timed_out {
+        let args = [
+            OsString::from("search"),
+            OsString::from("prs"),
+            OsString::from(head),
+            OsString::from("--repo"),
+            OsString::from(repository),
+            OsString::from("--limit"),
+            OsString::from("101"),
+            OsString::from("--json"),
+            OsString::from("number,state,repository"),
+        ];
+        let result = run_bounded_command("gh", &args, repository_root, timeout_ms)?;
+        if result.timed_out {
+            return Err("github-pr-commit-search-timeout".into());
+        }
+        if result.stdout_truncated || result.stderr_truncated {
+            return Err("github-pr-commit-search-output-truncated".into());
+        }
+        if result.status_code != Some(0) {
+            return Err("github-pr-commit-search-failed".into());
+        }
+        for candidate in parse_pull_request_search(&result.stdout, repository)? {
+            discovered.push((head.clone(), candidate));
+        }
+        if index + 1 < heads.len() {
+            let delay_ms = remaining().min(GITHUB_SEARCH_INTERVAL_MS);
+            if delay_ms < GITHUB_SEARCH_INTERVAL_MS {
                 return Err("github-pr-commit-search-timeout".into());
             }
-            if result.stdout_truncated || result.stderr_truncated {
-                return Err("github-pr-commit-search-output-truncated".into());
-            }
-            if result.status_code != Some(0) {
-                return Err("github-pr-commit-search-failed".into());
-            }
-            for candidate in parse_pull_request_search(&result.stdout, repository)? {
-                discovered.push((head.clone(), candidate));
-            }
+            thread::sleep(Duration::from_millis(delay_ms));
         }
     }
     let mut pull_requests = BTreeMap::<(u64, bool), BTreeSet<String>>::new();
