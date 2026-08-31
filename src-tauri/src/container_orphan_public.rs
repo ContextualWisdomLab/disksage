@@ -4,6 +4,7 @@ use crate::container_orphan_reclaim::{
 
 const FALLBACK_ISSUE: &str = "container-runtime-evidence-unavailable";
 const INDETERMINATE_PRUNE_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
+const MUTABLE_VOLUME_IDENTITY: &str = "container-volume-identity-not-immutable";
 
 fn stable_issue(raw: &str) -> String {
     let token = raw.split(':').next().unwrap_or_default();
@@ -35,13 +36,33 @@ fn public_command_shape(category: OrphanCategory, has_candidates: bool) -> Vec<S
     command
 }
 
+/// Rejects public mutation categories whose runtime deletion target cannot be bound to immutable
+/// object identity. Docker/Podman volume deletion is name-addressed; a volume can be deleted and
+/// recreated under the same name after the final audit but before `volume rm` executes. Until the
+/// runtime provides conditional deletion bound to the audited object identity, volume evidence is
+/// intentionally read-only.
+pub fn ensure_mutation_category_authority(category: OrphanCategory) -> Result<(), String> {
+    if category == OrphanCategory::Volume {
+        Err(MUTABLE_VOLUME_IDENTITY.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Removes runtime stderr, paths, socket details, local machine names, and record fragments from
-/// the machine-readable public plan while retaining stable fail-closed issue categories.
+/// the machine-readable public plan while retaining stable fail-closed issue categories. A volume
+/// plan remains observable but never publishes destructive authority because the runtime delete is
+/// bound only to a reusable volume name rather than immutable object identity.
 pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
     plan.runtime.detail_issue = plan.runtime.detail_issue.as_deref().map(stable_issue);
     plan.runtime.display_name = plan.runtime.kind.as_str().to_string();
     for category in &mut plan.categories {
         category.issue = category.issue.as_deref().map(stable_issue);
+        if ensure_mutation_category_authority(category.category).is_err() {
+            category.prune_command = None;
+            category.approval_phrase = None;
+            continue;
+        }
         let has_candidates = category
             .evidence
             .as_ref()
@@ -213,6 +234,22 @@ mod tests {
                 "--force"
             ]
         );
+    }
+
+    #[test]
+    fn public_mutation_policy_rejects_name_bound_volumes() {
+        assert_eq!(
+            ensure_mutation_category_authority(OrphanCategory::Volume).unwrap_err(),
+            MUTABLE_VOLUME_IDENTITY
+        );
+        for category in [
+            OrphanCategory::Container,
+            OrphanCategory::Image,
+            OrphanCategory::Network,
+            OrphanCategory::BuildCache,
+        ] {
+            assert!(ensure_mutation_category_authority(category).is_ok());
+        }
     }
 
     #[cfg(unix)]
