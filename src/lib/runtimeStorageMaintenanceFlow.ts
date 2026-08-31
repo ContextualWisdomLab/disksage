@@ -4,6 +4,22 @@ export interface RuntimeStorageMutationOutcome<TExecution, TPlan> {
   refreshFailed: boolean;
 }
 
+export interface RuntimeStorageRecoveryOutcome {
+  executed: boolean;
+  guest_reachable_after_recovery: boolean;
+}
+
+/**
+ * A completed restart is an execution receipt, not proof that the guest recovered.
+ * Customer-facing success requires both the completed mutation and a fresh positive
+ * reachability observation after the restart.
+ */
+export function runtimeStorageRecoverySucceeded(
+  execution: RuntimeStorageRecoveryOutcome,
+): boolean {
+  return execution.executed && execution.guest_reachable_after_recovery;
+}
+
 /**
  * Preserve a completed maintenance receipt even when the read-only refresh fails.
  * Approval state is invalidated immediately after mutation success, before any
