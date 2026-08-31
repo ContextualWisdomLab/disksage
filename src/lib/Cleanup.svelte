@@ -2,7 +2,10 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
-  import { runtimeStorageRecoverySucceeded } from "./runtimeStorageMaintenanceFlow";
+  import {
+    executeRuntimeStorageMutation,
+    runtimeStorageRecoverySucceeded,
+  } from "./runtimeStorageMaintenanceFlow";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -102,6 +105,11 @@
       && !runtimeStorageBusy;
   }
 
+  function invalidateRuntimeStorageApproval() {
+    runtimeStoragePhrase = {};
+    runtimeStorageRationale = {};
+  }
+
   async function trimRuntimeStorage(plan: api.RuntimeStoragePlan) {
     if (!runtimeStorageReady(plan) || !plan.exact_approval_phrase) return;
     const okay = await confirm(
@@ -112,14 +120,20 @@
     runtimeStorageBusy = true;
     runtimeStorageError = "";
     try {
-      runtimeStorageExecutions[plan.runtime] = await api.executeRuntimeStorageTrim(
-        plan.runtime,
-        runtimeStoragePhrase[plan.runtime].trim(),
-        runtimeStorageRationale[plan.runtime].trim(),
+      const outcome = await executeRuntimeStorageMutation(
+        () => api.executeRuntimeStorageTrim(
+          plan.runtime,
+          runtimeStoragePhrase[plan.runtime].trim(),
+          runtimeStorageRationale[plan.runtime].trim(),
+        ),
+        invalidateRuntimeStorageApproval,
+        api.inspectRuntimeStorage,
       );
-      runtimeStoragePhrase = {};
-      runtimeStorageRationale = {};
-      runtimeStoragePlans = await api.inspectRuntimeStorage();
+      runtimeStorageExecutions[plan.runtime] = outcome.execution;
+      if (outcome.plans) runtimeStoragePlans = outcome.plans;
+      if (outcome.refreshFailed) {
+        runtimeStorageError = "저장 공간 정리는 실행했지만 최신 상태를 다시 확인하지 못했습니다. 상태를 새로 확인하세요.";
+      }
     } catch {
       runtimeStorageError = "저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
@@ -137,14 +151,20 @@
     runtimeStorageBusy = true;
     runtimeStorageError = "";
     try {
-      runtimeStorageRecoveryExecutions[plan.runtime] = await api.executeRuntimeStorageRecovery(
-        plan.runtime,
-        runtimeStoragePhrase[plan.runtime].trim(),
-        runtimeStorageRationale[plan.runtime].trim(),
+      const outcome = await executeRuntimeStorageMutation(
+        () => api.executeRuntimeStorageRecovery(
+          plan.runtime,
+          runtimeStoragePhrase[plan.runtime].trim(),
+          runtimeStorageRationale[plan.runtime].trim(),
+        ),
+        invalidateRuntimeStorageApproval,
+        api.inspectRuntimeStorage,
       );
-      runtimeStoragePhrase = {};
-      runtimeStorageRationale = {};
-      runtimeStoragePlans = await api.inspectRuntimeStorage();
+      runtimeStorageRecoveryExecutions[plan.runtime] = outcome.execution;
+      if (outcome.plans) runtimeStoragePlans = outcome.plans;
+      if (outcome.refreshFailed) {
+        runtimeStorageError = "연결 재시작은 실행했지만 최신 게스트 상태를 다시 확인하지 못했습니다. 상태를 새로 확인하세요.";
+      }
     } catch {
       runtimeStorageError = "연결을 복구하지 못했습니다. 실행 중인 작업을 확인한 뒤 다시 시도하세요.";
     } finally {
