@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -44,6 +45,38 @@ struct PodmanImageRecord {
     containers: u64,
     #[serde(rename = "Size")]
     size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct PodmanVolumeRecord {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Mountpoint")]
+    mountpoint: String,
+    #[serde(rename = "MountCount")]
+    mount_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PodmanEmptyVolumePlan {
+    pub schema_version: u32,
+    pub ontology_class: &'static str,
+    pub candidate_count: usize,
+    pub candidate_set_sha256: String,
+    pub exact_approval_phrase: Option<String>,
+    pub evidence_complete: bool,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PodmanEmptyVolumeExecution {
+    pub schema_version: u32,
+    pub ontology_class: &'static str,
+    pub candidate_count: usize,
+    pub candidate_set_sha256: String,
+    pub executed: bool,
+    pub status_code: i32,
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,7 +208,7 @@ fn lower_hex(bytes: &[u8]) -> String {
 fn exact_candidates(output: &str) -> Result<Vec<ExactCandidate>, String> {
     let records: Vec<PodmanImageRecord> =
         serde_json::from_str(output).map_err(|_| "invalid-podman-images-json".to_string())?;
-    let mut candidates = Vec::new();
+    let mut images: BTreeMap<String, (Vec<String>, u64, bool)> = BTreeMap::new();
     for mut record in records {
         if record.id.len() != 64
             || !record
@@ -185,25 +218,31 @@ fn exact_candidates(output: &str) -> Result<Vec<ExactCandidate>, String> {
         {
             return Err("podman-images-invalid-id".to_string());
         }
-        if record.containers > 0 {
-            continue;
-        }
         let mut tags = record.repo_tags.take().unwrap_or_default();
         tags.extend(record.repo_digests.take().unwrap_or_default());
         tags.extend(record.names.take().unwrap_or_default());
         tags.sort();
         tags.dedup();
-        candidates.push(ExactCandidate {
-            id: record.id,
+        let image = images
+            .entry(record.id)
+            .or_insert_with(|| (Vec::new(), record.size_bytes, false));
+        if image.1 != record.size_bytes {
+            return Err("podman-images-duplicate-size-mismatch".to_string());
+        }
+        image.0.extend(tags);
+        image.0.sort();
+        image.0.dedup();
+        image.2 |= record.containers > 0;
+    }
+    Ok(images
+        .into_iter()
+        .filter(|(_, image)| !image.2)
+        .map(|(id, (tags, size_bytes, _))| ExactCandidate {
+            id,
             tags,
-            size_bytes: record.size_bytes,
-        });
-    }
-    candidates.sort_by(|left, right| left.id.cmp(&right.id));
-    if candidates.windows(2).any(|pair| pair[0].id == pair[1].id) {
-        return Err("podman-images-duplicate-id".to_string());
-    }
-    Ok(candidates)
+            size_bytes,
+        })
+        .collect())
 }
 
 fn candidate_set_sha256(candidates: &[ExactCandidate]) -> String {
@@ -220,7 +259,188 @@ fn candidate_set_sha256(candidates: &[ExactCandidate]) -> String {
     lower_hex(&hasher.finalize())
 }
 
-fn list_exact_candidates(podman_bin: &Path, requested_machine: &str) -> Result<Vec<ExactCandidate>, String> {
+fn valid_volume_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && !value.starts_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_volume_mountpoint(value: &str) -> bool {
+    value.starts_with("/var/home/core/.local/share/containers/storage/volumes/")
+        && value.ends_with("/_data")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.'))
+}
+
+fn volume_set_sha256(volumes: &[PodmanVolumeRecord]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.podman-empty-dangling-volumes.v1");
+    for volume in volumes {
+        hash_frame(&mut hasher, volume.name.as_bytes());
+        hash_frame(&mut hasher, volume.mountpoint.as_bytes());
+    }
+    lower_hex(&hasher.finalize())
+}
+
+fn list_dangling_volumes(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<Vec<PodmanVolumeRecord>, String> {
+    let output = run_text(
+        podman_bin,
+        &[
+            "--connection",
+            requested_machine,
+            "volume",
+            "ls",
+            "--filter",
+            "dangling=true",
+            "--format",
+            "json",
+        ],
+        PODMAN_PRUNE_TIMEOUT,
+        "podman-dangling-volumes",
+    )?;
+    let mut volumes: Vec<PodmanVolumeRecord> =
+        serde_json::from_str(&output).map_err(|_| "invalid-podman-volumes-json".to_string())?;
+    if volumes.iter().any(|volume| {
+        !valid_volume_component(&volume.name)
+            || !valid_volume_mountpoint(&volume.mountpoint)
+            || volume.mountpoint
+                != format!(
+                    "/var/home/core/.local/share/containers/storage/volumes/{}/_data",
+                    volume.name
+                )
+            || volume.mount_count != 0
+    }) {
+        return Err("podman-volume-evidence-invalid".into());
+    }
+    volumes.sort_by(|left, right| left.name.cmp(&right.name));
+    volumes.dedup_by(|left, right| left.name == right.name && left.mountpoint == right.mountpoint);
+    Ok(volumes)
+}
+
+fn empty_dangling_volumes(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<Vec<PodmanVolumeRecord>, String> {
+    let volumes = list_dangling_volumes(podman_bin, requested_machine)?;
+    let executable = podman_bin.to_path_buf();
+    let machine = requested_machine.to_string();
+    let mut empty = crate::stale_git_clone::bounded_parallel_map(
+        volumes
+            .into_iter()
+            .map(|volume| std::path::PathBuf::from(volume.name))
+            .collect(),
+        8,
+        move |name| {
+            let name = name.to_string_lossy().into_owned();
+            let mountpoint =
+                format!("/var/home/core/.local/share/containers/storage/volumes/{name}/_data");
+            let command = format!("sudo find {mountpoint} -mindepth 1 -print -quit");
+            let output = run_text(
+                &executable,
+                &["machine", "ssh", &machine, &command],
+                PODMAN_PRUNE_TIMEOUT,
+                "podman-volume-empty-probe",
+            );
+            output
+                .ok()
+                .filter(|value| value.trim().is_empty())
+                .map(|_| PodmanVolumeRecord {
+                    name,
+                    mountpoint,
+                    mount_count: 0,
+                })
+        },
+    )
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    empty.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(empty)
+}
+
+pub fn plan_empty_dangling_volumes(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<PodmanEmptyVolumePlan, String> {
+    if !valid_machine_name(requested_machine) {
+        return Err("unsafe-requested-machine-name".into());
+    }
+    let candidates = empty_dangling_volumes(podman_bin, requested_machine)?;
+    let fingerprint = volume_set_sha256(&candidates);
+    Ok(PodmanEmptyVolumePlan {
+        schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
+        ontology_class: "https://disksage.app/ontology#ContainerVolume",
+        candidate_count: candidates.len(),
+        exact_approval_phrase: (!candidates.is_empty())
+            .then(|| format!("DiskSage Podman empty dangling volume prune 승인 {fingerprint}")),
+        candidate_set_sha256: fingerprint,
+        evidence_complete: true,
+        issues: Vec::new(),
+    })
+}
+
+pub fn prune_empty_dangling_volumes(
+    podman_bin: &Path,
+    requested_machine: &str,
+    confirmation_phrase: &str,
+    rationale: &str,
+) -> Result<PodmanEmptyVolumeExecution, String> {
+    if rationale.trim().is_empty() || rationale != rationale.trim() {
+        return Err("podman-volume-prune-rationale-invalid".into());
+    }
+    let approved = empty_dangling_volumes(podman_bin, requested_machine)?;
+    let fingerprint = volume_set_sha256(&approved);
+    let expected = format!("DiskSage Podman empty dangling volume prune 승인 {fingerprint}");
+    if approved.is_empty() || confirmation_phrase != expected {
+        return Err("podman-volume-prune-confirmation-mismatch".into());
+    }
+    let revalidated = empty_dangling_volumes(podman_bin, requested_machine)?;
+    if revalidated != approved || volume_set_sha256(&revalidated) != fingerprint {
+        return Err("podman-volume-prune-candidate-set-changed".into());
+    }
+    let mut args = vec![
+        "--connection".to_string(),
+        requested_machine.to_string(),
+        "volume".to_string(),
+        "rm".to_string(),
+    ];
+    args.extend(revalidated.iter().map(|volume| volume.name.clone()));
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run_bounded(
+        podman_bin,
+        &refs,
+        PODMAN_PRUNE_TIMEOUT,
+        "podman-remove-approved-empty-volumes",
+    )?;
+    Ok(PodmanEmptyVolumeExecution {
+        schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
+        ontology_class: "https://disksage.app/ontology#ContainerVolume",
+        candidate_count: revalidated.len(),
+        candidate_set_sha256: fingerprint,
+        executed: output.status_code == 0,
+        status_code: output.status_code,
+        rationale: rationale.to_string(),
+    })
+}
+
+fn dangling_candidates(candidates: &[ExactCandidate]) -> Vec<&ExactCandidate> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.tags.is_empty())
+        .collect()
+}
+
+fn list_exact_candidates(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<Vec<ExactCandidate>, String> {
     let output = run_text(
         podman_bin,
         &[
@@ -278,10 +498,8 @@ pub fn prune_dangling_images(
     }
 
     let approved_candidates = list_exact_candidates(podman_bin, requested_machine)?;
-    if approved_candidates.is_empty()
-        || approved_candidates.len() > MAX_EXACT_DELETE_IDS
-        || approved_candidates.iter().any(|candidate| !candidate.tags.is_empty())
-    {
+    let approved_dangling = dangling_candidates(&approved_candidates);
+    if approved_dangling.is_empty() || approved_dangling.len() > MAX_EXACT_DELETE_IDS {
         return Err("podman-prune-tagged-empty-or-oversized-candidate-set".into());
     }
     let approved_sha = candidate_set_sha256(&approved_candidates);
@@ -293,10 +511,10 @@ pub fn prune_dangling_images(
     let revalidated_candidates = list_exact_candidates(podman_bin, requested_machine)?;
     if revalidated_candidates != approved_candidates
         || candidate_set_sha256(&revalidated_candidates) != approved_sha
-        || revalidated_candidates.iter().any(|candidate| !candidate.tags.is_empty())
     {
         return Err("podman-prune-candidate-set-changed".into());
     }
+    let revalidated_dangling = dangling_candidates(&revalidated_candidates);
 
     let before_available_bytes = std::env::current_dir()
         .ok()
@@ -310,7 +528,11 @@ pub fn prune_dangling_images(
         "rm".to_string(),
         "--no-prune".to_string(),
     ];
-    remove_args.extend(revalidated_candidates.iter().map(|candidate| candidate.id.clone()));
+    remove_args.extend(
+        revalidated_dangling
+            .iter()
+            .map(|candidate| candidate.id.clone()),
+    );
     let remove_arg_refs = remove_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = run_bounded(
         podman_bin,
@@ -354,4 +576,63 @@ pub fn prune_dangling_images(
         observed_available_gain_bytes,
         rationale: rationale.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_candidates_merge_alias_records_and_keep_referenced_images() {
+        let id = "b".repeat(64);
+        let output = format!(
+            r#"[{{"Id":"{id}","RepoTags":["one:latest"],"Containers":0,"Size":200}},{{"Id":"{id}","RepoTags":["two:latest"],"Containers":1,"Size":200}}]"#
+        );
+        assert!(exact_candidates(&output).unwrap().is_empty());
+
+        let mismatch = format!(
+            r#"[{{"Id":"{id}","RepoTags":[],"Containers":0,"Size":200}},{{"Id":"{id}","RepoTags":[],"Containers":0,"Size":201}}]"#
+        );
+        assert_eq!(
+            exact_candidates(&mismatch).unwrap_err(),
+            "podman-images-duplicate-size-mismatch"
+        );
+    }
+
+    #[test]
+    fn dangling_candidates_exclude_tagged_unused_images() {
+        let candidates = vec![
+            ExactCandidate {
+                id: "a".repeat(64),
+                tags: Vec::new(),
+                size_bytes: 1,
+            },
+            ExactCandidate {
+                id: "b".repeat(64),
+                tags: vec!["keep:latest".into()],
+                size_bytes: 2,
+            },
+        ];
+        let dangling = dangling_candidates(&candidates);
+        assert_eq!(dangling.len(), 1);
+        assert_eq!(dangling[0].id, "a".repeat(64));
+    }
+
+    #[test]
+    fn volume_identity_binds_name_to_expected_store_mountpoint() {
+        let volume = PodmanVolumeRecord {
+            name: "project_data".into(),
+            mountpoint: "/var/home/core/.local/share/containers/storage/volumes/project_data/_data"
+                .into(),
+            mount_count: 0,
+        };
+        assert!(valid_volume_component(&volume.name));
+        assert!(valid_volume_mountpoint(&volume.mountpoint));
+        assert_eq!(
+            volume_set_sha256(&[volume.clone()]),
+            volume_set_sha256(&[volume])
+        );
+        assert!(!valid_volume_component("../escape"));
+        assert!(!valid_volume_mountpoint("/tmp/project_data/_data"));
+    }
 }

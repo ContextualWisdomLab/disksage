@@ -4,6 +4,9 @@
 // coverage 빌드에서는 GUI 부트스트랩을 컴파일하지 않는다 (#[coverage(off)]는 아직 unstable)
 #[cfg(not(coverage))]
 fn main() {
+    if disksage_lib::cloud_local_eviction::run_native_icloud_eviction_helper_if_requested() {
+        return;
+    }
     disksage_lib::run()
 }
 

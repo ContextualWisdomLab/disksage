@@ -24,6 +24,18 @@ fn unknown_argument_does_not_echo_a_sensitive_value() {
     assert!(!stderr.contains(sensitive_value));
 }
 
+#[test]
+fn execute_dangling_requires_confirmation_before_calling_podman() {
+    let output = command()
+        .args(["--execute-dangling", "--rationale", "reviewed"])
+        .output()
+        .expect("the Podman reclaim planner binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
+    assert!(stderr.contains("requires --confirmation-phrase"));
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_argument_is_rejected_without_panicking() {

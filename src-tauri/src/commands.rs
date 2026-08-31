@@ -14,17 +14,16 @@ use crate::scanner;
 use crate::scanner::ScanResult;
 
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
+use crate::dev_artifacts;
 use crate::organize;
 use crate::safety;
-use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
-    organization_lineage,
-    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
-    provider_recovery, provider_sync, rules, orphan,
+    cloud_review, cloud_transfer, colima_reclaim, dupes, git_worktree, icloud_sync_health,
+    organization_lineage, orphan, podman_reclaim, provider_api_client, provider_api_write,
+    provider_capacity, provider_client_runtime, provider_evidence, provider_global_sync,
+    provider_oauth, provider_recovery, provider_sync, rules,
 };
 
 #[cfg(not(coverage))]
@@ -177,7 +176,8 @@ pub fn clean_dev_artifacts_inner(
                 .error
                 .starts_with("development artifact changed or its bounded manifest is incomplete")
             {
-                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
+                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요"
+                    .into()
             } else {
                 result.error
             },
@@ -496,6 +496,167 @@ pub fn inspect_podman_reclaim() -> podman_reclaim::PodmanReclaimPlan {
         &podman_binary(),
         podman_reclaim::DEFAULT_PODMAN_MACHINE,
         podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+    )
+}
+
+#[cfg(not(coverage))]
+fn colima_binary(home: &Path) -> PathBuf {
+    [
+        PathBuf::from("/opt/homebrew/bin/colima"),
+        PathBuf::from("/usr/local/bin/colima"),
+        home.join(".local/bin/colima"),
+    ]
+    .into_iter()
+    .find(|path| {
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+    })
+    .unwrap_or_else(|| PathBuf::from("colima"))
+}
+
+#[cfg(not(coverage))]
+fn colima_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(std::env::var_os("COLIMA_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or(
+            app.path()
+                .cache_dir()
+                .map_err(|_| "cache-directory-unavailable")?
+                .join("colima"),
+        ))
+}
+
+/// Read-only Colima profile, VM-state, configured-disk, and cache-allocation evidence.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_colima_reclaim(app: AppHandle) -> Result<colima_reclaim::ColimaReclaimPlan, String> {
+    let home = resolve_home(&app)?;
+    let cache_root = colima_cache_root(&app)?;
+    Ok(colima_reclaim::plan_colima_reclaim(
+        &colima_binary(&home),
+        &cache_root,
+        Duration::from_secs(10),
+    ))
+}
+
+/// Freshly re-plans and invokes Colima's native downloaded-asset cache prune only.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_colima_cache_prune(
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaCachePruneExecution, String> {
+    let home = resolve_home(&app)?;
+    colima_reclaim::execute_colima_cache_prune(
+        &colima_binary(&home),
+        &colima_cache_root(&app)?,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
+    )
+}
+
+/// Read-only exact dangling-image evidence for one running Colima Docker profile.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_colima_dangling_images(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaDanglingImagePlan, String> {
+    let home = resolve_home(&app)?;
+    Ok(colima_reclaim::plan_colima_dangling_images(
+        &colima_binary(&home),
+        &profile,
+        Duration::from_secs(10),
+    ))
+}
+
+/// Freshly revalidates and removes only the exact fingerprinted dangling image IDs.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_colima_dangling_images(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaDanglingImageExecution, String> {
+    let home = resolve_home(&app)?;
+    colima_reclaim::execute_colima_dangling_images(
+        &colima_binary(&home),
+        &profile,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
+    )
+}
+
+/// Read-only dangling and privileged-empty-content evidence for Colima Docker volumes.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_colima_empty_volumes(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaEmptyVolumePlan, String> {
+    let home = resolve_home(&app)?;
+    Ok(colima_reclaim::plan_colima_empty_volumes(
+        &colima_binary(&home),
+        &profile,
+        Duration::from_secs(10),
+    ))
+}
+
+/// Freshly revalidates and removes only exact dangling volumes whose content is still empty.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_colima_empty_volumes(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaEmptyVolumeExecution, String> {
+    let home = resolve_home(&app)?;
+    colima_reclaim::execute_colima_empty_volumes(
+        &colima_binary(&home),
+        &profile,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
+    )
+}
+
+/// Read-only Colima guest-TRIM eligibility and native host-compaction capability evidence.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_colima_guest_trim(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaGuestTrimPlan, String> {
+    let home = resolve_home(&app)?;
+    Ok(colima_reclaim::plan_colima_guest_trim(
+        &colima_binary(&home),
+        &profile,
+        Duration::from_secs(10),
+    ))
+}
+
+/// Runs only guest fstrim after fresh exact approval and records host APFS evidence.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_colima_guest_trim(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaGuestTrimExecution, String> {
+    let home = resolve_home(&app)?;
+    colima_reclaim::execute_colima_guest_trim(
+        &colima_binary(&home),
+        &profile,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
     )
 }
 
@@ -1046,6 +1207,46 @@ pub async fn remove_stale_git_worktrees(
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
 }
 
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_stale_git_clone(
+    repository_root: String,
+    open_age_days: u64,
+) -> Result<crate::stale_git_clone::StaleGitClonePlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::stale_git_clone::plan_stale_git_clone(
+            Path::new(&repository_root),
+            open_age_days,
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "stale-git-clone-plan-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn remove_stale_git_clone(
+    repository_root: String,
+    open_age_days: u64,
+    approved_plan_fingerprint: String,
+    confirmation_exact_approval_phrase: String,
+    rationale: String,
+) -> Result<crate::stale_git_clone::StaleGitCloneRemoval, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::stale_git_clone::remove_stale_git_clone(
+            Path::new(&repository_root),
+            open_age_days,
+            &approved_plan_fingerprint,
+            &confirmation_exact_approval_phrase,
+            &rationale,
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "stale-git-clone-remove-task-failed".to_string())?
+}
+
 /// Build a bounded, path-free ontology plan for uninstalled macOS application data.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
@@ -1351,9 +1552,13 @@ fn attach_pre_copy_evidence_cohort(
         });
     let cohort = cloud::compare_pre_copy_evidence(vec![local, runtime, health]);
     if cohort.complete {
-        report.notices.push("pre-copy-evidence-cohort-complete".into());
+        report
+            .notices
+            .push("pre-copy-evidence-cohort-complete".into());
     } else {
-        report.notices.push("pre-copy-evidence-cohort-blocked".into());
+        report
+            .notices
+            .push("pre-copy-evidence-cohort-blocked".into());
         report.notices.extend(cohort.blockers.iter().cloned());
     }
     report.pre_copy_evidence = Some(cohort);
@@ -1457,11 +1662,14 @@ fn cloud_plan_for_inputs(
         )
     });
     if native_client_mode {
-        report.notices.push("native-client-copy-capacity-unverified".into());
+        report
+            .notices
+            .push("native-client-copy-capacity-unverified".into());
     }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        let health =
+            icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
         if let Some(health) = health.as_ref() {
             if !persist_icloud_health_evidence(app, health) {
                 report
@@ -1763,8 +1971,7 @@ fn create_cloud_candidate_receipt(
     if !adopt_existing {
         require_native_copy_not_cancelled(cancel)?;
     }
-    let planning =
-        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
         selected,
         report,
@@ -1840,13 +2047,12 @@ fn create_cloud_candidate_receipt(
             .capacity
             .as_ref()
             .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-        let native_client_mode =
-            provider_capacity::native_personal_client_copy_capacity_exception(
-                selected.provider,
-                selected.account_scope,
-                runtime.copy_prerequisite_met,
-                &snapshot.snapshot,
-            );
+        let native_client_mode = provider_capacity::native_personal_client_copy_capacity_exception(
+            selected.provider,
+            selected.account_scope,
+            runtime.copy_prerequisite_met,
+            &snapshot.snapshot,
+        );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
@@ -1909,12 +2115,10 @@ fn create_cloud_candidate_receipt(
             (None, None)
         }
     };
-    let goal_status = cloud_adr::read_goal_status(
-        &app_data_dir.join("cloud-goals"),
-        &receipt.receipt_id,
-    )
-    .ok()
-    .flatten();
+    let goal_status =
+        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
+            .ok()
+            .flatten();
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -1952,12 +2156,9 @@ fn create_cloud_candidate_provider_api_receipt(
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let planning =
-        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
-        selected,
-        report,
-        ..
+        selected, report, ..
     } = planning;
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-api-icloud-unsupported".into());
@@ -2022,7 +2223,8 @@ fn create_cloud_candidate_provider_api_receipt(
         candidate.bytes,
         access_token.as_str(),
     )?;
-    if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    if let Err(error) =
+        cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
     {
         let cleanup = provider_api_write::delete_uploaded_object(
             selected.provider,
@@ -2031,9 +2233,9 @@ fn create_cloud_candidate_provider_api_receipt(
         );
         return Err(match cleanup {
             Ok(()) => error,
-            Err(cleanup_error) => format!(
-                "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
-            ),
+            Err(cleanup_error) => {
+                format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+            }
         });
     }
     let app_data_dir = app
@@ -2051,9 +2253,9 @@ fn create_cloud_candidate_provider_api_receipt(
             );
             return Err(match cleanup {
                 Ok(()) => error,
-                Err(cleanup_error) => format!(
-                    "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
-                ),
+                Err(cleanup_error) => {
+                    format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+                }
             });
         }
     };
@@ -2083,8 +2285,8 @@ fn create_cloud_candidate_provider_api_receipt(
     let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
     let home = resolve_home(app)?;
     let cloud_roots = cloud::discover_cloud_roots(&home);
-    let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
-        .then(|| upload.object_id.clone());
+    let attestation_object_id =
+        (selected.provider == cloud::CloudProvider::GoogleDrive).then(|| upload.object_id.clone());
     match collect_cloud_attestation_for_receipt(
         &receipt,
         attestation_object_id,
@@ -2123,12 +2325,10 @@ fn create_cloud_candidate_provider_api_receipt(
             ));
         }
     }
-    let goal_status = cloud_adr::read_goal_status(
-        &app_data_dir.join("cloud-goals"),
-        &receipt.receipt_id,
-    )
-    .ok()
-    .flatten();
+    let goal_status =
+        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
+            .ok()
+            .flatten();
     Ok(CloudCopyOutput {
         action: "copy-only",
         goal_state,
@@ -3319,10 +3519,16 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(output.receipts_seen, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(
+            output.receipts_seen,
+            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
+        );
         assert_eq!(output.unprocessed_count, 1);
         assert!(output.incomplete_reconciliation);
-        assert_eq!(output.error_count, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(
+            output.error_count,
+            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
+        );
     }
 
     #[cfg(not(coverage))]
@@ -3590,6 +3796,9 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "edge-cache",
                 "uv-cache",
                 "trivy-cache",
+                "playwright-cache",
+                "playwright-mcp-cache",
+                "node-gyp-cache",
             ]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3606,13 +3815,16 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
                 "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
+                "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
+                "playwright-mcp-cache" => bases.home.join("Library/Caches/ms-playwright-mcp"),
+                "node-gyp-cache" => bases.home.join("Library/Caches/node-gyp"),
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 6);
+        assert_eq!(results.len(), 9);
         assert!(results.iter().all(|result| result.ok));
     }
 
@@ -3630,7 +3842,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .as_millis() as u64;
         let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
         assert_eq!(observed.len(), 1);
-        fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
+        fs::write(
+            artifact.join("payload.bin"),
+            b"recreated-with-different-size",
+        )
+        .unwrap();
         let results = clean_dev_artifacts_inner(
             &observed,
             tmp.path(),

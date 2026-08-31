@@ -164,7 +164,7 @@ pub fn evidence_from_icloud_snapshot(
 
 const FILE_PROVIDER_CTL_EVALUATE: &str = "fileproviderctl:evaluate";
 const FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES: usize = 4 * 1024;
-pub const FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING: u64 = 1 << 6;
+pub const FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING: u64 = 1 << 29;
 
 /// Content and policy facts returned by one bounded `fileproviderctl evaluate` observation.
 ///
@@ -1384,6 +1384,14 @@ mod tests {
         assert!(!status
             .item_identifier_fingerprint
             .contains("opaque-provider-item"));
+
+        let onedrive = uploaded_file_provider_output()
+            .replace("capabilities = 805306495", "capabilities = 536870975");
+        assert!(
+            parse_file_providerctl_item_status(&onedrive, 42)
+                .unwrap()
+                .allows_eviction
+        );
 
         let no_eviction =
             uploaded_file_provider_output().replace("capabilities = 805306495", "capabilities = 0");

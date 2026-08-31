@@ -90,6 +90,7 @@ pub struct GitWorktreeActiveUseEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitWorktreeAuditEntry {
+    pub ontology_class: String,
     pub path: String,
     pub path_fingerprint: String,
     pub head: String,
@@ -282,14 +283,14 @@ impl RawWorktreeBuilder {
     }
 }
 
-struct CommandResult {
-    child_pid: u32,
-    status_code: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    timed_out: bool,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
+pub(crate) struct CommandResult {
+    pub(crate) child_pid: u32,
+    pub(crate) status_code: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) timed_out: bool,
+    pub(crate) stdout_truncated: bool,
+    pub(crate) stderr_truncated: bool,
 }
 
 #[derive(Debug)]
@@ -370,7 +371,7 @@ fn drain_bounded<R: Read + Send + 'static>(mut reader: R) -> thread::JoinHandle<
     })
 }
 
-fn run_bounded_command(
+pub(crate) fn run_bounded_command(
     program: &str,
     args: &[OsString],
     cwd: &Path,
@@ -594,7 +595,11 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
 }
 
-fn size_evidence(path: &Path, max_entries: u64, timeout_ms: u64) -> GitWorktreeSizeEvidence {
+pub(crate) fn size_evidence(
+    path: &Path,
+    max_entries: u64,
+    timeout_ms: u64,
+) -> GitWorktreeSizeEvidence {
     let started = Instant::now();
     let mut stack = vec![path.to_path_buf()];
     let mut visited_entries = 0u64;
@@ -1444,6 +1449,7 @@ pub fn audit_git_worktrees(
         }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
+            ontology_class: "https://disksage.app/ontology#GitWorktree".into(),
             path: path_string.clone(),
             path_fingerprint: path_fingerprint(&common_dir_string, &path_string),
             head: raw.head,
@@ -2206,6 +2212,7 @@ mod tests {
         }];
         let reference_fingerprint = retention_reference_set_fingerprint(&references);
         let mut entry = GitWorktreeAuditEntry {
+            ontology_class: "https://disksage.app/ontology#GitWorktree".into(),
             path: "/tmp/secondary".into(),
             path_fingerprint: path_fingerprint(&common_dir, "/tmp/secondary"),
             head: oid('b'),
@@ -2373,7 +2380,11 @@ mod tests {
         fs::create_dir_all(&worktree).unwrap();
         let admin = common_dir.join("worktrees").join("linked");
         fs::create_dir_all(&admin).unwrap();
-        fs::write(admin.join("gitdir"), format!("{}/.git\n", worktree.display())).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}/.git\n", worktree.display()),
+        )
+        .unwrap();
         fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
 
         let (entries, _) =
@@ -2519,6 +2530,7 @@ mod tests {
             error: None,
         };
         let mut entry = GitWorktreeAuditEntry {
+            ontology_class: "https://disksage.app/ontology#GitWorktree".into(),
             path: "/tmp/secondary".into(),
             path_fingerprint: "p".repeat(64),
             head: oid('a'),

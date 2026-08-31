@@ -22,6 +22,8 @@ const MAX_ACTIVE_USE_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ACTIVE_PIDS: usize = 64;
 const MAX_RATIONALE_BYTES: usize = 1_024;
 const POST_EVICTION_WAIT_MS: u64 = 5_000;
+const NATIVE_EVICTION_REQUEST_TIMEOUT_MS: u64 = 30_000;
+const NATIVE_EVICTION_HELPER_ENV: &str = "DISKSAGE_NATIVE_ICLOUD_EVICTION_HELPER";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -171,9 +173,6 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservation, String> {
-    if root.provider != CloudProvider::Icloud {
-        return Err("icloud-local-eviction-requires-icloud-root".into());
-    }
     let root_path = Path::new(&root.path);
     if !absolute_without_parent(root_path) || !absolute_without_parent(path) {
         return Err("icloud-local-eviction-path-not-safe-absolute".into());
@@ -733,18 +732,14 @@ fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvide
 fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let started = Instant::now();
     let remaining = deadline.saturating_duration_since(started);
-    let per_probe_budget = std::cmp::min(
-        remaining / 2,
-        Duration::from_millis(ACTIVE_USE_TIMEOUT_MS),
-    );
+    let per_probe_budget =
+        std::cmp::min(remaining / 2, Duration::from_millis(ACTIVE_USE_TIMEOUT_MS));
     // Reserve an independent bounded slice for each source. A recursive `lsof +D` may consume its
     // entire allocation; it must not starve the process-command probe and hide an active PID.
     let lsof = observe_lsof_active_use(path, started + per_probe_budget);
     let ps_started = Instant::now();
-    let process_commands = observe_process_command_use(
-        path,
-        std::cmp::min(deadline, ps_started + per_probe_budget),
-    );
+    let process_commands =
+        observe_process_command_use(path, std::cmp::min(deadline, ps_started + per_probe_budget));
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
@@ -789,9 +784,7 @@ fn observe_active_use_until(_path: &Path, _deadline: Instant) -> ActiveUseEviden
 pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
     observe_active_use_until(
         path,
-        Instant::now() + Duration::from_millis(
-            ACTIVE_USE_TIMEOUT_MS.saturating_mul(2),
-        ),
+        Instant::now() + Duration::from_millis(ACTIVE_USE_TIMEOUT_MS.saturating_mul(2)),
     )
 }
 
@@ -941,6 +934,32 @@ fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalS
     }
 }
 
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn observe_cloud_state(
+    provider: CloudProvider,
+    path: &Path,
+    observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
+    if provider == CloudProvider::Icloud {
+        return observe_icloud_state(path, observed_bytes);
+    }
+    let path = path
+        .to_str()
+        .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
+    let output = crate::provider_sync::file_providerctl_status(path)?;
+    let status = crate::provider_sync::parse_file_providerctl_item_status(&output, observed_bytes)?;
+    Ok(file_provider_icloud_state(true, &status))
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+fn observe_cloud_state(
+    _provider: CloudProvider,
+    _path: &Path,
+    _observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
+    Err("cloud-local-eviction-unsupported-platform".into())
+}
+
 fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
     matches!(
         error,
@@ -964,7 +983,7 @@ pub fn plan_icloud_local_eviction(
     observed_at_ms: u64,
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
-    let state = observe_icloud_state(path, file.logical_bytes)?;
+    let state = observe_cloud_state(root.provider, path, file.logical_bytes)?;
     let active_use = observe_path_active_use(path);
     Ok(build_plan(
         root,
@@ -1067,7 +1086,7 @@ fn validate_approval(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
+fn request_native_icloud_eviction_unbounded(path: &Path) -> Result<(), String> {
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{NSFileManager, NSString, NSURL};
 
@@ -1080,6 +1099,97 @@ fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
             .evictUbiquitousItemAtURL_error(&url)
             .map_err(|error| error.localizedDescription().to_string())
     })
+}
+
+/// Run the private native-eviction child mode before normal CLI or GUI startup.
+///
+/// The parent sends the path over stdin so it is not exposed in the process argument list. The
+/// child exists solely to make Foundation's synchronous XPC call killable on timeout.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn run_native_icloud_eviction_helper_if_requested() -> bool {
+    if std::env::var_os(NATIVE_EVICTION_HELPER_ENV).is_none() {
+        return false;
+    }
+    let mut bytes = Vec::new();
+    let result = std::io::stdin()
+        .take(16 * 1024)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "icloud-native-eviction-helper-input-failed".to_string())
+        .and_then(|_| {
+            if bytes.is_empty() || bytes.contains(&0) {
+                return Err("icloud-native-eviction-helper-path-invalid".into());
+            }
+            use std::os::unix::ffi::OsStringExt;
+            let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+            if !path.is_absolute() {
+                return Err("icloud-native-eviction-helper-path-invalid".into());
+            }
+            request_native_icloud_eviction_unbounded(&path)
+        });
+    if let Err(error) = result {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
+    true
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn run_native_icloud_eviction_helper_if_requested() -> bool {
+    false
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let executable = std::env::current_exe()
+        .map_err(|_| "icloud-native-eviction-helper-executable-unavailable".to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .env(NATIVE_EVICTION_HELPER_ENV, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "icloud-native-eviction-helper-spawn-failed".to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "icloud-native-eviction-helper-input-unavailable".to_string())?
+        .write_all(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| "icloud-native-eviction-helper-input-failed".to_string())?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("icloud-native-eviction-request-failed".into()),
+            Ok(None)
+                if started.elapsed()
+                    >= Duration::from_millis(NATIVE_EVICTION_REQUEST_TIMEOUT_MS) =>
+            {
+                unsafe {
+                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("icloud-native-eviction-request-timeout".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("icloud-native-eviction-helper-wait-failed".into());
+            }
+        }
+    }
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
@@ -1102,6 +1212,25 @@ fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
         path_retained: metadata.is_file() && !metadata.file_type().is_symlink(),
         is_ubiquitous,
         allocated_bytes: allocated_bytes(&metadata),
+    }
+}
+
+fn observe_post_eviction_until_changed(
+    path: &Path,
+    allocated_bytes_before: u64,
+) -> PostEvictionObservation {
+    let started = Instant::now();
+    loop {
+        let observed = observe_post_eviction(path);
+        if !observed.path_retained
+            || !observed.is_ubiquitous
+            || observed.allocated_bytes < allocated_bytes_before
+            || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+                >= POST_EVICTION_WAIT_MS
+        {
+            return observed;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -1204,22 +1333,19 @@ pub fn execute_icloud_local_eviction(
     {
         return Err("icloud-local-eviction-live-plan-changed".into());
     }
-    request_native_icloud_eviction(path)?;
-
-    let started = Instant::now();
-    let post = loop {
-        let observed = observe_post_eviction(path);
-        if !observed.path_retained
-            || !observed.is_ubiquitous
-            || observed.allocated_bytes < approved_plan.allocated_bytes
-            || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                >= POST_EVICTION_WAIT_MS
+    let request = request_native_icloud_eviction(path);
+    let post = observe_post_eviction_until_changed(path, approved_plan.allocated_bytes);
+    let result = build_result(approved_plan, approval, requested_at_ms, post);
+    match request {
+        Ok(()) => Ok(result),
+        Err(error)
+            if error == "icloud-native-eviction-request-timeout"
+                && result.verification_complete =>
         {
-            break observed;
+            Ok(result)
         }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    Ok(build_result(approved_plan, approval, requested_at_ms, post))
+        Err(error) => Err(error),
+    }
 }
 
 /// Prepare the private approval/result directory without allowing an app-data symlink or a
@@ -1616,7 +1742,10 @@ mod tests {
             b"lsof: WARNING: can't stat() /Users/test/Library/Caches/example/nested\n",
             target,
         ));
-        assert!(!lsof_stderr_is_benign(b"lsof: error: permission denied\n", target));
+        assert!(!lsof_stderr_is_benign(
+            b"lsof: error: permission denied\n",
+            target
+        ));
     }
 
     #[cfg(all(unix, not(coverage)))]
