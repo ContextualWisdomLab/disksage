@@ -4,12 +4,14 @@
 //! to OS Trash only when its path, metadata manifest, and filesystem identity still match.
 
 use disksage_lib::dev_artifacts::{
-    clean_artifacts, find_artifacts, permanently_delete_artifacts, DevArtifactCleanResult,
+    clean_artifacts, find_artifacts, permanently_delete_artifacts, DevArtifact,
+    DevArtifactCleanResult,
 };
 use std::path::{Component, Path, PathBuf};
 
 const MAX_AGE_DAYS: u64 = 3_650;
-const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--kind ARTIFACT_KIND] [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute] [--permanent]";
+const MAX_RATIONALE_CHARS: usize = 1_000;
+const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--kind ARTIFACT_KIND] [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute] [--permanent --confirm EXACT_PHRASE --rationale TEXT]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -19,6 +21,8 @@ struct Args {
     journal_path: PathBuf,
     execute: bool,
     permanent: bool,
+    confirm: Option<String>,
+    rationale: Option<String>,
 }
 
 fn absolute_without_parent(path: &Path) -> bool {
@@ -56,6 +60,13 @@ fn default_journal_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn rationale_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.chars().count() <= MAX_RATIONALE_CHARS
+        && !value.chars().any(char::is_control)
+}
+
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut kind = None;
@@ -63,6 +74,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut journal_path = default_journal_path()?;
     let mut execute = false;
     let mut permanent = false;
+    let mut confirm = None;
+    let mut rationale = None;
     let mut index = 0usize;
     while index < raw.len() {
         match raw[index].as_str() {
@@ -101,6 +114,24 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                         .ok_or_else(|| "--journal-path 값이 필요함".to_string())?,
                 );
             }
+            "--confirm" => {
+                index += 1;
+                confirm = Some(
+                    raw.get(index)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "--confirm 값이 필요함".to_string())?
+                        .clone(),
+                );
+            }
+            "--rationale" => {
+                index += 1;
+                rationale = Some(
+                    raw.get(index)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "--rationale 값이 필요함".to_string())?
+                        .clone(),
+                );
+            }
             "--execute" => execute = true,
             "--permanent" => permanent = true,
             "--help" | "-h" => return Err(USAGE.into()),
@@ -118,6 +149,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if permanent && !execute {
         return Err("--permanent requires --execute".into());
     }
+    if permanent && (confirm.is_none() || rationale.is_none()) {
+        return Err("--permanent requires --confirm and --rationale".into());
+    }
+    if rationale.as_deref().is_some_and(|value| !rationale_valid(value)) {
+        return Err("--rationale must be 1..1000 visible characters without leading/trailing whitespace".into());
+    }
     Ok(Args {
         root,
         kind,
@@ -125,7 +162,66 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         journal_path,
         execute,
         permanent,
+        confirm,
+        rationale,
     })
+}
+
+fn hash_field(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+fn permanent_approval_phrase(
+    root: &Path,
+    kind: Option<&str>,
+    min_age_days: u64,
+    candidates: &[DevArtifact],
+) -> Option<String> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut ordered = candidates.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+            .then_with(|| left.object_id.cmp(&right.object_id))
+    });
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-dev-artifact-permanent-v1\0");
+    hash_field(&mut hasher, root.as_os_str().as_encoded_bytes());
+    hash_field(&mut hasher, kind.unwrap_or_default().as_bytes());
+    hash_field(&mut hasher, &min_age_days.to_le_bytes());
+    hash_field(&mut hasher, &(ordered.len() as u64).to_le_bytes());
+    let mut total_bytes = 0u64;
+    for candidate in ordered {
+        for value in [
+            candidate.path.as_bytes(),
+            candidate.kind.as_bytes(),
+            candidate.project.as_bytes(),
+            candidate.fingerprint.as_bytes(),
+            candidate.object_id.as_bytes(),
+        ] {
+            hash_field(&mut hasher, value);
+        }
+        for value in [
+            candidate.bytes,
+            candidate.files,
+            candidate.skipped,
+            candidate.age_days,
+        ] {
+            hash_field(&mut hasher, &value.to_le_bytes());
+        }
+        hash_field(&mut hasher, &[u8::from(candidate.scan_complete)]);
+        total_bytes = total_bytes.saturating_add(candidate.bytes);
+    }
+    Some(format!(
+        "DiskSage permanent dev cleanup {} {total_bytes} 승인 {}",
+        candidates.len(),
+        hasher.finalize().to_hex()
+    ))
 }
 
 fn now_ms() -> u64 {
@@ -145,6 +241,20 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
                 .is_none_or(|kind| candidate.kind == kind)
         })
         .collect::<Vec<_>>();
+    let permanent_confirmation_phrase = permanent_approval_phrase(
+        &args.root,
+        args.kind.as_deref(),
+        args.min_age_days,
+        &candidates,
+    );
+    if args.execute && args.permanent {
+        let phrase = permanent_confirmation_phrase
+            .as_deref()
+            .ok_or_else(|| "development-artifact-permanent-empty-candidate-set".to_string())?;
+        if args.confirm.as_deref() != Some(phrase) {
+            return Err("development-artifact-permanent-confirmation-mismatch".into());
+        }
+    }
     let results: Vec<DevArtifactCleanResult> = if args.execute {
         if let Some(parent) = args.journal_path.parent() {
             std::fs::create_dir_all(parent)
@@ -170,6 +280,11 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
     } else {
         Vec::new()
     };
+    let recorded_rationale = if args.execute && args.permanent {
+        args.rationale.clone()
+    } else {
+        None
+    };
     serde_json::to_value(serde_json::json!({
         "schema_version": 1,
         "schema_kind": "disksage.dev-artifact-cleanup",
@@ -183,6 +298,8 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         "candidates": candidates,
         "results": results,
         "journal_path": if args.execute { Some(args.journal_path) } else { None::<PathBuf> },
+        "permanent_confirmation_phrase": permanent_confirmation_phrase,
+        "rationale": recorded_rationale,
         "cloud_write_executed": false,
         "source_eviction_executed": false,
     }))
@@ -218,6 +335,8 @@ mod tests {
         assert_eq!(parsed.min_age_days, 30);
         assert_eq!(parsed.kind, None);
         assert!(!parsed.execute);
+        assert_eq!(parsed.confirm, None);
+        assert_eq!(parsed.rationale, None);
         assert!(parse_args(&["--root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
             "--root".into(),
@@ -279,5 +398,71 @@ mod tests {
             .unwrap_err(),
             "--permanent requires --confirm and --rationale"
         );
+    }
+
+    #[test]
+    fn permanent_deletion_accepts_complete_operator_authority() {
+        let root = std::env::temp_dir();
+        let parsed = parse_args(&[
+            "--root".into(),
+            root.to_string_lossy().into_owned(),
+            "--execute".into(),
+            "--permanent".into(),
+            "--confirm".into(),
+            "reviewed phrase".into(),
+            "--rationale".into(),
+            "operator reviewed regenerable artifacts".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.confirm.as_deref(), Some("reviewed phrase"));
+        assert_eq!(
+            parsed.rationale.as_deref(),
+            Some("operator reviewed regenerable artifacts")
+        );
+    }
+
+    #[test]
+    fn permanent_deletion_rejects_unbounded_or_control_rationale() {
+        let root = std::env::temp_dir();
+        for rationale in [" leading-space", "line\nbreak"] {
+            assert_eq!(
+                parse_args(&[
+                    "--root".into(),
+                    root.to_string_lossy().into_owned(),
+                    "--execute".into(),
+                    "--permanent".into(),
+                    "--confirm".into(),
+                    "reviewed phrase".into(),
+                    "--rationale".into(),
+                    rationale.into(),
+                ])
+                .unwrap_err(),
+                "--rationale must be 1..1000 visible characters without leading/trailing whitespace"
+            );
+        }
+    }
+
+    #[test]
+    fn permanent_approval_phrase_binds_candidate_identity() {
+        let root = std::env::temp_dir();
+        let candidate = DevArtifact {
+            path: root.join("target").to_string_lossy().into_owned(),
+            kind: "target".into(),
+            project: root.to_string_lossy().into_owned(),
+            bytes: 4096,
+            files: 8,
+            skipped: 0,
+            scan_complete: true,
+            fingerprint: "manifest-a".into(),
+            object_id: "object-a".into(),
+            age_days: 30,
+        };
+        let first = permanent_approval_phrase(root, Some("target"), 30, &[candidate.clone()])
+            .unwrap();
+        let mut changed = candidate;
+        changed.object_id = "object-b".into();
+        let second = permanent_approval_phrase(root, Some("target"), 30, &[changed]).unwrap();
+        assert_ne!(first, second);
+        assert!(permanent_approval_phrase(root, Some("target"), 30, &[]).is_none());
     }
 }
