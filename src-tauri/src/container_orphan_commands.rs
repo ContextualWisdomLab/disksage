@@ -657,6 +657,42 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pinned_context_target_uses_resolved_host_not_mutable_context_name() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let docker = temp.path().join("docker");
+        std::fs::write(
+            &docker,
+            r#"#!/bin/sh
+case "$*" in
+  "context inspect customer-local --format {{json .}}")
+    printf '%s\n' '{"Name":"customer-local","Endpoints":{"docker":{"Host":"unix:///tmp/disksage-pinned.sock"}}}'
+    ;;
+  "context inspect customer-local --format {{json .Endpoints.docker.Host}}")
+    printf '%s\n' '"unix:///tmp/disksage-pinned.sock"'
+    ;;
+  *) exit 41 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let authority = DockerAmbientAuthority::Context("customer-local".to_string());
+        let pinned = pin_docker_authority(&docker, &authority).unwrap();
+        let target = pinned_docker_target(&pinned).unwrap();
+        let prefix = target.command_prefix().unwrap();
+
+        assert!(!prefix.iter().any(|argument| argument == "--context"));
+        assert_eq!(
+            &prefix[prefix.len() - 2..],
+            ["--host", "unix:///tmp/disksage-pinned.sock"]
+        );
+    }
+
     #[test]
     fn docker_context_environment_precedence_is_fail_closed_and_matches_empty_override_fallback() {
         assert_eq!(
