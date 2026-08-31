@@ -261,11 +261,9 @@ fn resolve_docker_ambient_authority(
     configured_context: Option<String>,
 ) -> Result<DockerAmbientAuthority, String> {
     match context_environment {
-        // Docker documents DOCKER_CONTEXT as overriding DOCKER_HOST and the configured default.
         DockerContextEnvironment::Context(context) => Ok(DockerAmbientAuthority::Context(context)),
         DockerContextEnvironment::Invalid => Err("docker-context-invalid".to_string()),
         DockerContextEnvironment::AbsentOrEmpty => match host_environment {
-            // With no explicit context, DOCKER_HOST overrides config.json.currentContext.
             DockerHostEnvironment::Host(host) => Ok(DockerAmbientAuthority::Host(host)),
             DockerHostEnvironment::Invalid => Err("docker-host-invalid".to_string()),
             DockerHostEnvironment::AbsentOrEmpty => Ok(configured_context
@@ -299,8 +297,6 @@ fn runtime_kinds_for_docker_authority(
     if matches!(authority, Ok(DockerAmbientAuthority::Host(_))) {
         kinds.push(DockerNative);
     }
-    // Named Docker contexts remain visible through the explicit Colima read-only target, but do
-    // not acquire destructive authority. Podman remains independent of Docker ambient authority.
     kinds.push(DockerColimaContext);
     kinds.push(PodmanMachine);
     kinds
@@ -374,11 +370,6 @@ fn suppress_context_mutation_authority(
     plan
 }
 
-/// Probes every supported container runtime target read-only and audits all orphan categories.
-/// An explicit DOCKER_HOST may acquire mutation authority because every later command is pinned to
-/// that exact endpoint. Named/default Docker contexts and the explicit Colima context remain
-/// read-only because a context name is mutable and cannot safely authorize a later delete without
-/// a private immutable context/TLS snapshot.
 #[tauri::command(async)]
 pub fn inspect_container_orphans(
     app: tauri::AppHandle,
@@ -417,11 +408,6 @@ pub fn inspect_container_orphans(
         .collect()
 }
 
-/// Re-audits one runtime/category immediately before exact identity-bound deletion. Docker-native
-/// mutation is permitted only for an explicit, bounded DOCKER_HOST that can be reused verbatim for
-/// every audit and delete command. Named/default Docker contexts and the Colima named context fail
-/// closed because re-resolving a mutable context after approval can redirect deletion to another
-/// daemon.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
     app: tauri::AppHandle,
@@ -439,6 +425,7 @@ pub fn execute_container_orphan_prune(
         return Err(format!("orphan-prune-{IMMUTABLE_CONTEXT_REQUIRED}"));
     }
     let category = parse_category(&category)?;
+    container_orphan_public::ensure_mutation_category_authority(category)?;
     let (target, docker_authority) =
         if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
             let ambient =
