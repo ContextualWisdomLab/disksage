@@ -44,7 +44,6 @@ pub struct DevArtifactCleanResult {
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
 const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
-    (".build", &["package.json"]),
     (".next", &["package.json"]),
     ("dist-electron", &["package.json"]),
     ("target", &["Cargo.toml"]),
@@ -616,16 +615,21 @@ mod tests {
     }
 
     #[test]
-    fn finds_only_marker_adjacent_javascript_build_outputs() {
+    fn finds_only_explicit_javascript_build_outputs() {
         let tmp = tempfile::tempdir().unwrap();
-        for name in [".build", ".next", "dist-electron"] {
+        for name in [".next", "dist-electron"] {
             project(tmp.path(), name, "package.json", name);
         }
-        fs::create_dir_all(tmp.path().join("unowned/.build")).unwrap();
+        let generic_project = tmp.path().join("generic");
+        fs::create_dir_all(generic_project.join(".build")).unwrap();
+        fs::write(generic_project.join("package.json"), b"{}").unwrap();
+        fs::write(generic_project.join(".build/customer-data.bin"), b"owned").unwrap();
+        fs::create_dir_all(tmp.path().join("unowned/.next")).unwrap();
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
-        for name in [".build", ".next", "dist-electron"] {
+        for name in [".next", "dist-electron"] {
             assert!(found.iter().any(|artifact| artifact.kind == name));
         }
+        assert!(!found.iter().any(|artifact| artifact.kind == ".build"));
         assert!(!found.iter().any(|artifact| artifact.path.contains("unowned")));
     }
 
