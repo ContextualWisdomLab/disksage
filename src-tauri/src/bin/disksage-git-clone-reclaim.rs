@@ -152,7 +152,10 @@ fn now_ms() -> u64 {
 }
 
 fn run(args: Args) -> Result<serde_json::Value, String> {
-    let options = GitWorktreeAuditOptions::default();
+    let options = GitWorktreeAuditOptions {
+        command_timeout_ms: 300_000,
+        ..GitWorktreeAuditOptions::default()
+    };
     let plan = plan_git_clone_reclaim(
         &args.repository_root,
         &args.retention_references,
