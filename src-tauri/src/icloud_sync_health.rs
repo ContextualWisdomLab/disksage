@@ -26,9 +26,9 @@ const CP_PATH: &str = "/bin/cp";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_COPY_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_ATTEMPTS: usize = 3;
-// CloudDocs' managed SQLite database can grow to many GiB. Never clone a database larger than
-// this bounded amount during a read-only health probe: the immutable fallback below is slower and
-// less complete, but it cannot unexpectedly consume the user's remaining disk while planning.
+// Non-macOS snapshots perform a real byte copy and must remain bounded. macOS uses `cp -c`, whose
+// required copy-on-write clone fails instead of falling back to a space-consuming full copy.
+#[cfg(not(target_os = "macos"))]
 const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
@@ -1579,7 +1579,7 @@ fn create_temporary_snapshot_directory() -> Result<TemporarySnapshotDirectory, S
 
 #[cfg(target_os = "macos")]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
-    ensure_snapshot_file_within_limit(source)?;
+    source_file_identity(source, true)?;
     let cp_metadata = fs::symlink_metadata(CP_PATH)
         .map_err(|_| "icloud-sync-health-clone-command-unavailable".to_string())?;
     if cp_metadata.file_type().is_symlink() || !cp_metadata.is_file() {
@@ -1650,11 +1650,25 @@ fn ensure_snapshot_file_within_limit(path: &Path) -> Result<(), String> {
     let identity = source_file_identity(path, true)?;
     if identity
         .as_ref()
-        .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+        .is_some_and(snapshot_source_exceeds_copy_limit)
     {
         return Err("icloud-sync-health-snapshot-source-too-large".into());
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_bytes_exceed_copy_limit(_logical_bytes: u64) -> bool {
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn snapshot_bytes_exceed_copy_limit(logical_bytes: u64) -> bool {
+    logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES
+}
+
+fn snapshot_source_exceeds_copy_limit(identity: &SourceFileIdentity) -> bool {
+    snapshot_bytes_exceed_copy_limit(identity.logical_bytes)
 }
 
 fn ensure_snapshot_file_with_cleanup(path: &Path) -> Result<(), String> {
@@ -1680,14 +1694,14 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
         let before_db = source_file_identity(&source_db, true)?;
         if before_db
             .as_ref()
-            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+            .is_some_and(snapshot_source_exceeds_copy_limit)
         {
             return Err("icloud-sync-health-snapshot-source-too-large".into());
         }
         let before_wal = source_file_identity(&source_wal, false)?;
         if before_wal
             .as_ref()
-            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+            .is_some_and(snapshot_source_exceeds_copy_limit)
         {
             return Err("icloud-sync-health-snapshot-source-too-large".into());
         }
@@ -1716,9 +1730,10 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
 
 #[cfg(target_os = "macos")]
 fn bounded_native_status(db_dir: &Path, observed_at_ms: u64) -> Option<IcloudNativeStatusEvidence> {
-    let identity = source_file_identity(&db_dir.join("client.db"), true).ok().flatten()?;
-    (identity.logical_bytes <= MAX_SNAPSHOT_SOURCE_BYTES)
-        .then(|| probe_native_status(observed_at_ms))
+    source_file_identity(&db_dir.join("client.db"), true)
+        .ok()
+        .flatten()
+        .map(|_| probe_native_status(observed_at_ms))
 }
 
 fn run_consistent_snapshot_queue_probe(db_dir: &Path) -> Result<(String, bool), String> {
@@ -2126,9 +2141,9 @@ pub fn probe_icloud_sync_health(
     let native_status = bounded_native_status(db_dir, observed_at_ms);
     #[cfg(not(target_os = "macos"))]
     let native_status = Some(probe_native_status(observed_at_ms));
-    let source_database_too_large = managed_database_files
-        .iter()
-        .any(|file| file.role == "client.db" && file.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES);
+    let source_database_too_large = managed_database_files.iter().any(|file| {
+        file.role == "client.db" && snapshot_bytes_exceed_copy_limit(file.logical_bytes)
+    });
     match run_consistent_snapshot_queue_probe(db_dir) {
         Ok((output, includes_wal)) => {
             let mut report = build_report(
@@ -2707,6 +2722,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn oversized_cloud_docs_database_fails_closed_before_snapshot_copy() {
         let source = tempfile::tempdir().unwrap();
@@ -2738,13 +2754,20 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn oversized_cloud_docs_database_skips_expensive_native_status_probe() {
+    fn oversized_cloud_docs_database_uses_copy_on_write_clone() {
+        let oversized_bytes = 512 * 1024 * 1024 + 1;
         let source = tempfile::tempdir().unwrap();
-        fs::File::create(source.path().join("client.db"))
+        let client_db = source.path().join("client.db");
+        fs::File::create(&client_db)
             .unwrap()
-            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .set_len(oversized_bytes)
             .unwrap();
-        assert!(bounded_native_status(source.path(), 1).is_none());
+
+        let snapshot = clone_client_database_snapshot(source.path()).unwrap();
+        assert_eq!(
+            fs::metadata(snapshot.client_db).unwrap().len(),
+            oversized_bytes
+        );
     }
 
     #[cfg(target_os = "macos")]
