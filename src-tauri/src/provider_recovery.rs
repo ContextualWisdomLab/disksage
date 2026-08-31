@@ -78,6 +78,17 @@ fn finish_onedrive_unpin(
     })
 }
 
+fn ensure_onedrive_stop_authority(
+    primary_runtime_observed: bool,
+    current_runtime_observed: bool,
+) -> Result<(), String> {
+    if !primary_runtime_observed && current_runtime_observed {
+        Err("provider-recovery-runtime-started-concurrently".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Request Finder to cancel its active copy/materialization dialog without touching any provider
 /// daemon, cloud object, or source file. The fixed AppleScript sends only Escape; it accepts no
 /// user-provided script, path, or process identifier.
@@ -261,7 +272,7 @@ fn run_bounded_output(program: &Path, args: &[&str]) -> Result<(), String> {
         }
     };
     capture
-        .seek(std::io::SeekFrom::Start(0))
+        .seek(SeekFrom::Start(0))
         .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
     let mut output = Vec::new();
     capture
@@ -311,7 +322,12 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     let operation = (|| {
         let mut deadline = Instant::now() + Duration::from_secs(10);
         let mut graceful_term_requested = false;
-        while require_primary_runtime_observation(CloudProvider::Onedrive)? {
+        loop {
+            let current_runtime_observed = require_primary_runtime_observation(CloudProvider::Onedrive)?;
+            ensure_onedrive_stop_authority(primary_runtime_observed, current_runtime_observed)?;
+            if !current_runtime_observed {
+                break;
+            }
             if Instant::now() >= deadline {
                 if graceful_term_requested {
                     return Err("provider-recovery-quit-timeout".into());
