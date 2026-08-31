@@ -59,7 +59,7 @@
   }
 
   function pruneReady(key: string, phrase: string | null, category: api.OrphanCategory): boolean {
-    if (phrase === null || pruneBusyKey !== null) return false;
+    if (busy || phrase === null || pruneBusyKey !== null) return false;
     return (
       phrases[categoryKey(key, category)]?.trim() === phrase &&
       (rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0
@@ -67,6 +67,7 @@
   }
 
   async function inspect() {
+    if (busy || pruneBusyKey !== null) return;
     busy = true;
     loadError = "";
     try {
@@ -93,7 +94,7 @@
     const typedPhrase = phrases[key]?.trim();
     const rationale = rationales[key]?.trim();
     if (!typedPhrase || typedPhrase !== cat.approval_phrase) return;
-    if (!rationale || pruneBusyKey !== null) return;
+    if (!rationale || busy || pruneBusyKey !== null) return;
     const granted = await confirm(
       `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 확인 코드를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
       { title: "DiskSage 컨테이너 정리", kind: "warning" },
@@ -144,7 +145,7 @@
     각 개발 환경의 컨테이너·이미지·볼륨·네트워크 중 아무것도 연결되지 않은 항목만 찾아줍니다.
     실행 중인 서비스와 기본 네트워크는 절대 건드리지 않습니다. 삭제 전 승인 문구와 사유를 요구합니다.
   </p>
-  <button onclick={inspect} disabled={busy}>
+  <button onclick={inspect} disabled={busy || pruneBusyKey !== null}>
     {busy ? "확인 중…" : "미사용 자원 확인"}
   </button>
   {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
