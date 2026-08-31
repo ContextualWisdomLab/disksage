@@ -64,7 +64,43 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
-pub mod container_orphan_reclaim;
+pub mod container_orphan_reclaim {
+    mod implementation {
+        include!("container_orphan_reclaim.rs");
+    }
+
+    pub use implementation::{
+        probe_container_orphans, probe_container_orphans_with_receipt_dir, probe_runtime_health,
+        ContainerOrphanPlan, ContainerOrphanPruneExecution, ContainerRuntimeKind,
+        ContainerRuntimeTarget, OrphanCandidateEvidence, OrphanCategory, OrphanCategoryPlan,
+        RuntimeHealthEvidence, CONTAINER_ORPHAN_SCHEMA_KIND, MAX_CATEGORY_RECORDS,
+        MAX_NETWORK_CANDIDATES,
+    };
+    pub(crate) use implementation::{
+        resolve_docker_context_fingerprint, resolve_docker_context_host,
+    };
+
+    pub fn execute_container_orphan_prune(
+        target: &ContainerRuntimeTarget,
+        category: OrphanCategory,
+        confirmation_phrase: &str,
+        rationale: &str,
+        executed_at_ms: u64,
+        receipt_dir: &std::path::Path,
+    ) -> Result<ContainerOrphanPruneExecution, String> {
+        if category == OrphanCategory::BuildCache {
+            return Err("orphan-prune-build-cache-exact-delete-unavailable".into());
+        }
+        implementation::execute_container_orphan_prune(
+            target,
+            category,
+            confirmation_phrase,
+            rationale,
+            executed_at_ms,
+            receipt_dir,
+        )
+    }
+}
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
 pub mod container_orphan_public;
 #[path = "duplicate_audit.rs"]
