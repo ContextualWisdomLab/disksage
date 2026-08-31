@@ -475,7 +475,7 @@ pub fn execute_recovery(
         stop_status_code: stop.0,
         start_status_code: start.0,
         guest_reachable_after_recovery: reachable,
-        executed: reachable,
+        executed: true,
         executed_at_ms: now_ms(),
         rationale: rationale.into(),
     })
