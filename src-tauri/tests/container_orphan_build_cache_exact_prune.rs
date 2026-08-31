@@ -29,7 +29,7 @@ case "$*" in
     printf '%s\n' '{{"ID":"cache123","Reclaimable":true}}'
     exit 0
     ;;
-  *"buildx prune --filter id=cache123 --force") exit 0 ;;
+  *"buildx prune --all --filter id~=^(cache123)$ --force") exit 0 ;;
   *)
     printf '%s\n' "unexpected command: $*" >&2
     exit 23
@@ -82,13 +82,16 @@ esac
 
     let log = std::fs::read_to_string(&log_path).unwrap();
     assert!(
-        log.lines()
-            .any(|line| line.ends_with("buildx prune --filter id=cache123 --force")),
+        log.lines().any(|line| {
+            line.ends_with("buildx prune --all --filter id~=^(cache123)$ --force")
+        }),
         "exact prune command missing from log: {log}"
     );
     assert!(
-        !log.lines()
-            .any(|line| line.contains("buildx prune --all")),
-        "category-wide prune must never run: {log}"
+        !log.lines().any(|line| {
+            line.contains("buildx prune --all --force")
+                || (line.contains("buildx prune --all") && !line.contains("--filter id~="))
+        }),
+        "unfiltered category-wide prune must never run: {log}"
     );
 }
