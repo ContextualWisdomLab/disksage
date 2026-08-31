@@ -98,8 +98,8 @@ pub fn sanitize_execution(
 mod tests {
     use super::*;
     use crate::container_orphan_reclaim::{
-        probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
-        RuntimeHealthEvidence,
+        probe_container_orphans, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
+        ContainerRuntimeTarget, RuntimeHealthEvidence,
     };
     use std::path::PathBuf;
 
@@ -200,6 +200,47 @@ mod tests {
     #[test]
     fn build_cache_public_command_has_no_mutation_authority() {
         assert!(public_command_shape(OrphanCategory::BuildCache, true).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approval_is_removed_even_when_internal_mutation_command_is_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp.path().join("receipts");
+        std::fs::create_dir(&receipt_dir).unwrap();
+        std::fs::set_permissions(&receipt_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let docker = temp.path().join("docker");
+        std::fs::write(
+            &docker,
+            "#!/bin/sh\ncase \"$*\" in\n  *\" info\") exit 0 ;;\n  *\"buildx du --format json\"*) printf '%s\\n' '{\"ID\":\"cache123\",\"Reclaimable\":true}' ;;\n  *) exit 0 ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let target = ContainerRuntimeTarget::new(
+            ContainerRuntimeKind::DockerNative,
+            docker,
+            None,
+        )
+        .unwrap();
+        let mut plan = probe_container_orphans_with_receipt_dir(&target, &receipt_dir);
+        let build_cache = plan
+            .categories
+            .iter_mut()
+            .find(|category| category.category == OrphanCategory::BuildCache)
+            .unwrap();
+        assert!(build_cache.approval_phrase.is_some());
+        build_cache.prune_command = None;
+
+        let sanitized = sanitize_plan(plan);
+        let build_cache = sanitized
+            .categories
+            .iter()
+            .find(|category| category.category == OrphanCategory::BuildCache)
+            .unwrap();
+        assert!(build_cache.approval_phrase.is_none());
+        assert!(build_cache.prune_command.is_none());
     }
 
     #[test]
