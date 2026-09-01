@@ -39,15 +39,25 @@ exit 1
     let plan = plan_empty_dangling_volumes(&fake_podman, "contract-machine")
         .expect("read-only empty-volume evidence should remain available");
     assert_eq!(plan.candidate_count, 1);
-    let phrase = plan
-        .exact_approval_phrase
-        .as_deref()
-        .expect("current implementation exposes destructive approval before the repair");
+    assert!(
+        plan.exact_approval_phrase.is_none(),
+        "a check-then-remove plan must not mint destructive authority"
+    );
+    assert!(
+        plan.issues
+            .iter()
+            .any(|issue| issue == "podman-empty-volume-atomic-removal-unavailable"),
+        "the plan should explain why execution is withheld"
+    );
 
+    let historical_phrase = format!(
+        "DiskSage Podman empty dangling volume prune 승인 {}",
+        plan.candidate_set_sha256
+    );
     let error = prune_empty_dangling_volumes(
         &fake_podman,
         "contract-machine",
-        phrase,
+        &historical_phrase,
         "reviewed reclaim",
     )
     .expect_err("check-then-remove volume deletion must fail closed until mutation is atomic");
