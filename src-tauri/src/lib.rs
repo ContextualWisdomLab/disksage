@@ -12,6 +12,9 @@ pub mod cloud;
 pub mod cloud_adr;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
+#[path = "cloud_local_eviction.rs"]
+mod cloud_local_eviction_impl;
+#[path = "cloud_local_eviction_public.rs"]
 pub mod cloud_local_eviction;
 #[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
