@@ -30,6 +30,7 @@ pub struct TransparentCompressionPlan {
     pub ontology_class: &'static str,
     pub root: String,
     pub minimum_age_days: u64,
+    pub max_files: usize,
     pub compression_concurrency: usize,
     pub candidate_count: usize,
     pub logical_bytes: u64,
@@ -100,12 +101,14 @@ fn observation(_path: &Path) -> Result<TransparentCompressionCandidate, String> 
 fn fingerprint(
     root: &Path,
     minimum_age_days: u64,
+    max_files: usize,
     candidates: &[TransparentCompressionCandidate],
 ) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage.transparent-compression.v1\0");
     hasher.update(root.as_os_str().to_string_lossy().as_bytes());
     hasher.update(&minimum_age_days.to_le_bytes());
+    hasher.update(&(max_files as u64).to_le_bytes());
     for candidate in candidates {
         hasher.update(candidate.path.as_bytes());
         for value in [
@@ -172,13 +175,14 @@ pub fn plan(
         }
     }
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
-    let plan_fingerprint = fingerprint(&root, minimum_age_days, &candidates);
+    let plan_fingerprint = fingerprint(&root, minimum_age_days, max_files, &candidates);
     Ok(TransparentCompressionPlan {
         schema_kind: "disksage.transparent-compression-plan",
         schema_version: 1,
         ontology_class: "https://disksage.app/ontology#StructuredLogArtifact",
         root: root.to_string_lossy().into_owned(),
         minimum_age_days,
+        max_files,
         compression_concurrency: COMPRESSION_CONCURRENCY,
         candidate_count: candidates.len(),
         logical_bytes: candidates
@@ -378,7 +382,7 @@ pub fn execute(
     let live = plan(
         Path::new(&approved_plan.root),
         approved_plan.minimum_age_days,
-        MAX_FILES,
+        approved_plan.max_files,
         now_ms,
     )?;
     if live.plan_fingerprint != approved_plan.plan_fingerprint
