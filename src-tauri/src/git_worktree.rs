@@ -2367,11 +2367,14 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         .iter()
         .filter(|entry| entry.disposition == GitWorktreeDisposition::EvidenceGap)
         .count();
+    let evidence_complete = issues.is_empty() && evidence_gap_count == 0;
     let removal_plan_fingerprint =
         removal_plan_fingerprint(&common_dir_string, &authority_fingerprint, &entries);
-    let exact_approval_phrase = (removal_candidate_count > 0).then(|| {
-        format!(
-            "DiskSage stale worktree {removal_candidate_count} {removal_candidate_allocated_bytes} 승인 {removal_plan_fingerprint}"
+    let exact_approval_phrase = (removal_candidate_count > 0 && evidence_complete).then(|| {
+        exact_removal_approval_phrase(
+            removal_candidate_count,
+            removal_candidate_allocated_bytes,
+            &removal_plan_fingerprint,
         )
     });
 
@@ -2391,7 +2394,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         removal_candidate_allocated_bytes,
         preserved_count,
         evidence_gap_count,
-        evidence_complete: issues.is_empty(),
+        evidence_complete,
         removal_plan_fingerprint,
         exact_approval_phrase,
         entries,
@@ -3864,6 +3867,32 @@ mod tests {
             "merged worktree reviewed for removal",
         )
         .is_err());
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn incomplete_audit_with_candidates_never_issues_approval_phrase() {
+        let (temp, repository, _secondary) = temporary_repository();
+        let missing = temp.path().join("missing");
+        git(&repository, &["branch", "missing", "HEAD~1"]);
+        git(
+            &repository,
+            &["worktree", "add", missing.to_str().unwrap(), "missing"],
+        );
+        fs::remove_dir_all(&missing).unwrap();
+
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            current_unix_ms(),
+        )
+        .unwrap();
+
+        assert_eq!(report.removal_candidate_count, 1, "{report:#?}");
+        assert!(report.evidence_gap_count > 0, "{report:#?}");
+        assert!(!report.evidence_complete);
+        assert_eq!(report.exact_approval_phrase, None);
     }
 
     #[cfg(all(unix, not(coverage)))]
