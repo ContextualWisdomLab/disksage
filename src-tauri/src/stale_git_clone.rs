@@ -457,36 +457,22 @@ pub fn plan_stale_git_clone(
     )?
     .trim()
     .to_string();
-    let default_branch = match command_text(
-        "git",
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    let repository_endpoint = format!("repos/{repository}");
+    let default_branch = command_text(
+        "gh",
+        &[
+            "api",
+            "--method",
+            "GET",
+            &repository_endpoint,
+            "--jq",
+            ".default_branch",
+        ],
         &path,
-        "git-default-branch",
-    ) {
-        Ok(default_ref) => default_ref
-            .trim()
-            .strip_prefix("origin/")
-            .unwrap_or(default_ref.trim())
-            .to_string(),
-        Err(_) => {
-            let endpoint = format!("repos/{repository}");
-            command_text(
-                "gh",
-                &[
-                    "api",
-                    "--method",
-                    "GET",
-                    &endpoint,
-                    "--jq",
-                    ".default_branch",
-                ],
-                &path,
-                "github-default-branch-rest",
-            )?
-            .trim()
-            .to_string()
-        }
-    };
+        "github-default-branch-rest",
+    )?
+    .trim()
+    .to_string();
     if default_branch == branch {
         return Err("stale-git-clone-default-branch".into());
     }
@@ -502,7 +488,7 @@ pub fn plan_stale_git_clone(
     let endpoint = format!("repos/{repository}/pulls");
     let head_filter = format!("{owner}:{branch}");
     let head_argument = format!("head={head_filter}");
-    let query = "[.[] | {number,state:(.state|ascii_upcase),headRefName:.head.ref,headRefOid:.head.sha,createdAtMs:((.created_at|fromdateiso8601)*1000),url:.html_url,association_method:\"exact-head\"}]";
+    let query = "[.[][] | {number,state:(.state|ascii_upcase),headRefName:.head.ref,headRefOid:.head.sha,createdAtMs:((.created_at|fromdateiso8601)*1000),url:.html_url,association_method:\"exact-head\"}]";
     let pr_json = command_text(
         "gh",
         &[
@@ -517,6 +503,7 @@ pub fn plan_stale_git_clone(
             "-f",
             "per_page=100",
             "--paginate",
+            "--slurp",
             "--jq",
             query,
         ],
