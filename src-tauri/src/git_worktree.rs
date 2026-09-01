@@ -2766,7 +2766,7 @@ pub fn execute_stale_worktree_removal(
     )
 }
 
-/// Execute with freshly queried GitHub closed-PR evidence before the plan and every candidate.
+/// Execute with freshly queried GitHub closed-PR evidence bound once before mutation.
 pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2786,7 +2786,7 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     )
 }
 
-/// Execute with freshly queried same-repository closed and explicitly stale-open PR evidence.
+/// Execute with freshly queried same-repository closed and stale-open PR evidence bound once.
 pub fn execute_stale_worktree_removal_with_github_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2811,13 +2811,13 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
         .iter()
         .map(|binding| binding.reference_ref.clone())
         .collect();
+    let evidence = crate::git_worktree_github_evidence::collect(
+        &repository_root,
+        include_closed_pull_requests,
+        stale_open_pull_request_cutoff_ms,
+        options,
+    )?;
     let audit_live = |observed_at_ms| {
-        let evidence = crate::git_worktree_github_evidence::collect(
-            &repository_root,
-            include_closed_pull_requests,
-            stale_open_pull_request_cutoff_ms,
-            options,
-        )?;
         audit_git_worktrees_with_pull_request_membership(
             &repository_root,
             &reference_names,
@@ -3939,6 +3939,50 @@ mod tests {
         assert!(!result.git_prune_executed);
         assert!(!secondary.exists());
         git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn execution_reaudits_and_removes_multiple_approved_candidates() {
+        let (temp, repository, secondary) = temporary_repository();
+        let third = temp.path().join("third");
+        git(&repository, &["branch", "merged-two", "HEAD~1"]);
+        git(
+            &repository,
+            &["worktree", "add", third.to_str().unwrap(), "merged-two"],
+        );
+        let generated_at = current_unix_ms();
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            generated_at,
+        )
+        .unwrap();
+        assert_eq!(report.removal_candidate_count, 2, "{report:#?}");
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            generated_at + 1,
+            "human:local:test",
+            "two merged worktrees reviewed for removal",
+        )
+        .unwrap();
+
+        let result = execute_stale_worktree_removal(
+            &report,
+            &approval,
+            &phrase,
+            GitWorktreeAuditOptions::default(),
+            generated_at + 2,
+        )
+        .unwrap();
+
+        assert!(result.verification_complete, "{result:#?}");
+        assert_eq!(result.removed_count, 2);
+        assert!(!secondary.exists());
+        assert!(!third.exists());
     }
 
     #[cfg(all(unix, not(coverage)))]
