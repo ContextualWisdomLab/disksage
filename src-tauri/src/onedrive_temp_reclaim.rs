@@ -85,6 +85,28 @@ fn filename_sha1(path: &Path) -> Option<String> {
         .then(|| hash.to_ascii_uppercase())
 }
 
+fn remote_records_from_command_result(
+    output: git_worktree::CommandResult,
+) -> Result<BTreeMap<String, u64>, String> {
+    if output.status_code != Some(0) {
+        return Err("onedrive-temp-database-query-failed".into());
+    }
+    let text =
+        std::str::from_utf8(&output.stdout).map_err(|_| "onedrive-temp-database-output-invalid")?;
+    text.lines()
+        .map(|line| {
+            let (hash, size) = line
+                .split_once('\t')
+                .ok_or_else(|| "onedrive-temp-database-output-invalid".to_string())?;
+            Ok((
+                hash.to_string(),
+                size.parse()
+                    .map_err(|_| "onedrive-temp-database-output-invalid".to_string())?,
+            ))
+        })
+        .collect()
+}
+
 fn remote_records(database: &Path, hashes: &[String]) -> Result<BTreeMap<String, u64>, String> {
     if hashes.is_empty() {
         return Ok(BTreeMap::new());
@@ -112,23 +134,15 @@ fn remote_records(database: &Path, hashes: &[String]) -> Result<BTreeMap<String,
         .arg(query)
         .output()
         .map_err(|_| "onedrive-temp-sqlite-spawn-failed")?;
-    if !output.status.success() {
-        return Err("onedrive-temp-database-query-failed".into());
-    }
-    let text =
-        std::str::from_utf8(&output.stdout).map_err(|_| "onedrive-temp-database-output-invalid")?;
-    text.lines()
-        .map(|line| {
-            let (hash, size) = line
-                .split_once('\t')
-                .ok_or_else(|| "onedrive-temp-database-output-invalid".to_string())?;
-            Ok((
-                hash.to_string(),
-                size.parse()
-                    .map_err(|_| "onedrive-temp-database-output-invalid".to_string())?,
-            ))
-        })
-        .collect()
+    remote_records_from_command_result(git_worktree::CommandResult {
+        child_pid: 0,
+        status_code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        timed_out: false,
+        stdout_truncated: false,
+        stderr_truncated: false,
+    })
 }
 
 fn fingerprint(values: &[&str]) -> String {
@@ -431,6 +445,23 @@ mod tests {
                 "item-0123456789abcdef0123456789abcdef0123456z.temp"
             )),
             None
+        );
+    }
+
+    #[test]
+    fn timed_out_sqlite_query_is_rejected() {
+        let result = remote_records_from_command_result(git_worktree::CommandResult {
+            child_pid: 42,
+            status_code: Some(0),
+            stdout: format!("{}\t1\n", "A".repeat(40)).into_bytes(),
+            stderr: Vec::new(),
+            timed_out: true,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        });
+        assert_eq!(
+            result,
+            Err("onedrive-temp-database-query-timeout".into())
         );
     }
 
