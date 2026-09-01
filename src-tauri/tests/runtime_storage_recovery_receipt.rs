@@ -6,6 +6,11 @@ use std::process::Command;
 
 const HELPER_ENV: &str = "DISKSAGE_RUNTIME_STORAGE_RECOVERY_HELPER";
 const START_FAIL_ENV: &str = "DISKSAGE_RUNTIME_STORAGE_START_FAIL";
+const FIXED_COLIMA_CANDIDATES: &[&str] = &[
+    "/opt/homebrew/bin/colima",
+    "/usr/local/bin/colima",
+    "/usr/bin/colima",
+];
 
 #[test]
 fn completed_restart_is_recorded_even_when_reachability_remains_unavailable() {
@@ -35,6 +40,9 @@ fn completed_restart_is_recorded_even_when_reachability_remains_unavailable() {
         return;
     }
 
+    if installed_colima_would_override_test_path() {
+        return;
+    }
     let temp = tempfile::tempdir().expect("temporary fake runtime directory");
     write_fake_colima(temp.path());
     let isolated_path = isolated_path_with(temp.path());
@@ -79,6 +87,9 @@ fn successful_stop_with_failed_start_returns_partial_recovery_receipt() {
         return;
     }
 
+    if installed_colima_would_override_test_path() {
+        return;
+    }
     let temp = tempfile::tempdir().expect("temporary fake runtime directory");
     write_fake_colima(temp.path());
     let isolated_path = isolated_path_with(temp.path());
@@ -94,6 +105,12 @@ fn successful_stop_with_failed_start_returns_partial_recovery_receipt() {
         .expect("run isolated partial-recovery regression");
 
     assert!(status.success(), "partial-recovery receipt regression failed");
+}
+
+fn installed_colima_would_override_test_path() -> bool {
+    FIXED_COLIMA_CANDIDATES.iter().any(|candidate| {
+        fs::metadata(candidate).is_ok_and(|metadata| metadata.is_file())
+    })
 }
 
 fn isolated_path_with(directory: &std::path::Path) -> std::ffi::OsString {
