@@ -83,6 +83,6 @@ esac
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
-        "DiskSage Git worktree audit: github-repository-identity-timeout\n"
+        "DiskSage Git worktree audit: github-exact-pr-membership-timeout\n"
     );
 }

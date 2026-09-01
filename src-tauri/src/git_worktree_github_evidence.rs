@@ -55,9 +55,14 @@ pub fn collect(
         Default::default()
     };
 
-    let mut pull_request_commits = git_worktree::github_pull_request_commit_membership(
+    let exact = git_worktree::github_exact_pull_request_commit_membership(
+        repository_root,
+        remaining_options(options, started)?.command_timeout_ms,
+    )?;
+    let mut pull_request_commits = git_worktree::github_pull_request_commit_membership_with_exact(
         repository_root,
         remaining_options(options, started)?,
+        exact,
     )?;
     if !include_closed_pull_requests {
         pull_request_commits.completed.clear();

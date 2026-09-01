@@ -601,6 +601,37 @@ fn parse_open_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads,
         .collect()
 }
 
+fn parse_exact_pull_request_commit_membership(
+    bytes: &[u8],
+) -> Result<PullRequestCommitMembership, String> {
+    let records: Vec<GitHubPullRequestHead> = serde_json::from_slice(bytes)
+        .map_err(|_| "github-exact-pr-membership-json-invalid".to_string())?;
+    let mut membership = PullRequestCommitMembership::default();
+    for record in records {
+        if record.is_cross_repository {
+            continue;
+        }
+        let number = record
+            .number
+            .filter(|number| *number > 0)
+            .ok_or_else(|| "github-exact-pr-number-invalid".to_string())?;
+        let oid = record.head_ref_oid.to_ascii_lowercase();
+        if !is_oid(&oid) {
+            return Err("github-exact-pr-head-invalid".into());
+        }
+        match record.state.as_str() {
+            "OPEN" => {
+                membership.open.entry(oid).or_default().insert(number);
+            }
+            "CLOSED" | "MERGED" => {
+                membership.completed.insert(oid);
+            }
+            _ => return Err("github-exact-pr-state-invalid".into()),
+        }
+    }
+    Ok(membership)
+}
+
 fn github_pull_request_heads_result(
     repository_root: &Path,
     timeout_ms: u64,
@@ -851,6 +882,30 @@ pub fn github_pull_request_commit_membership(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
 ) -> Result<PullRequestCommitMembership, String> {
+    github_pull_request_commit_membership_with_exact(
+        repository_root,
+        options,
+        PullRequestCommitMembership::default(),
+    )
+}
+
+pub(crate) fn github_exact_pull_request_commit_membership(
+    repository_root: &Path,
+    timeout_ms: u64,
+) -> Result<PullRequestCommitMembership, String> {
+    let result = github_pull_request_heads_result(
+        repository_root,
+        timeout_ms,
+        "github-exact-pr-membership",
+    )?;
+    parse_exact_pull_request_commit_membership(&result.stdout)
+}
+
+pub(crate) fn github_pull_request_commit_membership_with_exact(
+    repository_root: &Path,
+    options: GitWorktreeAuditOptions,
+    exact: PullRequestCommitMembership,
+) -> Result<PullRequestCommitMembership, String> {
     validate_options(options)?;
     let started = Instant::now();
     let remaining = || {
@@ -903,10 +958,11 @@ pub fn github_pull_request_commit_membership(
     let heads = list_worktrees(repository_root, options)?
         .into_iter()
         .map(|worktree| worktree.head)
+        .filter(|head| !exact.completed.contains(head) && !exact.open.contains_key(head))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let mut membership = PullRequestCommitMembership::default();
+    let mut membership = exact;
     let mut discovered = Vec::new();
     for (index, head) in heads.iter().enumerate() {
         let timeout_ms = remaining();
@@ -3099,13 +3155,16 @@ mod tests {
     #[test]
     fn merged_pull_request_evidence_binds_exact_branch_and_head() {
         let json = format!(
-            r#"[{{"headRefName":"merged-local","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}}]"#,
+            r#"[{{"number":1,"headRefName":"merged-local","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}}]"#,
             oid('a')
         );
         assert_eq!(
             parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
             BTreeSet::from([("refs/heads/merged-local".into(), oid('a'))])
         );
+        let exact = parse_exact_pull_request_commit_membership(json.as_bytes()).unwrap();
+        assert_eq!(exact.completed, BTreeSet::from([oid('a')]));
+        assert!(exact.open.is_empty());
     }
 
     #[test]
