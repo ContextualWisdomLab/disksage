@@ -223,6 +223,10 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn approval_path() -> PathBuf {
+        std::env::temp_dir().join("disksage-approved-cache-trash.json")
+    }
+
     #[test]
     fn help_is_non_mutating() {
         assert!(parse_args([OsString::from("--help")]).unwrap().is_none());
@@ -257,27 +261,26 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("requires --approved-cache-trash-candidates PATH"));
 
+        let path = approval_path();
         let args = parse_args([
             OsString::from("--execute"),
             OsString::from("--purge-proven-cache-trash"),
             OsString::from("--approved-cache-trash-candidates"),
-            OsString::from("/tmp/approved-cache-trash.json"),
+            path.as_os_str().to_os_string(),
         ])
         .unwrap()
         .unwrap();
         assert!(args.execute);
         assert!(args.purge_proven_cache_trash);
-        assert_eq!(
-            args.approved_cache_trash_candidates,
-            Some(PathBuf::from("/tmp/approved-cache-trash.json"))
-        );
+        assert_eq!(args.approved_cache_trash_candidates, Some(path));
     }
 
     #[test]
     fn approval_manifest_flag_cannot_be_used_outside_irreversible_purge() {
+        let path = approval_path();
         let error = parse_args([
             OsString::from("--approved-cache-trash-candidates"),
-            OsString::from("/tmp/approved-cache-trash.json"),
+            path.as_os_str().to_os_string(),
         ])
         .unwrap_err();
         assert!(error.contains("requires --execute --purge-proven-cache-trash"));
