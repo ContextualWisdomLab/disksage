@@ -46,11 +46,20 @@ pub struct OneDriveTempPlan {
 pub struct OneDriveTempExecution {
     pub ontology_class: &'static str,
     pub candidate_set_fingerprint: String,
+    pub planned_count: usize,
     pub removed_count: usize,
     pub removed_allocated_bytes_upper_bound: u64,
     pub executed_at_ms: u64,
     pub filesystem_mutation_executed: bool,
+    pub verification_complete: bool,
+    pub failure: Option<String>,
     pub recoverability: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemovalProgress {
+    removed_count: usize,
+    failure: Option<String>,
 }
 
 fn paths(home: &Path) -> Result<(PathBuf, PathBuf), String> {
@@ -286,6 +295,42 @@ fn plan_while_provider_quiesced<T>(
     Ok(planned)
 }
 
+fn remove_candidates_with(
+    candidates: &[OneDriveTempCandidate],
+    mut quiesced: impl FnMut() -> Result<bool, String>,
+    mut object_id: impl FnMut(&Path) -> Result<String, String>,
+    mut remove: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<RemovalProgress, String> {
+    let mut removed_count = 0usize;
+    for candidate in candidates {
+        let attempt = (|| -> Result<(), String> {
+            if !quiesced()? {
+                return Err("onedrive-temp-provider-restarted-before-delete".into());
+            }
+            let path = Path::new(&candidate.path);
+            if object_id(path)? != candidate.object_id {
+                return Err("onedrive-temp-file-changed".into());
+            }
+            remove(path)?;
+            Ok(())
+        })();
+        match attempt {
+            Ok(()) => removed_count = removed_count.saturating_add(1),
+            Err(error) if removed_count == 0 => return Err(error),
+            Err(error) => {
+                return Ok(RemovalProgress {
+                    removed_count,
+                    failure: Some(error),
+                });
+            }
+        }
+    }
+    Ok(RemovalProgress {
+        removed_count,
+        failure: None,
+    })
+}
+
 pub fn execute(
     home: &Path,
     expected_fingerprint: &str,
@@ -298,23 +343,26 @@ pub fn execute(
     {
         return Err("onedrive-temp-approval-mismatch".into());
     }
-    for candidate in &plan.candidates {
-        if !provider_quiesced()? {
-            return Err("onedrive-temp-provider-restarted-before-delete".into());
-        }
-        let path = Path::new(&candidate.path);
-        if safety::filesystem_object_id(path).ok().as_deref() != Some(&candidate.object_id) {
-            return Err("onedrive-temp-file-changed".into());
-        }
-        fs::remove_file(path).map_err(|_| "onedrive-temp-remove-failed".to_string())?;
-    }
+    let progress = remove_candidates_with(
+        &plan.candidates,
+        provider_quiesced,
+        |path| {
+            safety::filesystem_object_id(path)
+                .map_err(|_| "onedrive-temp-file-identity-unavailable".to_string())
+        },
+        |path| fs::remove_file(path).map_err(|_| "onedrive-temp-remove-failed".to_string()),
+    )?;
+    let verification_complete = progress.failure.is_none() && progress.removed_count == plan.candidates.len();
     Ok(OneDriveTempExecution {
         ontology_class: ONTOLOGY_CLASS,
         candidate_set_fingerprint: plan.candidate_set_fingerprint,
-        removed_count: plan.candidates.len(),
+        planned_count: plan.candidates.len(),
+        removed_count: progress.removed_count,
         removed_allocated_bytes_upper_bound: plan.candidate_allocated_bytes,
         executed_at_ms,
-        filesystem_mutation_executed: !plan.candidates.is_empty(),
+        filesystem_mutation_executed: progress.removed_count > 0,
+        verification_complete,
+        failure: progress.failure,
         recoverability: "not-recoverable; remote OneDrive content retained",
     })
 }
@@ -322,6 +370,19 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate(path: &str, object_id: &str) -> OneDriveTempCandidate {
+        OneDriveTempCandidate {
+            ontology_class: ONTOLOGY_CLASS.into(),
+            path: path.into(),
+            object_id: object_id.into(),
+            content_sha1: "A".repeat(40),
+            local_bytes: 1,
+            remote_bytes: 1,
+            modified_ms: 1,
+            candidate_fingerprint: "f".repeat(64),
+        }
+    }
 
     #[test]
     fn filename_parser_accepts_only_terminal_sha1_temp_names() {
@@ -360,5 +421,33 @@ mod tests {
             result,
             Err("onedrive-temp-provider-restarted-during-plan".into())
         );
+    }
+
+    #[test]
+    fn later_delete_failure_preserves_partial_mutation_receipt() {
+        let candidates = vec![candidate("/tmp/one.temp", "one"), candidate("/tmp/two.temp", "two")];
+        let mut remove_calls = 0usize;
+        let progress = remove_candidates_with(
+            &candidates,
+            || Ok(true),
+            |path| {
+                Ok(if path == Path::new("/tmp/one.temp") {
+                    "one".into()
+                } else {
+                    "two".into()
+                })
+            },
+            |_| {
+                remove_calls = remove_calls.saturating_add(1);
+                if remove_calls == 2 {
+                    Err("onedrive-temp-remove-failed".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(progress.removed_count, 1);
+        assert_eq!(progress.failure.as_deref(), Some("onedrive-temp-remove-failed"));
     }
 }
