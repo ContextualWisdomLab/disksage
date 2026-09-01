@@ -617,8 +617,8 @@ pub(crate) fn clean_cache_contents_inner(
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
-    if dir == rules::shared_temp_root() {
-        return Err("shared-temp-cleanup-requires-purpose-specific-audit".into());
+    if dir == bases.temp || dir == rules::shared_temp_root() {
+        return Err("temp-cleanup-requires-purpose-specific-audit".into());
     }
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
@@ -857,21 +857,36 @@ mod tests {
             .err()
             .expect("shared temp requires a purpose-specific audit");
 
-        assert_eq!(error, "shared-temp-cleanup-requires-purpose-specific-audit");
+        assert_eq!(error, "temp-cleanup-requires-purpose-specific-audit");
+    }
+
+    #[test]
+    fn cleanup_rejects_broad_user_temp_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        fs::create_dir(&bases.temp).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
+            .err()
+            .expect("user temp requires a purpose-specific audit");
+
+        assert_eq!(error, "temp-cleanup-requires-purpose-specific-audit");
     }
 
     #[test]
     fn cleanup_rejects_stale_target_snapshot_without_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
-        fs::create_dir(&bases.temp).unwrap();
-        let victim = bases.temp.join("keep.bin");
+        let cache = bases.home.join(".npm");
+        fs::create_dir_all(&cache).unwrap();
+        let victim = cache.join("keep.bin");
         fs::write(&victim, b"keep").unwrap();
         let journal = tmp.path().join("journal.jsonl");
-        let mut targets = rules::cache_targets(&bases.temp).unwrap();
+        let mut targets = rules::cache_targets(&cache).unwrap();
         targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &cache, &targets, &journal, 1)
             .err()
             .expect("stale target snapshot must be rejected");
 
