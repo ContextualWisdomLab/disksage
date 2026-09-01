@@ -359,4 +359,21 @@ mod tests {
         ])
         .is_err());
     }
+
+    #[test]
+    fn root_selector_rejects_non_icloud_provider() {
+        let roots = vec![CloudRoot {
+            id: "onedrive-personal".into(),
+            provider: cloud::CloudProvider::Onedrive,
+            account_scope: cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: CLOUD_ROOT.into(),
+            readable: true,
+            access_issue: None,
+        }];
+        assert_eq!(
+            select_root(&roots, Path::new(CLOUD_ROOT)).unwrap_err(),
+            "icloud-local-eviction-root-required"
+        );
+    }
 }
