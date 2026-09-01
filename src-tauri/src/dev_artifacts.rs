@@ -231,7 +231,7 @@ fn discover_candidates(root: &Path) -> Vec<PathBuf> {
     let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
     while let Some(entry) = walker.next() {
         let Ok(entry) = entry else { continue };
-        if entry.depth() > 0 && !scanner::keep_entry(&entry) {
+        if !scanner::keep_entry(&entry) {
             if entry.file_type().is_dir() {
                 walker.skip_current_dir();
             }
