@@ -91,6 +91,8 @@ mod reasoning;
 pub mod reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
+#[cfg(test)]
+mod rules_ontology_contract_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
