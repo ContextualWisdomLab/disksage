@@ -518,13 +518,6 @@ pub fn execute_podman_dangling_image_prune(
     )
 }
 
-/// Read-only evidence for VM-backed Podman and Colima storage maintenance.
-#[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn inspect_runtime_storage() -> Vec<crate::runtime_storage::RuntimeStoragePlan> {
-    crate::runtime_storage::inspect()
-}
-
 /// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
