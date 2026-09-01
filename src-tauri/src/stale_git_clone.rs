@@ -19,6 +19,7 @@ const MAX_OPEN_AGE_DAYS: u64 = 3_650;
 const MAX_BATCH_REPOSITORIES: usize = 10_000;
 const MAX_BATCH_CONCURRENCY: usize = 32;
 const MAX_BATCH_DEPTH: usize = 16;
+const REMOVAL_UNAVAILABLE: &str = "stale-git-clone-removal-identity-bound-trash-unavailable";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -626,13 +627,16 @@ pub fn plan_stale_git_clone(
     })
 }
 
+/// Stale-clone removal is intentionally unavailable until the reviewed repository is bound to a
+/// stable filesystem identity, constrained to an authorized scan root, and moved through the
+/// shared reversible Trash boundary. Read-only planning remains available.
 pub fn remove_stale_git_clone(
-    requested_path: &Path,
-    open_age_days: u64,
-    expected_fingerprint: &str,
-    confirmation_phrase: &str,
+    _requested_path: &Path,
+    _open_age_days: u64,
+    _expected_fingerprint: &str,
+    _confirmation_phrase: &str,
     rationale: &str,
-    executed_at_ms: u64,
+    _executed_at_ms: u64,
 ) -> Result<StaleGitCloneRemoval, String> {
     if rationale.trim() != rationale
         || rationale.is_empty()
@@ -641,37 +645,7 @@ pub fn remove_stale_git_clone(
     {
         return Err("stale-git-clone-rationale-invalid".into());
     }
-    let plan = plan_stale_git_clone(requested_path, open_age_days, executed_at_ms)?;
-    if !plan.eligible_after_human_approval
-        || plan.plan_fingerprint != expected_fingerprint
-        || plan.exact_approval_phrase.as_deref() != Some(confirmation_phrase)
-    {
-        return Err("stale-git-clone-approval-mismatch".into());
-    }
-    let pull_request = plan
-        .pull_request
-        .as_ref()
-        .ok_or_else(|| "stale-git-clone-pr-missing".to_string())?;
-    fs::remove_dir_all(&plan.path).map_err(|_| "stale-git-clone-remove-failed".to_string())?;
-    let path_absence_verified = !Path::new(&plan.path).exists();
-    if !path_absence_verified {
-        return Err("stale-git-clone-removal-unverified".into());
-    }
-    Ok(StaleGitCloneRemoval {
-        schema_version: SCHEMA_VERSION,
-        ontology_class: plan.ontology_class,
-        plan_fingerprint: plan.plan_fingerprint,
-        repository: plan.repository,
-        branch: plan.branch,
-        head: plan.head,
-        pull_request_number: pull_request.number,
-        removed_allocated_bytes_upper_bound: plan.size.allocated_bytes,
-        rationale: rationale.into(),
-        executed_at_ms,
-        filesystem_mutation_executed: true,
-        path_absence_verified,
-        recoverability: "remote-reclone-only",
-    })
+    Err(REMOVAL_UNAVAILABLE.into())
 }
 
 #[cfg(test)]
