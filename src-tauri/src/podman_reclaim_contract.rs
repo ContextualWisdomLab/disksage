@@ -5,13 +5,16 @@ use std::time::Duration;
 mod implementation;
 
 pub use implementation::{
-    plan_empty_dangling_volumes, prune_dangling_images, prune_empty_dangling_volumes,
-    GuestFilesystemEvidence, PodmanDanglingImagePruneExecution, PodmanEmptyVolumeExecution,
-    PodmanEmptyVolumePlan, PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan,
-    PodmanRecommendedAction, PodmanRecommendedActionKind, PodmanStoreEvidence,
-    PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence, PodmanUnusedImageEvidence,
-    RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
+    prune_dangling_images, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
+    PodmanEmptyVolumeExecution, PodmanEmptyVolumePlan, PodmanMachineEvidence,
+    PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction, PodmanRecommendedActionKind,
+    PodmanStoreEvidence, PodmanSystemDfCategoryEvidence, PodmanSystemDfEvidence,
+    PodmanUnusedImageEvidence, RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
+    PODMAN_RECLAIM_SCHEMA_KIND,
 };
+
+const PODMAN_EMPTY_VOLUME_ATOMIC_REMOVAL_UNAVAILABLE: &str =
+    "podman-empty-volume-atomic-removal-unavailable";
 
 fn dangling_image_approval_is_executable(evidence: &PodmanUnusedImageEvidence) -> bool {
     evidence.unused_untagged_records > 0
@@ -36,6 +39,44 @@ pub fn probe_podman_reclaim(
         plan.dangling_prune_approval_phrase = None;
     }
     plan
+}
+
+/// Inspect empty dangling Podman volumes while withholding unsafe destructive authority.
+///
+/// Podman's current command surface separates the final emptiness observation from `volume rm`.
+/// Another writer can populate an otherwise dangling volume in that interval, so the public
+/// contract exposes the read-only evidence but suppresses approval until DiskSage can bind the
+/// emptiness and removal decision to one atomic provider operation.
+pub fn plan_empty_dangling_volumes(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<PodmanEmptyVolumePlan, String> {
+    let mut plan = implementation::plan_empty_dangling_volumes(podman_bin, requested_machine)?;
+    plan.exact_approval_phrase = None;
+    if plan.candidate_count > 0
+        && !plan
+            .issues
+            .iter()
+            .any(|issue| issue == PODMAN_EMPTY_VOLUME_ATOMIC_REMOVAL_UNAVAILABLE)
+    {
+        plan.issues
+            .push(PODMAN_EMPTY_VOLUME_ATOMIC_REMOVAL_UNAVAILABLE.into());
+    }
+    Ok(plan)
+}
+
+/// Refuse empty-volume deletion until the provider offers an atomic identity/emptiness mutation.
+///
+/// The former implementation performed a complete re-scan and then issued a separate `volume rm`.
+/// That check-then-act gap could delete data written after approval. Returning before any provider
+/// invocation keeps the capability fail-closed without weakening the read-only planning surface.
+pub fn prune_empty_dangling_volumes(
+    _podman_bin: &Path,
+    _requested_machine: &str,
+    _confirmation_phrase: &str,
+    _rationale: &str,
+) -> Result<PodmanEmptyVolumeExecution, String> {
+    Err(PODMAN_EMPTY_VOLUME_ATOMIC_REMOVAL_UNAVAILABLE.into())
 }
 
 #[cfg(test)]
