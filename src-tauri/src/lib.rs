@@ -27,6 +27,9 @@ pub mod cloud_local_inventory;
 pub mod cloud_plan_view;
 pub mod cloud_review;
 pub mod cloud_transfer;
+#[path = "colima_reclaim.rs"]
+mod colima_reclaim_impl;
+#[path = "colima_reclaim_contract.rs"]
 pub mod colima_reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
