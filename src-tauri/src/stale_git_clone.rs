@@ -298,6 +298,21 @@ fn tracked_files_clean(cwd: &Path) -> Result<bool, String> {
     }
 }
 
+fn local_only_files(cwd: &Path) -> Result<String, String> {
+    command_text(
+        "git",
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+        ],
+        cwd,
+        "git-local-only",
+    )
+}
+
 fn github_repository(remote: &str) -> Option<String> {
     let value = remote
         .strip_prefix("https://github.com/")
@@ -478,19 +493,8 @@ pub fn plan_stale_git_clone(
     let head = command_text("git", &["rev-parse", "HEAD"], &path, "git-head")?
         .trim()
         .to_string();
-    let untracked = command_text(
-        "git",
-        &[
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "--directory",
-            "--no-empty-directory",
-        ],
-        &path,
-        "git-untracked",
-    )?;
-    let status_clean = tracked_files_clean(&path)? && untracked.is_empty();
+    let local_only = local_only_files(&path)?;
+    let status_clean = tracked_files_clean(&path)? && local_only.is_empty();
     let owner = repository
         .split_once('/')
         .map(|(owner, _)| owner)
@@ -831,6 +835,52 @@ mod tests {
         assert_eq!(tracked_files_clean(&root), Ok(true));
         fs::write(root.join("tracked"), "after").unwrap();
         assert_eq!(tracked_files_clean(&root), Ok(false));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignored_untracked_files_are_local_data() {
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!(
+            "disksage-stale-clone-ignored-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@example.invalid"],
+            vec!["config", "user.name", "DiskSage Test"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(root.join(".gitignore"), "private.log\n").unwrap();
+        fs::write(root.join("tracked"), "tracked").unwrap();
+        assert!(Command::new("git")
+            .args(["add", ".gitignore", "tracked"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "test"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        fs::write(root.join("private.log"), "customer-only data").unwrap();
+
+        assert_eq!(tracked_files_clean(&root), Ok(true));
+        assert!(local_only_files(&root)
+            .unwrap()
+            .lines()
+            .any(|path| path == "private.log"));
         fs::remove_dir_all(root).unwrap();
     }
 }
