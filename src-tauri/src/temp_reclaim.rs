@@ -103,10 +103,13 @@ fn canonical_temp_root(root: &Path) -> Result<PathBuf, String> {
         return Err("temp-reclaim-root-invalid".into());
     }
     let canonical = fs::canonicalize(root).map_err(|_| "temp-reclaim-root-unavailable")?;
+    #[cfg(target_os = "windows")]
+    let expected = fs::canonicalize(std::env::temp_dir())
+        .map_err(|_| "temp-reclaim-system-temp-unavailable".to_string())?;
     #[cfg(target_os = "macos")]
-    let expected = Path::new("/private/tmp");
-    #[cfg(not(target_os = "macos"))]
-    let expected = Path::new("/tmp");
+    let expected = PathBuf::from("/private/tmp");
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let expected = PathBuf::from("/tmp");
     if canonical != expected {
         return Err("temp-reclaim-root-not-system-temp".into());
     }
