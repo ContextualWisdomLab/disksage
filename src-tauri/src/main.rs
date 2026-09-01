@@ -9,7 +9,7 @@ extern "C" {
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn native_eviction_helper_parent_is_current_executable() -> bool {
-    use std::ffi::{CStr, OsStr};
+    use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
 
@@ -28,12 +28,20 @@ fn native_eviction_helper_parent_is_current_executable() -> bool {
             u32::try_from(buffer.len()).unwrap_or(u32::MAX),
         )
     };
-    if length <= 0 {
+    let Ok(length) = usize::try_from(length) else {
+        return false;
+    };
+    if length == 0 || length > buffer.len() {
         return false;
     }
 
-    let parent_path = unsafe { CStr::from_ptr(buffer.as_ptr().cast()) };
-    let parent_path = PathBuf::from(OsStr::from_bytes(parent_path.to_bytes()));
+    let parent_path_bytes = buffer[..length]
+        .strip_suffix(&[0])
+        .unwrap_or(&buffer[..length]);
+    if parent_path_bytes.is_empty() || parent_path_bytes.contains(&0) {
+        return false;
+    }
+    let parent_path = PathBuf::from(OsStr::from_bytes(parent_path_bytes));
     let Some(current_executable) = std::env::current_exe()
         .ok()
         .and_then(|path| std::fs::canonicalize(path).ok())
