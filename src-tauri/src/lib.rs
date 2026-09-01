@@ -27,6 +27,9 @@ pub mod cloud_local_inventory;
 pub mod cloud_plan_view;
 pub mod cloud_review;
 pub mod cloud_transfer;
+#[cfg(not(coverage))]
+mod colima_commands;
+pub mod colima_platform;
 #[path = "colima_reclaim.rs"]
 mod colima_reclaim_impl;
 #[path = "colima_reclaim_contract.rs"]
@@ -164,8 +167,8 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
-            commands::inspect_colima_reclaim,
-            commands::execute_colima_cache_prune,
+            colima_commands::inspect_colima_reclaim,
+            colima_commands::execute_colima_cache_prune,
             commands::inspect_colima_dangling_images,
             commands::execute_colima_dangling_images,
             commands::inspect_colima_empty_volumes,
