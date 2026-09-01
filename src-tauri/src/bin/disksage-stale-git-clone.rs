@@ -2,6 +2,7 @@ use disksage_lib::{cloud, stale_git_clone};
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: disksage-stale-git-clone (--repository-root ABSOLUTE_PATH | --scan-root ABSOLUTE_PATH [--max-depth 1..16] [--concurrency 1..32] [--max-repositories N]) [--open-age-days N] [--apply --plan-fingerprint HEX --confirmation-phrase PHRASE --rationale TEXT]";
+const REMOVAL_UNAVAILABLE: &str = "stale-git-clone-removal-identity-bound-trash-unavailable";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -12,9 +13,6 @@ struct Args {
     max_depth: usize,
     open_age_days: u64,
     apply: bool,
-    plan_fingerprint: Option<String>,
-    confirmation_phrase: Option<String>,
-    rationale: Option<String>,
 }
 
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
@@ -106,14 +104,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_depth,
         open_age_days,
         apply,
-        plan_fingerprint,
-        confirmation_phrase,
-        rationale,
     })
 }
 
 fn run() -> Result<(), String> {
     let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    if args.apply {
+        return Err(REMOVAL_UNAVAILABLE.into());
+    }
     let now_ms = cloud::system_now_ms();
     let json = if let Some(scan_root) = &args.scan_root {
         serde_json::to_value(stale_git_clone::plan_stale_git_clones(
@@ -123,15 +121,6 @@ fn run() -> Result<(), String> {
             args.max_repositories,
             args.concurrency,
             args.max_depth,
-        )?)
-    } else if args.apply {
-        serde_json::to_value(stale_git_clone::remove_stale_git_clone(
-            &args.repository_root,
-            args.open_age_days,
-            args.plan_fingerprint.as_deref().unwrap_or_default(),
-            args.confirmation_phrase.as_deref().unwrap_or_default(),
-            args.rationale.as_deref().unwrap_or_default(),
-            now_ms,
         )?)
     } else {
         serde_json::to_value(stale_git_clone::plan_stale_git_clone(
