@@ -385,6 +385,24 @@ mod tests {
     }
 
     #[test]
+    fn missing_staging_directory_returns_empty_plan() {
+        let home = std::env::temp_dir().join(format!(
+            "disksage-onedrive-missing-staging-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&home).unwrap();
+        let planned = plan(&home, MIN_AGE_MS).expect("missing staging is a clean empty state");
+        assert!(planned.candidates.is_empty());
+        assert_eq!(planned.candidate_allocated_bytes, 0);
+        assert!(planned.exact_approval_phrase.is_none());
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn filename_parser_accepts_only_terminal_sha1_temp_names() {
         assert_eq!(
             filename_sha1(Path::new(
