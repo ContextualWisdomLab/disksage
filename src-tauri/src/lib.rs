@@ -95,7 +95,6 @@ pub mod semantic_catalog;
 #[cfg_attr(coverage, allow(dead_code))]
 mod settings;
 pub mod stale_git_clone;
-pub mod stale_git_clone_commands;
 pub mod temp_reclaim;
 #[path = "transparent_compression.rs"]
 mod transparent_compression_impl;
@@ -169,7 +168,7 @@ pub fn run() {
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
             commands::plan_stale_git_clone,
-            stale_git_clone_commands::remove_stale_git_clone,
+            commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,
