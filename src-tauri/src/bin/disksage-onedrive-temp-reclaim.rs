@@ -1,16 +1,26 @@
 use disksage_lib::{cloud, onedrive_temp_reclaim};
 use std::path::PathBuf;
 
+const USAGE: &str = "usage: disksage-onedrive-temp-reclaim [--apply FINGERPRINT APPROVAL_PHRASE]";
+
 fn execution_failed(execution: &onedrive_temp_reclaim::OneDriveTempExecution) -> bool {
     execution.failure.is_some() || !execution.verification_complete
 }
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
+    let first = args.next();
+    if matches!(first.as_deref(), Some("--help" | "-h")) {
+        if args.next().is_some() {
+            return Err(USAGE.into());
+        }
+        println!("{USAGE}");
+        return Ok(());
+    }
+
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("home-unavailable")?;
-    let first = args.next();
     let (output, execution_failure) = if first.as_deref() == Some("--apply") {
         let fingerprint = args.next().ok_or("plan-fingerprint-required")?;
         let approval = args.next().ok_or("approval-phrase-required")?;
@@ -35,9 +45,7 @@ fn run() -> Result<(), String> {
             false,
         )
     } else {
-        return Err(
-            "usage: disksage-onedrive-temp-reclaim [--apply FINGERPRINT APPROVAL_PHRASE]".into(),
-        );
+        return Err(USAGE.into());
     };
     println!(
         "{}",
