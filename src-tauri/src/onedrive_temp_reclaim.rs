@@ -6,7 +6,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus},
 };
 
 const ONTOLOGY_CLASS: &str = "https://disksage.app/ontology#CloudTransferTemporaryArtifact";
@@ -249,12 +249,26 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OneDriveTempPlan, String
     })
 }
 
-fn provider_running() -> bool {
-    ["OneDrive", "OneDrive Sync Service"].iter().any(|name| {
+fn provider_quiesced_with(
+    mut observe: impl FnMut(&str) -> std::io::Result<ExitStatus>,
+) -> Result<bool, String> {
+    for name in ["OneDrive", "OneDrive Sync Service"] {
+        let status = observe(name)
+            .map_err(|_| "onedrive-temp-provider-observation-failed".to_string())?;
+        match status.code() {
+            Some(0) => return Ok(false),
+            Some(1) => {}
+            _ => return Err("onedrive-temp-provider-observation-failed".into()),
+        }
+    }
+    Ok(true)
+}
+
+fn provider_quiesced() -> Result<bool, String> {
+    provider_quiesced_with(|name| {
         Command::new("/usr/bin/pgrep")
             .args(["-x", name])
             .status()
-            .is_ok_and(|status| status.success())
     })
 }
 
@@ -264,7 +278,7 @@ pub fn execute(
     approval: &str,
     executed_at_ms: u64,
 ) -> Result<OneDriveTempExecution, String> {
-    if provider_running() {
+    if !provider_quiesced()? {
         return Err("onedrive-temp-provider-not-quiesced".into());
     }
     let plan = plan(home, executed_at_ms)?;
