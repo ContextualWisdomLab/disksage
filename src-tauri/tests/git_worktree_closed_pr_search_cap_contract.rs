@@ -42,24 +42,28 @@ fn paginated_rest_result_above_supported_bound_fails_closed() {
         .map(|index| {
             json!({
                 "number": index + 1,
-                "state": "closed",
-                "created_at": "2026-01-01T00:00:00Z",
-                "merged_at": null,
-                "head": {"ref": format!("closed-{index}"), "sha": format!("{index:040x}"), "repo": {"full_name": "owner/repo"}},
-                "base": {"ref": "main", "sha": format!("{:040x}", 10_002), "repo": {"full_name": "owner/repo"}}
+                "headRefName": format!("closed-{index}"),
+                "headRefOid": format!("{index:040x}"),
+                "isCrossRepository": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "state": "CLOSED"
             })
         })
         .collect();
     fs::write(
         &output_path,
-        serde_json::to_vec(&vec![records]).expect("serialize fake GitHub response"),
+        records
+            .iter()
+            .map(|record| serde_json::to_string(record).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
     .expect("write fake GitHub response");
 
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' api --paginate --slurp repos/{owner}/{repo}/pulls?state=all&per_page=100 '*) cat \"$DISKSAGE_FAKE_GH_OUTPUT\" ;;\n  *) exit 64 ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' api --paginate repos/{owner}/{repo}/pulls?state=all&per_page=100 --jq '*) cat \"$DISKSAGE_FAKE_GH_OUTPUT\" ;;\n  *) exit 64 ;;\nesac\n",
     )
     .expect("write fake gh executable");
     let mut permissions = fs::metadata(&gh_path)

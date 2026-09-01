@@ -46,7 +46,7 @@ fn one_timeout_bounds_the_complete_github_evidence_phase() {
         r#"#!/bin/sh
 set -eu
 case "$*" in
-  "api --paginate --slurp repos/{owner}/{repo}/pulls?state=all&per_page=100"*) sleep 1; printf '[[]]\n' ;;
+  "api --paginate repos/{owner}/{repo}/pulls?state=all&per_page=100 --jq "*) sleep 1; printf '' ;;
   "api repos/{owner}/{repo} --jq .full_name"*) sleep 1; printf 'ContextualWisdomLab/disksage\n' ;;
   "api -X GET search/issues "*) printf '{"total_count":0,"items":[]}\n' ;;
   *) printf 'unexpected fake gh invocation\n' >&2; exit 9 ;;

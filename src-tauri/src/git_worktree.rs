@@ -514,29 +514,6 @@ struct GitHubPullRequestHead {
 }
 
 #[derive(serde::Deserialize)]
-struct GitHubRestRepository {
-    full_name: String,
-}
-
-#[derive(serde::Deserialize)]
-struct GitHubRestPullRequestHead {
-    #[serde(rename = "ref")]
-    ref_name: String,
-    sha: String,
-    repo: Option<GitHubRestRepository>,
-}
-
-#[derive(serde::Deserialize)]
-struct GitHubRestPullRequest {
-    number: u64,
-    state: String,
-    created_at: String,
-    merged_at: Option<String>,
-    head: GitHubRestPullRequestHead,
-    base: GitHubRestPullRequestHead,
-}
-
-#[derive(serde::Deserialize)]
 struct GitHubRestSearchPullRequest {
     number: u64,
     state: String,
@@ -642,8 +619,11 @@ fn github_pull_request_heads_result(
         &[
             OsString::from("api"),
             OsString::from("--paginate"),
-            OsString::from("--slurp"),
             OsString::from("repos/{owner}/{repo}/pulls?state=all&per_page=100"),
+            OsString::from("--jq"),
+            OsString::from(
+                ".[] | {number, headRefName:.head.ref, headRefOid:.head.sha, isCrossRepository:(.head.repo.full_name != .base.repo.full_name), createdAt:.created_at, state:(if .state == \"open\" then \"OPEN\" elif .merged_at != null then \"MERGED\" else \"CLOSED\" end)}",
+            ),
         ],
         repository_root,
         timeout_ms,
@@ -657,28 +637,10 @@ fn github_pull_request_heads_result(
     if result.status_code != Some(0) {
         return Err(format!("{reason}-failed"));
     }
-    let pages: Vec<Vec<GitHubRestPullRequest>> =
-        serde_json::from_slice(&result.stdout).map_err(|_| format!("{reason}-json-invalid"))?;
-    let records = pages
-        .into_iter()
-        .flatten()
-        .map(|record| GitHubPullRequestHead {
-            number: Some(record.number),
-            head_ref_name: record.head.ref_name,
-            head_ref_oid: record.head.sha,
-            is_cross_repository: record.head.repo.as_ref().map(|repo| &repo.full_name)
-                != record.base.repo.as_ref().map(|repo| &repo.full_name),
-            created_at: Some(record.created_at),
-            state: if record.state == "open" {
-                "OPEN"
-            } else if record.merged_at.is_some() {
-                "MERGED"
-            } else {
-                "CLOSED"
-            }
-            .into(),
-        })
-        .collect::<Vec<_>>();
+    let records = serde_json::Deserializer::from_slice(&result.stdout)
+        .into_iter::<GitHubPullRequestHead>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| format!("{reason}-json-invalid"))?;
     Ok(CommandResult {
         stdout: serde_json::to_vec(&records).map_err(|_| format!("{reason}-json-invalid"))?,
         ..result

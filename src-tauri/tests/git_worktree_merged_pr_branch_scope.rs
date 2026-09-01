@@ -56,11 +56,7 @@ fn closed_and_merged_heads_use_one_paginated_rest_request_with_open_veto() {
     fs::write(
         &output_path,
         format!(
-            r#"[[
-              {{"number":1,"state":"closed","created_at":"2026-01-01T00:00:00Z","merged_at":null,"head":{{"ref":"closed-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}},
-              {{"number":2,"state":"closed","created_at":"2026-01-01T00:00:00Z","merged_at":"2026-01-02T00:00:00Z","head":{{"ref":"merged-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}},
-              {{"number":3,"state":"open","created_at":"2026-01-01T00:00:00Z","merged_at":null,"head":{{"ref":"closed-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}}
-            ]]"#
+            "{{\"number\":1,\"headRefName\":\"closed-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"createdAt\":\"2026-01-01T00:00:00Z\",\"state\":\"CLOSED\"}}\n{{\"number\":2,\"headRefName\":\"merged-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"createdAt\":\"2026-01-01T00:00:00Z\",\"state\":\"MERGED\"}}\n{{\"number\":3,\"headRefName\":\"closed-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"createdAt\":\"2026-01-01T00:00:00Z\",\"state\":\"OPEN\"}}\n"
         ),
     )
     .expect("write fake REST response");
@@ -70,7 +66,7 @@ fn closed_and_merged_heads_use_one_paginated_rest_request_with_open_veto() {
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DISKSAGE_FAKE_GH_LOG\"\ncase \" $* \" in\n  *' api --paginate --slurp repos/{owner}/{repo}/pulls?state=all&per_page=100 '*) cat \"$DISKSAGE_FAKE_GH_OUTPUT\" ;;\n  *) exit 64 ;;\nesac\n",
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DISKSAGE_FAKE_GH_LOG\"\ncase \" $* \" in\n  *' api --paginate repos/{owner}/{repo}/pulls?state=all&per_page=100 --jq '*) cat \"$DISKSAGE_FAKE_GH_OUTPUT\" ;;\n  *) exit 64 ;;\nesac\n",
     )
     .expect("write fake gh executable");
     let mut permissions = fs::metadata(&gh_path)
