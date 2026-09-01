@@ -327,11 +327,12 @@ fn list_dangling_volumes(
 fn collect_empty_volume_probe_results(
     results: Vec<Result<Option<PodmanVolumeRecord>, String>>,
 ) -> Result<Vec<PodmanVolumeRecord>, String> {
-    let mut empty = results
-        .into_iter()
-        .filter_map(Result::ok)
-        .flatten()
-        .collect::<Vec<_>>();
+    let mut empty = Vec::new();
+    for result in results {
+        if let Some(volume) = result? {
+            empty.push(volume);
+        }
+    }
     empty.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(empty)
 }
