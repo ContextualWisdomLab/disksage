@@ -5,8 +5,8 @@ const REMOVAL_UNAVAILABLE: &str =
 
 /// Keep destructive stale-clone removal unavailable before any caller-controlled path,
 /// approval, or rationale is interpreted. Read-only planning remains available separately.
-#[tauri::command]
-pub fn remove_stale_git_clone(
+#[tauri::command(rename = "remove_stale_git_clone")]
+pub fn remove_stale_git_clone_fail_closed(
     repository_root: String,
     open_age_days: u64,
     approved_plan_fingerprint: String,
