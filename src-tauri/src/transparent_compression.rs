@@ -429,6 +429,31 @@ pub fn execute(
 mod tests {
     use super::*;
 
+    fn candidate(path: &str, allocated_bytes: u64) -> TransparentCompressionCandidate {
+        TransparentCompressionCandidate {
+            path: path.into(),
+            logical_bytes: allocated_bytes,
+            allocated_bytes,
+            modified_ms: 1,
+            device: 1,
+            inode: allocated_bytes,
+        }
+    }
+
+    #[test]
+    fn partial_worker_failure_preserves_successful_mutation_receipt() {
+        let candidates = vec![candidate("/tmp/one.jsonl", 100), candidate("/tmp/two.jsonl", 200)];
+        let progress = summarize_compression_results(
+            &candidates,
+            vec![Ok((40, true)), Err("compression-output-sync-failed".into())],
+        );
+        assert_eq!(progress.compressed_count, 1);
+        assert_eq!(progress.not_compressible_count, 0);
+        assert_eq!(progress.failed_count, 1);
+        assert_eq!(progress.allocated_bytes_after_upper_bound, 240);
+        assert_eq!(progress.failures, vec!["compression-output-sync-failed"]);
+    }
+
     #[test]
     fn activity_probe_fails_closed_on_lsof_errors() {
         assert!(activity_probe_proves_inactive(Some(1), false, false, false));
