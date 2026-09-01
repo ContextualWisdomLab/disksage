@@ -335,6 +335,14 @@ mod tests {
         assert!(validate_options(options).is_err());
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_system_temp_root_is_accepted() {
+        let requested = std::env::temp_dir();
+        let expected = fs::canonicalize(&requested).expect("canonical Windows temp root");
+        assert_eq!(canonical_temp_root(&requested).unwrap(), expected);
+    }
+
     #[test]
     fn removal_fails_before_filesystem_observation() {
         assert_eq!(
