@@ -22,4 +22,11 @@ describe("Git worktree closed-PR opt-in", () => {
     expect(source).toContain("removeStaleGitWorktrees(");
     expect(source).toContain("보존할 작업 기록은 유지됩니다");
   });
+
+  it("discloses that opting in can admit clean worktrees from closed but unmerged pull requests", () => {
+    const source = readSource("src/lib/GitWorktreeCleanup.svelte");
+
+    expect(source).toContain("병합 없이 종료된 PR의 깨끗한 보조 폴더도 정리 후보가 될 수 있습니다.");
+    expect(source).toContain("브랜치와 커밋은 유지됩니다.");
+  });
 });
