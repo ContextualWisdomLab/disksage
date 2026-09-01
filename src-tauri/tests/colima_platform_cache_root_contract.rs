@@ -31,6 +31,22 @@ mod unix_contract {
     }
 
     #[test]
+    fn colima_cache_home_takes_precedence_over_xdg_cache_home() {
+        let _guard = ENV_LOCK.lock().expect("environment test lock");
+        let restore = restore();
+        let colima = tempfile::tempdir().expect("colima cache home");
+        let xdg = tempfile::tempdir().expect("xdg cache home");
+        unsafe { std::env::set_var("COLIMA_CACHE_HOME", colima.path()) };
+        unsafe { std::env::set_var("XDG_CACHE_HOME", xdg.path()) };
+
+        let actual = configured_cache_root(Path::new("/fallback/cache"))
+            .expect("configured Colima cache root");
+        drop(restore);
+
+        assert_eq!(actual, colima.path());
+    }
+
+    #[test]
     fn xdg_cache_home_matches_colima_upstream_cache_contract() {
         let _guard = ENV_LOCK.lock().expect("environment test lock");
         let restore = restore();
@@ -46,7 +62,7 @@ mod unix_contract {
     }
 
     #[test]
-    fn relative_explicit_cache_configuration_fails_closed() {
+    fn relative_colima_cache_home_fails_closed() {
         let _guard = ENV_LOCK.lock().expect("environment test lock");
         let restore = restore();
         unsafe { std::env::set_var("COLIMA_CACHE_HOME", "relative-colima-cache") };
@@ -54,6 +70,20 @@ mod unix_contract {
 
         let error = configured_cache_root(Path::new("/fallback/cache"))
             .expect_err("relative Colima cache home must not be authorized");
+        drop(restore);
+
+        assert_eq!(error, "colima-cache-home-relative-unsupported");
+    }
+
+    #[test]
+    fn relative_xdg_cache_home_fails_closed() {
+        let _guard = ENV_LOCK.lock().expect("environment test lock");
+        let restore = restore();
+        unsafe { std::env::remove_var("COLIMA_CACHE_HOME") };
+        unsafe { std::env::set_var("XDG_CACHE_HOME", "relative-xdg-cache") };
+
+        let error = configured_cache_root(Path::new("/fallback/cache"))
+            .expect_err("relative XDG cache home must not be authorized");
         drop(restore);
 
         assert_eq!(error, "colima-cache-home-relative-unsupported");
@@ -71,5 +101,19 @@ mod unix_contract {
         drop(restore);
 
         assert_eq!(actual, fallback.join("colima"));
+    }
+
+    #[test]
+    fn relative_platform_cache_directory_fails_closed() {
+        let _guard = ENV_LOCK.lock().expect("environment test lock");
+        let restore = restore();
+        unsafe { std::env::remove_var("COLIMA_CACHE_HOME") };
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+
+        let error = configured_cache_root(Path::new("relative-platform-cache"))
+            .expect_err("relative platform cache root must not be authorized");
+        drop(restore);
+
+        assert_eq!(error, "colima-cache-home-relative-unsupported");
     }
 }
