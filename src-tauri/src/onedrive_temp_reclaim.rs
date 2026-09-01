@@ -294,6 +294,7 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn filename_parser_accepts_only_terminal_sha1_temp_names() {
         assert_eq!(
@@ -308,6 +309,15 @@ mod tests {
                 "item-0123456789abcdef0123456789abcdef0123456z.temp"
             )),
             None
+        );
+    }
+
+    #[test]
+    fn provider_observation_failure_is_not_quiescence() {
+        let result = provider_quiesced_with(|_| Err(std::io::Error::other("pgrep unavailable")));
+        assert_eq!(
+            result,
+            Err("onedrive-temp-provider-observation-failed".into())
         );
     }
 }
