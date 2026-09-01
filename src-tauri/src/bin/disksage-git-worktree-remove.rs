@@ -10,6 +10,7 @@ use std::path::PathBuf;
 const USAGE: &str = "usage: disksage-git-worktree-remove \
 --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] \
 [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] \
+[--command-timeout-ms N] [--size-scan-timeout-ms N] \
 --approved-removal-plan-fingerprint HEX64 \
 --confirmation-exact-approval-phrase PHRASE --reviewed-by human:ID --rationale TEXT \
 --record-root ABSOLUTE_PATH";
@@ -20,6 +21,8 @@ struct Args {
     retention_references: Vec<String>,
     include_closed_pull_requests: bool,
     stale_open_pull_request_cutoff_ms: Option<u64>,
+    command_timeout_ms: u64,
+    size_scan_timeout_ms: u64,
     plan_fingerprint: String,
     confirmation_phrase: String,
     reviewed_by: String,
@@ -52,6 +55,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut plan_fingerprint = None;
     let mut include_closed_pull_requests = false;
     let mut stale_open_pull_request_cutoff_ms = None;
+    let mut command_timeout_ms = None;
+    let mut size_scan_timeout_ms = None;
     let mut confirmation_phrase = None;
     let mut reviewed_by = None;
     let mut rationale = None;
@@ -80,6 +85,22 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 )
             }
             Some("--stale-open-pull-request-cutoff-ms") => return Err("duplicate option".into()),
+            Some("--command-timeout-ms") if command_timeout_ms.is_none() => {
+                command_timeout_ms = Some(
+                    next_utf8(&mut args, "--command-timeout-ms")?
+                        .parse()
+                        .map_err(|_| "--command-timeout-ms must be an integer")?,
+                )
+            }
+            Some("--command-timeout-ms") => return Err("duplicate option".into()),
+            Some("--size-scan-timeout-ms") if size_scan_timeout_ms.is_none() => {
+                size_scan_timeout_ms = Some(
+                    next_utf8(&mut args, "--size-scan-timeout-ms")?
+                        .parse()
+                        .map_err(|_| "--size-scan-timeout-ms must be an integer")?,
+                )
+            }
+            Some("--size-scan-timeout-ms") => return Err("duplicate option".into()),
             Some("--approved-removal-plan-fingerprint") => {
                 plan_fingerprint =
                     Some(next_utf8(&mut args, "--approved-removal-plan-fingerprint")?)
@@ -130,6 +151,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
         retention_references,
         include_closed_pull_requests,
         stale_open_pull_request_cutoff_ms,
+        command_timeout_ms: command_timeout_ms.unwrap_or(10_000),
+        size_scan_timeout_ms: size_scan_timeout_ms.unwrap_or(60_000),
         plan_fingerprint,
         confirmation_phrase,
         reviewed_by,
@@ -150,7 +173,11 @@ struct RemovalOutput {
 }
 
 fn execute(args: Args) -> Result<RemovalOutput, String> {
-    let options = git_worktree::GitWorktreeAuditOptions::default();
+    let options = git_worktree::GitWorktreeAuditOptions {
+        command_timeout_ms: args.command_timeout_ms,
+        size_scan_timeout_ms: args.size_scan_timeout_ms,
+        ..git_worktree::GitWorktreeAuditOptions::default()
+    };
     let audited_at_ms = cloud::system_now_ms();
     let evidence = git_worktree_github_evidence::collect(
         &args.repository_root,
