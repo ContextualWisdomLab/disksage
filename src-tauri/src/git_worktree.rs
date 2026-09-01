@@ -536,6 +536,24 @@ pub struct PullRequestCommitMembership {
     pub open: BTreeMap<String, BTreeSet<u64>>,
 }
 
+fn retain_registered_pull_request_membership(
+    membership: PullRequestCommitMembership,
+    registered_heads: &BTreeSet<String>,
+) -> PullRequestCommitMembership {
+    PullRequestCommitMembership {
+        completed: membership
+            .completed
+            .intersection(registered_heads)
+            .cloned()
+            .collect(),
+        open: membership
+            .open
+            .into_iter()
+            .filter(|(head, _)| registered_heads.contains(head))
+            .collect(),
+    }
+}
+
 fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads, String> {
     let records: Vec<GitHubPullRequestHead> =
         serde_json::from_slice(bytes).map_err(|_| "github-closed-pr-json-invalid".to_string())?;
@@ -685,7 +703,7 @@ fn pull_request_contains_commit(bytes: &[u8], head: &str) -> Result<bool, String
         count = count.saturating_add(1);
         found |= oid == head;
     }
-        if count > 10_000 {
+    if count > 10_000 {
         return Err("github-pr-commit-count-exceeds-limit".into());
     }
     Ok(found)
@@ -917,12 +935,14 @@ pub(crate) fn github_pull_request_commit_membership_with_exact(
         return Err("github-repository-identity-invalid".into());
     }
 
-    let heads = list_worktrees(repository_root, options)?
+    let registered_heads = list_worktrees(repository_root, options)?
         .into_iter()
         .map(|worktree| worktree.head)
-        .filter(|head| !exact.completed.contains(head) && !exact.open.contains_key(head))
-        .collect::<BTreeSet<_>>()
+        .collect::<BTreeSet<_>>();
+    let exact = retain_registered_pull_request_membership(exact, &registered_heads);
+    let heads = registered_heads
         .into_iter()
+        .filter(|head| !exact.completed.contains(head) && !exact.open.contains_key(head))
         .collect::<Vec<_>>();
     let mut membership = exact;
     let mut discovered = Vec::new();
@@ -3127,6 +3147,19 @@ mod tests {
         let exact = parse_exact_pull_request_commit_membership(json.as_bytes()).unwrap();
         assert_eq!(exact.completed, BTreeSet::from([oid('a')]));
         assert!(exact.open.is_empty());
+
+        let relevant = retain_registered_pull_request_membership(
+            PullRequestCommitMembership {
+                completed: BTreeSet::from([oid('a'), oid('b')]),
+                open: BTreeMap::from([(oid('c'), BTreeSet::from([3]))]),
+            },
+            &BTreeSet::from([oid('a'), oid('c')]),
+        );
+        assert_eq!(relevant.completed, BTreeSet::from([oid('a')]));
+        assert_eq!(
+            relevant.open,
+            BTreeMap::from([(oid('c'), BTreeSet::from([3]))])
+        );
     }
 
     #[test]
