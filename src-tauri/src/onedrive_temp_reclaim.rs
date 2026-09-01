@@ -167,10 +167,13 @@ fn candidate_set_fingerprint(candidates: &[OneDriveTempCandidate]) -> String {
 
 pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OneDriveTempPlan, String> {
     let (temp_root, database_path) = paths(home)?;
-    let mut entries = fs::read_dir(&temp_root)
-        .map_err(|_| "onedrive-temp-root-unavailable".to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "onedrive-temp-root-unreadable".to_string())?;
+    let mut entries = match fs::read_dir(&temp_root) {
+        Ok(entries) => entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "onedrive-temp-root-unreadable".to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return Err("onedrive-temp-root-unavailable".into()),
+    };
     entries.sort_by_key(|entry| entry.file_name());
     if entries.len() > MAX_FILES {
         return Err("onedrive-temp-file-limit-exceeded".into());
