@@ -13,18 +13,29 @@ pub use implementation::{
     RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
+// Keep this contract value aligned with the exact-ID executor ceiling. The public wrapper must
+// never issue an approval that `prune_dangling_images` will reject before mutation.
+const MAX_EXECUTABLE_DANGLING_IMAGE_IDS: u64 = 256;
+
+fn dangling_image_approval_is_executable(evidence: &PodmanUnusedImageEvidence) -> bool {
+    evidence.unused_untagged_records > 0
+        && evidence.unused_untagged_records <= MAX_EXECUTABLE_DANGLING_IMAGE_IDS
+}
+
 /// Probe Podman reclaimability without offering an approval that the exact executor must reject.
-/// The dangling-image executor permits only a non-empty, exclusively untagged candidate set, so
-/// the public plan applies the same condition before exposing its backend-authored phrase.
+/// Tagged unused images may coexist with executable dangling candidates because the executor
+/// removes only immutable untagged IDs while binding approval to the complete candidate snapshot.
 pub fn probe_podman_reclaim(
     podman_bin: &Path,
     requested_machine: &str,
     timeout: Duration,
 ) -> PodmanReclaimPlan {
     let mut plan = implementation::probe_podman_reclaim(podman_bin, requested_machine, timeout);
-    if plan.unused_images.as_ref().is_none_or(|evidence| {
-        evidence.unused_untagged_records == 0 || evidence.unused_tagged_records > 0
-    }) {
+    if plan
+        .unused_images
+        .as_ref()
+        .is_none_or(|evidence| !dangling_image_approval_is_executable(evidence))
+    {
         plan.dangling_prune_approval_phrase = None;
     }
     plan
