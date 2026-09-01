@@ -7,7 +7,7 @@ mod unix {
     use std::time::Duration;
 
     #[test]
-    fn mixed_tagged_and_untagged_unused_images_do_not_offer_prune_approval() {
+    fn mixed_tagged_and_untagged_unused_images_offer_exact_prune_approval() {
         let root = std::env::temp_dir().join(format!(
             "disksage-podman-mixed-approval-{}",
             std::process::id()
@@ -63,7 +63,7 @@ esac
         let evidence = plan.unused_images.expect("unused image evidence should be complete");
         assert_eq!(evidence.unused_untagged_records, 1);
         assert_eq!(evidence.unused_tagged_records, 1);
-        assert_eq!(plan.dangling_prune_approval_phrase, None);
+        assert!(plan.dangling_prune_approval_phrase.is_some());
         fs::remove_dir_all(root).unwrap();
     }
 }
