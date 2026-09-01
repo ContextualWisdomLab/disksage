@@ -1,10 +1,11 @@
-use disksage_lib::temp_reclaim::{plan_temp_reclaim, remove_temp_candidates, TempReclaimOptions};
+use disksage_lib::temp_reclaim::{plan_temp_reclaim, TempReclaimOptions};
 use std::path::Path;
 
 #[cfg(target_os = "macos")]
 const ROOT: &str = "/private/tmp";
 #[cfg(not(target_os = "macos"))]
 const ROOT: &str = "/tmp";
+const REMOVAL_UNAVAILABLE: &str = "temp-reclaim-removal-private-approval-unavailable";
 
 fn usage() -> &'static str {
     "usage: disksage-temp-reclaim [--execute FINGERPRINT PHRASE RATIONALE]"
@@ -30,21 +31,13 @@ fn now_ms() -> u64 {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if parse_args(&args)?.is_some() {
+        return Err(REMOVAL_UNAVAILABLE.into());
+    }
     let options = TempReclaimOptions::default();
     let now = now_ms();
-    let output = match parse_args(&args)? {
-        None => serde_json::to_value(plan_temp_reclaim(Path::new(ROOT), options, now)?)
-            .map_err(|_| "temp-reclaim-json-failed".to_string())?,
-        Some((fingerprint, phrase, rationale)) => serde_json::to_value(remove_temp_candidates(
-            Path::new(ROOT),
-            options,
-            fingerprint,
-            phrase,
-            rationale,
-            now,
-        )?)
-        .map_err(|_| "temp-reclaim-json-failed".to_string())?,
-    };
+    let output = serde_json::to_value(plan_temp_reclaim(Path::new(ROOT), options, now)?)
+        .map_err(|_| "temp-reclaim-json-failed".to_string())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|_| "temp-reclaim-json-failed".to_string())?
