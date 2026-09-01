@@ -866,7 +866,7 @@ pub fn plan_colima_guest_trim(
     timeout: Duration,
 ) -> ColimaGuestTrimPlan {
     let evidence = running_profile(executable, profile, timeout);
-    let mut blockers = vec!["lima-native-host-compaction-command-unavailable".into()];
+    let mut blockers = Vec::new();
     let configured_disk_bytes = evidence
         .as_ref()
         .map(|candidate| candidate.configured_disk_bytes)
