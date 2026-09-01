@@ -69,7 +69,7 @@ mod organize;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
-#[path = "podman_reclaim_public.rs"]
+#[path = "podman_reclaim_contract.rs"]
 pub mod podman_reclaim;
 pub mod private_evidence;
 pub mod provider_api_client;
