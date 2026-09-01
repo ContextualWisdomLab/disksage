@@ -45,8 +45,10 @@ fn now_ms() -> u64 {
 }
 
 /// Returns read-only Colima profile, VM-state, configured-disk, and cache-allocation evidence.
-#[tauri::command(async)]
-pub fn inspect_colima_reclaim(app: AppHandle) -> Result<colima_reclaim::ColimaReclaimPlan, String> {
+#[tauri::command(rename = "inspect_colima_reclaim", async)]
+pub fn inspect_colima_reclaim_configured(
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaReclaimPlan, String> {
     let home = resolve_home(&app)?;
     let cache_root = cache_root(&app)?;
     Ok(colima_reclaim::plan_colima_reclaim(
@@ -57,8 +59,8 @@ pub fn inspect_colima_reclaim(app: AppHandle) -> Result<colima_reclaim::ColimaRe
 }
 
 /// Replans against the currently configured Colima cache root before invoking native cache prune.
-#[tauri::command(async)]
-pub fn execute_colima_cache_prune(
+#[tauri::command(rename = "execute_colima_cache_prune", async)]
+pub fn execute_colima_cache_prune_configured(
     confirmation_phrase: String,
     rationale: String,
     app: AppHandle,
