@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 const SCHEMA_VERSION: u32 = 1;
 const MAX_CHILDREN: usize = 10_000;
 const MAX_AGE_SECONDS: u64 = 365 * 86_400;
+const REMOVAL_UNAVAILABLE: &str = "temp-reclaim-removal-private-approval-unavailable";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -290,13 +291,17 @@ pub fn plan_temp_reclaim(
     })
 }
 
+/// Permanent deletion is deliberately unavailable until DiskSage can bind a private approval to
+/// every exact child and move each object through the shared identity-checked Trash boundary.
+/// Planning remains available so operators can inspect allocation and active-use evidence without
+/// granting mutation authority.
 pub fn remove_temp_candidates(
-    requested_root: &Path,
-    options: TempReclaimOptions,
-    expected_candidate_set_fingerprint: &str,
-    confirmation_phrase: &str,
+    _requested_root: &Path,
+    _options: TempReclaimOptions,
+    _expected_candidate_set_fingerprint: &str,
+    _confirmation_phrase: &str,
     rationale: &str,
-    executed_at_ms: u64,
+    _executed_at_ms: u64,
 ) -> Result<TempReclaimRemoval, String> {
     if rationale.trim() != rationale
         || rationale.is_empty()
@@ -305,46 +310,7 @@ pub fn remove_temp_candidates(
     {
         return Err("temp-reclaim-rationale-invalid".into());
     }
-    let plan = plan_temp_reclaim(requested_root, options, executed_at_ms)?;
-    if !plan.evidence_complete
-        || plan.candidate_set_fingerprint != expected_candidate_set_fingerprint
-        || plan.exact_approval_phrase.as_deref() != Some(confirmation_phrase)
-    {
-        return Err("temp-reclaim-approval-mismatch".into());
-    }
-    let mut removed_count = 0usize;
-    let mut removed_allocated_bytes_upper_bound = 0u64;
-    for candidate in &plan.candidates {
-        let path = Path::new(&candidate.path);
-        let metadata =
-            fs::symlink_metadata(path).map_err(|_| "temp-reclaim-candidate-changed".to_string())?;
-        let (_, device, inode) = identity(&metadata);
-        if metadata.file_type().is_symlink()
-            || device != candidate.device
-            || inode != candidate.inode
-        {
-            return Err("temp-reclaim-candidate-changed".into());
-        }
-        if metadata.is_dir() {
-            fs::remove_dir_all(path).map_err(|_| "temp-reclaim-remove-failed".to_string())?;
-        } else {
-            fs::remove_file(path).map_err(|_| "temp-reclaim-remove-failed".to_string())?;
-        }
-        removed_count += 1;
-        removed_allocated_bytes_upper_bound =
-            removed_allocated_bytes_upper_bound.saturating_add(candidate.allocated_bytes);
-    }
-    Ok(TempReclaimRemoval {
-        schema_version: SCHEMA_VERSION,
-        ontology_class: "https://disksage.app/ontology#TemporaryArtifact",
-        candidate_set_fingerprint: plan.candidate_set_fingerprint,
-        removed_count,
-        removed_allocated_bytes_upper_bound,
-        rationale: rationale.into(),
-        executed_at_ms,
-        filesystem_mutation_executed: removed_count > 0,
-        recoverability: "not-recoverable",
-    })
+    Err(REMOVAL_UNAVAILABLE.into())
 }
 
 #[cfg(test)]
@@ -367,5 +333,20 @@ mod tests {
         options = TempReclaimOptions::default();
         options.max_children = MAX_CHILDREN + 1;
         assert!(validate_options(options).is_err());
+    }
+
+    #[test]
+    fn removal_fails_before_filesystem_observation() {
+        assert_eq!(
+            remove_temp_candidates(
+                Path::new("/not-observed"),
+                TempReclaimOptions::default(),
+                "fingerprint",
+                "phrase",
+                "reviewed",
+                1,
+            ),
+            Err(REMOVAL_UNAVAILABLE.into())
+        );
     }
 }
