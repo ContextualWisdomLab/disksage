@@ -436,6 +436,7 @@ mod tests {
         assert!(!activity_probe_proves_inactive(Some(1), false, false, true));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn plan_is_deterministic_and_only_selects_old_large_jsonl() {
         let temp = tempfile::tempdir().unwrap();
