@@ -19,7 +19,7 @@ pub use implementation::{
 };
 
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
-const MAX_EXACT_DELETE_IDS: usize = 256;
+pub(super) const MAX_EXACT_DELETE_IDS: usize = 256;
 const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
 const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
 
