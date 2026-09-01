@@ -307,11 +307,16 @@ fn run_command(
             Ok(None) if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = reader.join();
+                drop(reader);
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(_) => return Err(format!("{label}-wait-failed")),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(reader);
+                return Err(format!("{label}-wait-failed"));
+            }
         }
     };
     let bytes = reader
