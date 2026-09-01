@@ -1,6 +1,8 @@
 use disksage_lib::{cloud, transparent_compression};
 use std::path::PathBuf;
 
+const MUTATION_UNAVAILABLE: &str = "transparent-compression-root-authorization-unavailable";
+
 fn usage() -> String {
     "usage: disksage-transparent-compress --root ABSOLUTE_PATH [--minimum-age-days N] [--max-files N] [--apply --plan-fingerprint HEX --confirmation-phrase PHRASE --rationale TEXT]".into()
 }
@@ -36,20 +38,18 @@ fn run() -> Result<(), String> {
         index += 1;
     }
     let root = root.ok_or_else(usage)?;
+    if apply {
+        if fingerprint.is_none() || phrase.is_none() || rationale.is_none() {
+            return Err(usage());
+        }
+        return Err(MUTATION_UNAVAILABLE.into());
+    }
+    if fingerprint.is_some() || phrase.is_some() || rationale.is_some() {
+        return Err(usage());
+    }
     let now_ms = cloud::system_now_ms();
     let plan = transparent_compression::plan(&root, minimum_age_days, max_files, now_ms)?;
-    let output = if apply {
-        serde_json::to_value(transparent_compression::execute(
-            &plan,
-            fingerprint.as_deref().ok_or_else(usage)?,
-            phrase.as_deref().ok_or_else(usage)?,
-            rationale.as_deref().ok_or_else(usage)?,
-            now_ms,
-        )?)
-    } else {
-        serde_json::to_value(plan)
-    }
-    .map_err(|error| error.to_string())?;
+    let output = serde_json::to_value(plan).map_err(|error| error.to_string())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
