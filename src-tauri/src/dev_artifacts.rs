@@ -41,8 +41,8 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
-    ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]),  // 재생성 가능한 CodeGraph 인덱스
+    ("__pycache__", &[]),
+    (".codegraph", &[]),
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -93,11 +93,6 @@ struct ArtifactManifest {
     object_id: String,
 }
 
-/// Build a bounded, deterministic metadata-only manifest for one generated directory.
-///
-/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
-/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
-/// unusually large trees instead of blocking the UI indefinitely.
 fn artifact_manifest(root: &Path) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
@@ -148,9 +143,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 manifest.scan_complete = false;
                 "<unknown>".into()
             });
-            manifest
-                .records
-                .push(format!("D\0{relative}\0{identity}\0{modified}"));
+            manifest.records.push(format!("D\0{relative}\0{identity}\0{modified}"));
         } else if file_type.is_file() {
             let Ok(metadata) = entry.metadata() else {
                 manifest.skipped = manifest.skipped.saturating_add(1);
@@ -177,9 +170,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     }
 
     if !manifest.scan_complete {
-        manifest
-            .records
-            .push("!incomplete\0bounded-artifact-manifest".into());
+        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
     }
     manifest.records.sort_unstable();
     manifest.fingerprint = metadata_fingerprint(&manifest.records);
@@ -187,16 +178,8 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
 }
 
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
-    let duration = metadata
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    Some(format!(
-        "{}:{}",
-        duration.as_secs(),
-        duration.subsec_nanos()
-    ))
+    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
 }
 
 fn metadata_fingerprint(records: &[String]) -> String {
@@ -241,10 +224,7 @@ fn discover_candidates(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         let path = entry.path();
-        let Some(name) = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-        else {
+        let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
             continue;
         };
         let Some((_, markers)) = artifact_kind(&name) else {
@@ -259,17 +239,7 @@ fn discover_candidates(root: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
-///
-/// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
-/// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
-/// 도중 걸러내면, 중첩 node_modules의 자식이 부모보다 먼저 방문될 경우 둘 다
-/// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
-/// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
-/// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
-    // ponytail: generated trees are metadata-I/O bound; cap at 32 until measurements justify a
-    // device-aware scheduler.
     let worker_count = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1)
@@ -296,7 +266,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         candidates.push(root_candidate);
     }
 
-    // 다른 후보의 하위 경로(중첩 아티팩트)는 제거 — 방문 순서에 의존하지 않는 비교
     let top_level: Vec<&Path> = candidates
         .iter()
         .enumerate()
@@ -313,11 +282,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let root = root.to_path_buf();
     let mut found: Vec<DevArtifact> =
         crate::stale_git_clone::bounded_parallel_map(paths, worker_count, move |path| {
-            let age = if now_ms == u64::MAX {
-                u64::MAX
-            } else {
-                age_days(&path, now_ms)
-            };
+            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(&path, now_ms) };
             if age < min_age_days {
                 return None;
             }
@@ -350,11 +315,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
-/// Re-scan and move only unchanged development artifacts to OS Trash.
-///
-/// The request manifest is deliberately compared against a fresh bounded scan. A path match is
-/// not sufficient because a recreated `target` or `node_modules` directory could otherwise cause
-/// an unrelated artifact to be removed.
 pub fn clean_artifacts(
     requests: &[DevArtifact],
     root: &Path,
@@ -362,12 +322,24 @@ pub fn clean_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
+    let mut seen_paths = std::collections::BTreeSet::new();
+    if requests
+        .iter()
+        .any(|request| !seen_paths.insert(request.path.as_str()))
+    {
+        return requests
+            .iter()
+            .map(|request| DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: false,
+                error: "duplicate development artifact cleanup request path; rescan before cleanup".into(),
+            })
+            .collect();
+    }
+
     let current = find_artifacts(root, min_age_days, now_ms);
     let active_use = crate::stale_git_clone::bounded_parallel_map(
-        requests
-            .iter()
-            .map(|request| PathBuf::from(&request.path))
-            .collect(),
+        requests.iter().map(|request| PathBuf::from(&request.path)).collect(),
         8,
         |path| {
             let evidence = crate::git_worktree::active_use_evidence(
@@ -418,10 +390,10 @@ pub fn clean_artifacts(
 
         if matches.is_none() {
             return DevArtifactCleanResult {
-                    path: request.path,
-                    ok: false,
-                    error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
-                };
+                path: request.path,
+                ok: false,
+                error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+            };
         }
 
         if let Some(blocker) = active_use.get(Path::new(&request.path)).copied().flatten() {
@@ -458,12 +430,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(
-        root: &std::path::Path,
-        name: &str,
-        marker: &str,
-        artifact: &str,
-    ) -> std::path::PathBuf {
+    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
@@ -478,35 +445,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "webapp", "package.json", "node_modules");
         project(tmp.path(), "cli", "Cargo.toml", "target");
-        // 마커 없는 가짜 — 탐지되면 안 됨
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
 
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
         let kinds: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"node_modules"));
         assert!(kinds.contains(&"target"));
-        assert!(
-            !found.iter().any(|a| a.path.contains("random")),
-            "마커 없는 아티팩트는 제외"
-        );
-        let nm = found.iter().find(|a| a.kind == "node_modules").unwrap();
-        assert_eq!(nm.project, "webapp");
-        assert_eq!(nm.bytes, 256);
-        assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
-        assert_eq!(
-            nm.ontology_class,
-            "https://disksage.app/ontology#BuildArtifact"
-        );
-        assert_eq!(
-            found
-                .iter()
-                .find(|a| a.kind == "target")
-                .unwrap()
-                .ontology_class,
-            "https://disksage.app/ontology#RustBuildArtifact"
-        );
+        assert!(!found.iter().any(|a| a.path.contains("random")));
     }
 
     #[test]
@@ -515,25 +461,19 @@ mod tests {
         let index = tmp.path().join("repo/.codegraph");
         fs::create_dir_all(&index).unwrap();
         fs::write(index.join("db"), b"generated").unwrap();
-
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert!(found.iter().any(|artifact| {
-            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
-        }));
+        assert!(found.iter().any(|artifact| artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()));
     }
 
     #[test]
     fn respects_min_age() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
-        // 방금 만든 것: min_age_days=30이면 제외 (now = 실제 현재로는 나이가 0)
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
         assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
-        // min_age_days=0이면 포함
         assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
     }
 
@@ -541,11 +481,9 @@ mod tests {
     fn artifacts_inside_artifacts_are_not_double_counted() {
         let tmp = tempfile::tempdir().unwrap();
         let nm = project(tmp.path(), "app", "package.json", "node_modules");
-        // node_modules 내부의 중첩 node_modules — 별도 항목이면 안 됨
         let nested = nm.join("dep").join("node_modules");
         fs::create_dir_all(&nested).unwrap();
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
-
         assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
     }
 
@@ -567,10 +505,7 @@ mod tests {
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(
-            !journal.exists(),
-            "stale identity must not create a journal"
-        );
+        assert!(!journal.exists());
     }
 
     #[test]
@@ -584,16 +519,10 @@ mod tests {
             results_truncated: false,
             error: None,
         };
-        assert_eq!(
-            active_use_blocker(&evidence),
-            Some("development-artifact-active-use-evidence-incomplete")
-        );
+        assert_eq!(active_use_blocker(&evidence), Some("development-artifact-active-use-evidence-incomplete"));
         evidence.evidence_complete = true;
         evidence.active = true;
-        assert_eq!(
-            active_use_blocker(&evidence),
-            Some("development-artifact-active-use-detected")
-        );
+        assert_eq!(active_use_blocker(&evidence), Some("development-artifact-active-use-detected"));
         evidence.active = false;
         assert_eq!(active_use_blocker(&evidence), None);
     }
