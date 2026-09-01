@@ -229,7 +229,8 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
         .collect();
     match matches.as_slice() {
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
-        [only] => Ok(*only),
+        [only] if only.provider == CloudProvider::Icloud => Ok(*only),
+        [_] => Err("icloud-local-eviction-root-required".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
 }
