@@ -181,9 +181,11 @@ action without exposing implementation ownership.
   remains unavailable while the generic exact-copy workflow stays reversible.
 - Realistic cache, Git, container/VM, temporary-file, and duplicate fixtures cover active use,
   dirty/untracked state, unique commits, provider roots, replacement races, incomplete authority,
-  Trash/quarantine receipt, and undo. Proven-cache purge fixtures additionally prove only the
-  explicit known-cache signatures already in OS Trash can cross the irreversible boundary, with
-  symlink, replacement, unknown-name, user-file, and arbitrary-Trash cases rejected.
+  Trash/quarantine receipt, and undo. Proven-cache purge fixtures additionally prove that only an
+  explicitly reviewed known-cache signature on a direct OS-Trash child can cross the irreversible
+  boundary; bounded symlink-free revalidation and separate pending/terminal journal records are
+  asserted, while nested descendants, symlink, replacement, unknown-name, user-file, and
+  arbitrary-Trash cases are rejected.
 - Cross-platform packaging, accessibility, customer-message, privacy, security, and exact-head
   release checks pass. UI flows remain responsive during long scans and actions.
 - An end-to-end reclaim report records candidate logical bytes, action results, before/after volume
