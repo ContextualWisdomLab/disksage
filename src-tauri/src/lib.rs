@@ -69,6 +69,9 @@ pub mod naruon_lineage;
 mod node_navigation;
 #[cfg(all(test, unix))]
 mod node_view_security_tests;
+#[path = "onedrive_temp_reclaim.rs"]
+mod onedrive_temp_reclaim_impl;
+#[path = "onedrive_temp_reclaim_contract.rs"]
 pub mod onedrive_temp_reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
 mod ontology;
