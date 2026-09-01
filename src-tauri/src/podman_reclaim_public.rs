@@ -324,6 +324,18 @@ fn list_dangling_volumes(
     Ok(volumes)
 }
 
+fn collect_empty_volume_probe_results(
+    results: Vec<Result<Option<PodmanVolumeRecord>, String>>,
+) -> Result<Vec<PodmanVolumeRecord>, String> {
+    let mut empty = results
+        .into_iter()
+        .filter_map(Result::ok)
+        .flatten()
+        .collect::<Vec<_>>();
+    empty.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(empty)
+}
+
 fn empty_dangling_volumes(
     podman_bin: &Path,
     requested_machine: &str,
@@ -331,7 +343,7 @@ fn empty_dangling_volumes(
     let volumes = list_dangling_volumes(podman_bin, requested_machine)?;
     let executable = podman_bin.to_path_buf();
     let machine = requested_machine.to_string();
-    let mut empty = crate::stale_git_clone::bounded_parallel_map(
+    let probes = crate::stale_git_clone::bounded_parallel_map(
         volumes
             .into_iter()
             .map(|volume| std::path::PathBuf::from(volume.name))
@@ -347,22 +359,15 @@ fn empty_dangling_volumes(
                 &["machine", "ssh", &machine, &command],
                 PODMAN_PRUNE_TIMEOUT,
                 "podman-volume-empty-probe",
-            );
-            output
-                .ok()
-                .filter(|value| value.trim().is_empty())
-                .map(|_| PodmanVolumeRecord {
-                    name,
-                    mountpoint,
-                    mount_count: 0,
-                })
+            )?;
+            Ok(output.trim().is_empty().then(|| PodmanVolumeRecord {
+                name,
+                mountpoint,
+                mount_count: 0,
+            }))
         },
-    )
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    empty.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(empty)
+    );
+    collect_empty_volume_probe_results(probes)
 }
 
 pub fn plan_empty_dangling_volumes(
@@ -634,5 +639,14 @@ mod tests {
         );
         assert!(!valid_volume_component("../escape"));
         assert!(!valid_volume_mountpoint("/tmp/project_data/_data"));
+    }
+
+    #[test]
+    fn failed_volume_probe_makes_evidence_incomplete() {
+        assert_eq!(
+            collect_empty_volume_probe_results(vec![Err("podman-volume-empty-probe-failed".into())])
+                .unwrap_err(),
+            "podman-volume-empty-probe-failed"
+        );
     }
 }
