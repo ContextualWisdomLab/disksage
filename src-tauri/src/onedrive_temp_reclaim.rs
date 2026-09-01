@@ -21,6 +21,7 @@ pub struct OneDriveTempCandidate {
     pub object_id: String,
     pub content_sha1: String,
     pub local_bytes: u64,
+    pub allocated_bytes: u64,
     pub remote_bytes: u64,
     pub modified_ms: u64,
     pub candidate_fingerprint: String,
@@ -59,6 +60,7 @@ pub struct OneDriveTempExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemovalProgress {
     removed_count: usize,
+    removed_allocated_bytes_upper_bound: u64,
     failure: Option<String>,
 }
 
@@ -143,6 +145,7 @@ fn candidate_fingerprint(
     object_id: &str,
     hash: &str,
     local: u64,
+    allocated: u64,
     remote: u64,
     modified: u64,
 ) -> String {
@@ -151,6 +154,7 @@ fn candidate_fingerprint(
         object_id,
         hash,
         &local.to_string(),
+        &allocated.to_string(),
         &remote.to_string(),
         &modified.to_string(),
     ])
@@ -213,6 +217,10 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OneDriveTempPlan, String
         }
         let object_id = safety::filesystem_object_id(&path)
             .map_err(|_| "onedrive-temp-file-identity-unavailable".to_string())?;
+        let allocation = git_worktree::size_evidence(&path, 1, 10_000);
+        if !allocation.evidence_complete {
+            return Err("onedrive-temp-allocation-evidence-incomplete".into());
+        }
         let path_string = path.to_string_lossy().into_owned();
         candidates.push(OneDriveTempCandidate {
             ontology_class: ONTOLOGY_CLASS.into(),
@@ -221,6 +229,7 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OneDriveTempPlan, String
                 &object_id,
                 &content_sha1,
                 metadata.len(),
+                allocation.allocated_bytes,
                 remote_bytes,
                 modified_ms,
             ),
@@ -228,21 +237,16 @@ pub fn plan(home: &Path, observed_at_ms: u64) -> Result<OneDriveTempPlan, String
             object_id,
             content_sha1,
             local_bytes: metadata.len(),
+            allocated_bytes: allocation.allocated_bytes,
             remote_bytes,
             modified_ms,
         });
     }
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
     let candidate_set_fingerprint = candidate_set_fingerprint(&candidates);
-    let candidate_allocated_bytes = candidates
-        .iter()
-        .try_fold(0u64, |total, candidate| {
-            let evidence = git_worktree::size_evidence(Path::new(&candidate.path), 1, 10_000);
-            evidence
-                .evidence_complete
-                .then_some(total.saturating_add(evidence.allocated_bytes))
-        })
-        .ok_or_else(|| "onedrive-temp-allocation-evidence-incomplete".to_string())?;
+    let candidate_allocated_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.allocated_bytes)
+    });
     let exact_approval_phrase = (!candidates.is_empty()).then(|| {
         format!("DiskSage OneDrive stale download reclaim 승인 {candidate_set_fingerprint}")
     });
@@ -305,6 +309,7 @@ fn remove_candidates_with(
     mut remove: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<RemovalProgress, String> {
     let mut removed_count = 0usize;
+    let mut removed_allocated_bytes_upper_bound = 0u64;
     for candidate in candidates {
         let attempt = (|| -> Result<(), String> {
             if !quiesced()? {
@@ -318,11 +323,16 @@ fn remove_candidates_with(
             Ok(())
         })();
         match attempt {
-            Ok(()) => removed_count = removed_count.saturating_add(1),
+            Ok(()) => {
+                removed_count = removed_count.saturating_add(1);
+                removed_allocated_bytes_upper_bound = removed_allocated_bytes_upper_bound
+                    .saturating_add(candidate.allocated_bytes);
+            }
             Err(error) if removed_count == 0 => return Err(error),
             Err(error) => {
                 return Ok(RemovalProgress {
                     removed_count,
+                    removed_allocated_bytes_upper_bound,
                     failure: Some(error),
                 });
             }
@@ -330,6 +340,7 @@ fn remove_candidates_with(
     }
     Ok(RemovalProgress {
         removed_count,
+        removed_allocated_bytes_upper_bound,
         failure: None,
     })
 }
@@ -361,7 +372,7 @@ pub fn execute(
         candidate_set_fingerprint: plan.candidate_set_fingerprint,
         planned_count: plan.candidates.len(),
         removed_count: progress.removed_count,
-        removed_allocated_bytes_upper_bound: plan.candidate_allocated_bytes,
+        removed_allocated_bytes_upper_bound: progress.removed_allocated_bytes_upper_bound,
         executed_at_ms,
         filesystem_mutation_executed: progress.removed_count > 0,
         verification_complete,
