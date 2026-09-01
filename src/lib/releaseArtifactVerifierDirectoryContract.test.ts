@@ -156,7 +156,7 @@ describe('release artifact verifier directory contract', () => {
     },
   );
 
-  it('requires tag attestation to verify downloaded platform namespaces before SBOM generation', () => {
+  it('requires tag attestation to use the shared verifier before SBOM generation', () => {
     const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
     const attestStart = workflow.indexOf('  attest-release:');
     const publishStart = workflow.indexOf('  publish-release:', attestStart);
@@ -174,9 +174,11 @@ describe('release artifact verifier directory contract', () => {
     expect(verifierOffset).toBeGreaterThanOrEqual(0);
     expect(verifierOffset).toBeGreaterThan(downloadOffset);
     expect(sbomOffset).toBeGreaterThan(verifierOffset);
+    expect(attestJob).not.toContain('- name: Verify release artifact checksums');
+    expect(attestJob).not.toContain('require_exactly_one_path()');
   });
 
-  it('pins every publish-release artifact download to download-artifact v8.0.1', () => {
+  it('pins every publish-release artifact download to exactly download-artifact v8.0.1', () => {
     const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
     const publishStart = workflow.indexOf('  publish-release:');
     const gpuStart = workflow.indexOf('  gpu-build:', publishStart);
@@ -184,11 +186,14 @@ describe('release artifact verifier directory contract', () => {
     expect(gpuStart).toBeGreaterThan(publishStart);
 
     const publishJob = workflow.slice(publishStart, gpuStart);
-    expect(publishJob).toContain(
-      'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1',
-    );
-    expect(publishJob).not.toContain(
-      'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0',
-    );
+    const pins = [
+      ...publishJob.matchAll(/actions\/download-artifact@([^\s]+)\s+#\s+([^\n]+)/g),
+    ].map((match) => ({ sha: match[1], label: match[2].trim() }));
+
+    expect(pins).toHaveLength(2);
+    expect(pins).toEqual([
+      { sha: '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', label: 'v8.0.1' },
+      { sha: '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', label: 'v8.0.1' },
+    ]);
   });
 });
