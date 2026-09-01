@@ -83,6 +83,10 @@ pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
+#[path = "git_worktree.rs"]
+mod git_worktree_impl;
+/// Public Git-worktree API that keeps aggregate operation budgets from becoming local subprocess deadlines.
+#[path = "git_worktree_public.rs"]
 pub mod git_worktree;
 /// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
 pub mod git_worktree_github_evidence;
