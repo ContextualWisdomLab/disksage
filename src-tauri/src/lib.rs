@@ -17,6 +17,10 @@ mod cloud_local_eviction_impl;
 #[path = "cloud_local_eviction_public.rs"]
 pub mod cloud_local_eviction;
 #[cfg(not(coverage))]
+#[path = "cloud_local_eviction_batch.rs"]
+mod cloud_local_eviction_batch_impl;
+#[cfg(not(coverage))]
+#[path = "cloud_local_eviction_batch_public.rs"]
 pub mod cloud_local_eviction_batch;
 pub mod cloud_local_inventory;
 /// Typed backend-authored presentation contract for cloud archive plans.
