@@ -22,6 +22,10 @@ fn runtime_storage_commands_use_blocking_task_boundary() {
     }
 
     let app_source = include_str!("../src/lib.rs");
-    assert!(app_source.contains("runtime_storage_commands::inspect_runtime_storage"));
-    assert!(!app_source.contains("commands::inspect_runtime_storage,"));
+    assert!(app_source.lines().any(|line| {
+        line.trim() == "runtime_storage_commands::inspect_runtime_storage,"
+    }));
+    assert!(!app_source
+        .lines()
+        .any(|line| line.trim() == "commands::inspect_runtime_storage,"));
 }
