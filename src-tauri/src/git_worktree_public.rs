@@ -4,7 +4,7 @@
 //! also uses that value as a whole-operation budget. This facade prevents that aggregate budget
 //! from becoming a one-hour `git`, `gh`, `lsof`, or `ps` child-process deadline. Higher-level
 //! orchestration may keep a longer total budget, but every call into the local implementation is
-//! capped independently before any subprocess can start.
+//! bounded independently before any subprocess can start.
 
 pub use crate::git_worktree_impl::{
     approve_stale_worktree_removal, prepare_worktree_record_directory, public_summary,
@@ -21,8 +21,8 @@ use std::path::Path;
 
 /// Maximum wall-clock time one local Git-worktree subprocess may inherit from a caller.
 ///
-/// Two minutes matches DiskSage's other bounded maintenance commands while leaving long-running
-/// GitHub evidence acquisition free to budget multiple independently bounded calls.
+/// Two minutes bounds a single command independently while the higher-level GitHub evidence phase
+/// may budget several sequential calls.
 pub const MAX_LOCAL_COMMAND_TIMEOUT_MS: u64 = 120_000;
 
 fn validate_local_command_timeout(timeout_ms: u64) -> Result<(), String> {
@@ -37,6 +37,7 @@ fn validate_local_options(options: GitWorktreeAuditOptions) -> Result<(), String
 }
 
 /// Probe active use only with a bounded local process deadline.
+#[cfg(unix)]
 pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -49,6 +50,32 @@ pub fn active_use_evidence(
                 "lsof-recursive-pid"
             } else {
                 "lsof-file-pid"
+            }
+            .into(),
+            assessed: false,
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("git-worktree-command-timeout-out-of-bounds".into()),
+        };
+    }
+    crate::git_worktree_impl::active_use_evidence(path, timeout_ms, max_pids, recursive)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn active_use_evidence(
+    path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    if validate_local_command_timeout(timeout_ms).is_err() {
+        return GitWorktreeActiveUseEvidence {
+            method: if recursive {
+                "process-observation-recursive"
+            } else {
+                "process-observation-file"
             }
             .into(),
             assessed: false,
