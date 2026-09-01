@@ -374,13 +374,14 @@ pub fn execute(
 mod tests {
     use super::*;
 
-    fn candidate(path: &str, object_id: &str) -> OneDriveTempCandidate {
+    fn candidate(path: &str, object_id: &str, allocated_bytes: u64) -> OneDriveTempCandidate {
         OneDriveTempCandidate {
             ontology_class: ONTOLOGY_CLASS.into(),
             path: path.into(),
             object_id: object_id.into(),
             content_sha1: "A".repeat(40),
             local_bytes: 1,
+            allocated_bytes,
             remote_bytes: 1,
             modified_ms: 1,
             candidate_fingerprint: "f".repeat(64),
@@ -446,7 +447,10 @@ mod tests {
 
     #[test]
     fn later_delete_failure_preserves_partial_mutation_receipt() {
-        let candidates = vec![candidate("/tmp/one.temp", "one"), candidate("/tmp/two.temp", "two")];
+        let candidates = vec![
+            candidate("/tmp/one.temp", "one", 4_096),
+            candidate("/tmp/two.temp", "two", 8_192),
+        ];
         let mut remove_calls = 0usize;
         let progress = remove_candidates_with(
             &candidates,
@@ -469,6 +473,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(progress.removed_count, 1);
+        assert_eq!(progress.removed_allocated_bytes_upper_bound, 4_096);
         assert_eq!(progress.failure.as_deref(), Some("onedrive-temp-remove-failed"));
     }
 }
