@@ -17,7 +17,7 @@ fn execution(failure: Option<&str>, verification_complete: bool) -> OneDriveTemp
         ontology_class: "https://disksage.app/ontology#CloudTransferTemporaryArtifact",
         candidate_set_fingerprint: "a".repeat(64),
         planned_count: 2,
-        removed_count: usize::from(failure.is_none()) * 2 + usize::from(failure.is_some()),
+        removed_count: if failure.is_some() { 1 } else { 2 },
         removed_allocated_bytes_upper_bound: 4096,
         executed_at_ms: 1,
         filesystem_mutation_executed: true,
