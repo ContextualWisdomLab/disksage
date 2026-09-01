@@ -685,7 +685,7 @@ fn pull_request_contains_commit(bytes: &[u8], head: &str) -> Result<bool, String
         count = count.saturating_add(1);
         found |= oid == head;
     }
-    if count >= 250 {
+        if count > 10_000 {
         return Err("github-pr-commit-count-exceeds-limit".into());
     }
     Ok(found)

@@ -49,7 +49,7 @@ fn init_repository(path: &std::path::Path) -> String {
 }
 
 #[test]
-fn exact_250_commit_pr_list_is_incomplete_evidence() {
+fn commit_list_above_ten_thousand_is_incomplete_evidence() {
     let _guard = PATH_ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repository");
@@ -68,7 +68,7 @@ case " $* " in
   *' api --paginate repos/ContextualWisdomLab/disksage/pulls/1/commits?per_page=100 '*)
     printf '%s\n' '{head}'
     i=1
-    while [ "$i" -lt 250 ]; do
+    while [ "$i" -lt 10001 ]; do
       printf '%040x\n' "$i"
       i=$((i + 1))
     done
