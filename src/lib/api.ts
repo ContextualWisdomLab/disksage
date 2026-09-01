@@ -212,7 +212,7 @@ export const inspectPodmanReclaim = () =>
 export interface ColimaReclaimPlan {
   schema_kind: "disksage.colima-reclaim-plan";
   schema_version: number;
-  ontology_class: "https://disksage.app/ontology#ColimaVirtualDisk";
+  ontology_class: "https://disksage.app/ontology#ColimaDownloadCache";
   evidence_complete: boolean;
   executable_available: boolean;
   cache_allocated_bytes: number;
