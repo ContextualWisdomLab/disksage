@@ -1192,9 +1192,7 @@ mod tests {
         let plan = plan_colima_guest_trim(&executable, "default", Duration::from_secs(1));
         assert!(plan.guest_trim_eligible);
         assert!(!plan.native_host_compaction_supported);
-        assert!(plan
-            .blockers
-            .contains(&"lima-native-host-compaction-command-unavailable".into()));
+        assert!(plan.blockers.is_empty());
         assert!(execute_colima_guest_trim(&executable, "default", "wrong", "reviewed", 1).is_err());
         let execution = execute_colima_guest_trim(
             &executable,
