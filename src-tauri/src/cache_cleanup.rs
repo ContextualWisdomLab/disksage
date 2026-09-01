@@ -617,6 +617,9 @@ pub(crate) fn clean_cache_contents_inner(
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
+    if dir == rules::shared_temp_root() {
+        return Err("shared-temp-cleanup-requires-purpose-specific-audit".into());
+    }
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
     let mut current = rules::cache_targets(dir)?;
@@ -837,6 +840,24 @@ mod tests {
             .expect("non-catalog root must be rejected");
 
         assert_eq!(error, "cache-root-not-current-or-safe");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_rejects_broad_shared_temp_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let journal = tmp.path().join("journal.jsonl");
+        #[cfg(target_os = "macos")]
+        let shared_temp = Path::new("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        let shared_temp = Path::new("/tmp");
+
+        let error = clean_cache_contents_inner(&bases, shared_temp, &[], &journal, 1)
+            .err()
+            .expect("shared temp requires a purpose-specific audit");
+
+        assert_eq!(error, "shared-temp-cleanup-requires-purpose-specific-audit");
     }
 
     #[test]
