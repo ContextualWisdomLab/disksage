@@ -177,6 +177,11 @@
     <input type="checkbox" bind:checked={includeClosedPullRequests} onchange={resetDecision} disabled={planning || executing} />
     완료된 작업과 연결된 항목도 확인
   </label>
+  {#if includeClosedPullRequests}
+    <p class="muted">
+      병합 없이 종료된 PR의 깨끗한 보조 폴더도 정리 후보가 될 수 있습니다. 브랜치와 커밋은 유지됩니다.
+    </p>
+  {/if}
   <label class="option">
     <input type="checkbox" bind:checked={includeStaleOpenPullRequests} onchange={resetDecision} disabled={planning || executing} />
     오래된 진행 중 작업도 확인
