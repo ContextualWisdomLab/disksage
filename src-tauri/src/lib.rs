@@ -97,6 +97,9 @@ mod settings;
 pub mod stale_git_clone;
 pub mod stale_git_clone_commands;
 pub mod temp_reclaim;
+#[path = "transparent_compression.rs"]
+mod transparent_compression_impl;
+#[path = "transparent_compression_public.rs"]
 pub mod transparent_compression;
 #[cfg_attr(coverage, allow(dead_code))]
 mod userrules;
