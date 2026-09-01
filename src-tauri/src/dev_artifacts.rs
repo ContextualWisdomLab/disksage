@@ -208,6 +208,24 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+fn discover_root_candidate(root: &Path) -> Option<PathBuf> {
+    let entry = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .max_depth(0)
+        .into_iter()
+        .next()?
+        .ok()?;
+    if !entry.file_type().is_dir() || !scanner::keep_entry(&entry) {
+        return None;
+    }
+    let path = entry.path();
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let (_, markers) = artifact_kind(&name)?;
+    let parent = path.parent().unwrap_or(root);
+    (markers.is_empty() || markers.iter().any(|marker| parent.join(marker).exists()))
+        .then(|| path.to_path_buf())
+}
+
 fn discover_candidates(root: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
@@ -257,6 +275,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .unwrap_or(1)
         .saturating_mul(4)
         .min(32);
+    let root_candidate = discover_root_candidate(root);
     let children = std::fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -266,13 +285,16 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             (file_type.is_dir() && !file_type.is_symlink()).then(|| entry.path())
         })
         .collect();
-    let candidates: Vec<PathBuf> =
+    let mut candidates: Vec<PathBuf> =
         crate::stale_git_clone::bounded_parallel_map(children, worker_count, |path| {
             discover_candidates(&path)
         })
         .into_iter()
         .flatten()
         .collect();
+    if let Some(root_candidate) = root_candidate {
+        candidates.push(root_candidate);
+    }
 
     // 다른 후보의 하위 경로(중첩 아티팩트)는 제거 — 방문 순서에 의존하지 않는 비교
     let top_level: Vec<&Path> = candidates
