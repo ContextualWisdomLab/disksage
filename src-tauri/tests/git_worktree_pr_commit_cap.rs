@@ -1,8 +1,6 @@
 #![cfg(unix)]
 
-use disksage_lib::git_worktree::{
-    github_pull_request_commit_membership, GitWorktreeAuditOptions,
-};
+use disksage_lib::git_worktree::{github_pull_request_commit_membership, GitWorktreeAuditOptions};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -12,16 +10,38 @@ static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn init_repository(path: &std::path::Path) -> String {
     fs::create_dir_all(path).unwrap();
-    Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(path).status().unwrap();
-    fs::write(path.join("tracked.txt"), b"fixture\n").unwrap();
-    Command::new("git").args(["add", "tracked.txt"]).current_dir(path).status().unwrap();
     Command::new("git")
-        .args(["-c", "user.name=DiskSage Test", "-c", "user.email=disksage@example.invalid", "commit", "-q", "-m", "fixture"])
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    fs::write(path.join("tracked.txt"), b"fixture\n").unwrap();
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args([
+            "-c",
+            "user.name=DiskSage Test",
+            "-c",
+            "user.email=disksage@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ])
         .current_dir(path)
         .status()
         .unwrap();
     String::from_utf8(
-        Command::new("git").args(["rev-parse", "HEAD"]).current_dir(path).output().unwrap().stdout,
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(path)
+            .output()
+            .unwrap()
+            .stdout,
     )
     .unwrap()
     .trim()
@@ -43,8 +63,8 @@ fn exact_250_commit_pr_list_is_incomplete_evidence() {
             r#"#!/bin/sh
 set -eu
 case " $* " in
-  *' repo view '*) printf '%s\n' 'ContextualWisdomLab/disksage' ;;
-  *' search prs '*) printf '%s' '[{{"number":1,"state":"open","repository":{{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}}}}]' ;;
+  *' api repos/{{owner}}/{{repo}} --jq .full_name '*) printf '%s\n' 'ContextualWisdomLab/disksage' ;;
+  *' api -X GET search/issues -f q='*) printf '%s' '{{"total_count":1,"items":[{{"number":1,"state":"open","repository_url":"https://api.github.com/repos/ContextualWisdomLab/disksage"}}]}}' ;;
   *' api --paginate repos/ContextualWisdomLab/disksage/pulls/1/commits?per_page=100 '*)
     printf '%s\n' '{head}'
     i=1
@@ -71,7 +91,10 @@ esac
     std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
     let result = github_pull_request_commit_membership(
         &repository,
-        GitWorktreeAuditOptions { command_timeout_ms: 5_000, ..GitWorktreeAuditOptions::default() },
+        GitWorktreeAuditOptions {
+            command_timeout_ms: 5_000,
+            ..GitWorktreeAuditOptions::default()
+        },
     );
     match original_path {
         Some(value) => std::env::set_var("PATH", value),

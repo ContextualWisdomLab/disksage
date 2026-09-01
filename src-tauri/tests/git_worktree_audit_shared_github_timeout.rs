@@ -11,7 +11,11 @@ fn git(repository: &Path, arguments: &[&str]) {
         .args(arguments)
         .output()
         .expect("Git should be available");
-    assert!(output.status.success(), "git {arguments:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "git {arguments:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
@@ -19,9 +23,13 @@ fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
     let repository = temp.path().join("repository");
     fs::create_dir(&repository).expect("repository directory should be created");
     git(&repository, &["init", "-q", "-b", "main"]);
-    git(&repository, &["config", "user.email", "coverage@example.invalid"]);
+    git(
+        &repository,
+        &["config", "user.email", "coverage@example.invalid"],
+    );
     git(&repository, &["config", "user.name", "DiskSage Test"]);
-    fs::write(repository.join("tracked.txt"), b"tracked\n").expect("tracked fixture should be written");
+    fs::write(repository.join("tracked.txt"), b"tracked\n")
+        .expect("tracked fixture should be written");
     git(&repository, &["add", "tracked.txt"]);
     git(&repository, &["commit", "-q", "-m", "fixture"]);
     (temp, repository)
@@ -38,16 +46,17 @@ fn one_timeout_bounds_the_complete_github_evidence_phase() {
         r#"#!/bin/sh
 set -eu
 case "$*" in
-  "pr list --state closed --search is:unmerged"*) sleep 1; printf '[]\n' ;;
-  "pr list "*) printf '[]\n' ;;
-  "repo view "*) sleep 1; printf 'ContextualWisdomLab/disksage\n' ;;
-  "search prs "*) printf '[]\n' ;;
+  "api --paginate --slurp repos/{owner}/{repo}/pulls?state=all&per_page=100"*) sleep 1; printf '[[]]\n' ;;
+  "api repos/{owner}/{repo} --jq .full_name"*) sleep 1; printf 'ContextualWisdomLab/disksage\n' ;;
+  "api -X GET search/issues "*) printf '{"total_count":0,"items":[]}\n' ;;
   *) printf 'unexpected fake gh invocation\n' >&2; exit 9 ;;
 esac
 "#,
     )
     .expect("fake gh should be written");
-    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
+    let mut permissions = fs::metadata(&gh_path)
+        .expect("fake gh metadata")
+        .permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&gh_path, permissions).expect("fake gh should be executable");
 

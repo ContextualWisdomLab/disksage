@@ -1,9 +1,6 @@
 #![cfg(unix)]
 
-use disksage_lib::git_worktree::{
-    github_closed_pull_request_heads, github_closed_pull_request_heads_with_options,
-    GitWorktreeAuditOptions,
-};
+use disksage_lib::git_worktree::github_closed_pull_request_heads;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -11,14 +8,13 @@ use std::sync::Mutex;
 
 static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-fn init_fixture_repository(path: &std::path::Path, branch: &str) -> String {
-    fs::create_dir_all(path).expect("create fixture repository root");
+fn init_repository(path: &std::path::Path) -> String {
     Command::new("git")
-        .args(["init", "-q", "-b", branch])
+        .args(["init", "-q", "-b", "main"])
         .current_dir(path)
         .status()
         .expect("initialize fixture repository");
-    fs::write(path.join("tracked.txt"), b"fixture\n").expect("write tracked fixture");
+    fs::write(path.join("tracked.txt"), b"fixture\n").expect("write fixture");
     Command::new("git")
         .args(["add", "tracked.txt"])
         .current_dir(path)
@@ -38,182 +34,81 @@ fn init_fixture_repository(path: &std::path::Path, branch: &str) -> String {
         .current_dir(path)
         .status()
         .expect("commit fixture");
-    let head = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(path)
-        .output()
-        .expect("resolve fixture head");
-    String::from_utf8(head.stdout).unwrap().trim().to_string()
+    String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(path)
+            .output()
+            .expect("resolve fixture head")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string()
 }
 
 #[test]
-fn merged_pull_request_query_is_scoped_to_registered_branch() {
+fn closed_and_merged_heads_use_one_paginated_rest_request_with_open_veto() {
     let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
     let temp = tempfile::tempdir().expect("temporary repository root");
-    let head = init_fixture_repository(temp.path(), "merged-work");
+    let head = init_repository(temp.path());
+    let output_path = temp.path().join("pull-requests.json");
+    fs::write(
+        &output_path,
+        format!(
+            r#"[[
+              {{"number":1,"state":"closed","created_at":"2026-01-01T00:00:00Z","merged_at":null,"head":{{"ref":"closed-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}},
+              {{"number":2,"state":"closed","created_at":"2026-01-01T00:00:00Z","merged_at":"2026-01-02T00:00:00Z","head":{{"ref":"merged-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}},
+              {{"number":3,"state":"open","created_at":"2026-01-01T00:00:00Z","merged_at":null,"head":{{"ref":"closed-work","sha":"{head}","repo":{{"full_name":"owner/repo"}}}},"base":{{"ref":"main","sha":"{head}","repo":{{"full_name":"owner/repo"}}}}}}
+            ]]"#
+        ),
+    )
+    .expect("write fake REST response");
 
     let bin_dir = temp.path().join("bin");
     fs::create_dir(&bin_dir).expect("create fake bin directory");
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        format!(
-            "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *' --state open '*) printf '[]' ;;\n  *' --state merged --head merged-work '*) printf '%s' '[{{\"headRefName\":\"merged-work\",\"headRefOid\":\"{head}\",\"isCrossRepository\":false,\"state\":\"MERGED\"}}]' ;;\n  *) exit 64 ;;\nesac\n"
-        ),
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DISKSAGE_FAKE_GH_LOG\"\ncase \" $* \" in\n  *' api --paginate --slurp repos/{owner}/{repo}/pulls?state=all&per_page=100 '*) cat \"$DISKSAGE_FAKE_GH_OUTPUT\" ;;\n  *) exit 64 ;;\nesac\n",
     )
     .expect("write fake gh executable");
-    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
+    let mut permissions = fs::metadata(&gh_path)
+        .expect("fake gh metadata")
+        .permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
 
+    let log_path = temp.path().join("gh.log");
     let original_path = std::env::var_os("PATH");
     let mut paths = vec![bin_dir];
     if let Some(existing) = original_path.as_ref() {
         paths.extend(std::env::split_paths(existing));
     }
     std::env::set_var("PATH", std::env::join_paths(paths).expect("join PATH"));
+    std::env::set_var("DISKSAGE_FAKE_GH_OUTPUT", &output_path);
+    std::env::set_var("DISKSAGE_FAKE_GH_LOG", &log_path);
+
     let result = github_closed_pull_request_heads(temp.path(), 5_000);
+
     match original_path {
         Some(value) => std::env::set_var("PATH", value),
         None => std::env::remove_var("PATH"),
     }
+    std::env::remove_var("DISKSAGE_FAKE_GH_OUTPUT");
+    std::env::remove_var("DISKSAGE_FAKE_GH_LOG");
 
     assert_eq!(
-        result.expect("branch-scoped merged evidence"),
+        result.expect("paginated REST evidence"),
         [("refs/heads/merged-work".to_string(), head)]
             .into_iter()
             .collect()
     );
-}
-
-#[test]
-fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
-    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
-    let temp = tempfile::tempdir().expect("temporary fixture parent");
-    let repository = temp.path().join("repository");
-    let linked = temp.path().join("linked");
-    init_fixture_repository(&repository, "main");
-    Command::new("git")
-        .args(["branch", "linked-work"])
-        .current_dir(&repository)
-        .status()
-        .expect("create linked worktree branch");
-    Command::new("git")
-        .args(["worktree", "add", "-q"])
-        .arg(&linked)
-        .arg("linked-work")
-        .current_dir(&repository)
-        .status()
-        .expect("create linked worktree");
-
-    let bin_dir = temp.path().join("bin");
-    fs::create_dir(&bin_dir).expect("create fake bin directory");
-    let gh_path = bin_dir.join("gh");
-    fs::write(
-        &gh_path,
-        "#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --state closed '*) printf '[]' ;;\n  *' --state open '*) printf '[]' ;;\n  *) exit 64 ;;\nesac\n",
-    )
-    .expect("write bounded fake gh executable");
-    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
-
-    let original_path = std::env::var_os("PATH");
-    let mut paths = vec![bin_dir];
-    if let Some(existing) = original_path.as_ref() {
-        paths.extend(std::env::split_paths(existing));
-    }
-    std::env::set_var("PATH", std::env::join_paths(paths).expect("join PATH"));
-
-    let options = GitWorktreeAuditOptions {
-        max_worktrees: 1,
-        ..GitWorktreeAuditOptions::default()
-    };
-    let result = github_closed_pull_request_heads_with_options(&repository, options);
-
-    match original_path {
-        Some(value) => std::env::set_var("PATH", value),
-        None => std::env::remove_var("PATH"),
-    }
-
-    assert_eq!(result.unwrap_err(), "git-worktree-list-exceeds-limit");
-}
-
-#[test]
-fn merged_pull_request_lookup_keeps_many_branch_queries_inside_one_timeout_budget() {
-    let _env_guard = PATH_ENV_LOCK.lock().expect("serialize PATH mutation");
-    let temp = tempfile::tempdir().expect("temporary fixture parent");
-    let repository = temp.path().join("repository");
-    let head = init_fixture_repository(&repository, "main");
-
-    for index in 0..3 {
-        let branch = format!("merged-work-{index}");
-        let linked = temp.path().join(format!("linked-{index}"));
-        Command::new("git")
-            .args(["branch", &branch])
-            .current_dir(&repository)
-            .status()
-            .expect("create linked worktree branch");
-        Command::new("git")
-            .args(["worktree", "add", "-q"])
-            .arg(&linked)
-            .arg(&branch)
-            .current_dir(&repository)
-            .status()
-            .expect("create linked worktree");
-    }
-
-    let bin_dir = temp.path().join("bin");
-    fs::create_dir(&bin_dir).expect("create fake bin directory");
-    let gh_path = bin_dir.join("gh");
-    fs::write(
-        &gh_path,
-        format!(
-            r#"#!/bin/sh
-set -eu
-case " $* " in
-  *' --state closed '*) printf '[]'; exit 0 ;;
-  *' --state open '*) sleep 0.20; printf '[]'; exit 0 ;;
-  *' --state merged --head '*)
-    branch=''
-    previous=''
-    for argument in "$@"; do
-      if [ "$previous" = '--head' ]; then branch="$argument"; break; fi
-      previous="$argument"
-    done
-    sleep 0.20
-    printf '[{{"headRefName":"%s","headRefOid":"{head}","isCrossRepository":false,"state":"MERGED"}}]' "$branch"
-    ;;
-  *) exit 64 ;;
-esac
-"#
-        ),
-    )
-    .expect("write delayed fake gh executable");
-    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
-
-    let original_path = std::env::var_os("PATH");
-    let mut paths = vec![bin_dir];
-    if let Some(existing) = original_path.as_ref() {
-        paths.extend(std::env::split_paths(existing));
-    }
-    std::env::set_var("PATH", std::env::join_paths(paths).expect("join PATH"));
-    let options = GitWorktreeAuditOptions {
-        command_timeout_ms: 500,
-        max_worktrees: 8,
-        ..GitWorktreeAuditOptions::default()
-    };
-    let result = github_closed_pull_request_heads_with_options(&repository, options);
-    match original_path {
-        Some(value) => std::env::set_var("PATH", value),
-        None => std::env::remove_var("PATH"),
-    }
-
-    let expected = ["main", "merged-work-0", "merged-work-1", "merged-work-2"]
-        .into_iter()
-        .map(|branch| (format!("refs/heads/{branch}"), head.clone()))
-        .collect();
-    assert_eq!(result.expect("bounded concurrent merged lookup"), expected);
+    assert_eq!(
+        fs::read_to_string(log_path)
+            .expect("read fake gh log")
+            .lines()
+            .count(),
+        1
+    );
 }

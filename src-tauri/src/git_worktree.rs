@@ -497,7 +497,7 @@ fn run_git(
     Ok(result)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct GitHubPullRequestHead {
     #[serde(default)]
@@ -514,20 +514,39 @@ struct GitHubPullRequestHead {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GitHubSearchRepository {
-    #[serde(rename = "name")]
-    _name: String,
-    #[serde(rename = "nameWithOwner")]
-    name_with_owner: String,
+struct GitHubRestRepository {
+    full_name: String,
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GitHubSearchPullRequest {
+struct GitHubRestPullRequestHead {
+    #[serde(rename = "ref")]
+    ref_name: String,
+    sha: String,
+    repo: Option<GitHubRestRepository>,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubRestPullRequest {
     number: u64,
     state: String,
-    repository: GitHubSearchRepository,
+    created_at: String,
+    merged_at: Option<String>,
+    head: GitHubRestPullRequestHead,
+    base: GitHubRestPullRequestHead,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubRestSearchPullRequest {
+    number: u64,
+    state: String,
+    repository_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubRestSearchResponse {
+    total_count: u64,
+    items: Vec<GitHubRestSearchPullRequest>,
 }
 
 pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
@@ -582,21 +601,79 @@ fn parse_open_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads,
         .collect()
 }
 
-fn parse_pull_request_search(bytes: &[u8], repository: &str) -> Result<Vec<(u64, bool)>, String> {
-    let records: Vec<GitHubSearchPullRequest> = serde_json::from_slice(bytes)
+fn github_pull_request_heads_result(
+    repository_root: &Path,
+    timeout_ms: u64,
+    reason: &str,
+) -> Result<CommandResult, String> {
+    let result = run_bounded_command(
+        "gh",
+        &[
+            OsString::from("api"),
+            OsString::from("--paginate"),
+            OsString::from("--slurp"),
+            OsString::from("repos/{owner}/{repo}/pulls?state=all&per_page=100"),
+        ],
+        repository_root,
+        timeout_ms,
+    )?;
+    if result.timed_out {
+        return Err(format!("{reason}-timeout"));
+    }
+    if result.stdout_truncated || result.stderr_truncated {
+        return Err(format!("{reason}-output-truncated"));
+    }
+    if result.status_code != Some(0) {
+        return Err(format!("{reason}-failed"));
+    }
+    let pages: Vec<Vec<GitHubRestPullRequest>> =
+        serde_json::from_slice(&result.stdout).map_err(|_| format!("{reason}-json-invalid"))?;
+    let records = pages
+        .into_iter()
+        .flatten()
+        .map(|record| GitHubPullRequestHead {
+            number: Some(record.number),
+            head_ref_name: record.head.ref_name,
+            head_ref_oid: record.head.sha,
+            is_cross_repository: record.head.repo.as_ref().map(|repo| &repo.full_name)
+                != record.base.repo.as_ref().map(|repo| &repo.full_name),
+            created_at: Some(record.created_at),
+            state: if record.state == "open" {
+                "OPEN"
+            } else if record.merged_at.is_some() {
+                "MERGED"
+            } else {
+                "CLOSED"
+            }
+            .into(),
+        })
+        .collect::<Vec<_>>();
+    Ok(CommandResult {
+        stdout: serde_json::to_vec(&records).map_err(|_| format!("{reason}-json-invalid"))?,
+        ..result
+    })
+}
+
+fn parse_pull_request_rest_search(
+    bytes: &[u8],
+    repository: &str,
+) -> Result<Vec<(u64, bool)>, String> {
+    let response: GitHubRestSearchResponse = serde_json::from_slice(bytes)
         .map_err(|_| "github-pr-commit-search-json-invalid".to_string())?;
-    if records.len() > 100 {
+    if response.total_count > 100 || response.items.len() > 100 {
         return Err("github-pr-commit-search-incomplete".into());
     }
-    records
+    let expected_suffix = format!("/repos/{repository}");
+    response
+        .items
         .into_iter()
         .map(|record| {
-            if record.repository.name_with_owner != repository || record.number == 0 {
+            if !record.repository_url.ends_with(&expected_suffix) {
                 return Err("github-pr-commit-search-repository-mismatch".into());
             }
             match record.state.as_str() {
                 "open" => Ok((record.number, true)),
-                "closed" | "merged" => Ok((record.number, false)),
+                "closed" => Ok((record.number, false)),
                 _ => Err("github-pr-commit-search-state-invalid".into()),
             }
         })
@@ -753,166 +830,13 @@ pub fn github_closed_pull_request_heads_with_options(
     options: GitWorktreeAuditOptions,
 ) -> Result<ClosedPullRequestHeads, String> {
     validate_options(options)?;
-    let timeout_ms = options.command_timeout_ms;
-    let started = Instant::now();
-    let mut heads = ClosedPullRequestHeads::new();
-
-    let mut accept_result = |result: CommandResult| -> Result<(), String> {
-        if result.timed_out {
-            return Err("github-closed-pr-list-timeout".into());
-        }
-        if result.stdout_truncated || result.stderr_truncated {
-            return Err("github-closed-pr-list-output-truncated".into());
-        }
-        if result.status_code != Some(0) {
-            return Err("github-closed-pr-list-failed".into());
-        }
-        let stderr = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
-        if stderr.contains("search")
-            && stderr.contains("1000")
-            && (stderr.contains("cap") || stderr.contains("limit"))
-        {
-            return Err("github-closed-pr-list-incomplete".into());
-        }
-        heads.extend(parse_closed_pull_request_heads(&result.stdout)?);
-        if heads.len() > 10_000 {
-            return Err("github-closed-pr-count-exceeds-limit".into());
-        }
-        Ok(())
-    };
-
-    let closed_args = vec![
-        OsString::from("pr"),
-        OsString::from("list"),
-        OsString::from("--state"),
-        OsString::from("closed"),
-        OsString::from("--search"),
-        OsString::from("is:unmerged"),
-        OsString::from("--limit"),
-        OsString::from("10001"),
-        OsString::from("--json"),
-        OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-    ];
-    let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
-    if remaining_ms == 0 {
-        return Err("github-closed-pr-list-timeout".into());
-    }
-    accept_result(run_bounded_command(
-        "gh",
-        &closed_args,
+    let result = github_pull_request_heads_result(
         repository_root,
-        remaining_ms,
-    )?)?;
-
-    let branches = list_worktrees(repository_root, options)?
-        .into_iter()
-        .filter_map(|worktree| worktree.branch)
-        .collect::<BTreeSet<_>>();
-    let merged_queries = branches
-        .iter()
-        .map(|branch| {
-            let head = branch
-                .strip_prefix("refs/heads/")
-                .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
-            Ok::<_, String>(vec![
-                OsString::from("pr"),
-                OsString::from("list"),
-                OsString::from("--state"),
-                OsString::from("merged"),
-                OsString::from("--head"),
-                OsString::from(head),
-                OsString::from("--limit"),
-                OsString::from("10001"),
-                OsString::from("--json"),
-                OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-            ])
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    const PR_QUERY_CONCURRENCY: usize = 8;
-    for query_chunk in merged_queries.chunks(PR_QUERY_CONCURRENCY) {
-        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
-        if remaining_ms == 0 {
-            return Err("github-closed-pr-list-timeout".into());
-        }
-        let results = thread::scope(|scope| {
-            let workers = query_chunk
-                .iter()
-                .map(|args| {
-                    scope.spawn(move || {
-                        run_bounded_command("gh", args, repository_root, remaining_ms)
-                    })
-                })
-                .collect::<Vec<_>>();
-            workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .map_err(|_| "github-closed-pr-list-worker-failed".to_string())
-                        .and_then(|result| result)
-                })
-                .collect::<Result<Vec<_>, String>>()
-        })?;
-        for result in results {
-            accept_result(result)?;
-        }
-    }
-    let mut open_vetoes = ClosedPullRequestHeads::new();
-    let open_queries = branches
-        .iter()
-        .map(|branch| {
-            let head = branch
-                .strip_prefix("refs/heads/")
-                .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
-            Ok::<_, String>(vec![
-                OsString::from("pr"),
-                OsString::from("list"),
-                OsString::from("--state"),
-                OsString::from("open"),
-                OsString::from("--head"),
-                OsString::from(head),
-                OsString::from("--limit"),
-                OsString::from("10001"),
-                OsString::from("--json"),
-                OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-            ])
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    for query_chunk in open_queries.chunks(PR_QUERY_CONCURRENCY) {
-        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
-        if remaining_ms == 0 {
-            return Err("github-closed-pr-list-timeout".into());
-        }
-        let results = thread::scope(|scope| {
-            let workers = query_chunk
-                .iter()
-                .map(|args| {
-                    scope.spawn(move || {
-                        run_bounded_command("gh", args, repository_root, remaining_ms)
-                    })
-                })
-                .collect::<Vec<_>>();
-            workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .map_err(|_| "github-closed-pr-list-worker-failed".to_string())
-                        .and_then(|result| result)
-                })
-                .collect::<Result<Vec<_>, String>>()
-        })?;
-        for result in results {
-            if result.timed_out || result.status_code != Some(0) {
-                return Err("github-closed-pr-list-failed".into());
-            }
-            if result.stdout_truncated || result.stderr_truncated {
-                return Err("github-closed-pr-list-output-truncated".into());
-            }
-            open_vetoes.extend(parse_open_pull_request_heads(&result.stdout)?);
-        }
-    }
+        options.command_timeout_ms,
+        "github-closed-pr-list",
+    )?;
+    let mut heads = parse_closed_pull_request_heads(&result.stdout)?;
+    let open_vetoes = parse_open_pull_request_heads(&result.stdout)?;
     heads.retain(|binding| !open_vetoes.contains(binding));
     Ok(heads)
 }
@@ -954,12 +878,10 @@ pub fn github_pull_request_commit_membership(
 
     let repository_result = run(
         &[
-            OsString::from("repo"),
-            OsString::from("view"),
-            OsString::from("--json"),
-            OsString::from("nameWithOwner"),
+            OsString::from("api"),
+            OsString::from("repos/{owner}/{repo}"),
             OsString::from("--jq"),
-            OsString::from(".nameWithOwner"),
+            OsString::from(".full_name"),
         ],
         "github-repository-identity",
     )?;
@@ -992,15 +914,14 @@ pub fn github_pull_request_commit_membership(
             return Err("github-pr-commit-search-timeout".into());
         }
         let args = [
-            OsString::from("search"),
-            OsString::from("prs"),
-            OsString::from(head),
-            OsString::from("--repo"),
-            OsString::from(repository),
-            OsString::from("--limit"),
-            OsString::from("101"),
-            OsString::from("--json"),
-            OsString::from("number,state,repository"),
+            OsString::from("api"),
+            OsString::from("-X"),
+            OsString::from("GET"),
+            OsString::from("search/issues"),
+            OsString::from("-f"),
+            OsString::from(format!("q={head} repo:{repository} is:pr")),
+            OsString::from("-f"),
+            OsString::from("per_page=100"),
         ];
         let result = run_bounded_command("gh", &args, repository_root, timeout_ms)?;
         if result.timed_out {
@@ -1012,7 +933,7 @@ pub fn github_pull_request_commit_membership(
         if result.status_code != Some(0) {
             return Err("github-pr-commit-search-failed".into());
         }
-        for candidate in parse_pull_request_search(&result.stdout, repository)? {
+        for candidate in parse_pull_request_rest_search(&result.stdout, repository)? {
             discovered.push((head.clone(), candidate));
         }
         if index + 1 < heads.len() {
@@ -1063,30 +984,8 @@ pub fn github_stale_open_pull_request_heads(
     cutoff_ms: u64,
     timeout_ms: u64,
 ) -> Result<StaleOpenPullRequestHeads, String> {
-    let result = run_bounded_command(
-        "gh",
-        &[
-            OsString::from("pr"),
-            OsString::from("list"),
-            OsString::from("--state"),
-            OsString::from("open"),
-            OsString::from("--limit"),
-            OsString::from("10001"),
-            OsString::from("--json"),
-            OsString::from("number,headRefName,headRefOid,isCrossRepository,state,createdAt"),
-        ],
-        repository_root,
-        timeout_ms,
-    )?;
-    if result.timed_out {
-        return Err("github-open-pr-list-timeout".into());
-    }
-    if result.stdout_truncated || result.stderr_truncated {
-        return Err("github-open-pr-list-output-truncated".into());
-    }
-    if result.status_code != Some(0) {
-        return Err("github-open-pr-list-failed".into());
-    }
+    let result =
+        github_pull_request_heads_result(repository_root, timeout_ms, "github-open-pr-list")?;
     parse_stale_open_pull_request_heads(&result.stdout, cutoff_ms)
 }
 
@@ -2237,13 +2136,14 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         });
         let stale_open_pull_request_head = stale_open_pull_request_numbers.is_some();
         let completed_pull_request_commit = pull_request_commits.completed.contains(&raw.head);
-        let open_pull_request_commit = pull_request_commits
-            .open
-            .get(&raw.head)
-            .is_some_and(|pull_request_numbers| {
-                stale_open_pull_request_numbers
-                    .is_none_or(|stale_numbers| !pull_request_numbers.is_subset(stale_numbers))
-            });
+        let open_pull_request_commit =
+            pull_request_commits
+                .open
+                .get(&raw.head)
+                .is_some_and(|pull_request_numbers| {
+                    stale_open_pull_request_numbers
+                        .is_none_or(|stale_numbers| !pull_request_numbers.is_subset(stale_numbers))
+                });
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
         let size = if path_valid {
             size_evidence(
@@ -3183,23 +3083,17 @@ mod tests {
 
     #[test]
     fn pull_request_commit_discovery_is_repository_bound_and_exact() {
-        let json = br#"[
-          {"number":1370,"state":"merged","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}},
-          {"number":1454,"state":"closed","repository":{"name":"disksage","nameWithOwner":"ContextualWisdomLab/disksage"}}
-        ]"#;
-        assert_eq!(
-            parse_pull_request_search(json, "ContextualWisdomLab/disksage").unwrap(),
-            vec![(1370, false), (1454, false)]
-        );
-        assert_eq!(
-            parse_pull_request_search(json, "ContextualWisdomLab/other").unwrap_err(),
-            "github-pr-commit-search-repository-mismatch"
-        );
         assert!(pull_request_contains_commit(
             format!("{}\n{}\n", oid('a'), oid('b')).as_bytes(),
             &oid('b')
         )
         .unwrap());
+
+        let rest = br#"{"total_count":1,"items":[{"number":1370,"state":"open","repository_url":"https://api.github.com/repos/ContextualWisdomLab/disksage"}]}"#;
+        assert_eq!(
+            parse_pull_request_rest_search(rest, "ContextualWisdomLab/disksage").unwrap(),
+            vec![(1370, true)]
+        );
     }
 
     #[test]
@@ -3231,7 +3125,10 @@ mod tests {
         let cutoff = parse_github_timestamp_ms("2026-08-01T00:00:00Z").unwrap();
         assert_eq!(
             parse_stale_open_pull_request_heads(json.as_bytes(), cutoff).unwrap(),
-            BTreeMap::from([(("refs/heads/old-local".into(), oid('a')), BTreeSet::from([1]))])
+            BTreeMap::from([(
+                ("refs/heads/old-local".into(), oid('a')),
+                BTreeSet::from([1])
+            )])
         );
         assert!(parse_github_timestamp_ms("2026-02-30T00:00:00Z").is_none());
         assert!(parse_github_timestamp_ms("2026-01-01T00:00:00+00:00").is_none());
