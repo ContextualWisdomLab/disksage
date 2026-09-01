@@ -4,6 +4,7 @@ use crate::{git_worktree, safety};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
@@ -12,6 +13,7 @@ use std::{
 const ONTOLOGY_CLASS: &str = "https://disksage.app/ontology#CloudTransferTemporaryArtifact";
 const MIN_AGE_MS: u64 = 86_400_000;
 const MAX_FILES: usize = 1_000;
+const SQLITE_QUERY_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +90,12 @@ fn filename_sha1(path: &Path) -> Option<String> {
 fn remote_records_from_command_result(
     output: git_worktree::CommandResult,
 ) -> Result<BTreeMap<String, u64>, String> {
+    if output.timed_out {
+        return Err("onedrive-temp-database-query-timeout".into());
+    }
+    if output.stdout_truncated || output.stderr_truncated {
+        return Err("onedrive-temp-database-output-incomplete".into());
+    }
     if output.status_code != Some(0) {
         return Err("onedrive-temp-database-query-failed".into());
     }
@@ -126,23 +134,21 @@ fn remote_records(database: &Path, hashes: &[String]) -> Result<BTreeMap<String,
          WHERE substr(hex(content_hash),1,40) IN ({values}) AND ph_insync=1 AND pending=0 \
          GROUP BY 1 ORDER BY 1;"
     );
-    let output = Command::new(sqlite)
-        .arg("-readonly")
-        .arg("-separator")
-        .arg("\t")
-        .arg(database)
-        .arg(query)
-        .output()
-        .map_err(|_| "onedrive-temp-sqlite-spawn-failed")?;
-    remote_records_from_command_result(git_worktree::CommandResult {
-        child_pid: 0,
-        status_code: output.status.code(),
-        stdout: output.stdout,
-        stderr: output.stderr,
-        timed_out: false,
-        stdout_truncated: false,
-        stderr_truncated: false,
-    })
+    let args = vec![
+        OsString::from("-readonly"),
+        OsString::from("-separator"),
+        OsString::from("\t"),
+        database.as_os_str().to_os_string(),
+        OsString::from(query),
+    ];
+    let output = git_worktree::run_bounded_command(
+        "/usr/bin/sqlite3",
+        &args,
+        Path::new("/"),
+        SQLITE_QUERY_TIMEOUT_MS,
+    )
+    .map_err(|_| "onedrive-temp-database-query-run-failed".to_string())?;
+    remote_records_from_command_result(output)
 }
 
 fn fingerprint(values: &[&str]) -> String {
