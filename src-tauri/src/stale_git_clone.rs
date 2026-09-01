@@ -304,7 +304,6 @@ fn local_only_files(cwd: &Path) -> Result<String, String> {
         &[
             "ls-files",
             "--others",
-            "--exclude-standard",
             "--directory",
             "--no-empty-directory",
         ],
