@@ -37,7 +37,7 @@ pub struct TransparentCompressionPlan {
     pub allocated_bytes_before: u64,
     pub candidates: Vec<TransparentCompressionCandidate>,
     pub plan_fingerprint: String,
-    pub exact_approval_phrase: String,
+    pub exact_approval_phrase: Option<String>,
     pub filesystem_mutation_executed: bool,
 }
 
@@ -207,8 +207,10 @@ pub fn plan(
             .iter()
             .map(|candidate| candidate.allocated_bytes)
             .sum(),
+        exact_approval_phrase: (!candidates.is_empty()).then(|| {
+            format!("DiskSage transparent compression 승인 {plan_fingerprint}")
+        }),
         candidates,
-        exact_approval_phrase: format!("DiskSage transparent compression 승인 {plan_fingerprint}"),
         plan_fingerprint,
         filesystem_mutation_executed: false,
     })
@@ -449,7 +451,8 @@ pub fn execute(
     )?;
     if live.plan_fingerprint != approved_plan.plan_fingerprint
         || expected_fingerprint != approved_plan.plan_fingerprint
-        || confirmation_phrase != approved_plan.exact_approval_phrase
+        || approved_plan.exact_approval_phrase.as_deref() != Some(confirmation_phrase)
+        || live.exact_approval_phrase != approved_plan.exact_approval_phrase
     {
         return Err("transparent-compression-approval-mismatch".into());
     }
