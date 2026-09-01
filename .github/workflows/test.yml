@@ -42,6 +42,8 @@ jobs:
         with:
           node-version: 20.19.0
       - run: npm ci
+      - name: Frontend type and Svelte contract checks
+        run: npm run check
       - run: npm test
       - run: npm run build
 
