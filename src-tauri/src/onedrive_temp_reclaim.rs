@@ -322,10 +322,44 @@ fn plan_while_provider_quiesced<T>(
     Ok(planned)
 }
 
+fn revalidate_local_candidate(
+    candidate: &OneDriveTempCandidate,
+    path: &Path,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "onedrive-temp-file-changed".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != candidate.local_bytes {
+        return Err("onedrive-temp-file-changed".into());
+    }
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .ok_or_else(|| "onedrive-temp-file-changed".to_string())?;
+    if modified_ms != candidate.modified_ms {
+        return Err("onedrive-temp-file-changed".into());
+    }
+    let object_id = safety::filesystem_object_id(path)
+        .map_err(|_| "onedrive-temp-file-changed".to_string())?;
+    if object_id != candidate.object_id {
+        return Err("onedrive-temp-file-changed".into());
+    }
+    let active = git_worktree::active_use_evidence(path, 10_000, 64, false);
+    if !active.assessed || !active.evidence_complete || active.active {
+        return Err("onedrive-temp-file-active-or-evidence-incomplete".into());
+    }
+    let allocation = git_worktree::size_evidence(path, 1, 10_000);
+    if !allocation.evidence_complete || allocation.allocated_bytes != candidate.allocated_bytes {
+        return Err("onedrive-temp-file-changed".into());
+    }
+    Ok(())
+}
+
 fn remove_candidates_with(
     candidates: &[OneDriveTempCandidate],
     mut quiesced: impl FnMut() -> Result<bool, String>,
-    mut object_id: impl FnMut(&Path) -> Result<String, String>,
+    mut revalidate: impl FnMut(&OneDriveTempCandidate, &Path) -> Result<(), String>,
     mut remove: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<RemovalProgress, String> {
     let mut removed_count = 0usize;
@@ -336,9 +370,7 @@ fn remove_candidates_with(
                 return Err("onedrive-temp-provider-restarted-before-delete".into());
             }
             let path = Path::new(&candidate.path);
-            if object_id(path)? != candidate.object_id {
-                return Err("onedrive-temp-file-changed".into());
-            }
+            revalidate(candidate, path)?;
             remove(path)?;
             Ok(())
         })();
@@ -380,10 +412,7 @@ pub fn execute(
     let progress = remove_candidates_with(
         &plan.candidates,
         provider_quiesced,
-        |path| {
-            safety::filesystem_object_id(path)
-                .map_err(|_| "onedrive-temp-file-identity-unavailable".to_string())
-        },
+        revalidate_local_candidate,
         |path| fs::remove_file(path).map_err(|_| "onedrive-temp-remove-failed".to_string()),
     )?;
     let verification_complete = progress.failure.is_none() && progress.removed_count == plan.candidates.len();
@@ -505,10 +534,7 @@ mod tests {
         let result = remove_candidates_with(
             &[reviewed],
             || Ok(true),
-            |candidate_path| {
-                safety::filesystem_object_id(candidate_path)
-                    .map_err(|_| "onedrive-temp-file-identity-unavailable".to_string())
-            },
+            revalidate_local_candidate,
             |candidate_path| {
                 fs::remove_file(candidate_path)
                     .map_err(|_| "onedrive-temp-remove-failed".to_string())
@@ -529,13 +555,7 @@ mod tests {
         let progress = remove_candidates_with(
             &candidates,
             || Ok(true),
-            |path| {
-                Ok(if path == Path::new("/tmp/one.temp") {
-                    "one".into()
-                } else {
-                    "two".into()
-                })
-            },
+            |_, _| Ok(()),
             |_| {
                 remove_calls = remove_calls.saturating_add(1);
                 if remove_calls == 2 {
