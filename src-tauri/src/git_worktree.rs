@@ -332,7 +332,7 @@ struct ClassificationInput {
 }
 
 fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
-    if options.command_timeout_ms == 0 || options.command_timeout_ms > 300_000 {
+    if options.command_timeout_ms == 0 || options.command_timeout_ms > 3_600_000 {
         return Err("git-worktree-command-timeout-out-of-bounds".into());
     }
     if options.size_scan_timeout_ms == 0 || options.size_scan_timeout_ms > 600_000 {
