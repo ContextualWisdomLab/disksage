@@ -4,7 +4,7 @@ use disksage_lib::container_orphan_reclaim::{
     ContainerRuntimeTarget, OrphanCategory,
 };
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> --receipt-dir ABSOLUTE_PRIVATE_DIR [--scope NAME] [--bin PATH] [--docker-host HOST] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
 Builds orphan evidence for containers, images, volumes, and networks. Execution re-audits and removes only the exact approved candidate set.";
@@ -95,6 +95,27 @@ fn suppress_unexecutable_docker_plan(
         }
     }
     plan
+}
+
+fn resolve_default_docker_from_path() -> Result<PathBuf, String> {
+    let path = std::env::var_os("PATH").ok_or_else(|| "docker-native-cli-binary-unavailable".to_string())?;
+    for directory in std::env::split_paths(&path) {
+        if directory.as_os_str().is_empty() {
+            continue;
+        }
+        #[cfg(windows)]
+        let names = ["docker.exe", "docker"];
+        #[cfg(not(windows))]
+        let names = ["docker", "docker"];
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return std::fs::canonicalize(candidate)
+                    .map_err(|_| "docker-native-cli-binary-unavailable".to_string());
+            }
+        }
+    }
+    Err("docker-native-cli-binary-unavailable".into())
 }
 
 fn run() -> Result<(), String> {
@@ -227,6 +248,7 @@ fn run() -> Result<(), String> {
         ensure_cli_execution_authority(runtime, docker_host.as_deref())?;
         ensure_mutation_category_authority(category)?;
     }
+    let binary_path_was_explicit = binary_path.is_some();
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
             ContainerRuntimeKind::PodmanMachine => "podman",
@@ -236,11 +258,14 @@ fn run() -> Result<(), String> {
         })
     });
     let binary_path = if docker_host.is_some() {
-        if !binary_path.is_absolute() {
+        if binary_path.is_absolute() {
+            std::fs::canonicalize(binary_path)
+                .map_err(|_| "docker-native-cli-binary-unavailable".to_string())?
+        } else if !binary_path_was_explicit && binary_path == Path::new("docker") {
+            resolve_default_docker_from_path()?
+        } else {
             return Err("docker-native-cli-authority-requires-absolute-binary".into());
         }
-        std::fs::canonicalize(binary_path)
-            .map_err(|_| "docker-native-cli-binary-unavailable".to_string())?
     } else {
         binary_path
     };
