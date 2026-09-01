@@ -11,6 +11,7 @@ const USAGE: &str = "usage: disksage-git-worktree-remove \
 --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] \
 [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] \
 [--command-timeout-ms N] [--size-scan-timeout-ms N] \
+[--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] \
 --approved-removal-plan-fingerprint HEX64 \
 --confirmation-exact-approval-phrase PHRASE --reviewed-by human:ID --rationale TEXT \
 --record-root ABSOLUTE_PATH";
@@ -23,6 +24,9 @@ struct Args {
     stale_open_pull_request_cutoff_ms: Option<u64>,
     command_timeout_ms: u64,
     size_scan_timeout_ms: u64,
+    max_worktrees: usize,
+    max_entries_per_worktree: u64,
+    max_active_pids: usize,
     plan_fingerprint: String,
     confirmation_phrase: String,
     reviewed_by: String,
@@ -57,6 +61,9 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut stale_open_pull_request_cutoff_ms = None;
     let mut command_timeout_ms = None;
     let mut size_scan_timeout_ms = None;
+    let mut max_worktrees = None;
+    let mut max_entries_per_worktree = None;
+    let mut max_active_pids = None;
     let mut confirmation_phrase = None;
     let mut reviewed_by = None;
     let mut rationale = None;
@@ -101,6 +108,30 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 )
             }
             Some("--size-scan-timeout-ms") => return Err("duplicate option".into()),
+            Some("--max-worktrees") if max_worktrees.is_none() => {
+                max_worktrees = Some(
+                    next_utf8(&mut args, "--max-worktrees")?
+                        .parse()
+                        .map_err(|_| "--max-worktrees must be an integer")?,
+                )
+            }
+            Some("--max-worktrees") => return Err("duplicate option".into()),
+            Some("--max-entries-per-worktree") if max_entries_per_worktree.is_none() => {
+                max_entries_per_worktree = Some(
+                    next_utf8(&mut args, "--max-entries-per-worktree")?
+                        .parse()
+                        .map_err(|_| "--max-entries-per-worktree must be an integer")?,
+                )
+            }
+            Some("--max-entries-per-worktree") => return Err("duplicate option".into()),
+            Some("--max-active-pids") if max_active_pids.is_none() => {
+                max_active_pids = Some(
+                    next_utf8(&mut args, "--max-active-pids")?
+                        .parse()
+                        .map_err(|_| "--max-active-pids must be an integer")?,
+                )
+            }
+            Some("--max-active-pids") => return Err("duplicate option".into()),
             Some("--approved-removal-plan-fingerprint") => {
                 plan_fingerprint =
                     Some(next_utf8(&mut args, "--approved-removal-plan-fingerprint")?)
@@ -145,14 +176,19 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     if !record_root.is_absolute() {
         return Err("--record-root must be absolute".into());
     }
+    let defaults = git_worktree::GitWorktreeAuditOptions::default();
 
     Ok(ParseResult::Run(Args {
         repository_root,
         retention_references,
         include_closed_pull_requests,
         stale_open_pull_request_cutoff_ms,
-        command_timeout_ms: command_timeout_ms.unwrap_or(10_000),
-        size_scan_timeout_ms: size_scan_timeout_ms.unwrap_or(60_000),
+        command_timeout_ms: command_timeout_ms.unwrap_or(defaults.command_timeout_ms),
+        size_scan_timeout_ms: size_scan_timeout_ms.unwrap_or(defaults.size_scan_timeout_ms),
+        max_worktrees: max_worktrees.unwrap_or(defaults.max_worktrees),
+        max_entries_per_worktree: max_entries_per_worktree
+            .unwrap_or(defaults.max_entries_per_worktree),
+        max_active_pids: max_active_pids.unwrap_or(defaults.max_active_pids),
         plan_fingerprint,
         confirmation_phrase,
         reviewed_by,
@@ -176,7 +212,9 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
     let options = git_worktree::GitWorktreeAuditOptions {
         command_timeout_ms: args.command_timeout_ms,
         size_scan_timeout_ms: args.size_scan_timeout_ms,
-        ..git_worktree::GitWorktreeAuditOptions::default()
+        max_worktrees: args.max_worktrees,
+        max_entries_per_worktree: args.max_entries_per_worktree,
+        max_active_pids: args.max_active_pids,
     };
     let audited_at_ms = cloud::system_now_ms();
     let evidence = git_worktree_github_evidence::collect(
@@ -314,5 +352,27 @@ mod tests {
         let mut args = valid_args();
         args[5] = "bad".into();
         assert!(parse_args(args).is_err());
+    }
+
+    #[test]
+    fn parser_preserves_custom_audit_resource_limits() {
+        let mut args = valid_args();
+        args.splice(
+            4..4,
+            [
+                OsString::from("--max-worktrees"),
+                OsString::from("17"),
+                OsString::from("--max-entries-per-worktree"),
+                OsString::from("2345"),
+                OsString::from("--max-active-pids"),
+                OsString::from("9"),
+            ],
+        );
+        let ParseResult::Run(parsed) = parse_args(args).unwrap() else {
+            panic!("runtime arguments must parse as a removal request");
+        };
+        assert_eq!(parsed.max_worktrees, 17);
+        assert_eq!(parsed.max_entries_per_worktree, 2345);
+        assert_eq!(parsed.max_active_pids, 9);
     }
 }
