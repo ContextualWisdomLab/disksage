@@ -272,22 +272,36 @@ fn provider_quiesced() -> Result<bool, String> {
     })
 }
 
+fn plan_while_provider_quiesced<T>(
+    mut observe: impl FnMut() -> Result<bool, String>,
+    planner: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if !observe()? {
+        return Err("onedrive-temp-provider-not-quiesced".into());
+    }
+    let planned = planner()?;
+    if !observe()? {
+        return Err("onedrive-temp-provider-restarted-during-plan".into());
+    }
+    Ok(planned)
+}
+
 pub fn execute(
     home: &Path,
     expected_fingerprint: &str,
     approval: &str,
     executed_at_ms: u64,
 ) -> Result<OneDriveTempExecution, String> {
-    if !provider_quiesced()? {
-        return Err("onedrive-temp-provider-not-quiesced".into());
-    }
-    let plan = plan(home, executed_at_ms)?;
+    let plan = plan_while_provider_quiesced(provider_quiesced, || plan(home, executed_at_ms))?;
     if plan.candidate_set_fingerprint != expected_fingerprint
         || plan.exact_approval_phrase.as_deref() != Some(approval)
     {
         return Err("onedrive-temp-approval-mismatch".into());
     }
     for candidate in &plan.candidates {
+        if !provider_quiesced()? {
+            return Err("onedrive-temp-provider-restarted-before-delete".into());
+        }
         let path = Path::new(&candidate.path);
         if safety::filesystem_object_id(path).ok().as_deref() != Some(&candidate.object_id) {
             return Err("onedrive-temp-file-changed".into());
@@ -332,6 +346,19 @@ mod tests {
         assert_eq!(
             result,
             Err("onedrive-temp-provider-observation-failed".into())
+        );
+    }
+
+    #[test]
+    fn provider_restart_during_planning_fails_closed() {
+        let mut observations = [true, false].into_iter();
+        let result = plan_while_provider_quiesced(
+            || Ok(observations.next().expect("two provider observations")),
+            || Ok(42_u8),
+        );
+        assert_eq!(
+            result,
+            Err("onedrive-temp-provider-restarted-during-plan".into())
         );
     }
 }
