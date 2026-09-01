@@ -11,6 +11,11 @@ reproducible, unused environments. A root-wide active-use observation either blo
 of unrelated entries or encourages an unsafe manual bypass. Cache contents are not user-file
 lineage and must not be uploaded to a cloud provider merely to reclaim local space.
 
+The irreversible proven-cache Trash purge has an additional authority problem: a preview-time flag
+cannot authorize objects that were not shown to the operator. If execution re-discovers Trash
+entries after approval, a newly appearing but structurally valid cache could be permanently deleted
+without ever being reviewed.
+
 ## Decision
 
 DiskSage exposes known cache roots through the existing cache catalog, including the macOS uv
@@ -22,15 +27,25 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
-- the operation is journaled; the normal path never permanently deletes cache content.
-- a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
-  OS-Trash children whose exact known cache name and structural signature are revalidated, whose
-  bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
-  arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
+- the operation is journaled; the normal path never permanently deletes cache content; and
+- a separate, explicit `--purge-proven-cache-trash` path may permanently remove only exact reviewed
+  direct OS-Trash children. Its dry-run candidate record binds known cache name, exact direct-child
+  path, byte count, modification time, filesystem object identity, and structural signature. The
+  operator must persist and review that exact candidate array and pass it back through
+  `--approved-cache-trash-candidates PATH` when executing. Every approved candidate is validated
+  before the first irreversible mutation and again immediately before its own deletion. A newly
+  appearing candidate is ignored; a moved, replaced, resized, modified, symlinked, structurally
+  changed, duplicate, nested, or otherwise stale approved candidate fails closed. Each attempted
+  deletion receives pending and terminal journal records. No arbitrary Trash entry, cloud
+  placeholder, or user-file candidate qualifies.
 
 This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
 same cache root must not prevent reclaiming an independently inactive entry, and it must never be
 treated as evidence that the inactive entry is safe without its own probe.
+
+For the irreversible Trash exception, the reviewed candidate manifest—not the command flags by
+themselves—is the mutation authority. Flags choose the operation; the manifest determines the exact
+objects that may cross the irreversible boundary.
 
 ## Consequences
 
@@ -38,8 +53,13 @@ treated as evidence that the inactive entry is safe without its own probe.
 - Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
 - The normal operation is reversible through the OS Trash; physical space is not claimed until the
   user empties that Trash, and APFS shared blocks may make physical reclaim smaller than logical
-  size. The explicit proven-cache purge is irreversible by design and is limited to cache data
-  already placed in Trash.
+  size. The explicit proven-cache purge is irreversible by design and is limited to exact reviewed
+  cache data already placed in Trash.
+- A proven cache that appears after review remains in Trash until a later preview and explicit
+  approval; execution never widens the reviewed candidate set by rescanning.
+- If any reviewed purge candidate becomes stale before the first deletion, the batch fails before
+  mutation. Each candidate is revalidated again immediately before its own delete to narrow the
+  remaining replacement-race window.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
   permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
@@ -47,8 +67,10 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
 - **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is allowed only for a structurally proven cache
-  already in OS Trash through the separate explicit flag.
+  identity at mutation time. Permanent deletion is allowed only for an exact reviewed,
+  structurally proven cache already in OS Trash through the separate explicit path.
+- **Execution-time rescan as approval:** rejected because a newly appearing candidate was not shown
+  to the operator and therefore has no human-attributed exact approval.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -89,15 +111,28 @@ untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd5
 ## Incident policy: proven cache Trash purge
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this
-incident, DiskSage may expose them as read-only candidates and permanently remove them only when
-the operator passes --execute --purge-proven-cache-trash. The candidate scanner accepts only the
-known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it bounds traversal,
-rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
-for both the pending and terminal outcome. This path never empties the Trash generally and never
-applies to user files or cloud-provider placeholders.
+incident, DiskSage may expose them as read-only candidates. The preview records each accepted
+candidate's exact direct-child path, known name, byte count, modification time, filesystem object
+identity, and structural signature. The operator reviews and persists that exact candidate array.
+Permanent removal then requires all three controls:
+
+1. `--execute --purge-proven-cache-trash` selects the irreversible operation;
+2. `--approved-cache-trash-candidates /ABSOLUTE/reviewed.json` supplies the exact reviewed candidate
+   set; and
+3. execution proves the entire approved set is still current before the first deletion, then
+   revalidates each candidate immediately before its own removal.
+
+The candidate scanner accepts only the known direct names/signatures for npm, pnpm, Edge, uv, and
+Trivy caches; it bounds traversal and rejects symlinks. Execution never rescans to widen authority:
+a matching cache that appears after preview remains untouched until a later review. Stale, nested,
+replaced, resized, modified, moved, duplicate, or structurally changed approved candidates fail
+closed. Each attempted removal writes both a pending journal record and a terminal `ok`/`error`
+record. This path never empties Trash generally and never applies to user files or cloud-provider
+placeholders.
 
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)
 - `src-tauri/src/cache_cleanup.rs`
+- `src-tauri/src/bin/disksage-cache-cleanup.rs`
 - `src-tauri/src/rules.rs`
