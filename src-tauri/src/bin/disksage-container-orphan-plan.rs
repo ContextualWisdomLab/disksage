@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> --receipt-dir ABSOLUTE_PRIVATE_DIR [--scope NAME] [--bin PATH] [--docker-host HOST] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
-Builds orphan evidence for containers, images, volumes, and networks. Execution re-audits and removes only the exact approved candidate set.";
+Builds orphan evidence for containers, images, volumes, networks, and build cache. Execution re-audits and removes only the exact approved candidate set.";
 
 fn next_utf8_argument(
     args: &mut impl Iterator<Item = std::ffi::OsString>,
@@ -359,6 +359,7 @@ mod tests {
             OrphanCategory::BuildCache
         );
         assert!(parse_category("all").is_err());
+        assert!(USAGE.contains("build cache"));
     }
 
     #[test]
