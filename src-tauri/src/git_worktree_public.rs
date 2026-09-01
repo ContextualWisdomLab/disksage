@@ -6,7 +6,16 @@
 //! orchestration may keep a longer total budget, but every call into the local implementation is
 //! capped independently before any subprocess can start.
 
-pub use crate::git_worktree_impl::*;
+pub use crate::git_worktree_impl::{
+    approve_stale_worktree_removal, prepare_worktree_record_directory, public_summary,
+    validate_reference, write_immutable_worktree_record, ClosedPullRequestHeads,
+    GitWorktreeActiveUseEvidence, GitWorktreeAuditEntry, GitWorktreeAuditOptions,
+    GitWorktreeAuditPublicSummary, GitWorktreeAuditReport, GitWorktreeDisposition,
+    GitWorktreeReferenceBinding, GitWorktreeRemovalApproval, GitWorktreeRemovalItemResult,
+    GitWorktreeRemovalResult, GitWorktreeSizeEvidence, PullRequestCommitMembership,
+    PullRequestCommits, StaleOpenPullRequestHeads, GIT_WORKTREE_AUDIT_SCHEMA_KIND,
+    MAX_REFERENCE_BYTES,
+};
 
 use std::path::Path;
 
