@@ -108,7 +108,13 @@ are defined by [ADR-0011](architecture/adr/0011-cloud-transfer-failure-and-mater
 - Every mutation requires a fresh, exact, human-attributed approval for the displayed candidate
   identities and action. Broad or stale approval is invalid.
 - User-file removal must use an OS-managed or product-managed reversible Trash/quarantine path with
-  a durable journal and tested undo/restore behavior. Permanent deletion is not a product action.
+  a durable journal and tested undo/restore behavior. Permanent deletion of user files is not a
+  product action. The only irreversible cleanup path is the separately invoked proven-cache Trash
+  purge from [ADR-0002](architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md): it may
+  remove only direct OS-Trash children that still match a known regenerable-cache name and
+  structural signature, contain no symlink in the bounded recheck, and receive pending/terminal
+  journal records. Arbitrary Trash entries, cloud placeholders, and user-file candidates never
+  qualify.
 - A changed, replaced, unreadable, active, or newly ambiguous candidate is skipped or blocks the
   batch without broadening authority to another item.
 - Receipts must state what was observed, approved, attempted, completed, skipped, and recovered;
@@ -135,8 +141,9 @@ action without exposing implementation ownership.
 
 - Reaching 300 GB by weakening evidence, deleting an irreplaceable item, or counting unobserved
   savings.
-- Permanent deletion, force-pruning repositories, terminating provider databases/processes, or
-  mutating a cloud placeholder to inspect it.
+- Permanent deletion of user files or arbitrary Trash entries, force-pruning repositories,
+  terminating provider databases/processes, or mutating a cloud placeholder to inspect it. The
+  narrowly bounded proven-cache Trash purge in ADR-0002 is the sole permanent cleanup exception.
 - Treating age, filename, file size, model confidence, or a rule of thumb as deletion authority.
 - Treating OAuth, an external LLM, or another ContextualWisdomLab service as a prerequisite for
   standalone personal use.
@@ -151,7 +158,9 @@ action without exposing implementation ownership.
 4. Every execution is bound to fresh content and filesystem identity and rejects replacement races.
 5. Provider placeholders, symlinks, active files, and incomplete scans are preserved.
 6. Cloud copy completion never means provider sync completion.
-7. User-file actions remain reversible and journaled; permanent deletion is unreachable.
+7. User-file actions remain reversible and journaled; permanent deletion of user files is
+   unreachable. Irreversible cleanup is confined to ADR-0002's explicit, structurally revalidated,
+   journaled purge of already-trashed known regenerable caches.
 8. A model can recommend but cannot override deterministic safety evidence.
 9. Private evidence stays local with least-privilege storage; shared exports are bounded and
    path-free.
@@ -172,7 +181,9 @@ action without exposing implementation ownership.
   remains unavailable while the generic exact-copy workflow stays reversible.
 - Realistic cache, Git, container/VM, temporary-file, and duplicate fixtures cover active use,
   dirty/untracked state, unique commits, provider roots, replacement races, incomplete authority,
-  Trash/quarantine receipt, and undo.
+  Trash/quarantine receipt, and undo. Proven-cache purge fixtures additionally prove only the
+  explicit known-cache signatures already in OS Trash can cross the irreversible boundary, with
+  symlink, replacement, unknown-name, user-file, and arbitrary-Trash cases rejected.
 - Cross-platform packaging, accessibility, customer-message, privacy, security, and exact-head
   release checks pass. UI flows remain responsive during long scans and actions.
 - An end-to-end reclaim report records candidate logical bytes, action results, before/after volume
