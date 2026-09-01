@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod runtime_storage_commands;
+#[cfg_attr(coverage, allow(dead_code))]
 mod container_orphan_commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
@@ -166,7 +168,7 @@ pub fn run() {
             commands::inspect_podman_reclaim,
             podman_desktop_bridge::inspect_podman_desktop_evidence,
             commands::execute_podman_dangling_image_prune,
-            commands::inspect_runtime_storage,
+            runtime_storage_commands::inspect_runtime_storage,
             commands::execute_runtime_storage_trim,
             commands::execute_runtime_storage_recovery,
             container_orphan_commands::inspect_container_orphans,
