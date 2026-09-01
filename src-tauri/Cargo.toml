@@ -88,6 +88,10 @@ name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
 
 [[bin]]
+name = "disksage-git-worktree-metadata-prune"
+path = "src/bin/disksage-git-worktree-metadata-prune.rs"
+
+[[bin]]
 name = "disksage-git-clone-reclaim"
 path = "src/bin/disksage-git-clone-reclaim.rs"
 
