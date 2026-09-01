@@ -90,6 +90,10 @@ mod reasoning;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules.rs"]
+mod rules_impl;
+#[cfg_attr(coverage, allow(dead_code))]
+#[path = "rules_public.rs"]
 mod rules;
 #[cfg(test)]
 mod rules_ontology_contract_tests;
