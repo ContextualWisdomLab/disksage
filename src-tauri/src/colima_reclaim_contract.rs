@@ -63,11 +63,13 @@ fn resolved_colima_executable(executable: &Path) -> PathBuf {
         .unwrap_or_else(|| executable.to_path_buf())
 }
 
-/// Builds Colima reclaim evidence only when the measured cache root agrees with Colima's
-/// explicit cache-home configuration. A relative or mismatched configured root fails closed so
-/// a reviewed fingerprint cannot authorize pruning a different cache tree. Bare executable names
-/// are resolved through absolute PATH entries before identity validation, while symlinked or
-/// non-regular candidates remain rejected by the implementation boundary.
+/// Builds Colima cache-reclaim evidence only when the measured cache root agrees with Colima's
+/// explicit cache-home configuration. The exported ontology class is the cache-specific
+/// `ColimaDownloadCache`, rather than the implementation module's broader virtual-disk class. A
+/// relative or mismatched configured root fails closed so a reviewed fingerprint cannot authorize
+/// pruning a different cache tree. Bare executable names are resolved through absolute PATH entries
+/// before identity validation, while symlinked or non-regular candidates remain rejected by the
+/// implementation boundary.
 pub fn plan_colima_reclaim(
     executable: &Path,
     cache_root: &Path,
@@ -76,6 +78,7 @@ pub fn plan_colima_reclaim(
     let executable = resolved_colima_executable(executable);
     let mut plan =
         crate::colima_reclaim_impl::plan_colima_reclaim(&executable, cache_root, timeout);
+    plan.ontology_class = "https://disksage.app/ontology#ColimaDownloadCache";
     if let Some(issue) = cache_root_contract_issue(cache_root) {
         if !plan.issues.iter().any(|existing| existing == &issue) {
             plan.issues.push(issue);
