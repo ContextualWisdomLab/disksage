@@ -14,7 +14,7 @@
 //!    a SHA-256 fingerprint of the exact sorted candidate identity set.
 //! 3. Running or paused containers are never candidates. Built-in networks
 //!    (`bridge`, `host`, `none`, `podman`) are never candidates. Image deletion targets only
-//!    full identities returned by each runtime's authoritative `dangling=true` image filter
+//!    full image identities that no container references
 //!    after a bounded container-membership query proves no container references the image.
 //! 4. Mutation targets only the exact identities observed by the fresh audit. Category-wide
 //!    `prune` commands are never used, so a resource that becomes orphaned after the audit cannot
@@ -264,7 +264,7 @@ pub(crate) fn resolve_docker_context_fingerprint(
 pub enum OrphanCategory {
     /// Stopped containers (`exited`/`created`/`dead`/`stopped` states).
     Container,
-    /// Runtime-reported dangling images.
+    /// Images with no container reference.
     Image,
     /// Dangling volumes not referenced by any container.
     Volume,
@@ -680,7 +680,7 @@ fn parse_image_records(output: &str) -> Result<Vec<ImageRecord>, String> {
     Ok(records)
 }
 
-fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> {
+fn parse_docker_image_ids(output: &str) -> Result<Vec<String>, String> {
     let values = split_json_envelopes(output)?;
     if values.len() > MAX_CATEGORY_RECORDS {
         return Err("record-count-exceeds-bound".to_string());
@@ -714,7 +714,7 @@ fn parse_buildx_reclaimable_ids(output: &str) -> Result<(u64, Vec<String>), Stri
 }
 
 /// Parse the exact byte sizes returned by `docker image inspect` for the already-authorized
-/// dangling image identities.  The list command's `Size` field is human-readable, so it is not
+/// unreferenced image identities. The list command's `Size` field is human-readable, so it is not
 /// converted with a unit heuristic; inspect's numeric `Size` is the only accepted estimate.
 fn parse_docker_image_sizes(output: &str) -> Result<BTreeMap<String, u64>, String> {
     let values = split_json_envelopes(output)?;
@@ -1412,14 +1412,7 @@ fn audit_category(
                 args.extend(["--format", "json"]);
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                args.extend([
-                    "images",
-                    "--filter",
-                    "dangling=true",
-                    "--no-trunc",
-                    "--format",
-                    "json",
-                ]);
+                args.extend(["images", "--all", "--no-trunc", "--format", "json"]);
             }
             OrphanCategory::Image => {
                 args.extend([
@@ -1510,8 +1503,7 @@ fn audit_category(
                 )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                let listed_ids =
-                    bounded_exact_candidate_ids(parse_docker_dangling_image_ids(&output)?)?;
+                let listed_ids = bounded_exact_candidate_ids(parse_docker_image_ids(&output)?)?;
                 let total = u64::try_from(listed_ids.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
                 let mut candidate_ids = Vec::with_capacity(listed_ids.len());
@@ -2110,16 +2102,16 @@ mod tests {
     }
 
     #[test]
-    fn docker_dangling_image_records_bind_only_full_ids() {
+    fn docker_image_records_bind_only_full_ids() {
         let documented = format!(
             "{{\"Containers\":\"N/A\",\"ID\":\"{DOCKER_ID_A}\",\"Repository\":\"<none>\",\"Size\":\"72.9MB\",\"Tag\":\"<none>\"}}"
         );
         assert_eq!(
-            parse_docker_dangling_image_ids(&documented).unwrap(),
+            parse_docker_image_ids(&documented).unwrap(),
             vec![DOCKER_ID_A.to_string()]
         );
         assert_eq!(
-            parse_docker_dangling_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
+            parse_docker_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
             "image-invalid-id"
         );
     }

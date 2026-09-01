@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
 #[test]
-fn docker_dangling_image_used_by_a_container_is_not_a_prune_candidate() {
+fn docker_image_used_by_a_container_is_not_a_prune_candidate() {
     const IMAGE_ID: &str =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const CONTAINER_ID: &str =
@@ -30,7 +30,7 @@ case "${{1:-}}" in
     esac
     ;;
   images)
-    case " $* " in *" --filter dangling=true "*) ;; *) exit 92 ;; esac
+    case " $* " in *" --all "*) ;; *) exit 92 ;; esac
     case " $* " in *" --no-trunc "*) ;; *) exit 93 ;; esac
     printf '%s\n' '{{"Containers":"N/A","ID":"{IMAGE_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
     ;;
@@ -65,7 +65,7 @@ esac
     assert_eq!(evidence.total_records, 1);
     assert_eq!(
         evidence.candidate_records, 0,
-        "a dangling image still referenced by a container must not receive deletion authority"
+        "an image referenced by a container must not receive deletion authority"
     );
     assert!(image.approval_phrase.is_none());
 }

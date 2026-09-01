@@ -27,8 +27,8 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    container state, missing reference count, or oversized listing fails the category closed.
 3. Candidates are strictly defined:
    - containers in `exited`/`created`/`dead` states only;
-   - untagged images with proven zero container references (tagged images are never
-     candidates even when unused);
+   - images with proven zero references from the complete current container set, whether tagged
+     or untagged; full IDs are revalidated immediately before exact deletion;
    - dangling volumes reported by the runtime's own `dangling=true` filter;
    - custom networks excluding built-ins (`bridge`, `host`, `none`, `podman`) whose inspect
      proves zero attached endpoints, bounded at 64 probes per audit.

@@ -54,6 +54,7 @@ case "${1:-}" in
     exit 0
     ;;
   images) exit 0 ;;
+  buildx) exit 0 ;;
   volume)
     [ "${2:-}" = "ls" ] || exit 92
     exit 0
@@ -79,7 +80,7 @@ esac
         plan.evidence_complete,
         "zero-record Docker listings are complete evidence"
     );
-    assert_eq!(plan.categories.len(), 4);
+    assert_eq!(plan.categories.len(), 5);
     for category in &plan.categories {
         assert!(
             category.evidence_complete,
@@ -98,7 +99,7 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn docker_audit_requests_full_ids_and_uses_dangling_image_evidence() {
+fn docker_audit_requests_full_ids_and_all_image_evidence() {
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (_temp, runtime) = fake_runtime(&format!(
         r#"
@@ -114,7 +115,7 @@ case "${{1:-}}" in
     ;;
   images)
     case " $* " in *" --no-trunc "*) ;; *) echo "missing image --no-trunc" >&2; exit 93 ;; esac
-    case " $* " in *" --filter dangling=true "*) ;; *) echo "missing dangling filter" >&2; exit 94 ;; esac
+    case " $* " in *" --all "*) ;; *) echo "missing all-images scope" >&2; exit 94 ;; esac
     printf '%s\n' '{{"Containers":"N/A","ID":"{FULL_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
     ;;
   image)
