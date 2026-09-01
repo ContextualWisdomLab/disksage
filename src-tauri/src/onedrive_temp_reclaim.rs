@@ -494,6 +494,32 @@ mod tests {
     }
 
     #[test]
+    fn changed_staging_file_is_not_removed_after_review() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("staging.temp");
+        fs::write(&path, b"a").unwrap();
+        let object_id = safety::filesystem_object_id(&path).unwrap();
+        let reviewed = candidate(&path.to_string_lossy(), &object_id, 4_096);
+        fs::write(&path, b"changed after review").unwrap();
+
+        let result = remove_candidates_with(
+            &[reviewed],
+            || Ok(true),
+            |candidate_path| {
+                safety::filesystem_object_id(candidate_path)
+                    .map_err(|_| "onedrive-temp-file-identity-unavailable".to_string())
+            },
+            |candidate_path| {
+                fs::remove_file(candidate_path)
+                    .map_err(|_| "onedrive-temp-remove-failed".to_string())
+            },
+        );
+
+        assert_eq!(result, Err("onedrive-temp-file-changed".into()));
+        assert!(path.exists());
+    }
+
+    #[test]
     fn later_delete_failure_preserves_partial_mutation_receipt() {
         let candidates = vec![
             candidate("/tmp/one.temp", "one", 4_096),
