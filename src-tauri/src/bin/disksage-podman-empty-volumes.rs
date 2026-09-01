@@ -64,13 +64,16 @@ fn run() -> Result<(), String> {
     }
 
     let result = if execute {
-        prune_empty_dangling_volumes(
-            &podman,
-            &machine,
-            phrase.as_deref().unwrap_or_default(),
-            rationale.as_deref().unwrap_or_default(),
-        )
-        .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
+        let phrase = phrase
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "--execute requires --confirmation-phrase".to_string())?;
+        let rationale = rationale
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "--execute requires --rationale".to_string())?;
+        prune_empty_dangling_volumes(&podman, &machine, phrase, rationale)
+            .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
     } else {
         plan_empty_dangling_volumes(&podman, &machine)
             .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
