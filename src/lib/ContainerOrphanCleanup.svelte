@@ -95,13 +95,13 @@
     const rationale = rationales[key]?.trim();
     if (!typedPhrase || typedPhrase !== cat.approval_phrase) return;
     if (!rationale || busy || pruneBusyKey !== null) return;
-    const granted = await confirm(
-      `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 확인 코드를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
-      { title: "DiskSage 컨테이너 정리", kind: "warning" },
-    );
-    if (!granted) return;
     pruneBusyKey = key;
     try {
+      const granted = await confirm(
+        `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 확인 코드를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
+        { title: "DiskSage 컨테이너 정리", kind: "warning" },
+      );
+      if (!granted) return;
       const result = await executeContainerOrphanPruneFlow(
         () => api.executeContainerOrphanPrune(
           plan.runtime.kind,
