@@ -13,13 +13,10 @@ pub use implementation::{
     RawImageEvidence, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
-// Keep this contract value aligned with the exact-ID executor ceiling. The public wrapper must
-// never issue an approval that `prune_dangling_images` will reject before mutation.
-const MAX_EXECUTABLE_DANGLING_IMAGE_IDS: u64 = 256;
-
 fn dangling_image_approval_is_executable(evidence: &PodmanUnusedImageEvidence) -> bool {
     evidence.unused_untagged_records > 0
-        && evidence.unused_untagged_records <= MAX_EXECUTABLE_DANGLING_IMAGE_IDS
+        && evidence.unused_untagged_records
+            <= u64::try_from(implementation::MAX_EXACT_DELETE_IDS).unwrap_or(u64::MAX)
 }
 
 /// Probe Podman reclaimability without offering an approval that the exact executor must reject.
@@ -119,11 +116,12 @@ exit 1
                 .join(",");
             format!("[{records}]")
         };
+        let limit = implementation::MAX_EXACT_DELETE_IDS;
 
-        let at_limit = probe_with_images(&images_json(256));
+        let at_limit = probe_with_images(&images_json(limit));
         assert!(at_limit.dangling_prune_approval_phrase.is_some());
 
-        let above_limit = probe_with_images(&images_json(257));
+        let above_limit = probe_with_images(&images_json(limit + 1));
         assert!(above_limit.dangling_prune_approval_phrase.is_none());
     }
 }
