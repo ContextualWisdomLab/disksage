@@ -34,44 +34,85 @@ pub fn probe_podman_reclaim(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn probe_with_images(images_json: &str) -> PodmanReclaimPlan {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "disksage-podman-contract-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("fixture root must be creatable");
+        let script = root.join("podman-fixture");
+        let escaped_root = root.to_string_lossy().replace('"', "\\\"");
+        let body = format!(
+            r#"#!/bin/sh
+if [ "$1" = "machine" ] && [ "$2" = "inspect" ]; then
+  printf '%s\n' '[{{"ConfigDir":{{"Path":"{escaped_root}"}},"Name":"contract-machine","State":"running","Resources":{{"DiskSize":1}}}}]'
+  exit 0
+fi
+if [ "$1" = "--connection" ] && [ "$3" = "images" ]; then
+  cat <<'DISKSAGE_IMAGES'
+{images_json}
+DISKSAGE_IMAGES
+  exit 0
+fi
+exit 1
+"#
+        );
+        fs::write(&script, body).expect("fixture script must be writable");
+        let mut permissions = fs::metadata(&script)
+            .expect("fixture script metadata must be readable")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script, permissions).expect("fixture script must be executable");
+
+        let plan = probe_podman_reclaim(&script, "contract-machine", Duration::from_secs(2));
+        let _ = fs::remove_dir_all(root);
+        plan
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn approval_predicate_matches_executor_requirement() {
-        let mut plan = PodmanReclaimPlan {
-            schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
-            schema_version: 3,
-            platform: "test",
-            evidence_complete: true,
-            elapsed_ms: 0,
-            machine: None,
-            raw_image: None,
-            guest_filesystem: None,
-            store: None,
-            system_df: None,
-            unused_images: Some(PodmanUnusedImageEvidence {
-                total_records: 2,
-                referenced_records: 0,
-                unused_records: 2,
-                unused_untagged_records: 1,
-                unused_tagged_records: 1,
-                candidate_record_size_sum: 2,
-                candidate_set_sha256: "0".repeat(64),
-            }),
-            dangling_prune_approval_phrase: Some("must-not-escape".into()),
-            assessment: PodmanReclaimAssessment {
-                physically_reclaimable_bytes: None,
-                podman_reported_reclaimable_bytes: None,
-                raw_allocated_minus_guest_used_bytes: None,
-                status: "unverified".into(),
-                reason_codes: Vec::new(),
-                recommended_actions: Vec::new(),
-            },
-            issues: Vec::new(),
+    fn mixed_tagged_and_untagged_images_preserve_executable_approval() {
+        let untagged = "a".repeat(64);
+        let tagged = "b".repeat(64);
+        let images = format!(
+            r#"[{{"Id":"{untagged}","RepoTags":[],"Containers":0,"Size":100}},{{"Id":"{tagged}","RepoTags":["keep:latest"],"Containers":0,"Size":200}}]"#
+        );
+
+        let plan = probe_with_images(&images);
+        let evidence = plan.unused_images.expect("image evidence must be collected");
+        assert_eq!(evidence.unused_untagged_records, 1);
+        assert_eq!(evidence.unused_tagged_records, 1);
+        assert!(plan.dangling_prune_approval_phrase.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approval_respects_exact_delete_id_boundary() {
+        let images_json = |count: usize| {
+            let records = (1..=count)
+                .map(|index| {
+                    format!(
+                        r#"{{"Id":"{index:064x}","RepoTags":[],"Containers":0,"Size":1}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{records}]")
         };
-        if plan.unused_images.as_ref().is_none_or(|evidence| {
-            evidence.unused_untagged_records == 0 || evidence.unused_tagged_records > 0
-        }) {
-            plan.dangling_prune_approval_phrase = None;
-        }
-        assert_eq!(plan.dangling_prune_approval_phrase, None);
+
+        let at_limit = probe_with_images(&images_json(256));
+        assert!(at_limit.dangling_prune_approval_phrase.is_some());
+
+        let above_limit = probe_with_images(&images_json(257));
+        assert!(above_limit.dangling_prune_approval_phrase.is_none());
     }
 }
