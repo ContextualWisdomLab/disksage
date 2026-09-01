@@ -532,6 +532,15 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn empty_plan_withholds_mutation_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let planned = plan(temp.path(), 1, 10, crate::cloud::system_now_ms()).unwrap();
+        assert_eq!(planned.candidate_count, 0);
+        assert!(planned.exact_approval_phrase.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn plan_is_deterministic_and_only_selects_old_large_jsonl() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("old.jsonl");
