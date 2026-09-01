@@ -1,3 +1,5 @@
+#![cfg(not(coverage))]
+
 use crate::runtime_storage::{self, RuntimeStoragePlan};
 
 /// Reads VM-backed runtime storage without occupying Tauri's async worker with bounded subprocesses.
