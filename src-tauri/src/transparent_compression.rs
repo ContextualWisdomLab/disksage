@@ -445,7 +445,9 @@ mod tests {
         let now_ms = crate::cloud::system_now_ms() + 2 * 86_400_000;
         let first = plan(temp.path(), 1, 10, now_ms).unwrap();
         let second = plan(temp.path(), 1, 10, now_ms).unwrap();
+        let tighter = plan(temp.path(), 1, 1, now_ms).unwrap();
         assert_eq!(first.candidate_count, 1);
         assert_eq!(first.plan_fingerprint, second.plan_fingerprint);
+        assert_ne!(first.plan_fingerprint, tighter.plan_fingerprint);
     }
 }
