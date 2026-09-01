@@ -277,7 +277,7 @@
     {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
   </button>
   <p class="notice" role="status">
-    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 확인이 바뀐 항목은 자동으로 건너뜁니다. 정리 범위를 확인하세요.
+    npm·pnpm·Adobe·Edge·uv·Trivy·AppMap·Superset·Playwright 캐시만 대상으로 하며, 사용 중이거나 확인이 바뀐 항목은 자동으로 건너뜁니다. 정리 범위를 확인하세요.
   </p>
   {#if cacheRetryMessage}<p class="notice" role="status">안내를 확인하세요. {cacheRetryMessage}</p>{/if}
   <ul class="list">
