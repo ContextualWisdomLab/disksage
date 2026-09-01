@@ -231,6 +231,15 @@ fn available_bytes(_path: &Path) -> Result<u64, String> {
     Err("transparent-compression-unsupported-platform".into())
 }
 
+fn activity_probe_proves_inactive(
+    status_code: Option<i32>,
+    timed_out: bool,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+) -> bool {
+    !timed_out && !stdout_truncated && !stderr_truncated && status_code == Some(1)
+}
+
 #[cfg(target_os = "macos")]
 fn compress_one(candidate: &TransparentCompressionCandidate) -> Result<(u64, bool), String> {
     let path = Path::new(&candidate.path);
@@ -243,11 +252,12 @@ fn compress_one(candidate: &TransparentCompressionCandidate) -> Result<(u64, boo
         Path::new("/"),
         15_000,
     )?;
-    if lsof.timed_out
-        || lsof.stdout_truncated
-        || lsof.stderr_truncated
-        || lsof.status_code == Some(0)
-    {
+    if !activity_probe_proves_inactive(
+        lsof.status_code,
+        lsof.timed_out,
+        lsof.stdout_truncated,
+        lsof.stderr_truncated,
+    ) {
         return Err("compression-file-active-or-unresolved".into());
     }
     let before = digest(path)?;
@@ -414,6 +424,17 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_probe_fails_closed_on_lsof_errors() {
+        assert!(activity_probe_proves_inactive(Some(1), false, false, false));
+        assert!(!activity_probe_proves_inactive(Some(0), false, false, false));
+        assert!(!activity_probe_proves_inactive(Some(2), false, false, false));
+        assert!(!activity_probe_proves_inactive(None, false, false, false));
+        assert!(!activity_probe_proves_inactive(Some(1), true, false, false));
+        assert!(!activity_probe_proves_inactive(Some(1), false, true, false));
+        assert!(!activity_probe_proves_inactive(Some(1), false, false, true));
+    }
 
     #[test]
     fn plan_is_deterministic_and_only_selects_old_large_jsonl() {
