@@ -179,7 +179,7 @@
   </label>
   {#if includeClosedPullRequests}
     <p class="muted">
-      병합 없이 종료된 PR의 깨끗한 보조 폴더도 정리 후보가 될 수 있습니다. 브랜치와 커밋은 유지됩니다.
+      병합 없이 종료된 PR의 깨끗한 보조 폴더도 정리 후보가 될 수 있습니다. 브랜치와 커밋은 유지됩니다. 선택한 저장소에 로그인된 GitHub 연결이 필요합니다.
     </p>
   {/if}
   <label class="option">
