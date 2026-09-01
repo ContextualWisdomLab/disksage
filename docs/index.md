@@ -21,7 +21,7 @@ DiskSage owns local storage inventory and evidence-bound reclaim decision suppor
 - [README](https://github.com/ContextualWisdomLab/disksage#readme) — product overview, maturity, safety, privacy, and onboarding.
 - [Product requirements](https://github.com/ContextualWisdomLab/disksage/blob/main/docs/PRD.md) — canonical customer outcomes and safety contract.
 - [Product and technical gap baseline](https://github.com/ContextualWisdomLab/disksage/blob/main/docs/product-technical-gap-baseline.md) — current implementation gaps and evidence status.
-- [Architecture decisions](https://github.com/ContextualWisdomLab/disksage/tree/main/docs/adr) — accepted design and safety decisions when present on protected `main`.
+- [Architecture decisions](https://github.com/ContextualWisdomLab/disksage/tree/main/docs/architecture/adr) — accepted design and safety decisions when present on protected `main`.
 - [Releases](https://github.com/ContextualWisdomLab/disksage/releases) — immutable release evidence when published.
 - [Ask DeepWiki](https://deepwiki.com/ContextualWisdomLab/disksage) — repository-grounded navigation and questions.
 
