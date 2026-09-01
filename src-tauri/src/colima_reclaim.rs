@@ -3,11 +3,18 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_CACHE_ENTRIES: u64 = 1_000_000;
@@ -277,59 +284,90 @@ struct CommandOutput {
     stdout: String,
 }
 
+#[cfg(unix)]
+fn kill_process_group(process_id: u32) {
+    let Ok(process_id) = i32::try_from(process_id) else {
+        return;
+    };
+    // SAFETY: run_command launches this child into its own process group, so a negative PID can
+    // only target this invocation and descendants that inherited its group.
+    let _ = unsafe { libc::kill(-process_id, libc::SIGKILL) };
+}
+
+#[cfg(unix)]
+fn terminate_command_tree(child: &mut Child) {
+    kill_process_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_command(
     executable: &Path,
     arguments: &[&str],
     timeout: Duration,
     label: &str,
 ) -> Result<CommandOutput, String> {
-    let mut child = Command::new(executable)
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| format!("{label}-spawn-failed"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{label}-stdout-unavailable"))?;
-    let reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take((MAX_OUTPUT_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                drop(reader);
-                return Err(format!("{label}-timeout"));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                drop(reader);
-                return Err(format!("{label}-wait-failed"));
-            }
-        }
-    };
-    let bytes = reader
-        .join()
-        .map_err(|_| format!("{label}-reader-panicked"))?
-        .map_err(|_| format!("{label}-read-failed"))?;
-    if bytes.len() > MAX_OUTPUT_BYTES {
-        return Err(format!("{label}-output-too-large"));
+    #[cfg(not(unix))]
+    {
+        let _ = (executable, arguments, timeout);
+        return Err(format!("{label}-unsupported-platform"));
     }
-    Ok(CommandOutput {
-        status_code: status.code().unwrap_or(-1),
-        stdout: String::from_utf8(bytes).map_err(|_| format!("{label}-output-not-utf8"))?,
-    })
+
+    #[cfg(unix)]
+    {
+        let mut command = Command::new(executable);
+        command
+            .args(arguments)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command.process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|_| format!("{label}-spawn-failed"))?;
+        let process_id = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("{label}-stdout-unavailable"))?;
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout
+                .take((MAX_OUTPUT_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map(|_| bytes)
+        });
+        let started = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    kill_process_group(process_id);
+                    break status;
+                }
+                Ok(None) if started.elapsed() >= timeout => {
+                    terminate_command_tree(&mut child);
+                    drop(reader);
+                    return Err(format!("{label}-timeout"));
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(25)),
+                Err(_) => {
+                    terminate_command_tree(&mut child);
+                    drop(reader);
+                    return Err(format!("{label}-wait-failed"));
+                }
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| format!("{label}-reader-panicked"))?
+            .map_err(|_| format!("{label}-read-failed"))?;
+        if bytes.len() > MAX_OUTPUT_BYTES {
+            return Err(format!("{label}-output-too-large"));
+        }
+        Ok(CommandOutput {
+            status_code: status.code().unwrap_or(-1),
+            stdout: String::from_utf8(bytes).map_err(|_| format!("{label}-output-not-utf8"))?,
+        })
+    }
 }
 
 fn run_list(executable: &Path, timeout: Duration) -> Result<String, String> {
