@@ -49,6 +49,9 @@ pub struct TransparentCompressionResult {
     pub plan_fingerprint: String,
     pub compressed_count: usize,
     pub not_compressible_count: usize,
+    pub failed_count: usize,
+    pub stopped_reason: Option<String>,
+    pub failures: Vec<String>,
     pub allocated_bytes_before: u64,
     pub allocated_bytes_after: u64,
     pub candidate_allocated_bytes_reduction: u64,
@@ -57,7 +60,18 @@ pub struct TransparentCompressionResult {
     pub rationale: String,
     pub filesystem_mutation_executed: bool,
     pub content_identity_verified: bool,
+    pub verification_complete: bool,
     pub recoverability: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompressionProgress {
+    compressed_count: usize,
+    not_compressible_count: usize,
+    failed_count: usize,
+    allocated_bytes_after_upper_bound: u64,
+    stopped_reason: Option<String>,
+    failures: Vec<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -365,6 +379,54 @@ fn compress_candidates(
     results.into_iter().map(|(_, result)| result).collect()
 }
 
+fn summarize_compression_results(
+    candidates: &[TransparentCompressionCandidate],
+    results: Vec<Result<(u64, bool), String>>,
+) -> CompressionProgress {
+    let mut progress = CompressionProgress {
+        compressed_count: 0,
+        not_compressible_count: 0,
+        failed_count: 0,
+        allocated_bytes_after_upper_bound: 0,
+        stopped_reason: None,
+        failures: Vec::new(),
+    };
+    if results.len() != candidates.len() {
+        let error = "compression-result-count-mismatch".to_string();
+        progress.stopped_reason = Some(error.clone());
+        progress.failures.push(error);
+    }
+    for (index, candidate) in candidates.iter().enumerate() {
+        match results.get(index) {
+            Some(Ok((allocated_bytes, compressed))) => {
+                progress.allocated_bytes_after_upper_bound = progress
+                    .allocated_bytes_after_upper_bound
+                    .saturating_add(*allocated_bytes);
+                if *compressed {
+                    progress.compressed_count = progress.compressed_count.saturating_add(1);
+                } else {
+                    progress.not_compressible_count =
+                        progress.not_compressible_count.saturating_add(1);
+                }
+            }
+            Some(Err(error)) => {
+                progress.allocated_bytes_after_upper_bound = progress
+                    .allocated_bytes_after_upper_bound
+                    .saturating_add(candidate.allocated_bytes);
+                progress.stopped_reason.get_or_insert_with(|| error.clone());
+                progress.failures.push(error.clone());
+            }
+            None => {
+                progress.allocated_bytes_after_upper_bound = progress
+                    .allocated_bytes_after_upper_bound
+                    .saturating_add(candidate.allocated_bytes);
+            }
+        }
+    }
+    progress.failed_count = progress.failures.len();
+    progress
+}
+
 pub fn execute(
     approved_plan: &TransparentCompressionPlan,
     expected_fingerprint: &str,
@@ -392,35 +454,38 @@ pub fn execute(
         return Err("transparent-compression-approval-mismatch".into());
     }
     let available_before = available_bytes(Path::new(&live.root))?;
-    let mut allocated_bytes_after = 0_u64;
-    let mut compressed_count = 0_usize;
-    for result in compress_candidates(&live.candidates) {
-        let (allocated_bytes, compressed) = result?;
-        allocated_bytes_after = allocated_bytes_after.saturating_add(allocated_bytes);
-        compressed_count += usize::from(compressed);
-    }
+    let progress = summarize_compression_results(
+        &live.candidates,
+        compress_candidates(&live.candidates),
+    );
     let available_after = available_bytes(Path::new(&live.root))?;
     let available_delta = i128::from(available_after) - i128::from(available_before);
     let host_available_bytes_delta_during_execution =
         available_delta.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+    let verification_complete = progress.failed_count == 0;
     Ok(TransparentCompressionResult {
         schema_kind: "disksage.transparent-compression-result",
         schema_version: 1,
         ontology_class: live.ontology_class,
         plan_fingerprint: live.plan_fingerprint,
-        compressed_count,
-        not_compressible_count: live.candidate_count.saturating_sub(compressed_count),
+        compressed_count: progress.compressed_count,
+        not_compressible_count: progress.not_compressible_count,
+        failed_count: progress.failed_count,
+        stopped_reason: progress.stopped_reason,
+        failures: progress.failures,
         allocated_bytes_before: live.allocated_bytes_before,
-        allocated_bytes_after,
+        allocated_bytes_after: progress.allocated_bytes_after_upper_bound,
         candidate_allocated_bytes_reduction: live
             .allocated_bytes_before
-            .saturating_sub(allocated_bytes_after),
+            .saturating_sub(progress.allocated_bytes_after_upper_bound),
         host_available_bytes_delta_during_execution,
-        physically_reclaimed_bytes: (host_available_bytes_delta_during_execution > 0)
+        physically_reclaimed_bytes: (verification_complete
+            && host_available_bytes_delta_during_execution > 0)
             .then_some(host_available_bytes_delta_during_execution as u64),
         rationale: rationale.into(),
-        filesystem_mutation_executed: compressed_count != 0,
-        content_identity_verified: true,
+        filesystem_mutation_executed: progress.compressed_count != 0,
+        content_identity_verified: verification_complete,
+        verification_complete,
         recoverability: "transparent-lossless-decompression-by-filesystem",
     })
 }
