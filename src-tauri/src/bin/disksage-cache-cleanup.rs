@@ -5,19 +5,23 @@
 
 use disksage_lib::cache_cleanup::{
     clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+    CacheTrashCandidate,
 };
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
+const APPROVAL_MANIFEST_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] \
+[--approved-cache-trash-candidates PATH] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+inactive regenerable cache children to OS Trash. Irreversible --purge-proven-cache-trash execution\n\
+requires an absolute --approved-cache-trash-candidates JSON path captured from a prior dry-run.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
     purge_proven_cache_trash: bool,
+    approved_cache_trash_candidates: Option<PathBuf>,
     journal_path: PathBuf,
 }
 
@@ -68,12 +72,24 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
 
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
+    let mut approved_cache_trash_candidates = None;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
+            Some("--approved-cache-trash-candidates") => {
+                let path = PathBuf::from(
+                    args.next().ok_or_else(|| {
+                        "--approved-cache-trash-candidates requires PATH".to_string()
+                    })?,
+                );
+                if !path.is_absolute() {
+                    return Err("--approved-cache-trash-candidates must be absolute".into());
+                }
+                approved_cache_trash_candidates = Some(path);
+            }
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
                     args.next()
@@ -88,11 +104,39 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
+    if approved_cache_trash_candidates.is_some() && !(execute && purge_proven_cache_trash) {
+        return Err(
+            "--approved-cache-trash-candidates requires --execute --purge-proven-cache-trash"
+                .into(),
+        );
+    }
+    if execute && purge_proven_cache_trash && approved_cache_trash_candidates.is_none() {
+        return Err(
+            "--execute --purge-proven-cache-trash requires --approved-cache-trash-candidates PATH"
+                .into(),
+        );
+    }
     Ok(Some(Args {
         execute,
         purge_proven_cache_trash,
+        approved_cache_trash_candidates,
         journal_path,
     }))
+}
+
+fn load_approved_cache_trash_candidates(path: &Path) -> Result<Vec<CacheTrashCandidate>, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "cache-trash-approval-manifest-stat-failed".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("cache-trash-approval-manifest-must-be-regular-file".into());
+    }
+    if metadata.len() > APPROVAL_MANIFEST_MAX_BYTES {
+        return Err("cache-trash-approval-manifest-too-large".into());
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|_| "cache-trash-approval-manifest-read-failed".to_string())?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "cache-trash-approval-manifest-invalid-json".to_string())
 }
 
 fn now_ms() -> u64 {
@@ -121,7 +165,8 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
-                "notice": "pass --execute to perform the guarded OS-Trash operation"
+                "approval_contract": "review and persist the exact proven_cache_trash array, then pass that JSON array with --approved-cache-trash-candidates when executing the irreversible purge",
+                "notice": "pass --execute to perform a guarded operation"
             })
         );
         return Ok(());
@@ -130,12 +175,24 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
+        let approval_path = args
+            .approved_cache_trash_candidates
+            .as_ref()
+            .ok_or("cache-trash-approval-manifest-required")?;
+        let approved = load_approved_cache_trash_candidates(approval_path)?;
+        let results = purge_proven_cache_trash(
+            &home_directory()?,
+            &approved,
+            &args.journal_path,
+            now_ms(),
+        )?;
         println!(
             "{}",
             serde_json::json!({
                 "executed": true,
                 "purge_proven_cache_trash": true,
+                "approved_cache_trash_candidates": approval_path,
+                "approved_candidate_count": approved.len(),
                 "journal_path": args.journal_path,
                 "results": results
             })
@@ -164,6 +221,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn help_is_non_mutating() {
@@ -191,11 +249,65 @@ mod tests {
     }
 
     #[test]
-    fn purge_cache_trash_flag_is_explicit() {
-        let args = parse_args([OsString::from("--purge-proven-cache-trash")])
-            .unwrap()
-            .unwrap();
-        assert!(!args.execute);
+    fn purge_cache_trash_requires_exact_approval_manifest_for_execution() {
+        let error = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .unwrap_err();
+        assert!(error.contains("requires --approved-cache-trash-candidates PATH"));
+
+        let args = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--purge-proven-cache-trash"),
+            OsString::from("--approved-cache-trash-candidates"),
+            OsString::from("/tmp/approved-cache-trash.json"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(args.execute);
         assert!(args.purge_proven_cache_trash);
+        assert_eq!(
+            args.approved_cache_trash_candidates,
+            Some(PathBuf::from("/tmp/approved-cache-trash.json"))
+        );
+    }
+
+    #[test]
+    fn approval_manifest_flag_cannot_be_used_outside_irreversible_purge() {
+        let error = parse_args([
+            OsString::from("--approved-cache-trash-candidates"),
+            OsString::from("/tmp/approved-cache-trash.json"),
+        ])
+        .unwrap_err();
+        assert!(error.contains("requires --execute --purge-proven-cache-trash"));
+    }
+
+    #[test]
+    fn approval_manifest_reader_rejects_symlink_and_oversize_inputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join("approval.json");
+        fs::write(&manifest, b"[]").unwrap();
+        assert!(load_approved_cache_trash_candidates(&manifest)
+            .unwrap()
+            .is_empty());
+
+        let oversized = tmp.path().join("oversized.json");
+        let file = fs::File::create(&oversized).unwrap();
+        file.set_len(APPROVAL_MANIFEST_MAX_BYTES + 1).unwrap();
+        assert_eq!(
+            load_approved_cache_trash_candidates(&oversized).unwrap_err(),
+            "cache-trash-approval-manifest-too-large"
+        );
+
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("approval-link.json");
+            std::os::unix::fs::symlink(&manifest, &link).unwrap();
+            assert_eq!(
+                load_approved_cache_trash_candidates(&link).unwrap_err(),
+                "cache-trash-approval-manifest-must-be-regular-file"
+            );
+        }
     }
 }
