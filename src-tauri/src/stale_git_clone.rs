@@ -689,6 +689,20 @@ mod tests {
     }
 
     #[test]
+    fn commit_association_rejects_branch_whose_pull_request_head_advanced() {
+        let advanced = PullRequestEvidence {
+            number: 8,
+            state: "CLOSED".into(),
+            head_ref_name: "feature".into(),
+            head_ref_oid: "b".repeat(40),
+            created_at_ms: 1,
+            url: "https://github.com/example/repo/pull/8".into(),
+            association_method: "commit-associated".into(),
+        };
+        assert!(unique_branch_association(vec![advanced], "feature").is_none());
+    }
+
+    #[test]
     fn github_remote_parser_accepts_only_exact_repository_paths() {
         assert_eq!(
             github_repository("https://github.com/ContextualWisdomLab/disksage.git"),
@@ -772,7 +786,7 @@ mod tests {
             vec!["config", "user.email", "test@example.invalid"],
             vec!["config", "user.name", "DiskSage Test"],
         ] {
-            assert!(Command::new("git")
+            assert!(std::process::Command::new("git")
                 .args(args)
                 .current_dir(&root)
                 .status()
