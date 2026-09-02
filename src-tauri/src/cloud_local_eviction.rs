@@ -25,6 +25,12 @@ const POST_EVICTION_WAIT_MS: u64 = 5_000;
 const NATIVE_EVICTION_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const NATIVE_EVICTION_HELPER_ENV: &str = "DISKSAGE_NATIVE_ICLOUD_EVICTION_HELPER";
 
+#[cfg(all(target_os = "macos", not(coverage)))]
+#[link(name = "proc")]
+extern "C" {
+    fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IcloudStateObservationMethod {
@@ -1101,14 +1107,66 @@ fn request_native_icloud_eviction_unbounded(path: &Path) -> Result<(), String> {
     })
 }
 
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn native_eviction_helper_parent_is_current_executable() -> bool {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
+
+    let parent_pid = unsafe { libc::getppid() };
+    if parent_pid <= 1 {
+        return false;
+    }
+
+    let mut buffer = [0u8; PROC_PIDPATHINFO_MAXSIZE];
+    let length = unsafe {
+        proc_pidpath(
+            parent_pid,
+            buffer.as_mut_ptr().cast(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+        )
+    };
+    let Ok(length) = usize::try_from(length) else {
+        return false;
+    };
+    if length == 0 || length > buffer.len() {
+        return false;
+    }
+
+    let parent_path_bytes = buffer[..length]
+        .strip_suffix(&[0])
+        .unwrap_or(&buffer[..length]);
+    if parent_path_bytes.is_empty() || parent_path_bytes.contains(&0) {
+        return false;
+    }
+    let parent_path = PathBuf::from(OsStr::from_bytes(parent_path_bytes));
+    let Some(current_executable) = std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::canonicalize(path).ok())
+    else {
+        return false;
+    };
+    let Some(parent_executable) = std::fs::canonicalize(parent_path).ok() else {
+        return false;
+    };
+    parent_executable == current_executable
+}
+
 /// Run the private native-eviction child mode before normal CLI or GUI startup.
 ///
 /// The parent sends the path over stdin so it is not exposed in the process argument list. The
-/// child exists solely to make Foundation's synchronous XPC call killable on timeout.
+/// child exists solely to make Foundation's synchronous XPC call killable on timeout. Helper mode
+/// is accepted only from the same executable that spawned the child; an ambient environment
+/// variable cannot turn the public desktop or CLI binaries into an unguarded eviction oracle.
 #[cfg(all(target_os = "macos", not(coverage)))]
 pub fn run_native_icloud_eviction_helper_if_requested() -> bool {
     if std::env::var_os(NATIVE_EVICTION_HELPER_ENV).is_none() {
         return false;
+    }
+    if !native_eviction_helper_parent_is_current_executable() {
+        eprintln!("icloud-native-eviction-helper-parent-untrusted");
+        std::process::exit(2);
     }
     let mut bytes = Vec::new();
     let result = std::io::stdin()
