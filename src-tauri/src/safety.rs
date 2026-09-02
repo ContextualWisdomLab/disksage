@@ -436,6 +436,15 @@ fn rename_macos_no_replace(source: &Path, destination: &Path) -> std::io::Result
     }
 }
 
+#[cfg(target_os = "macos")]
+fn move_staged_with_native_volume_trash(staged: &Path) -> Result<(), String> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+    let mut context = trash::TrashContext::new();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(staged).map_err(|error| error.to_string())
+}
+
 /// Move the exact reviewed filesystem object into a private sibling staging directory before
 /// handing it to the OS trash. The initial identity check prevents a stale path from being used;
 /// the atomic rename plus a second identity check prevents a replacement that wins the race from
@@ -450,9 +459,14 @@ fn move_staged_to_user_trash(staged: &Path, now_ms: u64) -> Result<(), String> {
         .ok_or_else(|| "home directory unavailable".to_string())?;
     let trash_root = home.join(".Trash");
     let metadata = std::fs::symlink_metadata(&trash_root).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() || !same_volume(staged, &trash_root)
-    {
-        return Err("user trash is unavailable on the candidate volume".into());
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("user trash is unavailable".into());
+    }
+    if !same_volume(staged, &trash_root) {
+        // NSFileManager resolves the Trash directory on the staged object's own mounted volume.
+        // Keep the identity-bound sibling staging move above this boundary; on native-trash
+        // failure the caller restores that same staged object to the reviewed pathname.
+        return move_staged_with_native_volume_trash(staged);
     }
     let name = staged
         .file_name()
