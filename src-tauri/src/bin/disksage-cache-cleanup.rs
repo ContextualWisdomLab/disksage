@@ -14,8 +14,8 @@ const APPROVAL_MANIFEST_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] \
 [--approved-cache-trash-candidates PATH] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. Irreversible --purge-proven-cache-trash execution\n\
-requires an absolute --approved-cache-trash-candidates JSON path captured from a prior dry-run.";
+inactive regenerable cache children to OS Trash. --purge-proven-cache-trash is currently a\n\
+read-only preview; irreversible execution is disabled until deletion is race-safe and recoverable.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -165,11 +165,18 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
-                "approval_contract": "review and persist the exact proven_cache_trash array, then pass that JSON array with --approved-cache-trash-candidates when executing the irreversible purge",
-                "notice": "pass --execute to perform a guarded operation"
+                "approval_contract": "permanent purge execution is disabled until reviewed identity can remain bound to a race-safe, recoverable deletion",
+                "notice": if args.purge_proven_cache_trash {
+                    "review-only preview; no irreversible purge can be executed"
+                } else {
+                    "pass --execute to move reviewed regenerable cache children to OS Trash"
+                }
             })
         );
         return Ok(());
+    }
+    if args.purge_proven_cache_trash {
+        return Err("cache-trash-permanent-purge-disabled-until-race-safe".into());
     }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
