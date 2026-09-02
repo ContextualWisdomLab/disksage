@@ -1,19 +1,14 @@
 use disksage_lib::temp_reclaim::{plan_temp_reclaim, TempReclaimOptions};
 use std::path::PathBuf;
 
-const REMOVAL_UNAVAILABLE: &str = "temp-reclaim-removal-private-approval-unavailable";
-
 fn usage() -> &'static str {
-    "usage: disksage-temp-reclaim [--execute FINGERPRINT PHRASE RATIONALE]"
+    "usage: disksage-temp-reclaim"
 }
 
-fn parse_args(args: &[String]) -> Result<Option<(&str, &str, &str)>, String> {
+fn parse_args(args: &[String]) -> Result<(), String> {
     match args {
-        [] => Ok(None),
+        [] => Ok(()),
         [flag] if flag == "--help" || flag == "-h" => Err(usage().into()),
-        [flag, fingerprint, phrase, rationale] if flag == "--execute" => {
-            Ok(Some((fingerprint, phrase, rationale)))
-        }
         _ => Err(usage().into()),
     }
 }
@@ -39,9 +34,7 @@ fn now_ms() -> u64 {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if parse_args(&args)?.is_some() {
-        return Err(REMOVAL_UNAVAILABLE.into());
-    }
+    parse_args(&args)?;
     let options = TempReclaimOptions::default();
     let now = now_ms();
     let root = platform_temp_root();
@@ -55,6 +48,11 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return;
+    }
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
@@ -66,8 +64,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parser_is_plan_only_unless_all_execution_authority_is_present() {
-        assert_eq!(parse_args(&[]).unwrap(), None);
+    fn parser_exposes_only_the_read_only_plan() {
+        assert!(parse_args(&[]).is_ok());
         assert!(parse_args(&["--execute".into(), "fingerprint".into()]).is_err());
         assert!(parse_args(&[
             "--execute".into(),
@@ -75,8 +73,7 @@ mod tests {
             "phrase".into(),
             "rationale".into(),
         ])
-        .unwrap()
-        .is_some());
+        .is_err());
     }
 
     #[test]
