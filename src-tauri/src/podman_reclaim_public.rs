@@ -196,11 +196,13 @@ fn run_bounded(
         .stderr(Stdio::piped());
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(windows)]
+    windows_process_tree::ProcessTreeGuard::prepare_suspended(&mut command);
     let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
     #[cfg(unix)]
     let process_id = child.id();
     #[cfg(windows)]
-    let mut process_tree = match windows_process_tree::ProcessTreeGuard::attach(&child) {
+    let mut process_tree = match windows_process_tree::ProcessTreeGuard::attach_and_resume(&child) {
         Ok(guard) => Some(guard),
         Err(_) => {
             let _ = child.kill();
