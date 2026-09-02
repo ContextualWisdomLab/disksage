@@ -325,17 +325,30 @@ where
 }
 
 pub fn plan_native_temp_reclaim(observed_at_ms: u64) -> Result<TempReclaimPlan, String> {
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = observed_at_ms;
-        return Err("temporary-reclaim-platform-unsupported".into());
+        let root = native_temp_root()?;
+        return plan_with_active(&root, observed_at_ms, |_, _| GitWorktreeActiveUseEvidence {
+            method: "windows-active-use-observer-unavailable".into(),
+            assessed: false,
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("active-use-observer-unavailable".into()),
+        });
     }
     #[cfg(unix)]
     {
         let root = native_temp_root()?;
-        plan_with_active(&root, observed_at_ms, |path, timeout_ms| {
+        return plan_with_active(&root, observed_at_ms, |path, timeout_ms| {
             crate::git_worktree::active_use_evidence(path, timeout_ms, 256, true)
-        })
+        });
+    }
+    #[cfg(all(not(unix), not(target_os = "windows")))]
+    {
+        let _ = observed_at_ms;
+        Err("temporary-reclaim-platform-unsupported".into())
     }
 }
 
