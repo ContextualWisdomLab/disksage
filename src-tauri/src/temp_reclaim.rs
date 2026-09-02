@@ -195,6 +195,7 @@ pub fn plan_temp_reclaim(
     let mut candidates = Vec::new();
     let mut issues = Vec::new();
     let mut skipped_count = 0usize;
+    let mut planning_only_evidence = false;
     for entry in entries {
         let path = entry.path();
         let metadata = match fs::symlink_metadata(&path) {
@@ -229,14 +230,25 @@ pub fn plan_temp_reclaim(
         );
         let active_use =
             active_use_evidence(&path, options.scan_timeout_ms, 64, file_type.is_dir());
-        if !size.evidence_complete
-            || !active_use.assessed
-            || !active_use.evidence_complete
-            || active_use.active
-        {
+        if !size.evidence_complete || active_use.active {
             skipped_count += 1;
             issues.push("temp-child-evidence-incomplete-or-active".into());
             continue;
+        }
+        let active_use_complete = active_use.assessed && active_use.evidence_complete;
+        #[cfg(not(target_os = "windows"))]
+        if !active_use_complete {
+            skipped_count += 1;
+            issues.push("temp-child-evidence-incomplete-or-active".into());
+            continue;
+        }
+        #[cfg(target_os = "windows")]
+        if !active_use_complete {
+            // Windows does not yet expose an identity-bound active-use observer through the shared
+            // worktree port. Keep the candidate visible for read-only operator review, but mark the
+            // whole plan incomplete so it can never gain approval or mutation authority.
+            planning_only_evidence = true;
+            issues.push("temp-child-active-use-unavailable-planning-only".into());
         }
         let kind = if file_type.is_dir() {
             "directory"
@@ -272,7 +284,7 @@ pub fn plan_temp_reclaim(
     let candidate_allocated_bytes = candidates.iter().fold(0u64, |total, candidate| {
         total.saturating_add(candidate.allocated_bytes)
     });
-    let evidence_complete = !results_truncated && skipped_count == 0;
+    let evidence_complete = !results_truncated && skipped_count == 0 && !planning_only_evidence;
     let exact_approval_phrase = (!candidates.is_empty() && evidence_complete)
         .then(|| format!("DiskSage temporary artifact reclaim 승인 {candidate_set_fingerprint}"));
     Ok(TempReclaimPlan {
