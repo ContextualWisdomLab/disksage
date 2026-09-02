@@ -44,36 +44,59 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+/// Runs filesystem scans and subprocess polling on Tauri's dedicated blocking executor.
+///
+/// Colima inspection and prune execution perform synchronous filesystem and child-process work.
+/// Keeping that work off the async command executor prevents one bounded 10–60 second provider
+/// operation from occupying an async runtime worker that also serves unrelated desktop commands.
+async fn run_colima_blocking<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|_| "colima-blocking-task-join-failed".to_string())?
+}
+
 /// Returns read-only Colima profile, VM-state, configured-disk, and cache-allocation evidence.
-#[tauri::command(rename = "inspect_colima_reclaim", async)]
-pub fn inspect_colima_reclaim_configured(
+#[tauri::command(rename = "inspect_colima_reclaim")]
+pub async fn inspect_colima_reclaim_configured(
     app: AppHandle,
 ) -> Result<colima_reclaim::ColimaReclaimPlan, String> {
     let home = resolve_home(&app)?;
     let cache_root = cache_root(&app)?;
-    Ok(colima_reclaim::plan_colima_reclaim(
-        &colima_binary(&home),
-        &cache_root,
-        Duration::from_secs(10),
-    ))
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        Ok(colima_reclaim::plan_colima_reclaim(
+            &binary,
+            &cache_root,
+            Duration::from_secs(10),
+        ))
+    })
+    .await
 }
 
 /// Replans against the currently configured Colima cache root before invoking native cache prune.
-#[tauri::command(rename = "execute_colima_cache_prune", async)]
-pub fn execute_colima_cache_prune_configured(
+#[tauri::command(rename = "execute_colima_cache_prune")]
+pub async fn execute_colima_cache_prune_configured(
     confirmation_phrase: String,
     rationale: String,
     app: AppHandle,
 ) -> Result<colima_reclaim::ColimaCachePruneExecution, String> {
     let home = resolve_home(&app)?;
     let cache_root = cache_root(&app)?;
-    colima_reclaim::execute_colima_cache_prune(
-        &colima_binary(&home),
-        &cache_root,
-        &confirmation_phrase,
-        &rationale,
-        now_ms(),
-    )
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        colima_reclaim::execute_colima_cache_prune(
+            &binary,
+            &cache_root,
+            &confirmation_phrase,
+            &rationale,
+            now_ms(),
+        )
+    })
+    .await
 }
 
 #[cfg(test)]
