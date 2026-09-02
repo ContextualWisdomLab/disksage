@@ -403,6 +403,39 @@ fn restore_staged_if_source_absent(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn rename_macos_no_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "trash source path contains an embedded NUL byte",
+        )
+    })?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "trash destination path contains an embedded NUL byte",
+        )
+    })?;
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// Move the exact reviewed filesystem object into a private sibling staging directory before
 /// handing it to the OS trash. The initial identity check prevents a stale path from being used;
 /// the atomic rename plus a second identity check prevents a replacement that wins the race from
@@ -424,17 +457,18 @@ fn move_staged_to_user_trash(staged: &Path, now_ms: u64) -> Result<(), String> {
     let name = staged
         .file_name()
         .ok_or_else(|| "staged object has no filename".to_string())?;
+    let pid = std::process::id();
     for _ in 0..1_000u32 {
         let sequence = TRASH_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let destination = trash_root.join(format!(
-            "disksage-{now_ms}-{}-{sequence}-{}",
-            std::process::id(),
+            "disksage-{now_ms}-{pid}-{sequence}-{}",
             name.to_string_lossy()
         ));
-        if destination.exists() {
-            continue;
+        match rename_macos_no_replace(staged, &destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) => continue,
+            Err(error) => return Err(error.to_string()),
         }
-        return std::fs::rename(staged, destination).map_err(|error| error.to_string());
     }
     Err("user trash destination namespace exhausted".into())
 }
