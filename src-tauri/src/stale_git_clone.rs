@@ -369,10 +369,11 @@ fn pr_is_stale(pr: &PullRequestEvidence, now_ms: u64, open_age_days: u64) -> boo
 fn unique_branch_association(
     pull_requests: Vec<PullRequestEvidence>,
     branch: &str,
+    local_head: &str,
 ) -> Option<PullRequestEvidence> {
     let mut matches = pull_requests
         .into_iter()
-        .filter(|pr| pr.head_ref_name == branch);
+        .filter(|pr| pr.head_ref_name == branch && pr.head_ref_oid == local_head);
     let found = matches.next()?;
     matches.next().is_none().then_some(found)
 }
@@ -538,7 +539,7 @@ pub fn plan_stale_git_clone(
         )?;
         let associated: Vec<PullRequestEvidence> = serde_json::from_str(&json)
             .map_err(|_| "github-commit-pulls-json-invalid".to_string())?;
-        unique_branch_association(associated, &branch)
+        unique_branch_association(associated, &branch, &head)
     };
     let active_use = active_use_evidence(&path, COMMAND_TIMEOUT_MS, 64, true);
     let collect_size = should_collect_size(
@@ -671,25 +672,32 @@ mod tests {
     }
 
     #[test]
-    fn commit_association_requires_one_matching_branch() {
+    fn commit_association_requires_one_matching_branch_and_exact_local_head() {
+        let local_head = "a".repeat(40);
         let evidence = PullRequestEvidence {
             number: 7,
             state: "CLOSED".into(),
             head_ref_name: "feature".into(),
-            head_ref_oid: "a".repeat(40),
+            head_ref_oid: local_head.clone(),
             created_at_ms: 1,
             url: "https://github.com/example/repo/pull/7".into(),
             association_method: "commit-associated".into(),
         };
         assert_eq!(
-            unique_branch_association(vec![evidence.clone()], "feature"),
+            unique_branch_association(vec![evidence.clone()], "feature", &local_head),
             Some(evidence.clone())
         );
-        assert!(unique_branch_association(vec![evidence.clone(), evidence], "feature").is_none());
+        assert!(unique_branch_association(
+            vec![evidence.clone(), evidence],
+            "feature",
+            &local_head
+        )
+        .is_none());
     }
 
     #[test]
     fn commit_association_rejects_branch_whose_pull_request_head_advanced() {
+        let local_head = "a".repeat(40);
         let advanced = PullRequestEvidence {
             number: 8,
             state: "CLOSED".into(),
@@ -699,7 +707,7 @@ mod tests {
             url: "https://github.com/example/repo/pull/8".into(),
             association_method: "commit-associated".into(),
         };
-        assert!(unique_branch_association(vec![advanced], "feature").is_none());
+        assert!(unique_branch_association(vec![advanced], "feature", &local_head).is_none());
     }
 
     #[test]
@@ -786,7 +794,7 @@ mod tests {
             vec!["config", "user.email", "test@example.invalid"],
             vec!["config", "user.name", "DiskSage Test"],
         ] {
-            assert!(std::process::Command::new("git")
+            assert!(Command::new("git")
                 .args(args)
                 .current_dir(&root)
                 .status()
