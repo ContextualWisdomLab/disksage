@@ -1,0 +1,161 @@
+name: Source fix PR315 unsafe permanent purge
+
+on:
+  push:
+    branches:
+      - codex/canonical-prd
+    paths:
+      - .github/source-fix-315-disable-unsafe-permanent-purge.trigger
+
+concurrency:
+  group: source-fix-pr315-unsafe-permanent-purge
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    permissions:
+      contents: write
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: codex/canonical-prd
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Disable the unsafe irreversible path and align contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path("src-tauri/src/cache_cleanup.rs")
+          text = source.read_text(encoding="utf-8")
+          start = text.index("pub fn purge_proven_cache_trash(")
+          end = text.index("\nfn active_use_blocker(", start)
+          replacement = '''pub fn purge_proven_cache_trash(
+              _home: &Path,
+              _approved_candidates: &[CacheTrashCandidate],
+              _journal_path: &Path,
+              _now_ms: u64,
+          ) -> Result<Vec<CacheTrashPurgeResult>, String> {
+              Err("cache-trash-permanent-purge-disabled-until-race-safe".into())
+          }
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          tests_start_marker = "    #[test]\n    fn proven_cache_trash_requires_reviewed_identity_and_journals_purge()"
+          tests_start = text.index(tests_start_marker)
+          tests_end = text.index("    #[cfg(unix)]\n    #[test]\n    fn cleanup_rejects_symlinked_catalog_root", tests_start)
+          tests = '''    #[test]
+              fn permanent_cache_trash_purge_is_disabled_fail_closed() {
+                  let tmp = tempfile::tempdir().unwrap();
+                  let trash = tmp.path().join(".Trash");
+                  fs::create_dir(&trash).unwrap();
+                  let npm = create_npm_cache(&trash, "_cacache");
+                  let approved = proven_cache_trash_candidates(tmp.path());
+                  assert_eq!(approved.len(), 1);
+
+                  let journal = tmp.path().join("journal.jsonl");
+                  let error = purge_proven_cache_trash(tmp.path(), &approved, &journal, 7)
+                      .expect_err("irreversible cache purge must remain disabled");
+
+                  assert_eq!(error, "cache-trash-permanent-purge-disabled-until-race-safe");
+                  assert!(npm.exists(), "disabled purge must not delete reviewed cache data");
+                  assert!(!journal.exists(), "disabled purge must not claim a pending mutation");
+              }
+
+          '''
+          text = text[:tests_start] + tests + text[tests_end:]
+          source.write_text(text, encoding="utf-8")
+
+          cli = Path("src-tauri/src/bin/disksage-cache-cleanup.rs")
+          cli_text = cli.read_text(encoding="utf-8")
+          anchor = '''    if approved_cache_trash_candidates.is_some() && !(execute && purge_proven_cache_trash) {
+          '''
+          if cli_text.count(anchor) != 1:
+              raise SystemExit("expected one cache purge argument-validation anchor")
+          guard = '''    if execute && purge_proven_cache_trash {
+                  return Err(
+                      "permanent cache-trash purge is disabled until an identity-bound race-safe implementation is available"
+                          .into(),
+                  );
+              }
+          '''
+          cli_text = cli_text.replace(anchor, guard + anchor, 1)
+          fn_start = cli_text.index("    #[test]\n    fn purge_cache_trash_requires_exact_approval_manifest_for_execution()")
+          fn_end = cli_text.index("\n    #[test]\n    fn approval_manifest_flag_cannot_be_used_outside_irreversible_purge()", fn_start)
+          replacement_test = '''    #[test]
+              fn purge_cache_trash_execution_is_disabled_fail_closed() {
+                  let error = parse_args([
+                      OsString::from("--execute"),
+                      OsString::from("--purge-proven-cache-trash"),
+                  ])
+                  .unwrap_err();
+                  assert!(error.contains("permanent cache-trash purge is disabled"));
+
+                  let path = approval_path();
+                  let error = parse_args([
+                      OsString::from("--execute"),
+                      OsString::from("--purge-proven-cache-trash"),
+                      OsString::from("--approved-cache-trash-candidates"),
+                      path.as_os_str().to_os_string(),
+                  ])
+                  .unwrap_err();
+                  assert!(error.contains("permanent cache-trash purge is disabled"));
+              }
+          '''
+          cli_text = cli_text[:fn_start] + replacement_test + cli_text[fn_end:]
+          cli.write_text(cli_text, encoding="utf-8")
+
+          appendices = {
+              "docs/PRD.md": '''\n\n### 2026-09-02 irreversible cache-purge safety amendment\n\nThe current executable product does **not** permanently purge cache directories from OS Trash. The previously documented narrow cache exception is suspended until an implementation can bind deletion to the reviewed filesystem object across the mutation boundary, bind the complete descendant content identity, carry an explicit approval-expiry authority, and reconcile a successful deletion after terminal-journal persistence failure. Candidate discovery may remain read-only evidence, but `purge_proven_cache_trash` fails closed and no CLI invocation can cross the irreversible boundary.\n''',
+              "docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md": '''\n\n## 2026-09-02 safety supersession: irreversible purge disabled\n\nThe permanent-cache-trash execution portion of this ADR is suspended. Exact-head review proved four unresolved hazards in the path-based implementation: replacement between validation and deletion, incomplete descendant-content identity, undefined approval expiry, and unrecoverable pending journal state after deletion. Production now fails closed before irreversible mutation. Re-enabling this capability requires a separately reviewed design that proves all four properties with executable race/failure regressions; read-only candidate discovery does not confer deletion authority.\n''',
+              "docs/development/cache-cleanup-operator-runbook.md": '''\n\n## Permanent purge is currently disabled\n\nDo not treat a reviewed cache-trash candidate list as irreversible deletion authority. Execution with `--execute --purge-proven-cache-trash` is intentionally rejected, and the library purge entry point returns `cache-trash-permanent-purge-disabled-until-race-safe` before journaling or deletion. Continue to use reversible OS-Trash cleanup only.\n''',
+              "CHANGELOG.md": '''\n- Disable irreversible proven-cache Trash purge until the implementation is race-safe, binds full descendant content identity, carries explicit approval expiry, and can reconcile terminal-journal failures; candidate discovery remains read-only.\n''',
+              "docs/product-technical-gap-baseline.md": '''\n\n### 2026-09-02 — PR #315 irreversible cache-purge safety boundary\n\nExact-head review identified four causal defects in the permanent cache-trash purge: TOCTOU path replacement, incomplete nested-content identity, undefined approval freshness, and missing recovery when terminal journaling fails after deletion. The owner-side repair removes the unsafe mutation authority from the current product: `purge_proven_cache_trash` fails closed before any journal or filesystem mutation and CLI execution is rejected. Re-enablement is an explicit open product/technical gap requiring identity-bound race-safe deletion, complete descendant identity, caller-authoritative expiry, and durable terminal reconciliation with failure-injection coverage.\n''',
+          }
+          for filename, appendix in appendices.items():
+              path = Path(filename)
+              body = path.read_text(encoding="utf-8")
+              marker = appendix.strip().splitlines()[0]
+              if marker not in body:
+                  path.write_text(body.rstrip() + "\n" + appendix, encoding="utf-8")
+          PY
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          git diff --check
+      - name: Verify fail-closed permanent-purge contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml permanent_cache_trash_purge_is_disabled_fail_closed
+          cargo test --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup purge_cache_trash_execution_is_disabled_fail_closed
+          cargo test --manifest-path src-tauri/Cargo.toml proven_cache_trash
+          git diff --check
+      - name: Self-remove and publish non-force repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-315-disable-unsafe-permanent-purge.yml \
+            .github/source-fix-315-disable-unsafe-permanent-purge.trigger
+          git add -A
+          git diff --cached --check
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git commit -m 'fix(cache): disable unsafe irreversible purge'
+          git fetch --no-tags origin codex/canonical-prd
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            echo "writer branch moved concurrently; refusing overwrite" >&2
+            exit 75
+          fi
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:codex/canonical-prd
