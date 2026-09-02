@@ -2,8 +2,11 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,6 +25,7 @@ const MAX_CAPTURE_BYTES: usize = 1_048_576;
 pub(super) const MAX_EXACT_DELETE_IDS: usize = 256;
 const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
 const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Deserialize)]
 struct MachineInspectRecord {
@@ -120,18 +124,67 @@ fn drain_bounded<R: Read>(mut reader: R) -> std::io::Result<Vec<u8>> {
     Ok(captured)
 }
 
+fn spawn_bounded_reader<R: Read + Send + 'static>(
+    reader: R,
+) -> Receiver<std::io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(drain_bounded(reader));
+    });
+    receiver
+}
+
+fn receive_bounded_reader(
+    receiver: Receiver<std::io::Result<Vec<u8>>>,
+    label: &str,
+    stream: &str,
+) -> Result<Vec<u8>, String> {
+    match receiver.recv_timeout(OUTPUT_DRAIN_TIMEOUT) {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(format!("{label}-output-too-large")),
+        Err(RecvTimeoutError::Timeout) => Err(format!("{label}-{stream}-reader-timeout")),
+        Err(RecvTimeoutError::Disconnected) => Err(format!("{label}-{stream}-reader-panicked")),
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group(process_id: u32) {
+    let Ok(process_id) = i32::try_from(process_id) else {
+        return;
+    };
+    // SAFETY: run_bounded starts the child in a private process group, so the negative PID targets
+    // only this Podman invocation and descendants that inherited its group.
+    let _ = unsafe { libc::kill(-process_id, libc::SIGKILL) };
+}
+
+#[cfg(unix)]
+fn terminate_command_tree(child: &mut Child) {
+    kill_process_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(not(unix))]
+fn terminate_command_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_bounded(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
     label: &str,
 ) -> Result<BoundedOutput, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
+    let process_id = child.id();
     let stdout = child
         .stdout
         .take()
@@ -140,37 +193,29 @@ fn run_bounded(
         .stderr
         .take()
         .ok_or_else(|| format!("{label}-stderr-pipe-unavailable"))?;
-    let stdout_reader = thread::spawn(move || drain_bounded(stdout));
-    let stderr_reader = thread::spawn(move || drain_bounded(stderr));
+    let stdout_reader = spawn_bounded_reader(stdout);
+    let stderr_reader = spawn_bounded_reader(stderr);
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => {
+                #[cfg(unix)]
+                kill_process_group(process_id);
+                break status;
+            }
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                terminate_command_tree(&mut child);
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                terminate_command_tree(&mut child);
                 return Err(format!("{label}-wait"));
             }
         }
     };
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| format!("{label}-stdout-reader-panicked"))?
-        .map_err(|_| format!("{label}-output-too-large"))?;
-    let _stderr = stderr_reader
-        .join()
-        .map_err(|_| format!("{label}-stderr-reader-panicked"))?
-        .map_err(|_| format!("{label}-output-too-large"))?;
+    let stdout = receive_bounded_reader(stdout_reader, label, "stdout")?;
+    let _stderr = receive_bounded_reader(stderr_reader, label, "stderr")?;
     Ok(BoundedOutput {
         status_code: status.code().unwrap_or(-1),
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
@@ -475,6 +520,9 @@ pub fn prune_dangling_images(
     rationale: &str,
     executed_at_ms: u64,
 ) -> Result<PodmanDanglingImagePruneExecution, String> {
+    #[cfg(not(unix))]
+    return Err("podman-prune-process-tree-control-unavailable".into());
+
     if executed_at_ms == 0 {
         return Err("podman-prune-time-invalid".into());
     }
@@ -587,6 +635,34 @@ pub fn prune_dangling_images(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_timeout_kills_descendants_holding_output_pipes() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("fixture directory should be creatable");
+        let script = root.path().join("podman-descendant-fixture");
+        fs::write(&script, "#!/bin/sh\n(sleep 30) &\nsleep 30\n")
+            .expect("fixture script should be writable");
+        let mut permissions = fs::metadata(&script)
+            .expect("fixture metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script, permissions).expect("fixture script should be executable");
+
+        let started = Instant::now();
+        assert_eq!(
+            run_bounded(&script, &[], Duration::from_millis(100), "podman-descendant-fixture")
+                .unwrap_err(),
+            "podman-descendant-fixture-timeout"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timeout must include descendant output-pipe cleanup"
+        );
+    }
 
     #[test]
     fn exact_candidates_merge_alias_records_and_keep_referenced_images() {
