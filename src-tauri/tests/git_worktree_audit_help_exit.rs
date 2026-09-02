@@ -297,7 +297,7 @@ fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
 fn out_of_range_limits_fail_before_git_or_filesystem_work() {
     let cases = [
         ("--command-timeout-ms", "0", "git-worktree-command-timeout-out-of-bounds"),
-        ("--command-timeout-ms", "3600001", "git-worktree-command-timeout-out-of-bounds"),
+        ("--command-timeout-ms", "300001", "git-worktree-command-timeout-out-of-bounds"),
         ("--size-scan-timeout-ms", "0", "git-worktree-size-timeout-out-of-bounds"),
         ("--size-scan-timeout-ms", "600001", "git-worktree-size-timeout-out-of-bounds"),
         ("--max-worktrees", "0", "git-worktree-count-limit-out-of-bounds"),
