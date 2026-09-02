@@ -1,375 +1,468 @@
-//! Exact-child, age/owner/active-use-bound reclaim for the system temporary directory.
+//! Evidence-bound reclaim planning for generated artifacts under native temporary roots.
 
-use crate::git_worktree::{active_use_evidence, size_evidence, GitWorktreeActiveUseEvidence};
+use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: u32 = 1;
-const MAX_CHILDREN: usize = 10_000;
-const MAX_AGE_SECONDS: u64 = 365 * 86_400;
-const REMOVAL_UNAVAILABLE: &str = "temp-reclaim-removal-private-approval-unavailable";
+use crate::dev_artifacts::{
+    clean_artifact_exact, inspect_artifact, DevArtifact, DevArtifactCleanResult,
+};
+use crate::git_worktree::GitWorktreeActiveUseEvidence;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TempReclaimOptions {
-    pub min_age_seconds: u64,
-    pub max_children: usize,
-    pub max_entries_per_child: u64,
-    pub scan_timeout_ms: u64,
-}
+// The shared development-artifact inspector has its own three-second manifest ceiling. Keep the
+// enclosing temp-root budget above that ceiling, then pass only the remaining wall-clock budget to
+// the potentially blocking active-handle probe so one candidate cannot turn this bounded planner
+// into a 30-second operation.
+const DISCOVERY_BUDGET: Duration = Duration::from_millis(3_500);
+const MAX_DISCOVERY_ENTRIES: usize = 4_096;
+const MAX_CANDIDATES: usize = 64;
+pub const MAX_APPROVAL_AGE_MS: u64 = 5 * 60 * 1_000;
 
-impl Default for TempReclaimOptions {
-    fn default() -> Self {
-        Self {
-            min_age_seconds: 7 * 86_400,
-            max_children: 1_000,
-            max_entries_per_child: 1_000_000,
-            scan_timeout_ms: 30_000,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TempReclaimCandidate {
-    pub ontology_class: String,
-    pub path: String,
-    pub kind: String,
-    pub modified_ms: u64,
-    pub age_seconds: u64,
-    pub allocated_bytes: u64,
-    pub logical_bytes: u64,
-    pub device: u64,
-    pub inode: u64,
+    pub artifact: DevArtifact,
     pub active_use: GitWorktreeActiveUseEvidence,
     pub candidate_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TempReclaimPlan {
-    pub schema_kind: String,
-    pub schema_version: u32,
-    pub ontology_class: String,
-    pub root: String,
-    pub observed_at_ms: u64,
-    pub options: TempReclaimOptions,
-    pub candidate_count: usize,
-    pub candidate_allocated_bytes: u64,
-    pub candidates: Vec<TempReclaimCandidate>,
-    pub skipped_count: usize,
-    pub issues: Vec<String>,
-    pub evidence_complete: bool,
-    pub candidate_set_fingerprint: String,
+    pub eligible_for_approval: bool,
     pub exact_approval_phrase: Option<String>,
-    pub filesystem_mutation_executed: bool,
+    pub blockers: Vec<String>,
+    pub permanent_delete_available: bool,
+    pub next_action: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TempReclaimRemoval {
+#[derive(Debug, Clone, Serialize)]
+pub struct TempReclaimPlan {
     pub schema_version: u32,
-    pub ontology_class: &'static str,
-    pub candidate_set_fingerprint: String,
-    pub removed_count: usize,
-    pub removed_allocated_bytes_upper_bound: u64,
-    pub rationale: String,
-    pub executed_at_ms: u64,
-    pub filesystem_mutation_executed: bool,
-    pub recoverability: &'static str,
+    pub schema_kind: &'static str,
+    pub requested_root: String,
+    pub canonical_root: String,
+    pub observed_at_ms: u64,
+    pub scan_complete: bool,
+    pub visited_entries: usize,
+    pub unavailable_entries: usize,
+    pub candidates: Vec<TempReclaimCandidate>,
+    pub plan_fingerprint: String,
+    pub permanent_delete_available: bool,
+    pub next_action: String,
 }
 
-fn validate_options(options: TempReclaimOptions) -> Result<(), String> {
-    if options.min_age_seconds == 0
-        || options.min_age_seconds > MAX_AGE_SECONDS
-        || options.max_children == 0
-        || options.max_children > MAX_CHILDREN
-        || options.max_entries_per_child == 0
-        || options.max_entries_per_child > 20_000_000
-        || options.scan_timeout_ms == 0
-        || options.scan_timeout_ms > 300_000
-    {
-        return Err("temp-reclaim-options-invalid".into());
-    }
-    Ok(())
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TempReclaimApproval {
+    pub candidate_fingerprint: String,
+    pub approved_at_ms: u64,
+    pub approved_by: String,
+    pub exact_phrase: String,
 }
 
-fn canonical_temp_root(root: &Path) -> Result<PathBuf, String> {
-    if !root.is_absolute()
-        || root
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err("temp-reclaim-root-invalid".into());
+fn hash_fields(domain: &[u8], fields: &[&[u8]]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    for field in fields {
+        hasher.update(&(field.len() as u64).to_le_bytes());
+        hasher.update(field);
     }
-    let canonical = fs::canonicalize(root).map_err(|_| "temp-reclaim-root-unavailable")?;
-    #[cfg(target_os = "windows")]
-    let expected = fs::canonicalize(std::env::temp_dir())
-        .map_err(|_| "temp-reclaim-system-temp-unavailable".to_string())?;
+    hasher.finalize().to_hex().to_string()
+}
+
+fn candidate_fingerprint(root: &Path, artifact: &DevArtifact) -> String {
+    hash_fields(
+        b"disksage-temp-reclaim-candidate-v1\0",
+        &[
+            root.to_string_lossy().as_bytes(),
+            artifact.path.as_bytes(),
+            artifact.kind.as_bytes(),
+            artifact.object_id.as_bytes(),
+            artifact.fingerprint.as_bytes(),
+            &artifact.bytes.to_le_bytes(),
+        ],
+    )
+}
+
+fn approval_phrase_for_fingerprint(candidate_fingerprint: &str) -> String {
+    format!("MOVE GENERATED TEMP ARTIFACT {candidate_fingerprint} TO TRASH")
+}
+
+pub fn approval_phrase(candidate: &TempReclaimCandidate) -> Option<String> {
+    candidate
+        .eligible_for_approval
+        .then(|| approval_phrase_for_fingerprint(&candidate.candidate_fingerprint))
+}
+
+fn native_temp_root() -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
-    let expected = PathBuf::from("/private/tmp");
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let expected = PathBuf::from("/tmp");
-    if canonical != expected {
-        return Err("temp-reclaim-root-not-system-temp".into());
+    let root = PathBuf::from("/tmp");
+    #[cfg(not(target_os = "macos"))]
+    let root = std::env::temp_dir();
+    if !root.is_absolute() {
+        return Err("temporary-root-not-absolute".into());
+    }
+    canonical_temp_root(&root)
+}
+
+fn canonical_temp_root(requested: &Path) -> Result<PathBuf, String> {
+    if !requested.is_absolute()
+        || requested
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("temporary-root-invalid".into());
+    }
+    let canonical = requested
+        .canonicalize()
+        .map_err(|_| "temporary-root-canonicalize-failed".to_string())?;
+    #[cfg(target_os = "macos")]
+    if requested == Path::new("/tmp") && canonical != Path::new("/private/tmp") {
+        return Err("temporary-root-alias-invalid".into());
     }
     Ok(canonical)
 }
 
-#[cfg(unix)]
-fn identity(metadata: &fs::Metadata) -> (u32, u64, u64) {
-    use std::os::unix::fs::MetadataExt;
-    (metadata.uid(), metadata.dev(), metadata.ino())
+fn forbidden_candidate(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('\\', "/");
+    text.contains("/Library/CloudStorage/")
+        || text.contains("/Library/Mobile Documents/")
+        || text.contains(".photoslibrary/")
+        || text.ends_with(".photoslibrary")
 }
 
-#[cfg(not(unix))]
-fn identity(_metadata: &fs::Metadata) -> (u32, u64, u64) {
-    (u32::MAX, 0, 0)
+/// Native temporary-root cleanup intentionally accepts only development artifact kinds whose
+/// normal inspector requires an adjacent project marker. Marker-free cache names remain useful in
+/// ordinary development scans but are insufficient authority inside a shared temporary root.
+fn marker_bound_temp_artifact(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("node_modules" | "target" | ".venv" | "venv")
+    )
 }
 
-#[cfg(unix)]
-fn current_uid() -> u32 {
-    unsafe { libc::geteuid() }
+fn remaining_discovery_timeout_ms(started: Instant) -> Option<u64> {
+    let remaining = DISCOVERY_BUDGET.checked_sub(started.elapsed())?;
+    let millis = remaining.as_millis();
+    (millis > 0).then(|| u64::try_from(millis).unwrap_or(u64::MAX))
 }
 
-#[cfg(not(unix))]
-fn current_uid() -> u32 {
-    u32::MAX
-}
-
-fn candidate_fingerprint(
-    path: &str,
-    kind: &str,
-    modified_ms: u64,
-    allocated_bytes: u64,
-    device: u64,
-    inode: u64,
-) -> String {
-    let mut hasher = blake3::Hasher::new();
-    for value in [
-        "disksage.temp-candidate.v1".to_string(),
-        path.to_string(),
-        kind.to_string(),
-        modified_ms.to_string(),
-        allocated_bytes.to_string(),
-        device.to_string(),
-        inode.to_string(),
-    ] {
-        hasher.update(&(value.len() as u64).to_le_bytes());
-        hasher.update(value.as_bytes());
-    }
-    hasher.finalize().to_hex().to_string()
-}
-
-fn candidate_set_fingerprint(candidates: &[TempReclaimCandidate]) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.temp-candidate-set.v1");
-    for candidate in candidates {
-        hasher.update(&(candidate.candidate_fingerprint.len() as u64).to_le_bytes());
-        hasher.update(candidate.candidate_fingerprint.as_bytes());
-    }
-    hasher.finalize().to_hex().to_string()
-}
-
-pub fn plan_temp_reclaim(
-    requested_root: &Path,
-    options: TempReclaimOptions,
+fn plan_with_active<F>(
+    requested: &Path,
     observed_at_ms: u64,
-) -> Result<TempReclaimPlan, String> {
-    validate_options(options)?;
-    if observed_at_ms == 0 {
-        return Err("temp-reclaim-time-invalid".into());
-    }
-    let root = canonical_temp_root(requested_root)?;
-    let mut entries = fs::read_dir(&root)
-        .map_err(|_| "temp-reclaim-root-unreadable".to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "temp-reclaim-root-entry-unreadable".to_string())?;
-    entries.sort_by_key(|entry| entry.file_name());
-    let results_truncated = entries.len() > options.max_children;
-    entries.truncate(options.max_children);
-    let current_uid = current_uid();
-    let actor_cwd = std::env::current_dir()
-        .ok()
-        .and_then(|path| fs::canonicalize(path).ok());
+    active: F,
+) -> Result<TempReclaimPlan, String>
+where
+    F: Fn(&Path, u64) -> GitWorktreeActiveUseEvidence,
+{
+    let root = canonical_temp_root(requested)?;
+    let started = Instant::now();
+    let mut visited = 0usize;
+    let mut unavailable = 0usize;
+    let mut complete = true;
     let mut candidates = Vec::new();
-    let mut issues = Vec::new();
-    let mut skipped_count = 0usize;
-    let mut planning_only_evidence = false;
-    for entry in entries {
-        let path = entry.path();
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(value) => value,
-            Err(_) => {
-                skipped_count += 1;
-                issues.push("temp-child-metadata-unavailable".into());
+    let children =
+        std::fs::read_dir(&root).map_err(|_| "temporary-root-read-failed".to_string())?;
+    'outer: for child in children {
+        if started.elapsed() >= DISCOVERY_BUDGET || visited >= MAX_DISCOVERY_ENTRIES {
+            complete = false;
+            break;
+        }
+        visited += 1;
+        let Ok(child) = child else {
+            unavailable += 1;
+            complete = false;
+            continue;
+        };
+        let Ok(kind) = child.file_type() else {
+            unavailable += 1;
+            complete = false;
+            continue;
+        };
+        if kind.is_symlink() || !kind.is_dir() {
+            unavailable += 1;
+            continue;
+        }
+        let project = child.path();
+        let Ok(project_root) = project.canonicalize() else {
+            unavailable += 1;
+            complete = false;
+            continue;
+        };
+        if project_root.parent() != Some(root.as_path()) || forbidden_candidate(&project_root) {
+            unavailable += 1;
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&project_root) else {
+            unavailable += 1;
+            complete = false;
+            continue;
+        };
+        for entry in entries {
+            if started.elapsed() >= DISCOVERY_BUDGET || visited >= MAX_DISCOVERY_ENTRIES {
+                complete = false;
+                break 'outer;
+            }
+            visited += 1;
+            let Ok(entry) = entry else {
+                unavailable += 1;
+                complete = false;
+                continue;
+            };
+            let Ok(kind) = entry.file_type() else {
+                unavailable += 1;
+                complete = false;
+                continue;
+            };
+            if kind.is_symlink() || !kind.is_dir() {
+                unavailable += 1;
                 continue;
             }
-        };
-        let file_type = metadata.file_type();
-        let (owner, device, inode) = identity(&metadata);
-        let modified_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-            .and_then(|value| u64::try_from(value.as_millis()).ok())
-            .unwrap_or(observed_at_ms);
-        let age_seconds = observed_at_ms.saturating_sub(modified_ms) / 1_000;
-        if file_type.is_symlink()
-            || (!file_type.is_file() && !file_type.is_dir())
-            || owner != current_uid
-            || age_seconds < options.min_age_seconds
-            || actor_cwd.as_ref().is_some_and(|cwd| cwd.starts_with(&path))
-        {
-            continue;
+            let path = entry.path();
+            if !marker_bound_temp_artifact(&path) {
+                unavailable += 1;
+                continue;
+            }
+            let Some(artifact) = inspect_artifact(&path, observed_at_ms) else {
+                unavailable += 1;
+                continue;
+            };
+            let canonical = match path.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) => {
+                    unavailable += 1;
+                    complete = false;
+                    continue;
+                }
+            };
+            if canonical.parent() != Some(project_root.as_path()) || forbidden_candidate(&canonical)
+            {
+                unavailable += 1;
+                continue;
+            }
+            let Some(active_timeout_ms) = remaining_discovery_timeout_ms(started) else {
+                complete = false;
+                break 'outer;
+            };
+            let use_evidence = active(&canonical, active_timeout_ms);
+            if started.elapsed() >= DISCOVERY_BUDGET {
+                complete = false;
+            }
+            let mut blockers = Vec::new();
+            if !artifact.scan_complete || artifact.skipped != 0 {
+                blockers.push("temporary-artifact-manifest-incomplete".into());
+            }
+            if !use_evidence.assessed || !use_evidence.evidence_complete {
+                blockers.push("temporary-artifact-active-use-incomplete".into());
+            } else if use_evidence.active {
+                blockers.push("temporary-artifact-active-use-detected".into());
+            }
+            let fingerprint = candidate_fingerprint(&root, &artifact);
+            let eligible = blockers.is_empty() && complete;
+            let exact_approval_phrase =
+                eligible.then(|| approval_phrase_for_fingerprint(&fingerprint));
+            candidates.push(TempReclaimCandidate {
+                artifact,
+                active_use: use_evidence,
+                candidate_fingerprint: fingerprint,
+                eligible_for_approval: eligible,
+                exact_approval_phrase,
+                blockers,
+                permanent_delete_available: false,
+                next_action: if eligible {
+                    "검토한 생성물만 정확한 승인 문구를 직접 입력해 휴지통으로 이동하세요."
+                } else {
+                    "사용 중인 작업을 종료하고 전체 증거를 다시 확인하세요."
+                }
+                .into(),
+            });
+            if !complete {
+                break 'outer;
+            }
+            if candidates.len() > MAX_CANDIDATES {
+                candidates.pop();
+                complete = false;
+                break 'outer;
+            }
         }
-        let size = size_evidence(
-            &path,
-            options.max_entries_per_child,
-            options.scan_timeout_ms,
-        );
-        let active_use =
-            active_use_evidence(&path, options.scan_timeout_ms, 64, file_type.is_dir());
-        if !size.evidence_complete || active_use.active {
-            skipped_count += 1;
-            issues.push("temp-child-evidence-incomplete-or-active".into());
-            continue;
-        }
-        let active_use_complete = active_use.assessed && active_use.evidence_complete;
-        #[cfg(not(target_os = "windows"))]
-        if !active_use_complete {
-            skipped_count += 1;
-            issues.push("temp-child-evidence-incomplete-or-active".into());
-            continue;
-        }
-        #[cfg(target_os = "windows")]
-        if !active_use_complete {
-            // Windows does not yet expose an identity-bound active-use observer through the shared
-            // worktree port. Keep the candidate visible for read-only operator review, but mark the
-            // whole plan incomplete so it can never gain approval or mutation authority.
-            planning_only_evidence = true;
-            issues.push("temp-child-active-use-unavailable-planning-only".into());
-        }
-        let kind = if file_type.is_dir() {
-            "directory"
-        } else {
-            "file"
-        };
-        let path_string = path.to_string_lossy().into_owned();
-        candidates.push(TempReclaimCandidate {
-            ontology_class: "https://disksage.app/ontology#TemporaryArtifact".into(),
-            candidate_fingerprint: candidate_fingerprint(
-                &path_string,
-                kind,
-                modified_ms,
-                size.allocated_bytes,
-                device,
-                inode,
-            ),
-            path: path_string,
-            kind: kind.into(),
-            modified_ms,
-            age_seconds,
-            allocated_bytes: size.allocated_bytes,
-            logical_bytes: size.logical_bytes,
-            device,
-            inode,
-            active_use,
-        });
     }
-    candidates.sort_by(|left, right| left.path.cmp(&right.path));
-    issues.sort();
-    issues.dedup();
-    let candidate_set_fingerprint = candidate_set_fingerprint(&candidates);
-    let candidate_allocated_bytes = candidates.iter().fold(0u64, |total, candidate| {
-        total.saturating_add(candidate.allocated_bytes)
-    });
-    let evidence_complete = !results_truncated && skipped_count == 0 && !planning_only_evidence;
-    let exact_approval_phrase = (!candidates.is_empty() && evidence_complete)
-        .then(|| format!("DiskSage temporary artifact reclaim 승인 {candidate_set_fingerprint}"));
+    candidates.sort_by(|a, b| a.artifact.path.cmp(&b.artifact.path));
+    if !complete {
+        for candidate in &mut candidates {
+            candidate.eligible_for_approval = false;
+            candidate.exact_approval_phrase = None;
+            if !candidate
+                .blockers
+                .iter()
+                .any(|value| value == "temporary-discovery-incomplete")
+            {
+                candidate
+                    .blockers
+                    .push("temporary-discovery-incomplete".into());
+            }
+            candidate.next_action =
+                "전체 임시 공간 확인이 끝나지 않았습니다. 실행하지 말고 다시 확인하세요.".into();
+        }
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-temp-reclaim-plan-v1\0");
+    hasher.update(root.to_string_lossy().as_bytes());
+    hasher.update(&observed_at_ms.to_le_bytes());
+    hasher.update(&[complete as u8]);
+    for candidate in &candidates {
+        hasher.update(candidate.candidate_fingerprint.as_bytes());
+    }
     Ok(TempReclaimPlan {
-        schema_kind: "disksage.temp-reclaim-plan".into(),
-        schema_version: SCHEMA_VERSION,
-        ontology_class: "https://disksage.app/ontology#TemporaryArtifact".into(),
-        root: root.to_string_lossy().into_owned(),
+        schema_version: 1,
+        schema_kind: "disksage.temp-reclaim-plan",
+        requested_root: requested.to_string_lossy().into_owned(),
+        canonical_root: root.to_string_lossy().into_owned(),
         observed_at_ms,
-        options,
-        candidate_count: candidates.len(),
-        candidate_allocated_bytes,
+        scan_complete: complete,
+        visited_entries: visited,
+        unavailable_entries: unavailable,
         candidates,
-        skipped_count,
-        issues,
-        evidence_complete,
-        candidate_set_fingerprint,
-        exact_approval_phrase,
-        filesystem_mutation_executed: false,
+        plan_fingerprint: hasher.finalize().to_hex().to_string(),
+        permanent_delete_available: false,
+        next_action: "안전 판정된 생성물만 선택해 휴지통 이동을 승인하세요. 알 수 없는 임시 항목은 그대로 둡니다.".into(),
     })
 }
 
-/// Permanent deletion is deliberately unavailable until DiskSage can bind a private approval to
-/// every exact child and move each object through the shared identity-checked Trash boundary.
-/// Planning remains available so operators can inspect allocation and active-use evidence without
-/// granting mutation authority.
-pub fn remove_temp_candidates(
-    _requested_root: &Path,
-    _options: TempReclaimOptions,
-    _expected_candidate_set_fingerprint: &str,
-    _confirmation_phrase: &str,
-    rationale: &str,
-    _executed_at_ms: u64,
-) -> Result<TempReclaimRemoval, String> {
-    if rationale.trim() != rationale
-        || rationale.is_empty()
-        || rationale.len() > 1_000
-        || rationale.chars().any(char::is_control)
+pub fn plan_native_temp_reclaim(observed_at_ms: u64) -> Result<TempReclaimPlan, String> {
+    #[cfg(target_os = "windows")]
     {
-        return Err("temp-reclaim-rationale-invalid".into());
+        let root = native_temp_root()?;
+        return plan_with_active(&root, observed_at_ms, |_, _| GitWorktreeActiveUseEvidence {
+            method: "windows-active-use-observer-unavailable".into(),
+            assessed: false,
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("active-use-observer-unavailable".into()),
+        });
     }
-    Err(REMOVAL_UNAVAILABLE.into())
+    #[cfg(unix)]
+    {
+        let root = native_temp_root()?;
+        return plan_with_active(&root, observed_at_ms, |path, timeout_ms| {
+            crate::git_worktree::active_use_evidence(path, timeout_ms, 256, true)
+        });
+    }
+    #[cfg(all(not(unix), not(target_os = "windows")))]
+    {
+        let _ = observed_at_ms;
+        Err("temporary-reclaim-platform-unsupported".into())
+    }
+}
+
+pub fn execute_candidate(
+    plan: &TempReclaimPlan,
+    candidate_fingerprint: &str,
+    approval: &TempReclaimApproval,
+    journal_path: &Path,
+    now_ms: u64,
+) -> DevArtifactCleanResult {
+    let failed = |code: &str| DevArtifactCleanResult {
+        path: String::new(),
+        ok: false,
+        error: code.into(),
+    };
+    if now_ms < approval.approved_at_ms
+        || now_ms - approval.approved_at_ms > MAX_APPROVAL_AGE_MS
+        || approval.candidate_fingerprint != candidate_fingerprint
+        || approval.approved_by.trim().is_empty()
+        || approval.approved_by.chars().any(char::is_control)
+    {
+        return failed("temporary-reclaim-approval-invalid-or-stale");
+    }
+    if !plan.scan_complete {
+        return failed("temporary-reclaim-discovery-incomplete");
+    }
+    let Some(candidate) = plan
+        .candidates
+        .iter()
+        .find(|item| item.candidate_fingerprint == candidate_fingerprint)
+    else {
+        return failed("temporary-reclaim-candidate-not-in-plan");
+    };
+    if !candidate.eligible_for_approval
+        || approval_phrase(candidate).as_deref() != Some(approval.exact_phrase.as_str())
+    {
+        return failed("temporary-reclaim-exact-approval-required");
+    }
+    let path = Path::new(&candidate.artifact.path);
+    let active = crate::git_worktree::active_use_evidence(path, 30_000, 256, true);
+    if !active.assessed || !active.evidence_complete || active.active {
+        return failed("temporary-artifact-active-use-recheck-failed");
+    }
+    clean_artifact_exact(&candidate.artifact, journal_path, now_ms)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn candidate_identity_changes_the_approval_fingerprint() {
-        let first = candidate_fingerprint("/private/tmp/a", "file", 1, 2, 3, 4);
-        let second = candidate_fingerprint("/private/tmp/a", "file", 1, 2, 3, 5);
-        assert_ne!(first, second);
-        assert_eq!(first.len(), 64);
+    fn idle() -> GitWorktreeActiveUseEvidence {
+        GitWorktreeActiveUseEvidence {
+            method: "fake-complete-handle-scan".into(),
+            assessed: true,
+            evidence_complete: true,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: None,
+        }
     }
 
     #[test]
-    fn unsafe_or_unbounded_options_are_rejected() {
-        let mut options = TempReclaimOptions::default();
-        options.min_age_seconds = 0;
-        assert!(validate_options(options).is_err());
-        options = TempReclaimOptions::default();
-        options.max_children = MAX_CHILDREN + 1;
-        assert!(validate_options(options).is_err());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_system_temp_root_is_accepted() {
-        let requested = std::env::temp_dir();
-        let expected = fs::canonicalize(&requested).expect("canonical Windows temp root");
-        assert_eq!(canonical_temp_root(&requested).unwrap(), expected);
-    }
-
-    #[test]
-    fn removal_fails_before_filesystem_observation() {
+    fn only_marker_bound_generated_roots_are_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join("target")).unwrap();
+        std::fs::write(project.join("Cargo.toml"), b"[package]").unwrap();
+        std::fs::write(project.join("target/output"), b"generated").unwrap();
+        std::fs::create_dir_all(temp.path().join("unknown/private-data")).unwrap();
+        let plan = plan_with_active(temp.path(), 10, |_, _| idle()).unwrap();
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].artifact.kind, "target");
+        assert!(plan.candidates[0].eligible_for_approval);
         assert_eq!(
-            remove_temp_candidates(
-                Path::new("/not-observed"),
-                TempReclaimOptions::default(),
-                "fingerprint",
-                "phrase",
-                "reviewed",
-                1,
-            ),
-            Err(REMOVAL_UNAVAILABLE.into())
+            plan.candidates[0].exact_approval_phrase,
+            approval_phrase(&plan.candidates[0])
+        );
+        assert!(!plan.permanent_delete_available);
+        assert!(plan.unavailable_entries > 0);
+    }
+
+    #[test]
+    fn wrong_exact_phrase_cannot_reach_trash_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join("target")).unwrap();
+        std::fs::write(project.join("Cargo.toml"), b"[package]").unwrap();
+        std::fs::write(project.join("target/output"), b"generated").unwrap();
+        let plan = plan_with_active(temp.path(), 10, |_, _| idle()).unwrap();
+        let candidate = &plan.candidates[0];
+        let result = execute_candidate(
+            &plan,
+            &candidate.candidate_fingerprint,
+            &TempReclaimApproval {
+                candidate_fingerprint: candidate.candidate_fingerprint.clone(),
+                approved_at_ms: 10,
+                approved_by: "local:test-user".into(),
+                exact_phrase: "not the backend phrase".into(),
+            },
+            &temp.path().join("journal.jsonl"),
+            11,
+        );
+        assert!(!result.ok);
+        assert_eq!(result.error, "temporary-reclaim-exact-approval-required");
+        assert!(project.join("target/output").is_file());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tmp_alias_resolves_only_to_private_tmp() {
+        assert_eq!(
+            canonical_temp_root(Path::new("/tmp")).unwrap(),
+            Path::new("/private/tmp")
         );
     }
 }
