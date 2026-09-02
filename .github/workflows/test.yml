@@ -61,6 +61,11 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows Podman descendant-lifecycle regression
+        shell: pwsh
+        run: |
+          rustc --edition=2021 --test src-tauri/src/windows_process_tree.rs -o target/windows-process-tree.exe
+          & .\target\windows-process-tree.exe
 
   macos-filesystem-safety:
     runs-on: macos-latest
