@@ -49,6 +49,11 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
 }
 
+fn is_regular_marker(path: &Path) -> bool {
+    path.symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
 fn ontology_class(kind: &str) -> &'static str {
     match kind {
         "target" => "https://disksage.app/ontology#RustBuildArtifact",
@@ -186,6 +191,38 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     manifest
 }
 
+/// Inspect one explicitly selected generated directory without walking its surrounding project.
+///
+/// Candidate discovery remains the caller's bounded responsibility. This helper preserves the
+/// same marker, identity, ontology, and metadata-manifest contract used by the broader inventory.
+pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let (kind, markers) = artifact_kind(&name)?;
+    let parent = path.parent()?;
+    if !path.is_dir()
+        || (!markers.is_empty()
+            && !markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker))))
+    {
+        return None;
+    }
+    let manifest = artifact_manifest(path);
+    Some(DevArtifact {
+        path: path.to_string_lossy().into_owned(),
+        kind: kind.to_string(),
+        ontology_class: ontology_class(kind).into(),
+        project: parent.file_name()?.to_string_lossy().into_owned(),
+        bytes: manifest.bytes,
+        files: manifest.files,
+        skipped: manifest.skipped,
+        scan_complete: manifest.scan_complete,
+        fingerprint: manifest.fingerprint,
+        object_id: manifest.object_id,
+        age_days: age_days(path, now_ms),
+    })
+}
+
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
     let duration = metadata
         .modified()
@@ -222,8 +259,11 @@ fn discover_root_candidate(root: &Path) -> Option<PathBuf> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let (_, markers) = artifact_kind(&name)?;
     let parent = path.parent().unwrap_or(root);
-    (markers.is_empty() || markers.iter().any(|marker| parent.join(marker).exists()))
-        .then(|| path.to_path_buf())
+    (markers.is_empty()
+        || markers
+            .iter()
+            .any(|marker| is_regular_marker(&parent.join(marker))))
+    .then(|| path.to_path_buf())
 }
 
 fn discover_candidates(root: &Path) -> Vec<PathBuf> {
@@ -251,7 +291,11 @@ fn discover_candidates(root: &Path) -> Vec<PathBuf> {
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        if markers.is_empty() || markers.iter().any(|marker| parent.join(marker).exists()) {
+        if markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker)))
+        {
             candidates.push(path.to_path_buf());
             walker.skip_current_dir();
         }
@@ -434,10 +478,10 @@ pub fn clean_artifacts(
 
         if matches.is_none() {
             return DevArtifactCleanResult {
-                    path: request.path,
-                    ok: false,
-                    error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
-                };
+                path: request.path,
+                ok: false,
+                error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+            };
         }
 
         if let Some(blocker) = active_use.get(Path::new(&request.path)).copied().flatten() {
@@ -467,6 +511,55 @@ pub fn clean_artifacts(
             },
         }
     })
+}
+
+/// Revalidate and trash one explicitly selected artifact without scanning sibling projects.
+pub fn clean_artifact_exact(
+    request: &DevArtifact,
+    journal_path: &Path,
+    now_ms: u64,
+) -> DevArtifactCleanResult {
+    let current = inspect_artifact(Path::new(&request.path), now_ms);
+    let unchanged = current.as_ref().is_some_and(|candidate| {
+        candidate.path == request.path
+            && candidate.kind == request.kind
+            && candidate.ontology_class == request.ontology_class
+            && candidate.project == request.project
+            && candidate.bytes == request.bytes
+            && candidate.files == request.files
+            && candidate.skipped == 0
+            && request.skipped == 0
+            && candidate.scan_complete
+            && request.scan_complete
+            && candidate.fingerprint == request.fingerprint
+            && !request.object_id.is_empty()
+            && candidate.object_id == request.object_id
+    });
+    if !unchanged {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+        };
+    }
+    match crate::safety::trash_delete_if_identity(
+        Path::new(&request.path),
+        &request.object_id,
+        request.bytes,
+        journal_path,
+        now_ms,
+    ) {
+        Ok(()) => DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: true,
+            error: String::new(),
+        },
+        Err(error) => DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: error.to_string(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -523,6 +616,23 @@ mod tests {
                 .ontology_class,
             "https://disksage.app/ontology#RustBuildArtifact"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_project_markers() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("linked-marker");
+        let artifact = project.join("target");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(artifact.join("payload.bin"), b"generated").unwrap();
+        fs::write(tmp.path().join("outside.toml"), b"[package]").unwrap();
+        symlink(tmp.path().join("outside.toml"), project.join("Cargo.toml")).unwrap();
+
+        assert!(inspect_artifact(&artifact, 0).is_none());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
