@@ -75,3 +75,19 @@ pub fn execute_colima_cache_prune_configured(
         now_ms(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocking_colima_work_runs_off_calling_thread() {
+        let caller = std::thread::current().id();
+        let observed = tauri::async_runtime::block_on(run_colima_blocking(move || {
+            Ok::<_, String>(std::thread::current().id())
+        }))
+        .expect("blocking worker should return its thread identity");
+
+        assert_ne!(observed, caller);
+    }
+}
