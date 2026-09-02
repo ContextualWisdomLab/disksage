@@ -519,7 +519,8 @@ pub fn clean_artifact_exact(
     journal_path: &Path,
     now_ms: u64,
 ) -> DevArtifactCleanResult {
-    let current = inspect_artifact(Path::new(&request.path), now_ms);
+    let path = Path::new(&request.path);
+    let current = inspect_artifact(path, now_ms);
     let unchanged = current.as_ref().is_some_and(|candidate| {
         candidate.path == request.path
             && candidate.kind == request.kind
@@ -542,8 +543,21 @@ pub fn clean_artifact_exact(
             error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
         };
     }
+    let active_use = crate::git_worktree::active_use_evidence(
+        path,
+        ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
+        crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+        true,
+    );
+    if let Some(blocker) = active_use_blocker(&active_use) {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: blocker.into(),
+        };
+    }
     match crate::safety::trash_delete_if_identity(
-        Path::new(&request.path),
+        path,
         &request.object_id,
         request.bytes,
         journal_path,
