@@ -24,17 +24,18 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml \
 ```
 
 Omit `--execute` for a no-op check; pass an absolute `--journal-path` when running outside the
-installed application so the operation remains auditable.
+installed application so the reversible operation remains auditable.
 
-## Irreversible proven-cache Trash purge
+## Proven-cache Trash preview — permanent purge disabled
 
-The proven-cache purge is a separate authority boundary. The command flags select the operation;
-they do not authorize whatever matching caches happen to exist at execution time. Permanent
-removal requires an exact candidate set that was shown and reviewed beforehand.
+DiskSage may inspect known regenerable cache directories that are already direct children of OS
+Trash, but **permanent purge execution is currently disabled**. The earlier path-based deletion
+implementation cannot yet prove that the reviewed descendant tree remains the exact object being
+removed across the irreversible mutation, and it does not yet provide the required freshness and
+post-crash receipt reconciliation. Those gaps must be repaired before permanent deletion can become
+a product capability.
 
-### 1. Preview the current candidates
-
-Run the purge mode without `--execute` and retain the JSON output:
+The supported operator action today is read-only preview only:
 
 ```bash
 cargo run --locked --manifest-path src-tauri/Cargo.toml \
@@ -44,47 +45,24 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml \
   > /ABSOLUTE/cache-trash-preview.json
 ```
 
-The `proven_cache_trash` array contains only direct OS-Trash children whose known cache name,
-structural signature, bounded symlink-free tree, byte count, modification time, and filesystem
-object identity were observed together. Review every displayed candidate and the reported bytes.
+The `proven_cache_trash` array contains direct OS-Trash children whose known cache name, structural
+signature, bounded symlink-free tree, byte count, modification time, and filesystem object identity
+were observed. This is review evidence only; it is **not deletion authority**.
 
-### 2. Persist exactly the reviewed candidate array
+Do not treat an approval manifest as a way to re-enable the operation. Any invocation containing
+both `--execute` and `--purge-proven-cache-trash` fails before journal-directory creation or cache
+mutation, whether or not `--approved-cache-trash-candidates` is supplied. The CLI reports that
+permanent purge is unavailable and directs the operator back to the safe preview above.
 
-After review, copy only the exact `proven_cache_trash` array into a separate approval manifest. For
-example, with `jq` installed:
+A future re-enable must be a separately reviewed implementation that, at minimum, binds the full
+reviewed descendant identity to a descriptor-relative/no-follow deletion primitive, has an explicit
+approval-freshness boundary, resists pathname replacement races, and can reconcile an interrupted
+or failed terminal journal write without repeating deletion. Its tests must prove that equal-sized
+nested replacements and concurrent target replacement cannot cross the reviewed boundary.
 
-```bash
-jq '.proven_cache_trash' \
-  /ABSOLUTE/cache-trash-preview.json \
-  > /ABSOLUTE/approved-cache-trash.json
-```
-
-Do not add a path, edit an identity field, or regenerate the array immediately before execution.
-A changed approval manifest is a new review artifact and must be reviewed again.
-
-### 3. Execute only the reviewed set
-
-```bash
-cargo run --locked --manifest-path src-tauri/Cargo.toml \
-  --bin disksage-cache-cleanup -- \
-  --execute \
-  --purge-proven-cache-trash \
-  --approved-cache-trash-candidates /ABSOLUTE/approved-cache-trash.json \
-  --journal-path /ABSOLUTE/journal.jsonl
-```
-
-Execution validates the entire approved set before the first irreversible mutation and revalidates
-each candidate immediately before its own removal. A reviewed candidate that moved, was replaced,
-changed size or modification time, changed filesystem identity or signature, became a symlink, or
-is no longer an exact direct Trash child causes a fail-closed result rather than widening authority.
-A new matching cache that appears after preview is not in the approval manifest and therefore
-remains untouched until a later preview and review.
-
-Each attempted purge writes a `pending` journal record before deletion and a terminal `ok` or
-`error` record afterward. The path never empties Trash generally and never targets cloud
-placeholders, arbitrary Trash entries, or user files. Review the command result, both journal
-states, and measured filesystem free-space evidence before treating reported logical bytes as
-physically reclaimed capacity.
+Until those conditions are met, leave the reviewed cache directories in OS Trash or use operating-
+system/user-managed Trash controls outside DiskSage. DiskSage does not claim permanently reclaimed
+bytes from the disabled path.
 
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry cache/source roots when present. The Cargo registry source root is catalogued for explicit
