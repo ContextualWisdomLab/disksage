@@ -127,6 +127,9 @@ mod tests {
 
         assert_eq!(error, "ontology-protection-target-changed");
         assert_ne!(filesystem_object_id(&file).unwrap(), original_id);
-        assert!(disksage_lib::is_protected(&file));
+        assert!(
+            !disksage_lib::is_protected(&file),
+            "a replacement that was never reviewed must not inherit the failed protection request"
+        );
     }
 }
