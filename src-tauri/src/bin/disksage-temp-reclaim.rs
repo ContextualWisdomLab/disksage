@@ -55,6 +55,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parser_is_plan_only_unless_all_execution_authority_is_present() {
@@ -68,5 +69,18 @@ mod tests {
         ])
         .unwrap()
         .is_some());
+    }
+
+    #[test]
+    fn windows_uses_the_operating_system_temp_root_instead_of_unix_tmp() {
+        let windows_temp = PathBuf::from(r"C:\Users\tester\AppData\Local\Temp");
+        assert_eq!(
+            default_temp_root("windows", windows_temp.clone()),
+            windows_temp
+        );
+        assert_ne!(
+            default_temp_root("windows", PathBuf::from(r"D:\Temp")),
+            PathBuf::from("/tmp")
+        );
     }
 }
