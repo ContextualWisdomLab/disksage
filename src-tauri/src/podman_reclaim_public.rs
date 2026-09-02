@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 #[path = "podman_reclaim.rs"]
 mod implementation;
+#[cfg(windows)]
+#[path = "windows_process_tree.rs"]
+mod windows_process_tree;
 
 pub use implementation::{
     probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
@@ -164,8 +167,18 @@ fn terminate_command_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn terminate_command_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn terminate_windows_command_tree(
+    child: &mut Child,
+    process_tree: &mut Option<windows_process_tree::ProcessTreeGuard>,
+) {
+    process_tree.take();
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -184,7 +197,17 @@ fn run_bounded(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
+    #[cfg(unix)]
     let process_id = child.id();
+    #[cfg(windows)]
+    let mut process_tree = match windows_process_tree::ProcessTreeGuard::attach(&child) {
+        Ok(guard) => Some(guard),
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{label}-process-tree-control-unavailable"));
+        }
+    };
     let stdout = child
         .stdout
         .take()
@@ -201,14 +224,24 @@ fn run_bounded(
             Ok(Some(status)) => {
                 #[cfg(unix)]
                 kill_process_group(process_id);
+                #[cfg(windows)]
+                {
+                    process_tree.take();
+                }
                 break status;
             }
             Ok(None) if started.elapsed() >= timeout => {
+                #[cfg(windows)]
+                terminate_windows_command_tree(&mut child, &mut process_tree);
+                #[cfg(not(windows))]
                 terminate_command_tree(&mut child);
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
+                #[cfg(windows)]
+                terminate_windows_command_tree(&mut child, &mut process_tree);
+                #[cfg(not(windows))]
                 terminate_command_tree(&mut child);
                 return Err(format!("{label}-wait"));
             }

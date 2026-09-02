@@ -1,19 +1,134 @@
 #![cfg(windows)]
 
+use std::ffi::c_void;
 use std::io;
+use std::mem::size_of;
+use std::os::windows::io::AsRawHandle;
 use std::process::Child;
+use std::ptr::null_mut;
 
-/// Owns the operating-system boundary used to terminate one spawned command and its descendants.
+type Handle = *mut c_void;
+type Bool = i32;
+
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+#[repr(C)]
+#[derive(Default)]
+struct JobObjectBasicLimitInformation {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: u32,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct IoCounters {
+    read_operation_count: u64,
+    write_operation_count: u64,
+    other_operation_count: u64,
+    read_transfer_count: u64,
+    write_transfer_count: u64,
+    other_transfer_count: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct JobObjectExtendedLimitInformation {
+    basic_limit_information: JobObjectBasicLimitInformation,
+    io_info: IoCounters,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateJobObjectW(job_attributes: *const c_void, name: *const u16) -> Handle;
+    fn SetInformationJobObject(
+        job: Handle,
+        information_class: i32,
+        information: *const c_void,
+        information_length: u32,
+    ) -> Bool;
+    fn AssignProcessToJobObject(job: Handle, process: Handle) -> Bool;
+    fn CloseHandle(object: Handle) -> Bool;
+}
+
+/// Owns the Windows Job Object that contains one subprocess and all descendants it creates.
 ///
-/// The initial implementation intentionally models the pre-fix behavior so the Windows regression
-/// demonstrates that killing only the direct child is insufficient. The production repair replaces
-/// this placeholder with a Windows Job Object whose lifetime contains the whole subprocess tree.
-pub(crate) struct ProcessTreeGuard;
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` makes the guard a fail-closed lifetime boundary: dropping
+/// it terminates every process still attached to the job, including descendants that inherited the
+/// Podman stdout/stderr handles and would otherwise keep DiskSage reader threads alive after timeout.
+pub(crate) struct ProcessTreeGuard {
+    job: Handle,
+}
 
 impl ProcessTreeGuard {
-    /// Attaches lifecycle control to a newly spawned child process.
-    pub(crate) fn attach(_child: &Child) -> io::Result<Self> {
-        Ok(Self)
+    /// Creates a kill-on-close Job Object and assigns the newly spawned child to it.
+    ///
+    /// Call this immediately after `Command::spawn`. If assignment fails, callers must terminate
+    /// the direct child and reject the command rather than continuing without descendant control.
+    pub(crate) fn attach(child: &Child) -> io::Result<Self> {
+        // SAFETY: null security attributes/name request an unnamed job with default ACLs. The
+        // returned HANDLE is checked before use and owned exclusively by ProcessTreeGuard.
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut limits = JobObjectExtendedLimitInformation::default();
+        limits.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let information_length = u32::try_from(size_of::<JobObjectExtendedLimitInformation>())
+            .expect("Windows Job Object information size fits in u32");
+        // SAFETY: `limits` has the layout required by JobObjectExtendedLimitInformation and stays
+        // alive for the call. `job` is a valid owned handle from CreateJobObjectW.
+        let configured = unsafe {
+            SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                (&limits as *const JobObjectExtendedLimitInformation).cast(),
+                information_length,
+            )
+        };
+        if configured == 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: `job` is owned by this function and has not been transferred.
+            let _ = unsafe { CloseHandle(job) };
+            return Err(error);
+        }
+
+        let process = child.as_raw_handle().cast::<c_void>();
+        // SAFETY: `process` is the live process handle owned by `child`; assigning it does not
+        // transfer ownership. `job` remains owned by the returned guard.
+        let assigned = unsafe { AssignProcessToJobObject(job, process) };
+        if assigned == 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: `job` is still exclusively owned here.
+            let _ = unsafe { CloseHandle(job) };
+            return Err(error);
+        }
+
+        Ok(Self { job })
+    }
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        if self.job.is_null() {
+            return;
+        }
+        // SAFETY: this guard exclusively owns the Job Object handle. KILL_ON_JOB_CLOSE makes this
+        // close operation the process-tree termination boundary for any members still running.
+        let _ = unsafe { CloseHandle(self.job) };
+        self.job = null_mut();
     }
 }
 
