@@ -1,91 +1,104 @@
-use disksage_lib::temp_reclaim::{plan_temp_reclaim, TempReclaimOptions};
+//! Read-only-by-default native temp reclaim plan with explicit per-candidate Trash approval.
+
 use std::path::PathBuf;
 
-fn usage() -> &'static str {
-    "usage: disksage-temp-reclaim"
-}
+use disksage_lib::temp_reclaim::{
+    execute_candidate, plan_native_temp_reclaim, TempReclaimApproval, MAX_APPROVAL_AGE_MS,
+};
 
-fn parse_args(args: &[String]) -> Result<(), String> {
-    match args {
-        [] => Ok(()),
-        [flag] if flag == "--help" || flag == "-h" => Err(usage().into()),
-        _ => Err(usage().into()),
-    }
-}
-
-fn default_temp_root(platform: &str, environment_temp: PathBuf) -> PathBuf {
-    match platform {
-        "windows" => environment_temp,
-        "macos" => PathBuf::from("/private/tmp"),
-        _ => PathBuf::from("/tmp"),
-    }
-}
-
-fn platform_temp_root() -> PathBuf {
-    default_temp_root(std::env::consts::OS, std::env::temp_dir())
-}
+const USAGE: &str = "usage: disksage-temp-reclaim [--execute-fingerprint HEX --approved-by LOCAL_USER --approval-phrase EXACT_PHRASE --journal-path ABSOLUTE_PATH]";
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
-
-fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    parse_args(&args)?;
-    let options = TempReclaimOptions::default();
-    let now = now_ms();
-    let root = platform_temp_root();
-    let output = serde_json::to_value(plan_temp_reclaim(&root, options, now)?)
-        .map_err(|_| "temp-reclaim-json-failed".to_string())?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).map_err(|_| "temp-reclaim-json-failed".to_string())?
-    );
-    Ok(())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn main() {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
-        println!("{}", usage());
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args
+        .iter()
+        .any(|value| matches!(value.as_str(), "-h" | "--help"))
+    {
+        println!("{USAGE}");
         return;
     }
-    if let Err(error) = run() {
-        eprintln!("{error}");
+    let observed_at_ms = now_ms();
+    let plan = match plan_native_temp_reclaim(observed_at_ms) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("임시 공간을 확인하지 못했습니다. 저장 공간 위치를 확인한 뒤 다시 시도하세요: {error}");
+            std::process::exit(2);
+        }
+    };
+    if args.is_empty() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".into())
+        );
+        return;
+    }
+    let value = |flag: &str| -> Option<String> {
+        args.windows(2)
+            .find(|pair| pair[0] == flag)
+            .map(|pair| pair[1].clone())
+    };
+    let (Some(fingerprint), Some(actor), Some(phrase), Some(journal)) = (
+        value("--execute-fingerprint"),
+        value("--approved-by"),
+        value("--approval-phrase"),
+        value("--journal-path"),
+    ) else {
+        eprintln!(
+            "필요한 승인 값이 없습니다. 계획에 표시된 정확한 문구를 직접 입력하세요.\n{USAGE}"
+        );
+        std::process::exit(2);
+    };
+    let journal = PathBuf::from(journal);
+    if !journal.is_absolute() {
+        eprintln!("저널 경로는 절대 경로여야 합니다.");
         std::process::exit(2);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parser_exposes_only_the_read_only_plan() {
-        assert!(parse_args(&[]).is_ok());
-        assert!(parse_args(&["--execute".into(), "fingerprint".into()]).is_err());
-        assert!(parse_args(&[
-            "--execute".into(),
-            "fingerprint".into(),
-            "phrase".into(),
-            "rationale".into(),
-        ])
-        .is_err());
+    let approval = TempReclaimApproval {
+        candidate_fingerprint: fingerprint.clone(),
+        approved_at_ms: observed_at_ms,
+        approved_by: actor,
+        exact_phrase: phrase,
+    };
+    let execution_now_ms = now_ms();
+    let approval_can_reach_mutation = execution_now_ms >= approval.approved_at_ms
+        && execution_now_ms - approval.approved_at_ms <= MAX_APPROVAL_AGE_MS
+        && approval.candidate_fingerprint == fingerprint
+        && !approval.approved_by.trim().is_empty()
+        && !approval.approved_by.chars().any(char::is_control)
+        && plan.scan_complete
+        && plan.candidates.iter().any(|candidate| {
+            candidate.candidate_fingerprint == fingerprint
+                && candidate.eligible_for_approval
+                && candidate.exact_approval_phrase.as_deref()
+                    == Some(approval.exact_phrase.as_str())
+        });
+    if approval_can_reach_mutation {
+        if let Some(parent) = journal.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                eprintln!("저널 저장 위치를 준비하지 못했습니다. 쓰기 가능한 로컬 경로를 확인하세요.");
+                std::process::exit(2);
+            }
+        }
     }
-
-    #[test]
-    fn windows_uses_the_operating_system_temp_root_instead_of_unix_tmp() {
-        let windows_temp = PathBuf::from(r"C:\Users\tester\AppData\Local\Temp");
-        assert_eq!(
-            default_temp_root("windows", windows_temp.clone()),
-            windows_temp
-        );
-        assert_ne!(
-            default_temp_root("windows", PathBuf::from(r"D:\Temp")),
-            PathBuf::from("/tmp")
-        );
+    let result = execute_candidate(
+        &plan,
+        &fingerprint,
+        &approval,
+        &journal,
+        execution_now_ms,
+    );
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into())
+    );
+    if !result.ok {
+        std::process::exit(1);
     }
 }
