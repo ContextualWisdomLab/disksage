@@ -2,6 +2,11 @@
 
 use disksage_lib::rules::{cache_candidates, BaseDirs};
 use std::fs;
+use std::process::Command;
+
+const CONSTRAINED_CHILD_ENV: &str = "DISKSAGE_MACOS_FD_BOUND_CHILD";
+const TEST_NAME: &str =
+    "parallel_cache_measurement_does_not_open_every_direct_child_before_workers_run";
 
 struct FileDescriptorLimitGuard {
     original: libc::rlimit,
@@ -10,7 +15,7 @@ struct FileDescriptorLimitGuard {
 impl Drop for FileDescriptorLimitGuard {
     fn drop(&mut self) {
         let result = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &self.original) };
-        assert_eq!(result, 0, "must restore process file-descriptor limit");
+        assert_eq!(result, 0, "must restore child process file-descriptor limit");
     }
 }
 
@@ -43,13 +48,12 @@ fn constrain_file_descriptors() -> FileDescriptorLimitGuard {
     assert_eq!(
         unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &constrained) },
         0,
-        "must lower the soft file-descriptor limit"
+        "must lower the child process soft file-descriptor limit"
     );
     FileDescriptorLimitGuard { original }
 }
 
-#[test]
-fn parallel_cache_measurement_does_not_open_every_direct_child_before_workers_run() {
+fn run_constrained_measurement() {
     let tmp = tempfile::tempdir().unwrap();
     let bases = BaseDirs {
         temp: tmp.path().join("tmp"),
@@ -70,5 +74,29 @@ fn parallel_cache_measurement_does_not_open_every_direct_child_before_workers_ru
         .find(|candidate| candidate.id == "npm-cache")
         .expect("npm cache must remain in the catalog");
 
-    assert_eq!(npm.bytes, 128, "all direct children must be measured even when the process cannot hold one descriptor per child");
+    assert_eq!(
+        npm.bytes, 128,
+        "all direct children must be measured even when the process cannot hold one descriptor per child"
+    );
+}
+
+#[test]
+fn parallel_cache_measurement_does_not_open_every_direct_child_before_workers_run() {
+    if std::env::var_os(CONSTRAINED_CHILD_ENV).is_some() {
+        run_constrained_measurement();
+        return;
+    }
+
+    let status = Command::new(std::env::current_exe().expect("test executable must be available"))
+        .env(CONSTRAINED_CHILD_ENV, "1")
+        .arg("--exact")
+        .arg(TEST_NAME)
+        .arg("--nocapture")
+        .status()
+        .expect("constrained regression child must start");
+
+    assert!(
+        status.success(),
+        "isolated file-descriptor regression child must pass"
+    );
 }
