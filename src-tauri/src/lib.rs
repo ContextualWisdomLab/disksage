@@ -11,33 +11,7 @@ mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
-#[path = "cache_cleanup.rs"]
-mod cache_cleanup_impl;
-/// Public cache-cleanup boundary. Reversible cleanup remains available; irreversible Trash purge
-/// is intentionally fail-closed until deletion can stay bound to the reviewed filesystem object.
-pub mod cache_cleanup {
-    pub use super::cache_cleanup_impl::{
-        clean_regenerable_caches_headless, proven_cache_trash_candidates, CacheTrashCandidate,
-        CacheTrashPurgeResult,
-    };
-    pub(crate) use super::cache_cleanup_impl::{
-        clean_regenerable_caches_inner, AUTO_REGENERABLE_CACHE_IDS,
-    };
-    #[cfg(not(coverage))]
-    pub use super::cache_cleanup_impl::{clean_cache_contents, list_cache_targets};
-    use std::path::Path;
-
-    /// Reject irreversible cache-trash deletion until an identity-bound race-safe implementation
-    /// can prove the reviewed object remains the object being mutated and can reconcile receipts.
-    pub fn purge_proven_cache_trash(
-        _home: &Path,
-        _approved_candidates: &[CacheTrashCandidate],
-        _journal_path: &Path,
-        _now_ms: u64,
-    ) -> Result<Vec<CacheTrashPurgeResult>, String> {
-        Err("cache-trash-permanent-purge-disabled-until-race-safe".into())
-    }
-}
+pub mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -139,10 +113,10 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::clean_regenerable_caches,
-            cache_cleanup_impl::list_cache_targets,
+            cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
             generic_cleanup::fail_closed_clean_paths,
-            cache_cleanup_impl::clean_cache_contents,
+            cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
