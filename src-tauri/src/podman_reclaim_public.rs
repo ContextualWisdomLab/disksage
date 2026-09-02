@@ -555,9 +555,6 @@ pub fn prune_dangling_images(
     rationale: &str,
     executed_at_ms: u64,
 ) -> Result<PodmanDanglingImagePruneExecution, String> {
-    #[cfg(not(unix))]
-    return Err("podman-prune-process-tree-control-unavailable".into());
-
     if executed_at_ms == 0 {
         return Err("podman-prune-time-invalid".into());
     }
