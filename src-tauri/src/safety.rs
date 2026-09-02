@@ -458,15 +458,16 @@ fn move_staged_to_user_trash(staged: &Path, now_ms: u64) -> Result<(), String> {
         .filter(|path| path.is_absolute())
         .ok_or_else(|| "home directory unavailable".to_string())?;
     let trash_root = home.join(".Trash");
-    let metadata = std::fs::symlink_metadata(&trash_root).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("user trash is unavailable".into());
-    }
     if !same_volume(staged, &trash_root) {
         // NSFileManager resolves the Trash directory on the staged object's own mounted volume.
         // Keep the identity-bound sibling staging move above this boundary; on native-trash
-        // failure the caller restores that same staged object to the reviewed pathname.
+        // failure the caller restores that same staged object to the reviewed pathname. This path
+        // must not depend on the home volume's .Trash directory being present.
         return move_staged_with_native_volume_trash(staged);
+    }
+    let metadata = std::fs::symlink_metadata(&trash_root).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("user trash is unavailable".into());
     }
     let name = staged
         .file_name()
