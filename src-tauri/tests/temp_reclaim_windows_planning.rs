@@ -26,7 +26,6 @@ fn windows_cli_keeps_native_temp_planning_read_only_when_active_use_is_unavailab
     );
     assert!(output.stderr.is_empty());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
-    assert_eq!(report["scan_complete"], false);
     let candidate = report["candidates"]
         .as_array()
         .expect("candidate array")
@@ -35,5 +34,10 @@ fn windows_cli_keeps_native_temp_planning_read_only_when_active_use_is_unavailab
         .expect("generated Cargo target remains visible for operator review");
     assert_eq!(candidate["eligible_for_approval"], false);
     assert!(candidate["exact_approval_phrase"].is_null());
+    assert!(candidate["blockers"]
+        .as_array()
+        .expect("blocker array")
+        .iter()
+        .any(|blocker| blocker == "temporary-artifact-active-use-incomplete"));
     assert!(target.exists(), "read-only planning must not mutate the candidate");
 }
