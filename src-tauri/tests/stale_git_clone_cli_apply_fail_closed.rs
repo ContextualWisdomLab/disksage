@@ -1,8 +1,22 @@
 use std::process::Command;
 
 #[test]
-fn apply_fails_closed_before_repository_access_until_identity_bound_trash_exists() {
-    let output = Command::new(env!("CARGO_BIN_EXE_disksage-stale-git-clone"))
+fn cli_does_not_advertise_or_parse_disabled_stale_clone_removal() {
+    let binary = env!("CARGO_BIN_EXE_disksage-stale-git-clone");
+
+    let help = Command::new(binary)
+        .arg("--help")
+        .output()
+        .expect("stale clone CLI help must execute");
+    assert!(!help.status.success(), "the current CLI routes help through usage output");
+    let help_stderr = String::from_utf8(help.stderr).expect("help stderr is UTF-8");
+    assert!(help_stderr.contains("usage: disksage-stale-git-clone"));
+    assert!(
+        !help_stderr.contains("--apply"),
+        "a disabled destructive operation must not appear in the public CLI contract"
+    );
+
+    let output = Command::new(binary)
         .args([
             "--repository-root",
             "/definitely-not-a-real-disksage-repository",
@@ -15,12 +29,14 @@ fn apply_fails_closed_before_repository_access_until_identity_bound_trash_exists
             "reviewed by operator",
         ])
         .output()
-        .expect("stale clone CLI should launch");
+        .expect("stale clone CLI invalid mutation request must terminate");
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr is UTF-8"),
-        "disksage-stale-git-clone: stale-git-clone-removal-identity-bound-trash-unavailable\n"
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert!(stderr.contains("usage: disksage-stale-git-clone"));
+    assert!(
+        !stderr.contains("removal-identity-bound-trash-unavailable"),
+        "unsupported destructive authority must be rejected at argument admission rather than leaking an internal disabled-mode error"
     );
 }
