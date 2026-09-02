@@ -4,14 +4,19 @@ use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
 use std::os::windows::io::AsRawHandle;
-use std::process::Child;
+use std::os::windows::process::CommandExt;
+use std::process::{Child, Command};
 use std::ptr::null_mut;
 
 type Handle = *mut c_void;
 type Bool = i32;
 
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+const THREAD_SUSPEND_RESUME: u32 = 0x0002;
+const ERROR_NO_MORE_FILES: u32 = 18;
 
 #[repr(C)]
 #[derive(Default)]
@@ -49,6 +54,18 @@ struct JobObjectExtendedLimitInformation {
     peak_job_memory_used: usize,
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct ThreadEntry32 {
+    dw_size: u32,
+    cnt_usage: u32,
+    thread_id: u32,
+    owner_process_id: u32,
+    base_priority: i32,
+    delta_priority: i32,
+    flags: u32,
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn CreateJobObjectW(job_attributes: *const c_void, name: *const u16) -> Handle;
@@ -59,7 +76,97 @@ extern "system" {
         information_length: u32,
     ) -> Bool;
     fn AssignProcessToJobObject(job: Handle, process: Handle) -> Bool;
+    fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> Handle;
+    fn Thread32First(snapshot: Handle, entry: *mut ThreadEntry32) -> Bool;
+    fn Thread32Next(snapshot: Handle, entry: *mut ThreadEntry32) -> Bool;
+    fn OpenThread(desired_access: u32, inherit_handle: Bool, thread_id: u32) -> Handle;
+    fn ResumeThread(thread: Handle) -> u32;
+    fn GetLastError() -> u32;
     fn CloseHandle(object: Handle) -> Bool;
+}
+
+fn invalid_handle_value() -> Handle {
+    -1_isize as Handle
+}
+
+fn process_thread_ids(process_id: u32) -> io::Result<Vec<u32>> {
+    // SAFETY: TH32CS_SNAPTHREAD ignores the process-id argument and returns an owned snapshot
+    // handle. The handle is checked for INVALID_HANDLE_VALUE before use and closed on every path.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == invalid_handle_value() {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut entry = ThreadEntry32 {
+        dw_size: u32::try_from(size_of::<ThreadEntry32>())
+            .expect("THREADENTRY32 size fits in u32"),
+        ..ThreadEntry32::default()
+    };
+    // SAFETY: `snapshot` is a live thread snapshot and `entry` points to writable storage whose
+    // `dw_size` field matches the Windows THREADENTRY32 contract.
+    let first = unsafe { Thread32First(snapshot, &mut entry) };
+    if first == 0 {
+        let error = io::Error::last_os_error();
+        // SAFETY: this function exclusively owns the snapshot handle.
+        let _ = unsafe { CloseHandle(snapshot) };
+        return Err(error);
+    }
+
+    let mut thread_ids = Vec::new();
+    loop {
+        if entry.owner_process_id == process_id {
+            thread_ids.push(entry.thread_id);
+        }
+        // SAFETY: arguments have the same validity as Thread32First above. A false return with
+        // ERROR_NO_MORE_FILES is the documented end-of-snapshot condition.
+        if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
+            // SAFETY: GetLastError has no preconditions and reads the calling thread's last error.
+            let last_error = unsafe { GetLastError() };
+            if last_error != ERROR_NO_MORE_FILES {
+                let error = io::Error::from_raw_os_error(last_error as i32);
+                // SAFETY: this function exclusively owns the snapshot handle.
+                let _ = unsafe { CloseHandle(snapshot) };
+                return Err(error);
+            }
+            break;
+        }
+    }
+    // SAFETY: this function exclusively owns the snapshot handle.
+    let _ = unsafe { CloseHandle(snapshot) };
+
+    if thread_ids.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "suspended child has no discoverable thread",
+        ));
+    }
+    Ok(thread_ids)
+}
+
+fn resume_suspended_process(process_id: u32) -> io::Result<()> {
+    let thread_ids = process_thread_ids(process_id)?;
+    for thread_id in thread_ids {
+        // SAFETY: the numeric thread ID came from a current system snapshot. The returned handle is
+        // checked before use and closed below without being transferred.
+        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+        if thread.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `thread` is a live handle opened with THREAD_SUSPEND_RESUME access.
+        let previous_suspend_count = unsafe { ResumeThread(thread) };
+        // SAFETY: this function exclusively owns the thread handle.
+        let _ = unsafe { CloseHandle(thread) };
+        if previous_suspend_count == u32::MAX {
+            return Err(io::Error::last_os_error());
+        }
+        if previous_suspend_count != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "child thread was not suspended exactly once before Job Object attachment",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Owns the Windows Job Object that contains one subprocess and all descendants it creates.
@@ -72,11 +179,16 @@ pub(crate) struct ProcessTreeGuard {
 }
 
 impl ProcessTreeGuard {
-    /// Creates a kill-on-close Job Object and assigns the newly spawned child to it.
+    /// Configures a command so its primary thread cannot execute before process-tree control exists.
     ///
-    /// Call this immediately after `Command::spawn`. If assignment fails, callers must terminate
-    /// the direct child and reject the command rather than continuing without descendant control.
-    pub(crate) fn attach(child: &Child) -> io::Result<Self> {
+    /// Callers must pair this with `attach_and_resume` immediately after `Command::spawn`. Creating
+    /// the process suspended closes the otherwise unavoidable spawn-to-Job-assignment window in
+    /// which a hostile or fast child could create descendants outside the Job Object.
+    pub(crate) fn prepare_suspended(command: &mut Command) {
+        command.creation_flags(CREATE_SUSPENDED);
+    }
+
+    fn attach_job(child: &Child) -> io::Result<Self> {
         // SAFETY: null security attributes/name request an unnamed job with default ACLs. The
         // returned HANDLE is checked before use and owned exclusively by ProcessTreeGuard.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -117,6 +229,25 @@ impl ProcessTreeGuard {
         }
 
         Ok(Self { job })
+    }
+
+    /// Attaches a CREATE_SUSPENDED child to a kill-on-close Job Object, then starts its user code.
+    ///
+    /// The method fails closed if Job creation, assignment, thread discovery, or resumption fails.
+    /// On a resumption failure the guard is dropped before the error is returned, terminating the
+    /// still-suspended process instead of allowing an uncontrolled subprocess to survive.
+    pub(crate) fn attach_and_resume(child: &Child) -> io::Result<Self> {
+        let guard = Self::attach_job(child)?;
+        if let Err(error) = resume_suspended_process(child.id()) {
+            drop(guard);
+            return Err(error);
+        }
+        Ok(guard)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach(child: &Child) -> io::Result<Self> {
+        Self::attach_job(child)
     }
 }
 
