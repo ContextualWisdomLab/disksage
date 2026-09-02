@@ -76,6 +76,8 @@ jobs:
           cache-targets: false
       - name: macOS file-descriptor bound regression
         run: cargo test --manifest-path src-tauri/Cargo.toml --test macos_parallel_directory_fd_bound
+      - name: macOS filesystem safety unit regressions
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib safety::tests
 
   llm-engine-build:
     runs-on: ubuntu-latest
