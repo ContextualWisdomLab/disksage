@@ -1,25 +1,30 @@
 #![cfg(windows)]
 
-#[path = "../src/podman_reclaim_public.rs"]
-mod podman_reclaim_public;
-
-use std::path::PathBuf;
+use std::process::Command;
 
 #[test]
 fn windows_prune_reaches_the_bounded_command_runner() {
-    let missing_podman = PathBuf::from(r"C:\disksage-test-missing-podman.exe");
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-podman-reclaim-plan"))
+        .args([
+            "--execute-dangling",
+            "--confirmation-phrase",
+            "unused-on-purpose",
+            "--rationale",
+            "reviewed Windows execution boundary",
+            "--podman-bin",
+            r"C:\disksage-test-missing-podman.exe",
+        ])
+        .output()
+        .expect("the shipped Podman reclaim CLI must start");
 
-    let error = podman_reclaim_public::prune_dangling_images(
-        &missing_podman,
-        podman_reclaim_public::DEFAULT_PODMAN_MACHINE,
-        "unused-on-purpose",
-        "reviewed Windows execution boundary",
-        1,
-    )
-    .expect_err("the missing test executable must fail before any mutation");
-
-    assert_eq!(
-        error, "podman-prune-machine-inspect-spawn",
-        "Windows must enter the bounded process runner instead of being rejected as unsupported"
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr must remain UTF-8");
+    assert!(
+        stderr.contains("podman-prune-machine-inspect-spawn"),
+        "Windows must enter the bounded process runner before a missing executable is rejected: {stderr}"
+    );
+    assert!(
+        !stderr.contains("podman-prune-process-tree-control-unavailable"),
+        "Windows process-tree containment is implemented and must not be rejected as unsupported"
     );
 }
