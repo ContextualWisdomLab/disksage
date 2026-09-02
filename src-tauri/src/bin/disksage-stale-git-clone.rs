@@ -79,8 +79,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+fn run(raw: &[String]) -> Result<(), String> {
+    let args = parse_args(raw)?;
     let now_ms = cloud::system_now_ms();
     let json = if let Some(scan_root) = &args.scan_root {
         serde_json::to_value(stale_git_clone::plan_stale_git_clones(
@@ -107,7 +107,12 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = run() {
+    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{USAGE}");
+        return;
+    }
+    if let Err(error) = run(&raw) {
         eprintln!("disksage-stale-git-clone: {error}");
         std::process::exit(2);
     }
