@@ -1,10 +1,6 @@
 use disksage_lib::temp_reclaim::{plan_temp_reclaim, TempReclaimOptions};
-use std::path::Path;
+use std::path::PathBuf;
 
-#[cfg(target_os = "macos")]
-const ROOT: &str = "/private/tmp";
-#[cfg(not(target_os = "macos"))]
-const ROOT: &str = "/tmp";
 const REMOVAL_UNAVAILABLE: &str = "temp-reclaim-removal-private-approval-unavailable";
 
 fn usage() -> &'static str {
@@ -22,6 +18,18 @@ fn parse_args(args: &[String]) -> Result<Option<(&str, &str, &str)>, String> {
     }
 }
 
+fn default_temp_root(platform: &str, environment_temp: PathBuf) -> PathBuf {
+    match platform {
+        "windows" => environment_temp,
+        "macos" => PathBuf::from("/private/tmp"),
+        _ => PathBuf::from("/tmp"),
+    }
+}
+
+fn platform_temp_root() -> PathBuf {
+    default_temp_root(std::env::consts::OS, std::env::temp_dir())
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -36,7 +44,8 @@ fn run() -> Result<(), String> {
     }
     let options = TempReclaimOptions::default();
     let now = now_ms();
-    let output = serde_json::to_value(plan_temp_reclaim(Path::new(ROOT), options, now)?)
+    let root = platform_temp_root();
+    let output = serde_json::to_value(plan_temp_reclaim(&root, options, now)?)
         .map_err(|_| "temp-reclaim-json-failed".to_string())?;
     println!(
         "{}",
@@ -55,7 +64,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn parser_is_plan_only_unless_all_execution_authority_is_present() {
