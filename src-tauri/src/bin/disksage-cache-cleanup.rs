@@ -3,22 +3,21 @@
 //! Without `--execute` this command is read-only. With it, the library path moves only inactive,
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
-use disksage_lib::cache_cleanup::{clean_regenerable_caches_headless, proven_cache_trash_candidates};
+use disksage_lib::cache_cleanup::{
+    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const PURGE_DISABLED: &str = "permanent cache Trash purge is currently unavailable; run --purge-proven-cache-trash without --execute for a safe read-only preview";
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] \
-[--approved-cache-trash-candidates PATH] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash is currently a\n\
-read-only preview; irreversible execution is disabled until deletion is race-safe and recoverable.";
+inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
+only structurally proven cache directories already in OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
     purge_proven_cache_trash: bool,
-    approved_cache_trash_candidates: Option<PathBuf>,
     journal_path: PathBuf,
 }
 
@@ -69,24 +68,12 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
 
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
-    let mut approved_cache_trash_candidates = None;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
-            Some("--approved-cache-trash-candidates") => {
-                let path = PathBuf::from(
-                    args.next().ok_or_else(|| {
-                        "--approved-cache-trash-candidates requires PATH".to_string()
-                    })?,
-                );
-                if !path.is_absolute() {
-                    return Err("--approved-cache-trash-candidates must be absolute".into());
-                }
-                approved_cache_trash_candidates = Some(path);
-            }
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
                     args.next()
@@ -101,13 +88,9 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
-    if approved_cache_trash_candidates.is_some() && !purge_proven_cache_trash {
-        return Err("--approved-cache-trash-candidates requires --purge-proven-cache-trash".into());
-    }
     Ok(Some(Args {
         execute,
         purge_proven_cache_trash,
-        approved_cache_trash_candidates,
         journal_path,
     }))
 }
@@ -138,21 +121,26 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
-                "approval_contract": "permanent purge execution is disabled until reviewed identity can remain bound to a race-safe, recoverable deletion",
-                "notice": if args.purge_proven_cache_trash {
-                    "review-only preview; no irreversible purge can be executed"
-                } else {
-                    "pass --execute to move reviewed regenerable cache children to OS Trash"
-                }
+                "notice": "pass --execute to perform the guarded OS-Trash operation"
             })
         );
         return Ok(());
     }
-    if args.purge_proven_cache_trash {
-        return Err(PURGE_DISABLED.into());
-    }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if args.purge_proven_cache_trash {
+        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "executed": true,
+                "purge_proven_cache_trash": true,
+                "journal_path": args.journal_path,
+                "results": results
+            })
+        );
+        return Ok(());
     }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
@@ -176,10 +164,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn approval_path() -> PathBuf {
-        std::env::temp_dir().join("disksage-approved-cache-trash.json")
-    }
 
     #[test]
     fn help_is_non_mutating() {
@@ -207,47 +191,11 @@ mod tests {
     }
 
     #[test]
-    fn disabled_purge_execution_does_not_require_an_approval_manifest() {
-        let args = parse_args([
-            OsString::from("--execute"),
-            OsString::from("--purge-proven-cache-trash"),
-        ])
-        .unwrap()
-        .unwrap();
-        assert!(args.execute);
+    fn purge_cache_trash_flag_is_explicit() {
+        let args = parse_args([OsString::from("--purge-proven-cache-trash")])
+            .unwrap()
+            .unwrap();
+        assert!(!args.execute);
         assert!(args.purge_proven_cache_trash);
-        assert!(args.approved_cache_trash_candidates.is_none());
-        assert_eq!(
-            run_with_args([
-                OsString::from("--execute"),
-                OsString::from("--purge-proven-cache-trash"),
-            ])
-            .unwrap_err(),
-            PURGE_DISABLED
-        );
-    }
-
-    #[test]
-    fn disabled_purge_execution_reports_the_same_boundary_with_a_manifest() {
-        let path = approval_path();
-        let error = run_with_args([
-            OsString::from("--execute"),
-            OsString::from("--purge-proven-cache-trash"),
-            OsString::from("--approved-cache-trash-candidates"),
-            path.as_os_str().to_os_string(),
-        ])
-        .unwrap_err();
-        assert_eq!(error, PURGE_DISABLED);
-    }
-
-    #[test]
-    fn approval_manifest_flag_is_scoped_to_purge_mode() {
-        let path = approval_path();
-        let error = parse_args([
-            OsString::from("--approved-cache-trash-candidates"),
-            path.as_os_str().to_os_string(),
-        ])
-        .unwrap_err();
-        assert!(error.contains("requires --purge-proven-cache-trash"));
     }
 }
