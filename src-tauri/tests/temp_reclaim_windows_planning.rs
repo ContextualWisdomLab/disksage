@@ -1,39 +1,43 @@
 #![cfg(target_os = "windows")]
 
-use disksage_lib::temp_reclaim::{plan_temp_reclaim, TempReclaimOptions};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::Command;
 
 #[test]
-fn windows_plan_keeps_old_temp_children_visible_without_granting_removal_authority() {
-    let root = std::env::temp_dir();
-    let candidate = root.join(format!(
-        "000000-disksage-temp-reclaim-planning-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&candidate);
-    std::fs::write(&candidate, b"temporary planning evidence").expect("temporary candidate");
+fn windows_cli_keeps_native_temp_planning_read_only_when_active_use_is_unavailable() {
+    let temp = tempfile::tempdir().expect("isolated Windows temp root");
+    let project = temp.path().join("000000-disksage-temp-project");
+    let target = project.join("target");
+    std::fs::create_dir_all(&target).expect("target directory");
+    std::fs::write(project.join("Cargo.toml"), b"[package]\nname='temp-project'\nversion='0.1.0'\n")
+        .expect("Cargo marker");
+    std::fs::write(target.join("artifact.bin"), b"generated").expect("generated artifact");
 
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time after epoch")
-        .as_millis() as u64;
-    let mut options = TempReclaimOptions::default();
-    options.min_age_seconds = 1;
-    options.max_children = 10_000;
-    let observed_at_ms = now_ms.saturating_add(5_000);
+    let binary = env!("CARGO_BIN_EXE_disksage-temp-reclaim");
+    let output = Command::new(binary)
+        .env("TEMP", temp.path())
+        .env("TMP", temp.path())
+        .output()
+        .expect("temp reclaim CLI executes");
 
-    let plan = plan_temp_reclaim(&root, options, observed_at_ms).expect("Windows planning succeeds");
-    let visible = plan
-        .candidates
+    assert!(
+        output.status.success(),
+        "Windows must support a read-only native temp plan instead of rejecting the platform: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
+    let candidate = report["candidates"]
+        .as_array()
+        .expect("candidate array")
         .iter()
-        .find(|item| std::path::Path::new(&item.path) == candidate)
-        .expect("old temporary child remains visible for operator review");
-
-    assert!(!visible.active_use.evidence_complete);
-    assert!(!plan.evidence_complete);
-    assert!(plan.exact_approval_phrase.is_none());
-    assert!(!plan.filesystem_mutation_executed);
-    assert!(candidate.exists());
-
-    std::fs::remove_file(candidate).expect("cleanup test candidate");
+        .find(|candidate| candidate["artifact"]["kind"] == "target")
+        .expect("generated Cargo target remains visible for operator review");
+    assert_eq!(candidate["eligible_for_approval"], false);
+    assert!(candidate["exact_approval_phrase"].is_null());
+    assert!(candidate["blockers"]
+        .as_array()
+        .expect("blocker array")
+        .iter()
+        .any(|blocker| blocker == "temporary-artifact-active-use-incomplete"));
+    assert!(target.exists(), "read-only planning must not mutate the candidate");
 }
