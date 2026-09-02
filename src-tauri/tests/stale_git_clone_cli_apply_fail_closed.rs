@@ -8,11 +8,12 @@ fn cli_does_not_advertise_or_parse_disabled_stale_clone_removal() {
         .arg("--help")
         .output()
         .expect("stale clone CLI help must execute");
-    assert!(!help.status.success(), "the current CLI routes help through usage output");
-    let help_stderr = String::from_utf8(help.stderr).expect("help stderr is UTF-8");
-    assert!(help_stderr.contains("usage: disksage-stale-git-clone"));
+    assert!(help.status.success(), "--help must remain a successful read-only operation");
+    assert!(help.stderr.is_empty(), "help must not be rendered as a command failure");
+    let help_stdout = String::from_utf8(help.stdout).expect("help stdout is UTF-8");
+    assert!(help_stdout.contains("usage: disksage-stale-git-clone"));
     assert!(
-        !help_stderr.contains("--apply"),
+        !help_stdout.contains("--apply"),
         "a disabled destructive operation must not appear in the public CLI contract"
     );
 
