@@ -27,6 +27,17 @@ describe('release workflow retry contract', () => {
     ).toBe(3);
   });
 
+  it('keeps verifier artifact directories aligned with the pinned build matrix', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const verifier = readRepositoryFile('.github/scripts/verify-release-artifacts.sh');
+
+    for (const runner of ['ubuntu-22.04', 'windows-2022', 'macos-latest']) {
+      expect(workflow).toContain(`- os: ${runner}`);
+      expect(verifier).toContain(`release-disksage-${runner}-\${run_attempt}`);
+    }
+    expect(verifier).not.toContain('release-disksage-windows-latest-${run_attempt}');
+  });
+
   it('documents retry-safe concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
