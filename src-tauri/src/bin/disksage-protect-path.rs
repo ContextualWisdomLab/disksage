@@ -13,6 +13,11 @@ fn bind_current_object(
         .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
     before_bind();
     bind_retained_ontology_class(path, class_id)?;
+    let bound_object_id = filesystem_object_id(path)
+        .map_err(|_| "ontology-protection-target-changed".to_string())?;
+    if bound_object_id != object_id {
+        return Err("ontology-protection-target-changed".into());
+    }
     Ok(object_id)
 }
 
@@ -122,5 +127,6 @@ mod tests {
 
         assert_eq!(error, "ontology-protection-target-changed");
         assert_ne!(filesystem_object_id(&file).unwrap(), original_id);
+        assert!(disksage_lib::is_protected(&file));
     }
 }
