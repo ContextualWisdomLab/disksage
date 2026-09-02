@@ -103,7 +103,7 @@ pub mod reclaim;
 mod rules_impl;
 #[cfg_attr(coverage, allow(dead_code))]
 #[path = "rules_public.rs"]
-mod rules;
+pub mod rules;
 #[cfg(test)]
 mod rules_ontology_contract_tests;
 #[cfg_attr(coverage, allow(dead_code))]
