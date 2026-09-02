@@ -512,21 +512,23 @@ impl CatalogRoot {
         let Some(names) = self.directory_entries() else {
             return 0;
         };
-        let entries = names
-            .into_iter()
-            .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name)))
-            .filter_map(|name| self.open_child(&name))
-            .collect::<Vec<_>>();
-        let pending = std::sync::Mutex::new(entries.into_iter());
+        let pending = std::sync::Mutex::new(
+            names
+                .into_iter()
+                .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name))),
+        );
         std::thread::scope(|scope| {
             let workers = (0..DIRECTORY_SIZE_WORKERS)
                 .map(|_| {
                     scope.spawn(|| {
                         let mut bytes = 0u64;
                         loop {
-                            let entry = pending.lock().expect("directory queue poisoned").next();
-                            let Some((child, metadata)) = entry else {
+                            let name = pending.lock().expect("directory queue poisoned").next();
+                            let Some(name) = name else {
                                 break;
+                            };
+                            let Some((child, metadata)) = self.open_child(&name) else {
+                                continue;
                             };
                             bytes = bytes.saturating_add(if metadata.is_file() {
                                 metadata.len()
