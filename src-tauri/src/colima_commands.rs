@@ -1,4 +1,4 @@
-//! Tauri adapter for Colima host-cache inspection and exact cache-prune execution.
+//! Tauri adapter for Colima inspection and reclaim execution.
 
 use crate::{colima_platform, colima_reclaim};
 use std::{
@@ -46,9 +46,9 @@ fn now_ms() -> u64 {
 
 /// Runs filesystem scans and subprocess polling on Tauri's dedicated blocking executor.
 ///
-/// Colima inspection and prune execution perform synchronous filesystem and child-process work.
-/// Keeping that work off the async command executor prevents one bounded 10–60 second provider
-/// operation from occupying an async runtime worker that also serves unrelated desktop commands.
+/// Colima inspection and reclaim execution perform synchronous filesystem and child-process work.
+/// Keeping that work off the async command executor prevents one bounded provider operation from
+/// occupying an async runtime worker that also serves unrelated desktop commands.
 async fn run_colima_blocking<T, F>(task: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -91,6 +91,126 @@ pub async fn execute_colima_cache_prune_configured(
         colima_reclaim::execute_colima_cache_prune(
             &binary,
             &cache_root,
+            &confirmation_phrase,
+            &rationale,
+            now_ms(),
+        )
+    })
+    .await
+}
+
+/// Returns exact dangling-image evidence without blocking Tauri's async command executor.
+#[tauri::command(rename = "inspect_colima_dangling_images")]
+pub async fn inspect_colima_dangling_images_configured(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaDanglingImagePlan, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        Ok(colima_reclaim::plan_colima_dangling_images(
+            &binary,
+            &profile,
+            Duration::from_secs(10),
+        ))
+    })
+    .await
+}
+
+/// Revalidates and removes only the approved dangling-image identities on a blocking worker.
+#[tauri::command(rename = "execute_colima_dangling_images")]
+pub async fn execute_colima_dangling_images_configured(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaDanglingImageExecution, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        colima_reclaim::execute_colima_dangling_images(
+            &binary,
+            &profile,
+            &confirmation_phrase,
+            &rationale,
+            now_ms(),
+        )
+    })
+    .await
+}
+
+/// Returns dangling and privileged-empty-content volume evidence on a blocking worker.
+#[tauri::command(rename = "inspect_colima_empty_volumes")]
+pub async fn inspect_colima_empty_volumes_configured(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaEmptyVolumePlan, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        Ok(colima_reclaim::plan_colima_empty_volumes(
+            &binary,
+            &profile,
+            Duration::from_secs(10),
+        ))
+    })
+    .await
+}
+
+/// Revalidates and removes only approved empty-volume identities on a blocking worker.
+#[tauri::command(rename = "execute_colima_empty_volumes")]
+pub async fn execute_colima_empty_volumes_configured(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaEmptyVolumeExecution, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        colima_reclaim::execute_colima_empty_volumes(
+            &binary,
+            &profile,
+            &confirmation_phrase,
+            &rationale,
+            now_ms(),
+        )
+    })
+    .await
+}
+
+/// Returns guest-TRIM eligibility and native host-compaction evidence on a blocking worker.
+#[tauri::command(rename = "inspect_colima_guest_trim")]
+pub async fn inspect_colima_guest_trim_configured(
+    profile: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaGuestTrimPlan, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        Ok(colima_reclaim::plan_colima_guest_trim(
+            &binary,
+            &profile,
+            Duration::from_secs(10),
+        ))
+    })
+    .await
+}
+
+/// Runs approved guest fstrim and records host evidence on a blocking worker.
+#[tauri::command(rename = "execute_colima_guest_trim")]
+pub async fn execute_colima_guest_trim_configured(
+    profile: String,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<colima_reclaim::ColimaGuestTrimExecution, String> {
+    let home = resolve_home(&app)?;
+    let binary = colima_binary(&home);
+    run_colima_blocking(move || {
+        colima_reclaim::execute_colima_guest_trim(
+            &binary,
+            &profile,
             &confirmation_phrase,
             &rationale,
             now_ms(),
