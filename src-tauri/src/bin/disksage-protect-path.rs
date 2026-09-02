@@ -1,8 +1,20 @@
 use disksage_lib::{bind_retained_ontology_class, filesystem_object_id};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "Usage: disksage-protect-path --path ABSOLUTE_PATH --class RETAINED_CLASS_IRI";
+
+fn bind_current_object(
+    path: &Path,
+    class_id: &str,
+    before_bind: impl FnOnce(),
+) -> Result<String, String> {
+    let object_id = filesystem_object_id(path)
+        .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
+    before_bind();
+    bind_retained_ontology_class(path, class_id)?;
+    Ok(object_id)
+}
 
 fn run(args: impl IntoIterator<Item = OsString>) -> Result<serde_json::Value, String> {
     let args = args.into_iter().collect::<Vec<_>>();
@@ -32,9 +44,7 @@ fn run(args: impl IntoIterator<Item = OsString>) -> Result<serde_json::Value, St
     }
     let path = path.ok_or_else(|| "ontology-protection-path-required".to_string())?;
     let class_id = class_id.ok_or_else(|| "ontology-protection-class-required".to_string())?;
-    let object_id = filesystem_object_id(&path)
-        .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
-    bind_retained_ontology_class(&path, &class_id)?;
+    let object_id = bind_current_object(&path, &class_id, || {})?;
     Ok(serde_json::json!({
         "schema_kind": "disksage.ontology-protection-binding/v1",
         "class_id": class_id,
@@ -66,6 +76,9 @@ fn main() {
 mod tests {
     use super::*;
 
+    const RETAINED_CLASS: &str =
+        "https://disksage.app/ontology#CustomerRelationshipManagementData";
+
     #[test]
     fn retained_binding_protects_exact_file_without_exposing_its_path() {
         let temp = tempfile::tempdir().unwrap();
@@ -75,7 +88,7 @@ mod tests {
             OsString::from("--path"),
             file.clone().into_os_string(),
             OsString::from("--class"),
-            OsString::from("https://disksage.app/ontology#CustomerRelationshipManagementData"),
+            OsString::from(RETAINED_CLASS),
         ])
         .unwrap();
 
@@ -91,5 +104,23 @@ mod tests {
             "ontology-protection-class-not-retained"
         );
         assert!(!disksage_lib::is_protected(&installer));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_between_identity_and_binding_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("business.db");
+        std::fs::write(&file, b"original").unwrap();
+        let original_id = filesystem_object_id(&file).unwrap();
+
+        let error = bind_current_object(&file, RETAINED_CLASS, || {
+            std::fs::remove_file(&file).unwrap();
+            std::fs::write(&file, b"replacement").unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(error, "ontology-protection-target-changed");
+        assert_ne!(filesystem_object_id(&file).unwrap(), original_id);
     }
 }
