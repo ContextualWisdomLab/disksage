@@ -91,9 +91,6 @@ pub fn approval_phrase(candidate: &TempReclaimCandidate) -> Option<String> {
 }
 
 fn native_temp_root() -> Result<PathBuf, String> {
-    #[cfg(target_os = "macos")]
-    let root = PathBuf::from("/tmp");
-    #[cfg(not(target_os = "macos"))]
     let root = std::env::temp_dir();
     if !root.is_absolute() {
         return Err("temporary-root-not-absolute".into());
