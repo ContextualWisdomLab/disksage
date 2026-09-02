@@ -81,17 +81,20 @@ fn macos_cleanup_moves_reviewed_external_volume_artifact_to_that_volumes_trash()
 
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let home_trash = home.join(".Trash");
-    fs::create_dir_all(&home_trash).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    assert!(
+        !home.join(".Trash").exists(),
+        "the regression must prove external-volume cleanup does not depend on the home Trash"
+    );
     let _home_guard = HomeGuard::replace(&home);
 
     let mounted = MountedImage::create(tmp.path());
     let artifact = create_node_project(&mounted.mount_point);
-    let home_device = fs::metadata(&home_trash).unwrap().dev();
+    let home_device = fs::metadata(&home).unwrap().dev();
     let external_device = fs::metadata(&artifact).unwrap().dev();
     assert_ne!(
         external_device, home_device,
-        "the fixture must exercise a real filesystem device distinct from $HOME/.Trash"
+        "the fixture must exercise a real filesystem device distinct from HOME"
     );
 
     let now_ms = 1_888_888_888_u64;
@@ -104,7 +107,7 @@ fn macos_cleanup_moves_reviewed_external_volume_artifact_to_that_volumes_trash()
     assert_eq!(results.len(), 1);
     assert!(
         results[0].ok,
-        "a reviewed artifact on another mounted volume must use that volume's native Trash instead of being rejected: {}",
+        "a reviewed artifact on another mounted volume must use that volume's native Trash independently of HOME/.Trash: {}",
         results[0].error.as_deref().unwrap_or("unknown cleanup failure")
     );
     assert!(
