@@ -77,6 +77,14 @@ fn active_use_blocker(
     }
 }
 
+fn active_use_probe_path(path: &Path) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+    }
+}
+
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
@@ -430,8 +438,14 @@ pub fn clean_artifacts(
             .collect(),
         8,
         |path| {
+            let Some(probe_path) = active_use_probe_path(&path) else {
+                return (
+                    path,
+                    Some("development-artifact-active-use-evidence-incomplete"),
+                );
+            };
             let evidence = crate::git_worktree::active_use_evidence(
-                &path,
+                &probe_path,
                 ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 true,
@@ -543,8 +557,15 @@ pub fn clean_artifact_exact(
             error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
         };
     }
+    let Some(probe_path) = active_use_probe_path(path) else {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: "development-artifact-active-use-evidence-incomplete".into(),
+        };
+    };
     let active_use = crate::git_worktree::active_use_evidence(
-        path,
+        &probe_path,
         ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
         crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
         true,
