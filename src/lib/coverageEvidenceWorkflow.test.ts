@@ -67,6 +67,19 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('lines: totals?.lines ?? null');
   });
 
+  it('runs metric diagnostic construction after a failed coverage measurement when coverage JSON exists', () => {
+    const buildStart = workflow.indexOf('name: Build exact-head coverage evidence');
+    const diagnosticUploadStart = workflow.indexOf(
+      'name: Upload bounded coverage diagnostic',
+      buildStart,
+    );
+
+    expect(buildStart).toBeGreaterThanOrEqual(0);
+    expect(diagnosticUploadStart).toBeGreaterThan(buildStart);
+    const buildStep = workflow.slice(buildStart, diagnosticUploadStart);
+    expect(buildStep).toContain("if: always() && hashFiles('coverage.json') != ''");
+  });
+
   it('preserves both ends of a bounded sanitized command diagnostic when measurement itself fails', () => {
     expect(workflow).toContain('id: rust-coverage');
     expect(workflow).toContain('coverage-command.raw.log');
