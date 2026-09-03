@@ -134,3 +134,30 @@ fn shipped_cli_rejects_duplicate_authority_singletons_before_side_effects() {
     assert!(!journal_a.exists());
     assert!(!journal_b.exists());
 }
+
+#[test]
+fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
+    let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri must live directly under the repository root");
+    let runbook = std::fs::read_to_string(
+        repository_root.join("docs/development/cache-cleanup-operator-runbook.md"),
+    )
+    .unwrap();
+    let adr = std::fs::read_to_string(
+        repository_root.join(
+            "docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md",
+        ),
+    )
+    .unwrap();
+
+    for document in [&runbook, &adr] {
+        assert!(document.contains(
+            "cache-trash-identity-bound-permanent-delete-unavailable"
+        ));
+        assert!(!document.contains("permanently removes only"));
+        assert!(!document.contains("may permanently remove only"));
+    }
+    assert!(runbook.contains("empty the native Trash manually"));
+    assert!(adr.contains("before journal or filesystem mutation"));
+}
