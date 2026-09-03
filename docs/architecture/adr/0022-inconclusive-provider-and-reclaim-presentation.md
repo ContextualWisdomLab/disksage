@@ -1,8 +1,8 @@
-# ADR 0012: Keep inconclusive provider evidence and reclaim attribution separate
+# ADR-0022: Keep inconclusive provider evidence and reclaim attribution separate
 
 ## Status
 
-Accepted.
+Proposed.
 
 ## Context
 
@@ -13,6 +13,10 @@ the global delta is not the sum of DiskSage actions.
 
 Customer guidance also has a different responsibility from audit evidence. The primary view must
 say what to do next, while stable reason codes and evidence kinds remain available on demand.
+
+Earlier active owner lineages already allocate ADR-0012 through ADR-0021. This decision therefore
+uses ADR-0022 rather than overwriting an existing architecture identity. It remains Proposed until
+its implementation and prerequisite lineages reach protected authority with exact-current gates.
 
 ## Decision
 
@@ -28,10 +32,12 @@ say what to do next, while stable reason codes and evidence kinds remain availab
 
 An empty native response remains useful and durable enough for diagnosis without becoming a
 mutation permit. Progress cannot be overstated by assigning concurrent APFS movement to DiskSage,
-and customers can act without interpreting internal evidence terminology.
+and customers can act without interpreting internal evidence terminology. The decision must not
+be marked Accepted solely because an active branch is locally green.
 
 ## Rejected alternatives
 
+- Reusing ADR-0012 was rejected because that immutable identity belongs to an earlier active owner.
 - Treating empty output as a clear queue was rejected because absence of evidence cannot prove
   remote completion.
 - Assigning the positive APFS delta to the preceding action was rejected because the shared volume
