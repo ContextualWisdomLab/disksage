@@ -975,6 +975,25 @@ fn delete_refresh_token(connection_id: &str) -> Result<(), String> {
     }
 }
 
+/// Reserve one durable identity slot when a legacy-only migration may need to keep both the new
+/// canonical record and a failed stale credential as a retry handle.
+fn ensure_reauthorization_cleanup_capacity(
+    original: &[OAuthConnection],
+    root: &CloudRoot,
+    connection: &OAuthConnection,
+) -> Result<(), String> {
+    let has_stale = original.iter().any(|entry| {
+        entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
+    });
+    let has_canonical = original
+        .iter()
+        .any(|entry| entry.connection_id == connection.connection_id);
+    if has_stale && !has_canonical && original.len() >= MAX_CONNECTIONS {
+        return Err("provider-oauth-reauthorization-recovery-capacity-exhausted".into());
+    }
+    Ok(())
+}
+
 /// Delete legacy credentials after canonical authorization without making a failed cleanup secret
 /// invisible. On failure the canonical replacement and every original stale identity are persisted
 /// together so a later authorization or disconnect has durable identifiers to retry cleanup.
@@ -1037,6 +1056,7 @@ pub fn finish_authorization(
     };
     validate_connection(&connection)?;
     let original = load_connections(connection_document_path)?;
+    ensure_reauthorization_cleanup_capacity(&original, root, &connection)?;
     let mut updated = original.clone();
     updated.retain(|entry| !connection_matches_root(entry, root));
     updated.push(connection.clone());
