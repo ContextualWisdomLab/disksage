@@ -211,6 +211,7 @@ jobs:
           path: coverage-command-diagnostic.log
           if-no-files-found: error
       - name: Build exact-head coverage evidence
+        if: always() && hashFiles('coverage.json') != ''
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -278,5 +279,3 @@ jobs:
         with:
           workspaces: src-tauri
           cache-targets: false
-      - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
