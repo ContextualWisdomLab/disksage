@@ -6,14 +6,13 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::dev_artifacts::{
-    clean_artifact_exact, inspect_artifact, DevArtifact, DevArtifactCleanResult,
+    clean_artifact_exact, inspect_artifact_with_budget, DevArtifact, DevArtifactCleanResult,
 };
 use crate::git_worktree::GitWorktreeActiveUseEvidence;
 
-// The shared development-artifact inspector has its own three-second manifest ceiling. Keep the
-// enclosing temp-root budget above that ceiling, then pass only the remaining wall-clock budget to
-// the potentially blocking active-handle probe so one candidate cannot turn this bounded planner
-// into a 30-second operation.
+// Metadata manifests and active-handle probes share one enclosing wall-clock budget. Passing the
+// remaining budget into both boundaries prevents a candidate that begins near the deadline from
+// silently restarting an independent three- or thirty-second operation.
 const DISCOVERY_BUDGET: Duration = Duration::from_millis(3_500);
 const MAX_DISCOVERY_ENTRIES: usize = 4_096;
 const MAX_CANDIDATES: usize = 64;
@@ -219,7 +218,15 @@ where
                 unavailable += 1;
                 continue;
             }
-            let Some(artifact) = inspect_artifact(&path, observed_at_ms) else {
+            let Some(manifest_timeout_ms) = remaining_discovery_timeout_ms(started) else {
+                complete = false;
+                break 'outer;
+            };
+            let Some(artifact) = inspect_artifact_with_budget(
+                &path,
+                observed_at_ms,
+                Duration::from_millis(manifest_timeout_ms),
+            ) else {
                 unavailable += 1;
                 continue;
             };
