@@ -13,6 +13,7 @@ on:
       - "docs/doctoring/model-artifact-integrity.md"
       - "docs/doctoring/model-load-handle-binding.md"
       - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/development/coverage-evidence.md"
       - "docs/architecture/goals/cloud-offload-goal.json"
       - "CHANGELOG.md"
   pull_request:
@@ -26,6 +27,7 @@ on:
       - "docs/doctoring/model-artifact-integrity.md"
       - "docs/doctoring/model-load-handle-binding.md"
       - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/development/coverage-evidence.md"
       - "docs/architecture/goals/cloud-offload-goal.json"
       - "CHANGELOG.md"
 
