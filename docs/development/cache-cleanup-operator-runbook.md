@@ -39,9 +39,11 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml \
   > /ABSOLUTE/cache-trash-preview.json
 ```
 
-The `proven_cache_trash` array is review evidence. It may include a known cache name, structural
-signature, bounded symlink-free tree, byte count, modification time, and filesystem object
-identity. Those facts are not sufficient by themselves to authorize an irreversible mutation.
+The current `proven_cache_trash` array is review evidence with exactly the candidate's `name`,
+`path`, logical `bytes`, and recognized structural `signature`. The bounded scanner rejects
+symlinks while deriving that evidence, but the preview payload does not currently publish
+modification time, filesystem object identity, or a full descendant fingerprint. The preview is
+therefore inspection evidence only and cannot authorize an irreversible mutation.
 
 ## Permanent purge is not an operator-supported capability
 
