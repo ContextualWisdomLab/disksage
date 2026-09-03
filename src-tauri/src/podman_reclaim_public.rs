@@ -464,11 +464,10 @@ pub fn plan_empty_dangling_volumes(
         schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
         ontology_class: "https://disksage.app/ontology#ContainerVolume",
         candidate_count: candidates.len(),
-        exact_approval_phrase: (!candidates.is_empty())
-            .then(|| format!("DiskSage Podman empty dangling volume prune 승인 {fingerprint}")),
         candidate_set_sha256: fingerprint,
+        exact_approval_phrase: None,
         evidence_complete: true,
-        issues: Vec::new(),
+        issues: vec!["podman-empty-volume-atomic-removal-unavailable".into()],
     })
 }
 
@@ -481,39 +480,11 @@ pub fn prune_empty_dangling_volumes(
     if rationale.trim().is_empty() || rationale != rationale.trim() {
         return Err("podman-volume-prune-rationale-invalid".into());
     }
-    let approved = empty_dangling_volumes(podman_bin, requested_machine)?;
-    let fingerprint = volume_set_sha256(&approved);
-    let expected = format!("DiskSage Podman empty dangling volume prune 승인 {fingerprint}");
-    if approved.is_empty() || confirmation_phrase != expected {
-        return Err("podman-volume-prune-confirmation-mismatch".into());
+    if !valid_machine_name(requested_machine) {
+        return Err("unsafe-requested-machine-name".into());
     }
-    let revalidated = empty_dangling_volumes(podman_bin, requested_machine)?;
-    if revalidated != approved || volume_set_sha256(&revalidated) != fingerprint {
-        return Err("podman-volume-prune-candidate-set-changed".into());
-    }
-    let mut args = vec![
-        "--connection".to_string(),
-        requested_machine.to_string(),
-        "volume".to_string(),
-        "rm".to_string(),
-    ];
-    args.extend(revalidated.iter().map(|volume| volume.name.clone()));
-    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = run_bounded(
-        podman_bin,
-        &refs,
-        PODMAN_PRUNE_TIMEOUT,
-        "podman-remove-approved-empty-volumes",
-    )?;
-    Ok(PodmanEmptyVolumeExecution {
-        schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
-        ontology_class: "https://disksage.app/ontology#ContainerVolume",
-        candidate_count: revalidated.len(),
-        candidate_set_sha256: fingerprint,
-        executed: output.status_code == 0,
-        status_code: output.status_code,
-        rationale: rationale.to_string(),
-    })
+    let _ = (podman_bin, confirmation_phrase);
+    Err("podman-empty-volume-atomic-removal-unavailable".into())
 }
 
 fn dangling_candidates(candidates: &[ExactCandidate]) -> Vec<&ExactCandidate> {
