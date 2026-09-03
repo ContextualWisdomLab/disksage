@@ -35,6 +35,22 @@ fn unicode_google_root(decomposed: bool) -> CloudRoot {
     }
 }
 
+fn unrelated_google_root(index: usize) -> CloudRoot {
+    #[cfg(windows)]
+    let path = format!(r"C:\Cloud\unrelated-{index}");
+    #[cfg(not(windows))]
+    let path = format!("/Cloud/unrelated-{index}");
+    CloudRoot {
+        id: path.clone(),
+        provider: CloudProvider::GoogleDrive,
+        account_scope: crate::cloud::CloudAccountScope::Unknown,
+        label: format!("Google Drive {index}"),
+        path,
+        readable: true,
+        access_issue: None,
+    }
+}
+
 fn google_connection(
     root: &CloudRoot,
     connection_id: String,
@@ -168,4 +184,48 @@ fn failed_retry_visibility_publication_is_reported_separately() {
         document.is_dir(),
         "recovery publication must fail closed rather than mutate a non-regular authority path"
     );
+}
+
+#[test]
+fn legacy_only_migration_reserves_capacity_for_retry_visible_recovery() {
+    let saved_root = unicode_google_root(true);
+    let requested_root = unicode_google_root(false);
+    let legacy = google_connection(&saved_root, legacy_connection_id(&saved_root), 100);
+    let canonical = google_connection(&requested_root, connection_id(&requested_root), 200);
+    let mut full_without_canonical = vec![legacy];
+    for index in 0..(MAX_CONNECTIONS - 1) {
+        let unrelated = unrelated_google_root(index);
+        full_without_canonical.push(google_connection(
+            &unrelated,
+            connection_id(&unrelated),
+            1_000 + index as u64,
+        ));
+    }
+    assert_eq!(full_without_canonical.len(), MAX_CONNECTIONS);
+
+    assert_eq!(
+        ensure_reauthorization_cleanup_capacity(
+            &full_without_canonical,
+            &requested_root,
+            &canonical,
+        )
+        .unwrap_err(),
+        "provider-oauth-reauthorization-recovery-capacity-exhausted"
+    );
+
+    let mut with_room = full_without_canonical.clone();
+    with_room.pop();
+    assert!(
+        ensure_reauthorization_cleanup_capacity(&with_room, &requested_root, &canonical).is_ok()
+    );
+
+    let mut full_with_canonical = with_room;
+    full_with_canonical.push(canonical.clone());
+    assert_eq!(full_with_canonical.len(), MAX_CONNECTIONS);
+    assert!(ensure_reauthorization_cleanup_capacity(
+        &full_with_canonical,
+        &requested_root,
+        &canonical,
+    )
+    .is_ok());
 }
