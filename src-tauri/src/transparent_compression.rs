@@ -523,6 +523,22 @@ mod tests {
     }
 
     #[test]
+    fn post_commit_verification_failure_preserves_mutation_receipt() {
+        let candidates = vec![candidate("/tmp/committed.jsonl", 100)];
+        let progress = summarize_compression_results(
+            &candidates,
+            vec![Err("compression-post-commit-identity-mismatch".into())],
+        );
+        assert_eq!(progress.compressed_count, 1);
+        assert_eq!(progress.failed_count, 1);
+        assert_eq!(progress.allocated_bytes_after_upper_bound, 100);
+        assert_eq!(
+            progress.failures,
+            vec!["compression-post-commit-identity-mismatch"]
+        );
+    }
+
+    #[test]
     fn activity_probe_fails_closed_on_lsof_errors() {
         assert!(activity_probe_proves_inactive(Some(1), false, false, false));
         assert!(!activity_probe_proves_inactive(Some(0), false, false, false));
