@@ -694,6 +694,9 @@ fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
     if request.len() >= MAX_CALLBACK_REQUEST_BYTES {
         return Err("oauth-callback-request-too-large".into());
     }
+    if !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        return Err("oauth-callback-request-invalid".into());
+    }
     let request = std::str::from_utf8(&request).map_err(|_| "oauth-callback-request-invalid")?;
     let first_line = request
         .split("\r\n")
