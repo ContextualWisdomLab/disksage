@@ -160,7 +160,7 @@
     </div>
   {/if}
 
-  {#if top.length > 0}
+  {#if node}
     <TopFiles files={top} />
   {/if}
 
