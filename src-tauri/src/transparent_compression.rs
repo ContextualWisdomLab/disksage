@@ -12,6 +12,7 @@ use std::thread;
 const MAX_FILES: usize = 10_000;
 const MIN_BYTES: u64 = 100 * 1024 * 1024;
 const COMPRESSION_CONCURRENCY: usize = 4;
+const POST_COMMIT_FAILURE_PREFIX: &str = "compression-post-commit-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TransparentCompressionCandidate {
@@ -330,11 +331,18 @@ fn compress_one(candidate: &TransparentCompressionCandidate) -> Result<(u64, boo
             return Err("compression-file-changed-before-commit".into());
         }
         fs::rename(&temporary, path).map_err(|_| "compression-atomic-replace-failed")?;
-        File::open(path.parent().ok_or("compression-parent-unavailable")?)
+        let parent = path
+            .parent()
+            .ok_or("compression-post-commit-parent-unavailable")?;
+        File::open(parent)
             .and_then(|directory| directory.sync_all())
-            .map_err(|_| "compression-parent-sync-failed")?;
-        let after = observation(path)?.allocated_bytes;
-        if digest(path)? != before {
+            .map_err(|_| "compression-post-commit-parent-sync-failed")?;
+        let after = observation(path)
+            .map_err(|_| "compression-post-commit-observation-failed")?
+            .allocated_bytes;
+        let after_digest = digest(path)
+            .map_err(|_| "compression-post-commit-content-read-failed")?;
+        if after_digest != before {
             return Err("compression-post-commit-identity-mismatch".into());
         }
         Ok((after, true))
@@ -415,6 +423,11 @@ fn summarize_compression_results(
                 progress.allocated_bytes_after_upper_bound = progress
                     .allocated_bytes_after_upper_bound
                     .saturating_add(candidate.allocated_bytes);
+                if error.starts_with(POST_COMMIT_FAILURE_PREFIX) {
+                    // The atomic rename already committed the verified compressed temporary file.
+                    // Post-commit verification may fail, but the receipt must not deny mutation.
+                    progress.compressed_count = progress.compressed_count.saturating_add(1);
+                }
                 progress.stopped_reason.get_or_insert_with(|| error.clone());
                 progress.failures.push(error.clone());
             }
