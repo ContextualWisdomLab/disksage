@@ -975,6 +975,41 @@ fn delete_refresh_token(connection_id: &str) -> Result<(), String> {
     }
 }
 
+/// Delete legacy credentials after canonical authorization without making a failed cleanup secret
+/// invisible. On failure the canonical replacement and every original stale identity are persisted
+/// together so a later authorization or disconnect has durable identifiers to retry cleanup.
+fn cleanup_stale_authorization_credentials<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    original: &[OAuthConnection],
+    connection: &OAuthConnection,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
+    let stale_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| {
+            entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
+        })
+        .map(|entry| entry.connection_id.clone())
+        .collect();
+    for stale_id in stale_ids {
+        if let Err(error) = delete_token(&stale_id) {
+            let mut retry_visible = original.to_vec();
+            retry_visible.retain(|entry| entry.connection_id != connection.connection_id);
+            retry_visible.push(connection.clone());
+            retry_visible.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
+            if save_connections(connection_document_path, &retry_visible).is_err() {
+                return Err("provider-oauth-keyring-delete-and-config-recovery-failed".into());
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(coverage))]
 pub fn finish_authorization(
     pending: PendingOAuth,
@@ -1013,11 +1048,13 @@ pub fn finish_authorization(
         }
         return Err(error);
     }
-    for stale in original.iter().filter(|entry| {
-        entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
-    }) {
-        let _ = delete_refresh_token(&stale.connection_id);
-    }
+    cleanup_stale_authorization_credentials(
+        connection_document_path,
+        root,
+        &original,
+        &connection,
+        delete_refresh_token,
+    )?;
     Ok(connection)
 }
 
