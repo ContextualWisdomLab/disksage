@@ -89,10 +89,14 @@ describe('Test workflow coverage evidence contract', () => {
     expect(diagnosticHelper).toContain('edge_bytes=9000');
     expect(diagnosticHelper).toContain('head -c "$edge_bytes" "$line_bounded_log"');
     expect(diagnosticHelper).toContain('tail -c "$edge_bytes" "$line_bounded_log"');
+    expect(diagnosticHelper).toContain('--- bounded diagnostic tail ---');
     expect(workflow).toContain("replaceAll(workspace, '<repo>')");
     expect(workflow).toContain("replaceAll(home, '<home>')");
     expect(workflow).toContain(
       "if: failure() && steps.rust-coverage.outcome == 'failure'",
+    );
+    expect(workflow).toContain(
+      'name: coverage-command-diagnostic-${{ env.HEAD_SHA }}',
     );
   });
 
@@ -113,11 +117,17 @@ describe('Test workflow coverage evidence contract', () => {
       "printf '%s\\n' 'coverage diagnostic rendering failed; raw diagnostic withheld' > coverage-command-diagnostic.log",
     );
     expect(measureStep).toContain('exit "$coverage_status"');
+    expect(measureStep.indexOf('set -e')).toBeGreaterThan(
+      measureStep.indexOf('redaction_status=$?'),
+    );
   });
 
   it('identifies the largest exact-head Rust coverage gaps without leaking runner paths', () => {
     expect(workflow).toContain('top_uncovered_files');
     expect(workflow).toContain("const marker = '/src-tauri/'");
+    expect(workflow).toContain(
+      'return markerIndex < 0 ? null : `src-tauri/${normalized.slice(markerIndex + marker.length)}`;',
+    );
     expect(workflow).toContain('uncovered_regions');
     expect(workflow).toContain('uncovered_branches');
     expect(workflow).toContain('uncovered_functions');
@@ -132,12 +142,28 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('.slice(0, 40)');
   });
 
+  it('surfaces the same bounded Rust diagnostic in logs and the GitHub step summary', () => {
+    expect(workflow).toContain(
+      'console.error(`coverage-diagnostic=${JSON.stringify(diagnostic)}`)',
+    );
+    expect(workflow).toContain('process.env.GITHUB_STEP_SUMMARY');
+    expect(workflow).toContain('Coverage diagnostic for \\`${sha}\\`');
+  });
+
   it('preserves bounded frontend diagnostics when the all-production threshold fails', () => {
     expect(workflow).toContain('name: Build bounded frontend coverage diagnostic');
     expect(workflow).toContain("readFileSync('coverage/coverage-final.json', 'utf8')");
     expect(workflow).toContain("readFileSync('coverage/coverage-summary.json', 'utf8')");
     expect(workflow).toContain('frontend_top_uncovered_files');
+    expect(workflow).toContain('frontend_uncovered_line_numbers');
     expect(workflow).toContain('frontend-coverage-diagnostic.json');
+    expect(workflow).toContain(
+      'name: frontend-coverage-diagnostic-${{ env.HEAD_SHA }}',
+    );
+    expect(workflow).toContain('path: frontend-coverage-diagnostic.json');
+    expect(workflow).toContain(
+      "if: failure() && steps.frontend-coverage.outcome == 'failure'",
+    );
   });
 
   it('uploads fail-closed evidence under the organization contract name', () => {
