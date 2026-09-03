@@ -829,7 +829,7 @@ fn parse_token_document(
             .expect("provider scope is non-empty");
         if !scope
             .split_whitespace()
-            .any(|granted| granted.eq_ignore_ascii_case(required_resource_scope))
+            .any(|granted| granted == required_resource_scope)
         {
             return Err("oauth-required-scope-missing".into());
         }
