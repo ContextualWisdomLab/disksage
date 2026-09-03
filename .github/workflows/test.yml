@@ -228,11 +228,35 @@ jobs:
             const markerIndex = normalized.lastIndexOf(marker);
             return markerIndex < 0 ? null : `src-tauri/${normalized.slice(markerIndex + marker.length)}`;
           };
+          const uncoveredLineNumbers = (segments) => {
+            const lines = new Set();
+            for (const segment of Array.isArray(segments) ? segments : []) {
+              if (
+                Array.isArray(segment) &&
+                Number.isSafeInteger(segment[0]) &&
+                segment[0] > 0 &&
+                segment[2] === 0 &&
+                segment[3] === true &&
+                segment[4] === true &&
+                segment[5] !== true
+              ) {
+                lines.add(segment[0]);
+              }
+            }
+            return [...lines].sort((a, b) => a - b).slice(0, 40);
+          };
           const top_uncovered_files = (coverageData?.files ?? [])
             .map((file) => {
               const path = repositoryPath(file?.filename);
               if (!path) return null;
-              return { path, uncovered_regions: gap(file?.summary?.regions), uncovered_branches: gap(file?.summary?.branches), uncovered_functions: gap(file?.summary?.functions), uncovered_lines: gap(file?.summary?.lines) };
+              return {
+                path,
+                uncovered_regions: gap(file?.summary?.regions),
+                uncovered_branches: gap(file?.summary?.branches),
+                uncovered_functions: gap(file?.summary?.functions),
+                uncovered_lines: gap(file?.summary?.lines),
+                uncovered_line_numbers: uncoveredLineNumbers(file?.segments),
+              };
             })
             .filter((entry) => entry && (entry.uncovered_regions || entry.uncovered_branches || entry.uncovered_functions || entry.uncovered_lines))
             .sort((a, b) => (b.uncovered_regions + b.uncovered_branches + b.uncovered_functions + b.uncovered_lines) - (a.uncovered_regions + a.uncovered_branches + a.uncovered_functions + a.uncovered_lines) || a.path.localeCompare(b.path))
