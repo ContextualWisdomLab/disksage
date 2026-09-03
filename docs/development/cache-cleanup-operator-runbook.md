@@ -50,10 +50,13 @@ implementation has known replacement-race, descendant-identity, approval-freshne
 post-delete receipt-reconciliation gaps. Its presence in a checkout does **not** make it a supported
 DiskSage operation.
 
-Do not run `--execute --purge-proven-cache-trash` from a revision that still exposes the legacy
-implementation. The canonical cache-safety repair owns the fail-closed implementation and must
-reach protected authority with its exact-head tests/reviews before operator documentation can
-present irreversible deletion as safely unavailable in source, much less re-enable it.
+On the canonical fail-closed cache-safety lineage, supplying `--execute` together with
+`--purge-proven-cache-trash` is rejected with
+`cache-trash-identity-bound-permanent-delete-unavailable` before journal or filesystem mutation.
+Do not run that combination from a revision that still exposes a legacy irreversible implementation.
+The canonical cache-safety repair must reach protected authority with its exact-head tests/reviews
+before operator documentation can treat the fail-closed source behavior as shipped truth, much less
+re-enable irreversible deletion.
 
 A future irreversible implementation requires all of the following before it can become supported:
 
