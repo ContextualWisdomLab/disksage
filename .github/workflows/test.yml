@@ -29,6 +29,10 @@ on:
       - "docs/architecture/goals/cloud-offload-goal.json"
       - "CHANGELOG.md"
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
 permissions:
   contents: read
 
