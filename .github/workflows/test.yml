@@ -59,11 +59,15 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
         run: |
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit
           cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
+      - name: Reclaim Rust test build space before archive proofs
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml
+          df -h .
       - name: Extraction-free archive tree proof tests
         run: |
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --features archive-cli archive_git_tree
           cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
           cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
