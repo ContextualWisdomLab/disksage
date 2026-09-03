@@ -12,4 +12,14 @@ const exactHeadEvidence: PullRequestEvidence = {
   association_method: "exact-head",
 };
 
+// Rust intentionally keeps the upstream PR state as an opaque String. The
+// TypeScript boundary must therefore remain forward-compatible with a future
+// GitHub state instead of narrowing the wire contract to today's literals.
+const forwardCompatibleEvidence: PullRequestEvidence = {
+  ...exactHeadEvidence,
+  state: "FUTURE_STATE",
+  association_method: "commit-associated",
+};
+
 void exactHeadEvidence;
+void forwardCompatibleEvidence;
