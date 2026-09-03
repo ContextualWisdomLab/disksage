@@ -17,6 +17,11 @@ fn bind_current_object(
         return Err("ontology-protection-target-changed".into());
     }
     before_bind();
+    let pre_bind_object_id = filesystem_object_id(path)
+        .map_err(|_| "ontology-protection-target-changed".to_string())?;
+    if pre_bind_object_id != object_id {
+        return Err("ontology-protection-target-changed".into());
+    }
     bind_retained_ontology_class(path, class_id)?;
     let bound_object_id = filesystem_object_id(path)
         .map_err(|_| "ontology-protection-target-changed".to_string())?;
