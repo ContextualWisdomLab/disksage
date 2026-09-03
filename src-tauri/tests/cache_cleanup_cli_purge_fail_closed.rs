@@ -134,3 +134,47 @@ fn shipped_cli_rejects_duplicate_authority_singletons_before_side_effects() {
     assert!(!journal_a.exists());
     assert!(!journal_b.exists());
 }
+
+#[test]
+fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
+    let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri must live directly under the repository root");
+    let runbook = std::fs::read_to_string(
+        repository_root.join("docs/development/cache-cleanup-operator-runbook.md"),
+    )
+    .unwrap();
+    let legacy_adr = std::fs::read_to_string(
+        repository_root.join(
+            "docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md",
+        ),
+    )
+    .unwrap();
+    let adr_index = std::fs::read_to_string(repository_root.join("docs/architecture/adr/README.md"))
+        .unwrap();
+    let current_adr = std::fs::read_to_string(repository_root.join(
+        "docs/architecture/adr/0012-cache-trash-permanent-delete-fails-closed.md",
+    ))
+    .unwrap();
+
+    assert!(runbook.contains(
+        "cache-trash-identity-bound-permanent-delete-unavailable"
+    ));
+    assert!(runbook.contains("empty the native Trash manually"));
+    assert!(!runbook.contains("permanently removes only"));
+
+    assert!(legacy_adr.contains("**Status:** Superseded by ADR-0012"));
+    assert!(adr_index.contains(
+        "0012-cache-trash-permanent-delete-fails-closed.md"
+    ));
+    assert!(adr_index.contains("Cache Trash permanent deletion fails closed"));
+    assert!(adr_index.contains("Proposed"));
+
+    assert!(current_adr.contains("**Status:** Proposed"));
+    assert!(current_adr.contains(
+        "cache-trash-identity-bound-permanent-delete-unavailable"
+    ));
+    assert!(current_adr.contains("before journal or filesystem mutation"));
+    assert!(!current_adr.contains("permanently removes only"));
+    assert!(!current_adr.contains("may permanently remove only"));
+}
