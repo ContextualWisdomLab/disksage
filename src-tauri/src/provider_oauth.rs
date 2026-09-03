@@ -456,10 +456,6 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
         let _ = std::fs::remove_file(&temporary);
         return Err("oauth-connection-document-write-failed".into());
     }
-    #[cfg(windows)]
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|_| "oauth-connection-document-replace-failed")?;
-    }
     if std::fs::rename(&temporary, path).is_err() {
         let _ = std::fs::remove_file(&temporary);
         return Err("oauth-connection-document-replace-failed".into());
