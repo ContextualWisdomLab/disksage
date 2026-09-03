@@ -852,11 +852,12 @@ export interface StaleGitWorktreeRemovalOutput {
 
 export interface PullRequestEvidence {
   number: number;
-  state: "OPEN" | "CLOSED" | "MERGED";
+  state: string;
   headRefName: string;
   headRefOid: string;
   createdAtMs: number;
   url: string;
+  association_method: "exact-head" | "commit-associated";
 }
 
 export interface StaleGitClonePlan {
