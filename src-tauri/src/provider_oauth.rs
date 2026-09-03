@@ -47,6 +47,7 @@ const GOOGLE_READ_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.
 const GOOGLE_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuthConnection {
     pub connection_id: String,
     pub provider: CloudProvider,
@@ -58,6 +59,7 @@ pub struct OAuthConnection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConnectionDocument {
     version: u32,
     connections: Vec<OAuthConnection>,
