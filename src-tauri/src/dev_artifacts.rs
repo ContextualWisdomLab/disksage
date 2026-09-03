@@ -73,12 +73,12 @@ struct ArtifactManifest {
     object_id: String,
 }
 
-/// Build a bounded, deterministic metadata-only manifest for one generated directory.
+/// Build a deterministic metadata-only manifest within a caller-supplied wall-clock budget.
 ///
-/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
-/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
-/// unusually large trees instead of blocking the UI indefinitely.
-fn artifact_manifest(root: &Path) -> ArtifactManifest {
+/// The budget is deliberately supplied by the owning operation so a higher-level discovery
+/// deadline cannot be extended by starting a fresh three-second manifest for every candidate.
+/// Exhaustion fails the manifest closed and therefore cannot create deletion authority.
+fn artifact_manifest_with_budget(root: &Path, budget: Duration) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
@@ -88,14 +88,14 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         manifest.scan_complete = false;
     }
     manifest.object_id = root_object_id.unwrap_or_default();
-    let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let started = Instant::now();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
 
     for entry in walker {
-        if Instant::now() >= deadline || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
+        if started.elapsed() >= budget || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
             manifest.scan_complete = false;
             break;
         }
@@ -166,11 +166,21 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     manifest
 }
 
-/// Inspect one explicitly selected generated directory without walking its surrounding project.
+/// Build a bounded manifest for ordinary development-artifact scans.
+fn artifact_manifest(root: &Path) -> ArtifactManifest {
+    artifact_manifest_with_budget(root, ARTIFACT_MANIFEST_BUDGET)
+}
+
+/// Inspect one explicitly selected generated directory using a caller-owned manifest budget.
 ///
-/// The caller is responsible for bounding candidate discovery. This helper retains the existing
-/// marker, identity, and metadata-manifest contract used by normal development-artifact cleanup.
-pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
+/// Higher-level operations with a stricter global deadline must pass only their remaining budget.
+/// A zero or exhausted budget still recognizes the artifact identity but returns an incomplete
+/// manifest, preserving fail-closed cleanup semantics.
+pub fn inspect_artifact_with_budget(
+    path: &Path,
+    now_ms: u64,
+    manifest_budget: Duration,
+) -> Option<DevArtifact> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let (kind, markers) = artifact_kind(&name)?;
     let parent = path.parent()?;
@@ -182,7 +192,7 @@ pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
     {
         return None;
     }
-    let manifest = artifact_manifest(path);
+    let manifest = artifact_manifest_with_budget(path, manifest_budget);
     Some(DevArtifact {
         path: path.to_string_lossy().into_owned(),
         kind: kind.to_string(),
@@ -195,6 +205,14 @@ pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
         object_id: manifest.object_id,
         age_days: age_days(path, now_ms),
     })
+}
+
+/// Inspect one explicitly selected generated directory without walking its surrounding project.
+///
+/// Ordinary development-artifact callers retain the established three-second manifest ceiling.
+/// Operations with a tighter enclosing deadline must use [`inspect_artifact_with_budget`].
+pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
+    inspect_artifact_with_budget(path, now_ms, ARTIFACT_MANIFEST_BUDGET)
 }
 
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
