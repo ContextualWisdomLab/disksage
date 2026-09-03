@@ -215,6 +215,11 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
         .append(true)
         .open(journal_path)
         .map_err(journal_io_err)?;
+    // The desktop process and audited CLIs intentionally share the same journal. Serialize the
+    // read-tail/heal/append sequence across processes as well as threads so two writers cannot
+    // inspect the same torn tail or interleave recovery evidence. fs4 uses flock on Unix and
+    // LockFileEx on Windows; the lock is advisory, so every DiskSage writer goes through here.
+    fs4::FileExt::lock(&f).map_err(journal_io_err)?;
     // 크래시로 개행 없이 끊긴 꼬리가 있으면 개행을 먼저 넣어 다음 엔트리와의 병합을 막는다 (자가 치유)
     let mut healing = String::new();
     let len = f.seek(SeekFrom::End(0)).map_err(journal_io_err)?;
