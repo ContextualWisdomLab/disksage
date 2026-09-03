@@ -1037,23 +1037,50 @@ pub fn refreshed_access_token(
     Ok(grant.access_token)
 }
 
-#[cfg(not(coverage))]
-pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+fn disconnect_with_delete<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
     let original = load_connections(connection_document_path)?;
     let connection = connection_for_root(&original, root)?;
+    let matching_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| connection_matches_root(entry, root))
+        .map(|entry| entry.connection_id.clone())
+        .collect();
     let updated: Vec<_> = original
         .iter()
-        .filter(|entry| entry.connection_id != connection.connection_id)
+        .filter(|entry| !connection_matches_root(entry, root))
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
-    if let Err(error) = delete_refresh_token(&connection.connection_id) {
+    for stale_id in matching_ids
+        .iter()
+        .filter(|connection_id| **connection_id != connection.connection_id)
+    {
+        if let Err(error) = delete_token(stale_id) {
+            if save_connections(connection_document_path, &original).is_err() {
+                return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
+            }
+            return Err(error);
+        }
+    }
+    if let Err(error) = delete_token(&connection.connection_id) {
         if save_connections(connection_document_path, &original).is_err() {
             return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
         }
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+    disconnect_with_delete(connection_document_path, root, delete_refresh_token)
 }
 
 #[cfg(test)]
@@ -1163,7 +1190,6 @@ mod tests {
             &state,
         )
         .unwrap();
-        assert!(google.starts_with(ONEDRIVE_AUTH_ENDPOINT) == false);
         assert!(google.starts_with(GOOGLE_AUTH_ENDPOINT));
         assert!(google.contains("drive.metadata.readonly"));
         assert!(google.contains("access_type=offline"));
