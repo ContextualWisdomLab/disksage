@@ -1,6 +1,6 @@
 # ADR-0002: Cache cleanup is per-item active-use evidence bound
 
-**Status:** Superseded by ADR-0012  
+**Status:** Superseded by ADR-0012
 **Date:** 2026-08-20
 
 ## Supersession scope
