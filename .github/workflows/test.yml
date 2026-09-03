@@ -6,7 +6,6 @@ on:
     paths-ignore:
       - "docs/**"
       - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
       - "!docs/doctoring/release-artifact-provenance.md"
       - "!docs/doctoring/tauri-content-security-policy.md"
       - "!docs/doctoring/model-artifact-integrity.md"
@@ -18,7 +17,6 @@ on:
     paths-ignore:
       - "docs/**"
       - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
       - "!docs/doctoring/release-artifact-provenance.md"
       - "!docs/doctoring/tauri-content-security-policy.md"
       - "!docs/doctoring/model-artifact-integrity.md"
@@ -33,38 +31,103 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev lsof
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           cache-targets: false
       - name: Rust tests (includes unix symlink test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
       - name: Extraction-free archive tree proof tests
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20.19.0
       - run: npm ci
       - run: npm test
+      - name: Frontend production coverage
+        id: frontend-coverage
+        run: npm run coverage
+      - name: Build bounded frontend coverage diagnostic
+        if: failure() && steps.frontend-coverage.outcome == 'failure'
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+          const sha = process.env.HEAD_SHA ?? '';
+          const repository = process.env.GITHUB_REPOSITORY ?? '';
+          if (!/^[0-9a-f]{40}$/.test(sha) || repository.length === 0) {
+            throw new Error('frontend coverage diagnostic identity is invalid');
+          }
+          const finalCoverage = JSON.parse(readFileSync('coverage/coverage-final.json', 'utf8'));
+          const summaryCoverage = JSON.parse(readFileSync('coverage/coverage-summary.json', 'utf8'));
+          const frontendMarker = '/src/';
+          const frontendRepositoryPath = (filename) => {
+            const normalized = String(filename ?? '').replaceAll('\\', '/');
+            if (normalized.startsWith('src/')) return normalized;
+            const markerIndex = normalized.lastIndexOf(frontendMarker);
+            return markerIndex < 0 ? null : `src/${normalized.slice(markerIndex + frontendMarker.length)}`;
+          };
+          const uncoveredCount = (values) => values.filter((value) => value === 0).length;
+          const frontend_uncovered_line_numbers = (file) => {
+            const lines = new Set();
+            for (const [statementId, count] of Object.entries(file?.s ?? {})) {
+              if (count !== 0) continue;
+              const line = file?.statementMap?.[statementId]?.start?.line;
+              if (Number.isSafeInteger(line) && line > 0) lines.add(line);
+            }
+            return [...lines].sort((a, b) => a - b).slice(0, 40);
+          };
+          const frontend_top_uncovered_files = Object.entries(finalCoverage)
+            .map(([filename, file]) => {
+              const path = frontendRepositoryPath(filename);
+              if (!path || !file || typeof file !== 'object') return null;
+              const branches = Object.values(file.b ?? {}).flatMap((value) => Array.isArray(value) ? value : []);
+              return {
+                path,
+                uncovered_statements: uncoveredCount(Object.values(file.s ?? {})),
+                uncovered_branches: uncoveredCount(branches),
+                uncovered_functions: uncoveredCount(Object.values(file.f ?? {})),
+                uncovered_line_numbers: frontend_uncovered_line_numbers(file),
+              };
+            })
+            .filter((entry) => entry && (entry.uncovered_statements || entry.uncovered_branches || entry.uncovered_functions || entry.uncovered_line_numbers.length))
+            .sort((a, b) => (b.uncovered_statements + b.uncovered_branches + b.uncovered_functions + b.uncovered_line_numbers.length) - (a.uncovered_statements + a.uncovered_branches + a.uncovered_functions + a.uncovered_line_numbers.length) || a.path.localeCompare(b.path))
+            .slice(0, 20);
+          const diagnostic = { schema_version: 1, head_sha: sha, repository, totals: summaryCoverage?.total ?? null, frontend_top_uncovered_files };
+          writeFileSync('frontend-coverage-diagnostic.json', `${JSON.stringify(diagnostic, null, 2)}\n`);
+          console.error(`frontend-coverage-diagnostic=${JSON.stringify(diagnostic)}`);
+          if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Frontend coverage diagnostic for \`${sha}\`\n\n\`\`\`json\n${JSON.stringify(diagnostic, null, 2)}\n\`\`\`\n`);
+          NODE
+      - name: Upload bounded frontend coverage diagnostic
+        if: failure() && steps.frontend-coverage.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-coverage-diagnostic-${{ env.HEAD_SHA }}
+          path: frontend-coverage-diagnostic.json
+          if-no-files-found: error
+      - run: npm run check
       - run: npm run build
 
   windows-home-resolution:
@@ -74,6 +137,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Windows absolute-home regression
         shell: pwsh
@@ -82,6 +146,117 @@ jobs:
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
 
+  coverage-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUST_TEST_THREADS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev lsof
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: nightly-2026-08-07
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - name: Measure exact-head Rust coverage
+        id: rust-coverage
+        run: |
+          set +e
+          cargo llvm-cov --locked --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json >coverage-command.raw.log 2>&1
+          coverage_status=$?
+          bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log
+          diagnostic_status=$?
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          let diagnostic = readFileSync('coverage-command.bounded.log', 'utf8');
+          const workspace = process.env.GITHUB_WORKSPACE ?? '';
+          const home = process.env.HOME ?? '';
+          const runnerTemp = process.env.RUNNER_TEMP ?? '';
+          if (workspace) diagnostic = diagnostic.replaceAll(workspace, '<repo>');
+          if (home) diagnostic = diagnostic.replaceAll(home, '<home>');
+          if (runnerTemp) diagnostic = diagnostic.replaceAll(runnerTemp, '<runner-temp>');
+          writeFileSync('coverage-command-diagnostic.log', diagnostic);
+          NODE
+          redaction_status=$?
+          rm -f coverage-command.raw.log coverage-command.bounded.log
+          set -e
+          if [ "$diagnostic_status" -ne 0 ] || [ "$redaction_status" -ne 0 ]; then
+            printf '%s\n' 'coverage diagnostic rendering failed; raw diagnostic withheld' > coverage-command-diagnostic.log
+            echo "::warning::coverage diagnostic rendering failed; preserving authoritative coverage exit status" >&2
+          fi
+          exit "$coverage_status"
+      - name: Upload bounded coverage command diagnostic
+        if: failure() && steps.rust-coverage.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-command-diagnostic-${{ env.HEAD_SHA }}
+          path: coverage-command-diagnostic.log
+          if-no-files-found: error
+      - name: Build exact-head coverage evidence
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+          const sha = process.env.HEAD_SHA ?? '';
+          const repository = process.env.GITHUB_REPOSITORY ?? '';
+          if (!/^[0-9a-f]{40}$/.test(sha) || repository.length === 0) throw new Error('coverage evidence identity is invalid');
+          const report = JSON.parse(readFileSync('coverage.json', 'utf8'));
+          const coverageData = report?.data?.[0];
+          const totals = coverageData?.totals;
+          const gap = (value) => Number.isSafeInteger(value?.count) && Number.isSafeInteger(value?.covered) && value.count >= value.covered ? value.count - value.covered : 0;
+          const repositoryPath = (filename) => {
+            const normalized = String(filename ?? '').replaceAll('\\', '/');
+            const marker = '/src-tauri/';
+            const markerIndex = normalized.lastIndexOf(marker);
+            return markerIndex < 0 ? null : `src-tauri/${normalized.slice(markerIndex + marker.length)}`;
+          };
+          const top_uncovered_files = (coverageData?.files ?? [])
+            .map((file) => {
+              const path = repositoryPath(file?.filename);
+              if (!path) return null;
+              return { path, uncovered_regions: gap(file?.summary?.regions), uncovered_branches: gap(file?.summary?.branches), uncovered_functions: gap(file?.summary?.functions), uncovered_lines: gap(file?.summary?.lines) };
+            })
+            .filter((entry) => entry && (entry.uncovered_regions || entry.uncovered_branches || entry.uncovered_functions || entry.uncovered_lines))
+            .sort((a, b) => (b.uncovered_regions + b.uncovered_branches + b.uncovered_functions + b.uncovered_lines) - (a.uncovered_regions + a.uncovered_branches + a.uncovered_functions + a.uncovered_lines) || a.path.localeCompare(b.path))
+            .slice(0, 20);
+          const diagnostic = { schema_version: 1, head_sha: sha, repository, regions: totals?.regions ?? null, branches: totals?.branches ?? null, functions: totals?.functions ?? null, lines: totals?.lines ?? null, top_uncovered_files };
+          writeFileSync('coverage-diagnostic.json', `${JSON.stringify(diagnostic, null, 2)}\n`);
+          console.error(`coverage-diagnostic=${JSON.stringify(diagnostic)}`);
+          if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Coverage diagnostic for \`${sha}\`\n\n\`\`\`json\n${JSON.stringify(diagnostic, null, 2)}\n\`\`\`\n`);
+          const metric = (name, value) => {
+            if (!value || !Number.isFinite(value.count) || !Number.isFinite(value.covered) || !Number.isFinite(value.percent) || value.count <= 0 || value.covered !== value.count || value.percent !== 100) throw new Error(`${name} coverage is not exactly 100%`);
+            return value.percent;
+          };
+          const evidence = { schema_version: 1, head_sha: sha, commit_sha: sha, repository, trust_tier: 'ci-verified', ci_server: 'github-actions', ci_workflow: 'Test', coverage_command: 'cargo llvm-cov', statement_coverage: metric('statement/region', totals?.regions), branch_coverage: metric('branch', totals?.branches), function_coverage: metric('function', totals?.functions), line_coverage: metric('line', totals?.lines), passed: true };
+          writeFileSync('coverage-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+      - name: Upload bounded coverage diagnostic
+        if: always() && hashFiles('coverage-diagnostic.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-diagnostic-${{ env.HEAD_SHA }}
+          path: coverage-diagnostic.json
+          if-no-files-found: error
+      - name: Upload coverage evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-evidence
+          path: coverage-evidence.json
+          if-no-files-found: error
+
   llm-engine-build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -89,6 +264,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install build deps (llama.cpp native + tauri)
         run: |
           sudo apt-get update
@@ -99,4 +275,4 @@ jobs:
           workspaces: src-tauri
           cache-targets: false
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
