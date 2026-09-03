@@ -419,6 +419,15 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
         validate_connection(connection)?;
     }
     validate_unique_connection_ids(connections)?;
+    let document = ConnectionDocument {
+        version: CONNECTION_DOCUMENT_VERSION,
+        connections: connections.to_vec(),
+    };
+    let encoded = serde_json::to_vec_pretty(&document)
+        .map_err(|_| "oauth-connection-document-encode-failed")?;
+    if encoded.len() as u64 > MAX_CONNECTION_DOCUMENT_BYTES {
+        return Err("oauth-connection-document-too-large".into());
+    }
     let parent = connection_document_parent(path);
     validate_connection_document_parent(parent, true)?;
     std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
@@ -428,12 +437,6 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
             return Err("oauth-connection-document-not-regular-file".into());
         }
     }
-    let document = ConnectionDocument {
-        version: CONNECTION_DOCUMENT_VERSION,
-        connections: connections.to_vec(),
-    };
-    let encoded = serde_json::to_vec_pretty(&document)
-        .map_err(|_| "oauth-connection-document-encode-failed")?;
     let temporary = parent.join(format!(
         ".cloud-oauth-connections.{}.tmp",
         random_urlsafe(12)?
@@ -1160,6 +1163,7 @@ mod tests {
             &state,
         )
         .unwrap();
+        assert!(google.starts_with(ONEDRIVE_AUTH_ENDPOINT) == false);
         assert!(google.starts_with(GOOGLE_AUTH_ENDPOINT));
         assert!(google.contains("drive.metadata.readonly"));
         assert!(google.contains("access_type=offline"));
