@@ -3,6 +3,35 @@
 **Status:** Superseded by ADR-0012  
 **Date:** 2026-08-20
 
+## Supersession scope
+
+ADR-0012 supersedes only this record's permanent cache-Trash deletion authority. The reversible,
+per-item active-use and identity-bound cleanup decision remains historical context for the current
+cache-cleanup design. Statements below that describe `--execute --purge-proven-cache-trash` as an
+available irreversible operation are retained as decision history, not current product authority.
+The current implementation and operator contract fail that path closed until ADR-0012's object-bound
+and recoverable deletion requirements are implemented, reviewed, integrated, and proven on the
+platforms where the capability would be enabled.
+
+Before any irreversible cache-Trash operation can become supported again, one protected and reviewed
+revision must prove at least all of the following:
+
+1. preview produces an exact bounded identity for each direct Trash candidate and its relevant
+   descendant tree, so equal-sized nested replacements cannot preserve approval;
+2. approval has an explicit freshness/expiry boundary and cannot authorize candidates that appear
+   after review;
+3. validation and deletion are bound to the same filesystem object through descriptor-relative,
+   no-follow, or equivalently strong platform primitives rather than a later pathname lookup;
+4. concurrent rename/replacement cannot redirect deletion to an unreviewed object;
+5. durable pending and terminal evidence supports restart/retry reconciliation when deletion
+   completes but the terminal record initially fails;
+6. retries never repeat an already-completed irreversible deletion;
+7. symlinks/reparse points, nested candidates, unknown names, user files, provider placeholders,
+   and arbitrary Trash entries fail closed;
+8. candidate logical bytes are never reported as physical recovery without filesystem evidence; and
+9. platform-specific integration tests exercise real filesystem replacement, permission, race, and
+   recovery scenarios for every enabled platform.
+
 ## Context
 
 Package-manager and tool caches can share one root while individual entries have different
@@ -11,113 +40,94 @@ reproducible, unused environments. A root-wide active-use observation either blo
 of unrelated entries or encourages an unsafe manual bypass. Cache contents are not user-file
 lineage and must not be uploaded to a cloud provider merely to reclaim local space.
 
-A second boundary applies after cache data reaches OS Trash. An irreversible operation cannot be
-authorized merely because a pathname, cache name, aggregate byte count, or structural signature
-matched during an earlier preview. A same-user process can replace a pathname between validation
-and deletion, and equal-sized descendant changes can preserve shallow metadata. A crash after an
-irreversible mutation can also leave an ambiguous journal unless recovery semantics are explicit.
-
 ## Decision
 
-### Reversible cache cleanup
-
-DiskSage exposes known cache roots through the cache catalog. Cleanup uses the reviewed child
-manifest and revalidates current identity before mutation. Active-use evidence is collected
-independently for each reviewed child with bounded path-local evidence:
+DiskSage exposes known cache roots through the existing cache catalog, including the macOS uv
+cache. Cleanup uses the reviewed child manifest (`path`, byte count, modification time, and object
+identity) and revalidates that manifest immediately before mutation. Active-use evidence is
+collected independently for each reviewed child with bounded, path-local `lsof` evidence
+(recursive for directories and direct for regular files):
 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
-- an inactive, unchanged child may move through DiskSage's identity-bound OS-Trash path;
-- the cache root and unrelated children remain untouched;
-- the operation is journaled; and
-- the ordinary cleanup path never permanently deletes cache content.
+- an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
+- the cache root and all unrelated children remain untouched;
+- the operation is journaled; the normal path never permanently deletes cache content.
+- historically, a separate explicit `--purge-proven-cache-trash` path was designed to permanently
+  remove only direct OS-Trash children whose exact known cache name and structural signature were
+  revalidated, whose bounded tree contained no symlink, and whose deletion was journaled as
+  pending/ok/error. ADR-0012 now supersedes that irreversible authority and requires this path to
+  fail closed until a stronger same-object primitive and recovery contract are proven.
 
-A live process elsewhere under the same cache root is not evidence that another entry is active or
-safe. Each reviewed child owns its own evidence and decision.
-
-### Irreversible cache-Trash deletion
-
-Permanent cache-Trash deletion is **not an available DiskSage capability until the final destructive
-primitive is proven race-safe and recoverable**. A legacy pathname-based implementation existing in
-source history or an unintegrated branch is not product authority and must not be presented as an
-operator-supported execution path.
-
-Any future implementation may be enabled only when all of the following are true on one protected,
-reviewed revision:
-
-1. preview produces an exact bounded candidate identity for a direct OS-Trash child;
-2. the reviewed identity covers the relevant descendant tree, so equal-sized nested replacement is
-   detected rather than accepted;
-3. approval has an explicit freshness/expiry boundary and cannot be reused indefinitely;
-4. validation and irreversible deletion are bound to the same filesystem object using a
-   descriptor-relative/no-follow or equivalently strong platform primitive rather than a later
-   pathname lookup;
-5. concurrent rename/replacement cannot redirect deletion to an unreviewed object;
-6. pending and terminal evidence are durable, and restart/retry reconciliation can represent a
-   completed deletion whose terminal write initially failed without deleting again;
-7. newly appearing candidates never inherit authority from a previous preview;
-8. symlinks/reparse points, nested candidates, unknown names, user files, provider placeholders and
-   arbitrary Trash entries fail closed; and
-9. platform-specific tests prove the boundary on every platform where the capability is enabled.
-
-Until that acceptance evidence exists, the supported interface is read-only candidate inspection.
-An implementation branch may fail closed earlier than protected `main`; neither state authorizes
-permanent deletion until the safe implementation itself reaches protected authority.
+This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
+same cache root must not prevent reclaiming an independently inactive entry, and it must never be
+treated as evidence that the inactive entry is safe without its own probe.
 
 ## Consequences
 
-- A user can clean independently inactive regenerable cache entries while active runtimes continue
-  running elsewhere under the same cache root.
-- Ordinary cleanup remains reversible through OS Trash. Logical bytes are not promoted to physical
-  recovery until filesystem evidence supports that claim.
-- A structurally recognizable cache already in Trash may be shown as review evidence, but preview
-  evidence alone is never irreversible mutation authority.
-- Product and operator documentation must not advertise an irreversible command while the race,
-  descendant-identity, freshness, or recovery requirements above remain unsatisfied.
-- A future safe implementation must land through its canonical implementation owner and then be
-  reflected here; documentation branches must not duplicate that runtime repair.
-- Cache cleanup creates no cloud-copy receipt, provider-sync evidence, or source-eviction permit.
-  User files remain governed by the cloud-offload/reversible-removal boundaries.
+- A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
+- Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
+- The normal operation is reversible through the OS Trash; physical space is not claimed until the
+  user empties that Trash, and APFS shared blocks may make physical reclaim smaller than logical
+  size. Permanent cache-Trash deletion is unavailable under ADR-0012 until its stronger acceptance
+  contract is satisfied.
+- Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
+  permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
 ## Alternatives rejected
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
-- **Direct recursive deletion by previously checked pathname:** rejected because validation does not
-  stay bound to the object consumed by the destructive call.
-- **Structural signature plus aggregate bytes as deletion identity:** rejected because equal-sized
-  descendant replacement can preserve that shallow evidence.
-- **Execution-time rescan as approval:** rejected because a newly appearing candidate was not shown
-  to the operator and has no human-attributed exact approval.
-- **Permanent deletion with best-effort terminal journaling:** rejected because post-delete journal
-  failure creates ambiguous recovery state.
-- **Copying caches to iCloud/OneDrive/Google Drive:** rejected because reproducible caches are local
-  cleanup data, not user-file lineage.
+- **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
+  identity at mutation time.
+- **Pathname-recursive permanent deletion after a prior identity check:** superseded and rejected by
+  ADR-0012 because the final destructive syscall is not bound to the reviewed object.
+- **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
+  conflates cache cleanup with user-file lineage.
 
-## Incident policy: observed regenerable caches
+## Incident policy: observed macOS regenerable caches
 
-The automatic regenerable-cache action remains deliberately narrow. It may act only on catalogued
-roots whose rebuild and active-use contracts are understood, and every selected child still needs
-complete current evidence. DiskSage staging entries such as `.disksage-trash-*` are not recursive
-cleanup targets. Cataloguing an additional cache root does not automatically grant mutation
-authority for it.
+When provider upload is blocked and local pressure is high, DiskSage may run the
+`clean_regenerable_caches` command without a second approval prompt for the observed regenerable
+macOS roots (npm, uv, pnpm, Adobe, Microsoft Edge, and Trivy). This is a narrow policy, not a
+general path-based delete rule: each direct child is still bound to its reviewed object identity,
+byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
+staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
+probe target. The cache root is preserved, successful operations go to OS Trash, and a journal
+entry is written. Any child in use is reported and left untouched.
 
-During low-disk development incidents, DiskSage used this distinction to preserve active uv/Cargo
-work, provider-managed data and user files while reclaiming only explicitly regenerable local
-artifacts. Those observations are development evidence, not a standing permission to delete future
-paths with similar names.
+The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
+`cargo-registry-source` for explicit review because it is regenerable but may require network
+downloads to rebuild. It is intentionally excluded from the automatic six-cache action. During
+the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage development reclaimed the
+observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
+package archives, git checkouts, all user files, and provider-managed data.
 
-## Operator status
+The observed `~/.cache/node`, `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
+catalogued as explicit manual-review targets for the same reason. Their paths are now stable
+catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CACHE_IDS`; the
+automatic action remains limited to the six incident-approved roots until each tool's rebuild and
+active-use contract is independently established.
 
-The current operator contract is documented in
-[`docs/development/cache-cleanup-operator-runbook.md`](../../development/cache-cleanup-operator-runbook.md).
-It exposes reversible cleanup and read-only proven-cache inspection. If a checked-out source revision
-still contains a legacy irreversible execution path, operators must treat it as a known defect, not
-as an approved DiskSage capability, until the canonical fail-closed/safe implementation is
-integrated and verified.
+The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
+still preparing. A bounded read-only provider dump showed progress markers and stale `itemNotFound`
+errors, so the operation remained blocked. DiskSage reclaimed only explicitly regenerable package/tool
+caches (pnpm, npm's `_npx`/`_cacache`, and node/torch/prisma/gh caches), recovering roughly 1.6 GiB;
+active uv/cargo processes and the Cargo registry source tree were not touched in this pass. No cache
+was uploaded to iCloud, OneDrive, or Google Drive: reproducible build caches are a cleanup domain,
+not user-file lineage, and sending them through a stalled provider would consume additional staging
+space. The provider process, Finder copy, CloudDocs database, cloud objects, and user files remained
+untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
+
+## Incident policy: proven cache Trash purge
+
+The original incident decision allowed structurally proven regenerable cache directories already in
+OS Trash to be reviewed as candidates. Under ADR-0012, that review remains evidence-only. The
+current operator contract must not treat a known name, structural signature, bounded tree, size,
+mtime, or prior filesystem identity as sufficient authority for irreversible deletion. Permanent
+removal remains unavailable until the superseding acceptance contract above is met.
 
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)
 - [ADR-0012: Cache Trash permanent deletion fails closed](0012-cache-trash-permanent-delete-fails-closed.md)
 - `src-tauri/src/cache_cleanup.rs`
-- `src-tauri/src/bin/disksage-cache-cleanup.rs`
 - `src-tauri/src/rules.rs`
