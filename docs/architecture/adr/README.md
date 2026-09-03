@@ -17,6 +17,8 @@ new numbered record rather than rewriting history.
 | [0009](0009-path-free-lineage-relation-graph.md) | Export a path-free lineage relation graph | Accepted |
 | [0010](0010-rooted-organize-destinations.md) | Require rooted, process-independent organize destinations | Accepted |
 | [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
+| [0012](0012-native-temp-reclaim-is-evidence-bound.md) | Native temp reclaim is evidence-bound | Accepted |
+| [0013](0013-macos-native-temp-root-is-user-scoped.md) | Scope macOS native temp reclaim to the OS-reported user temp root | Proposed |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;
