@@ -119,6 +119,23 @@ fn bearer_type_expiry_and_resource_scope_are_bounded() {
 }
 
 #[test]
+fn oauth_scope_tokens_are_case_sensitive() {
+    let differently_cased = GOOGLE_READ_SCOPE.to_ascii_uppercase();
+    let json = serde_json::json!({
+        "access_token": "access",
+        "token_type": "Bearer",
+        "scope": differently_cased
+    })
+    .to_string();
+
+    assert_eq!(
+        parse_error(parse_google(&json, false)),
+        "oauth-required-scope-missing",
+        "RFC 6749 scope tokens are case-sensitive and a case-folded token must not gain authority"
+    );
+}
+
+#[test]
 fn microsoft_scope_echo_represents_access_scope_while_refresh_token_proves_offline_grant() {
     let grant = parse_token_document(
         CloudProvider::Onedrive,
