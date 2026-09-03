@@ -44,7 +44,8 @@ proved on the current platform is unavailable rather than simulated.
 2. Identify regenerable caches, inactive development artifacts, duplicates, and cloud-offload
    candidates with the evidence needed to review each action.
 3. Preserve the best-supported copy and its provenance before suggesting removal of another copy.
-4. Move only approved, unchanged candidates through a reversible recovery path.
+4. Move only eligible, unchanged candidates through a reversible recovery path under either an
+   exact human approval or an explicitly documented narrow automatic policy.
 5. Explain why an action is blocked and tell the person what observable step to take next.
 6. Produce receipts that distinguish proposed bytes, processed bytes, and attributable physical
    recovery.
@@ -105,20 +106,26 @@ are defined by [ADR-0011](architecture/adr/0011-cloud-transfer-failure-and-mater
 
 ### Review, recovery, and receipts
 
-- Every mutation requires a fresh, exact, human-attributed approval for the displayed candidate
-  identities and action. Broad or stale approval is invalid.
+- Human-reviewed mutations require a fresh, exact, human-attributed approval for the displayed
+  candidate identities and action. Broad or stale approval is invalid.
+- The only currently documented no-second-approval exception is ADR-0002's narrow reversible
+  regenerable-cache policy: the fixed catalogued macOS cache roots may move independently eligible
+  direct children to OS Trash only after fresh per-child identity and complete active-use evidence.
+  The root, unrelated children, DiskSage staging entries, active/ambiguous children, user files,
+  provider data, and irreversible deletion remain outside that automatic authority.
 - User-file removal must use an OS-managed or product-managed reversible Trash/quarantine path with
   a durable journal and tested undo/restore behavior. Permanent deletion of user files is not a
-  product action. The only irreversible cleanup path is the separately invoked proven-cache Trash
-  purge from [ADR-0002](architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md): it may
-  remove only direct OS-Trash children that still match a known regenerable-cache name and
-  structural signature, contain no symlink in the bounded recheck, and receive pending/terminal
-  journal records. Arbitrary Trash entries, cloud placeholders, and user-file candidates never
-  qualify.
+  product action.
+- Permanent cache-Trash deletion is also unavailable. `--purge-proven-cache-trash` is read-only
+  inspection evidence only; the canonical cache-safety lineage rejects
+  `--execute --purge-proven-cache-trash` before journal or filesystem mutation. ADR-0012 defines
+  the stronger same-object, descendant-identity, freshness, race, and recovery evidence required
+  before any future irreversible capability can be considered.
 - A changed, replaced, unreadable, active, or newly ambiguous candidate is skipped or blocks the
   batch without broadening authority to another item.
-- Receipts must state what was observed, approved, attempted, completed, skipped, and recovered;
-  they must never promote logical candidate bytes into measured physical recovery.
+- Receipts must state what was observed, approved or policy-admitted, attempted, completed,
+  skipped, and recovered; they must never promote logical candidate bytes into measured physical
+  recovery.
 
 ## Product states and next actions
 
@@ -141,9 +148,9 @@ action without exposing implementation ownership.
 
 - Reaching 300 GB by weakening evidence, deleting an irreplaceable item, or counting unobserved
   savings.
-- Permanent deletion of user files or arbitrary Trash entries, force-pruning repositories,
-  terminating provider databases/processes, or mutating a cloud placeholder to inspect it. The
-  narrowly bounded proven-cache Trash purge in ADR-0002 is the sole permanent cleanup exception.
+- Permanent deletion of user files, regenerable caches, or arbitrary Trash entries while the
+  irreversible cache-Trash boundary remains disabled; force-pruning repositories; terminating
+  provider databases/processes; or mutating a cloud placeholder to inspect it.
 - Treating age, filename, file size, model confidence, or a rule of thumb as deletion authority.
 - Treating OAuth, an external LLM, or another ContextualWisdomLab service as a prerequisite for
   standalone personal use.
@@ -152,15 +159,17 @@ action without exposing implementation ownership.
 
 ## Safety invariants
 
-1. Read-only evidence cannot authorize a mutation by itself.
+1. Read-only evidence cannot authorize an irreversible mutation by itself.
 2. Unknown, stale, incomplete, timed-out, ambiguous, or conflicting evidence fails closed.
 3. Planning, copy, provider confirmation, eviction approval, and execution are distinct states.
-4. Every execution is bound to fresh content and filesystem identity and rejects replacement races.
+4. Every human-reviewed execution is bound to fresh content and filesystem identity and rejects
+   replacement races; policy-admitted reversible cache cleanup still revalidates the exact child
+   identity and active-use evidence immediately before Trash mutation.
 5. Provider placeholders, symlinks, active files, and incomplete scans are preserved.
 6. Cloud copy completion never means provider sync completion.
-7. User-file actions remain reversible and journaled; permanent deletion of user files is
-   unreachable. Irreversible cleanup is confined to ADR-0002's explicit, structurally revalidated,
-   journaled purge of already-trashed known regenerable caches.
+7. User-file actions remain reversible and journaled. The automatic regenerable-cache policy is
+   also reversible through OS Trash. Permanent deletion is unreachable through the supported
+   cache-cleanup interface until ADR-0012's stronger boundary is implemented and accepted.
 8. A model can recommend but cannot override deterministic safety evidence.
 9. Private evidence stays local with least-privilege storage; shared exports are bounded and
    path-free.
@@ -181,11 +190,15 @@ action without exposing implementation ownership.
   remains unavailable while the generic exact-copy workflow stays reversible.
 - Realistic cache, Git, container/VM, temporary-file, and duplicate fixtures cover active use,
   dirty/untracked state, unique commits, provider roots, replacement races, incomplete authority,
-  Trash/quarantine receipt, and undo. Proven-cache purge fixtures additionally prove that only an
-  explicitly reviewed known-cache signature on a direct OS-Trash child can cross the irreversible
-  boundary; bounded symlink-free revalidation and separate pending/terminal journal records are
-  asserted, while nested descendants, symlink, replacement, unknown-name, user-file, and
-  arbitrary-Trash cases are rejected.
+  Trash/quarantine receipt, and undo.
+- Automatic regenerable-cache fixtures prove the fixed policy cannot widen from catalogued roots,
+  cannot act on active/ambiguous/replaced children or DiskSage staging entries, preserves roots and
+  unrelated children, and records only reversible Trash outcomes.
+- Proven-cache Trash fixtures are inspection-only: preview emits only the current bounded candidate
+  schema, and every attempted irreversible execution fails before filesystem or journal mutation.
+  Future enablement tests must additionally prove full descendant identity, approval expiry,
+  same-object descriptor-relative/no-follow or equivalent deletion, replacement-race resistance,
+  durable pending/terminal reconciliation without repeated deletion, and platform-specific safety.
 - Cross-platform packaging, accessibility, customer-message, privacy, security, and exact-head
   release checks pass. UI flows remain responsive during long scans and actions.
 - An end-to-end reclaim report records candidate logical bytes, action results, before/after volume
@@ -216,7 +229,7 @@ operation and deterministic safety do not depend on telemetry collection.
 
 - [README](../README.md): concise product entry point and current feature surface.
 - [Architecture index](../ARCHITECTURE.md): product-to-technical ownership and decision links.
-- [ADR index](architecture/adr/README.md): accepted technical decisions.
+- [ADR index](architecture/adr/README.md): status-bearing technical decisions.
 - [Product and technical gap baseline](product-technical-gap-baseline.md): dated implementation,
   live incident, and open-PR inventory. Exact PR heads belong there, not in this PRD.
 - [Changelog](../CHANGELOG.md): integrated user-visible changes; it is not release evidence.
