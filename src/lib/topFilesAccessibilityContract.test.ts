@@ -30,14 +30,14 @@ describe("TopFiles accessible data table", () => {
     expect(body).toContain("/data/large.bin");
   });
 
-  it("renders a sequential fragment link to the named keyboard-scroll target", () => {
+  it("renders both a fragment shortcut and a sequentially focusable scroll region", () => {
     const { body } = render(TopFiles, { props: { files: [sampleFile] } });
 
     expect(body).toContain('<a class="table-focus" href="#top-files-table">파일 표 탐색 시작</a>');
     expect(body).toContain('id="top-files-table"');
     expect(body).toContain('class="table-scroll"');
     expect(body).toContain('role="region"');
-    expect(body).toContain('tabindex="-1"');
+    expect(body).toContain('tabindex="0"');
     expect(body).toContain('aria-labelledby="top-files-heading"');
   });
 });
