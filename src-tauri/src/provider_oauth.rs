@@ -339,7 +339,45 @@ pub fn connections_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("cloud-oauth-connections.json")
 }
 
+fn connection_document_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Result<(), String> {
+    for ancestor in parent
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Ok(metadata) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    let shared_writable = mode & 0o022 != 0;
+                    let sticky = mode & 0o1000 != 0;
+                    if shared_writable && (ancestor == parent || !sticky) {
+                        return Err("oauth-connection-directory-writable-by-others".into());
+                    }
+                }
+            }
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Err(_) => return Err("oauth-connection-directory-unavailable".into()),
+        }
+    }
+    Ok(())
+}
+
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
+    validate_connection_document_parent(connection_document_parent(path), true)?;
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -347,6 +385,13 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("oauth-connection-document-not-regular-file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("oauth-connection-document-permissions-unsafe".into());
+        }
     }
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
@@ -374,10 +419,10 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
         validate_connection(connection)?;
     }
     validate_unique_connection_ids(connections)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "oauth-connection-directory-invalid".to_string())?;
+    let parent = connection_document_parent(path);
+    validate_connection_document_parent(parent, true)?;
     std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
+    validate_connection_document_parent(parent, false)?;
     if let Ok(metadata) = std::fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("oauth-connection-document-not-regular-file".into());
@@ -1287,6 +1332,69 @@ mod tests {
         symlink(&target, &link).unwrap();
         assert!(load_connections(&link).is_err());
         assert!(save_connections(&link, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_symlinked_directory_ancestors_for_read_and_write() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside-ancestor");
+        let outside_parent = outside.join("nested");
+        std::fs::create_dir_all(&outside_parent).unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&outside_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let outside_document = outside_parent.join("connections.json");
+        let original = b"{\"version\":1,\"connections\":[]}";
+        std::fs::write(&outside_document, original).unwrap();
+        std::fs::set_permissions(&outside_document, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let alias = temp.path().join("app-data-alias");
+        symlink(&outside, &alias).unwrap();
+        let path = alias.join("nested").join("connections.json");
+
+        assert_eq!(
+            load_connections(&path).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(
+            save_connections(&path, &[]).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(std::fs::read(&outside_document).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_shared_writable_parent_for_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for writable_bit in [0o020, 0o002] {
+            let temp = tempfile::tempdir().unwrap();
+            let parent = temp
+                .path()
+                .join(format!("oauth-write-parent-{writable_bit:o}"));
+            std::fs::create_dir(&parent).unwrap();
+            let path = parent.join("connections.json");
+            let original = b"{\"version\":1,\"connections\":[]}";
+            std::fs::write(&path, original).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(
+                &parent,
+                std::fs::Permissions::from_mode(0o700 | writable_bit),
+            )
+            .unwrap();
+
+            let result = save_connections(&path, &[]);
+
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "oauth-connection-directory-writable-by-others"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
     }
 
     #[test]
