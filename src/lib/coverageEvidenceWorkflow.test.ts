@@ -109,6 +109,9 @@ describe('Test workflow coverage evidence contract', () => {
     expect(measureStep).toContain('diagnostic_status=$?');
     expect(measureStep).toContain('redaction_status=$?');
     expect(measureStep).toContain('coverage diagnostic rendering failed');
+    expect(measureStep).toContain(
+      "printf '%s\\n' 'coverage diagnostic rendering failed; raw diagnostic withheld' > coverage-command-diagnostic.log",
+    );
     expect(measureStep).toContain('exit "$coverage_status"');
   });
 
@@ -119,6 +122,14 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('uncovered_branches');
     expect(workflow).toContain('uncovered_functions');
     expect(workflow).toContain('uncovered_lines');
+  });
+
+  it('preserves source-targetable Rust uncovered line numbers from the superseded coverage lineage', () => {
+    expect(workflow).toContain('uncovered_line_numbers');
+    expect(workflow).toContain('const uncoveredLineNumbers = (segments) =>');
+    expect(workflow).toContain('Array.isArray(segment)');
+    expect(workflow).toContain('segment[2] === 0');
+    expect(workflow).toContain('.slice(0, 40)');
   });
 
   it('preserves bounded frontend diagnostics when the all-production threshold fails', () => {
