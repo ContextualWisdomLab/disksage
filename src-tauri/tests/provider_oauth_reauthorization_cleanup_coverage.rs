@@ -35,7 +35,11 @@ fn unicode_google_root(decomposed: bool) -> CloudRoot {
     }
 }
 
-fn google_connection(root: &CloudRoot, connection_id: String, connected_at_ms: u64) -> OAuthConnection {
+fn google_connection(
+    root: &CloudRoot,
+    connection_id: String,
+    connected_at_ms: u64,
+) -> OAuthConnection {
     OAuthConnection {
         connection_id,
         provider: root.provider,
@@ -111,4 +115,57 @@ fn successful_legacy_cleanup_keeps_the_published_document_canonical_only() {
 
     assert_eq!(deleted, vec![legacy.connection_id]);
     assert_eq!(load_connections(&document).unwrap(), vec![canonical]);
+}
+
+#[test]
+fn no_stale_identity_never_calls_the_credential_delete_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = temp.path().join("connections.json");
+    let requested_root = unicode_google_root(false);
+    let canonical = google_connection(&requested_root, connection_id(&requested_root), 200);
+    let original = vec![canonical.clone()];
+    save_connections(&document, std::slice::from_ref(&canonical)).unwrap();
+
+    cleanup_stale_authorization_credentials(
+        &document,
+        &requested_root,
+        &original,
+        &canonical,
+        |_| -> Result<(), String> { panic!("no stale credential may reach the delete boundary") },
+    )
+    .unwrap();
+
+    assert_eq!(load_connections(&document).unwrap(), vec![canonical]);
+}
+
+#[test]
+fn failed_retry_visibility_publication_is_reported_separately() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = temp.path().join("connections.json");
+    let saved_root = unicode_google_root(true);
+    let requested_root = unicode_google_root(false);
+    let legacy = google_connection(&saved_root, legacy_connection_id(&saved_root), 100);
+    let canonical = google_connection(&requested_root, connection_id(&requested_root), 200);
+    let original = vec![legacy];
+    save_connections(&document, std::slice::from_ref(&canonical)).unwrap();
+
+    std::fs::remove_file(&document).unwrap();
+    std::fs::create_dir(&document).unwrap();
+    let error = cleanup_stale_authorization_credentials(
+        &document,
+        &requested_root,
+        &original,
+        &canonical,
+        |_| Err("provider-oauth-keyring-delete-failed".to_string()),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        "provider-oauth-keyring-delete-and-config-recovery-failed"
+    );
+    assert!(
+        document.is_dir(),
+        "recovery publication must fail closed rather than mutate a non-regular authority path"
+    );
 }
