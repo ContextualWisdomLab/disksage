@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -155,4 +155,24 @@ describe('release artifact verifier directory contract', () => {
       }
     },
   );
+
+  it('requires tag attestation to verify downloaded platform namespaces before SBOM generation', () => {
+    const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
+    const attestStart = workflow.indexOf('  attest-release:');
+    const publishStart = workflow.indexOf('  publish-release:', attestStart);
+    expect(attestStart).toBeGreaterThanOrEqual(0);
+    expect(publishStart).toBeGreaterThan(attestStart);
+
+    const attestJob = workflow.slice(attestStart, publishStart);
+    const downloadOffset = attestJob.indexOf('- name: Download exact release artifact set');
+    const verifierOffset = attestJob.indexOf(
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+    );
+    const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
+
+    expect(downloadOffset).toBeGreaterThanOrEqual(0);
+    expect(verifierOffset).toBeGreaterThanOrEqual(0);
+    expect(verifierOffset).toBeGreaterThan(downloadOffset);
+    expect(sbomOffset).toBeGreaterThan(verifierOffset);
+  });
 });
