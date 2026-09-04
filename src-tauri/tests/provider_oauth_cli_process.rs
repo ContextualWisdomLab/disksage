@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::{Command, Output};
 
+const APP_IDENTIFIER: &str = "com.contextualwisdomlab.disksage";
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
 
 fn command() -> Command {
@@ -94,6 +95,49 @@ fn read_only_list_uses_userprofile_when_home_is_absent() {
     assert_eq!(value["secrets_included"], false);
     assert_eq!(value["cloud_write_executed"], false);
     assert_eq!(value["source_eviction_executed"], false);
+}
+
+#[cfg(windows)]
+#[test]
+fn read_only_list_uses_redirected_roaming_appdata_for_default_connection_document() {
+    let temp = tempfile::tempdir().expect("temporary Windows authority root should be created");
+    let user_profile = temp.path().join("profile");
+    let appdata = temp.path().join("redirected-roaming-appdata");
+    let app_directory = appdata.join(APP_IDENTIFIER);
+    std::fs::create_dir_all(&user_profile).expect("USERPROFILE fixture should be created");
+    std::fs::create_dir_all(&app_directory).expect("redirected APPDATA fixture should be created");
+
+    let connection = google_connection(&temp.path().join("cloud-root"));
+    let document = app_directory.join("cloud-oauth-connections.json");
+    write_private_document(&document, std::slice::from_ref(&connection));
+
+    let output = command()
+        .env_remove("HOME")
+        .env("USERPROFILE", &user_profile)
+        .env("APPDATA", &appdata)
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout should remain JSON");
+    assert_eq!(value["action"], "list");
+    assert_eq!(value["connection_count"], 1);
+    assert_eq!(value["connections"][0]["connection_id"], connection.connection_id);
+    assert_eq!(value["connection_document_effect"], "none");
+    assert_eq!(value["credential_store_effect"], "none");
+    assert_eq!(value["cloud_write_executed"], false);
+    assert_eq!(value["source_eviction_executed"], false);
+    assert!(
+        !user_profile
+            .join("AppData/Roaming")
+            .join(APP_IDENTIFIER)
+            .join("cloud-oauth-connections.json")
+            .exists(),
+        "read-only list must not create a stale local-profile connection document"
+    );
 }
 
 #[cfg(unix)]
