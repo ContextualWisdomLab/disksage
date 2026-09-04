@@ -5660,9 +5660,11 @@ mod tests {
         writable_dir(&cloud);
         writable_dir(&root.join("Documents"));
         writable_dir(&root.join("project/node_modules"));
+        writable_dir(&root.join("project/cache"));
         std::fs::write(root.join("Documents/report.pdf"), b"pdf").unwrap();
         std::fs::write(root.join("Documents/code.rs"), b"rust").unwrap();
         std::fs::write(root.join("project/node_modules/bundle.zip"), b"zip").unwrap();
+        std::fs::write(root.join("project/cache/bundle.zip"), b"zip").unwrap();
         std::fs::write(cloud.join("already.mp4"), b"video").unwrap();
         let files = collect_archive_files(&root, std::slice::from_ref(&cloud));
         assert_eq!(files.len(), 1);

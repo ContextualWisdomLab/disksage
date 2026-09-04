@@ -1288,6 +1288,25 @@ pub(crate) fn record_copy_failure(
     write_copy_failure_record(&record, receipt_dir).map(|_| ())
 }
 
+/// Persist one provider-copy failure while retaining the original customer-actionable error.
+#[cfg(not(coverage))]
+pub fn journal_provider_api_copy_failure(
+    candidate: &CloudCandidate,
+    error: &str,
+    failure_dir: &Path,
+) -> String {
+    match record_copy_failure(
+        candidate,
+        CloudCopyApprovalAction::CopyOnly,
+        error,
+        crate::cloud::system_now_ms(),
+        failure_dir,
+    ) {
+        Ok(()) => error.to_string(),
+        Err(journal_error) => format!("{error};{journal_error}"),
+    }
+}
+
 #[cfg(all(not(coverage), target_os = "macos"))]
 const COPY_TIMEOUT_BASE_SECS: u64 = 120;
 #[cfg(all(not(coverage), target_os = "macos"))]
@@ -2232,6 +2251,22 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn provider_post_success_failure_is_journaled_without_replacing_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let failure_dir = temporary.path().join("cloud-copy-failures");
+
+        let error = journal_provider_api_copy_failure(
+            &candidate(),
+            "source-changed-after-provider-upload",
+            &failure_dir,
+        );
+
+        assert_eq!(error, "source-changed-after-provider-upload");
+        assert_eq!(std::fs::read_dir(&failure_dir).unwrap().count(), 1);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn copy_failure_record_surfaces_unwritable_journal() {
         let temporary = tempfile::tempdir().unwrap();
         let receipt_path = temporary.path().join("not-a-directory");
@@ -2476,6 +2511,41 @@ mod tests {
         assert_eq!(
             CloudOffloadGoalState::after_attestation(&legacy, true),
             CloudOffloadGoalState::PendingProviderSync
+        );
+    }
+
+    #[test]
+    fn every_non_complete_provider_state_remains_pending_without_a_permit() {
+        for state in [
+            ProviderSyncState::PendingUpload,
+            ProviderSyncState::NotUbiquitous,
+            ProviderSyncState::NotLocalCurrent,
+            ProviderSyncState::Uploading,
+            ProviderSyncState::ExcludedFromSync,
+            ProviderSyncState::SyncPaused,
+            ProviderSyncState::RemoteUnavailable,
+            ProviderSyncState::ContentMismatch,
+            ProviderSyncState::Unknown,
+        ] {
+            let mut observed = evidence();
+            observed.sync_complete = true;
+            observed.sync_state = state;
+            assert_eq!(
+                CloudOffloadGoalState::after_attestation(&observed, true),
+                CloudOffloadGoalState::PendingProviderSync,
+                "{} must fail closed",
+                state.as_str()
+            );
+        }
+
+        let complete = evidence();
+        assert_eq!(
+            CloudOffloadGoalState::after_attestation(&complete, false),
+            CloudOffloadGoalState::ProviderSyncConfirmed
+        );
+        assert_eq!(
+            CloudOffloadGoalState::after_attestation(&complete, true),
+            CloudOffloadGoalState::EvictionReady
         );
     }
 
@@ -3193,6 +3263,63 @@ mod tests {
             read_immutable_receipt(&wrong_name).unwrap_err(),
             "receipt-filename-id-mismatch"
         );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn provider_api_receipt_round_trips_after_writer_values_are_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source/report.pdf");
+        let cloud = temporary.path().join("cloud");
+        let destination = cloud.join("DiskSage Archive/report.pdf");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&cloud).unwrap();
+        std::fs::write(&source, b"provider-api-upload").unwrap();
+
+        let metadata = std::fs::metadata(&source).unwrap();
+        let mut planned = candidate();
+        planned.provider = CloudProvider::Onedrive;
+        planned.src = source.to_string_lossy().into_owned();
+        planned.dst = destination.to_string_lossy().into_owned();
+        planned.bytes = metadata.len();
+        planned.modified_ms = modified_ms(&metadata).unwrap();
+        refresh_review_fingerprint(&mut planned);
+
+        let mut selected_root = root();
+        selected_root.id = "onedrive:test".into();
+        selected_root.provider = CloudProvider::Onedrive;
+        selected_root.label = "OneDrive".into();
+        selected_root.path = cloud.to_string_lossy().into_owned();
+        let approval =
+            test_copy_approval(&planned, &selected_root, CloudCopyApprovalAction::CopyOnly, 456)
+                .unwrap();
+        let (receipt, hashes) = prepare_provider_api_source_receipt(
+            &planned,
+            &selected_root,
+            None,
+            &approval,
+            789,
+        )
+        .unwrap();
+        let expected_id = receipt.receipt_id.clone();
+        let receipt_path = write_provider_api_receipt(&receipt, &temporary.path().join("receipts"))
+            .unwrap();
+        // This verifies durable re-open after writer-owned values are discarded. Process restart
+        // behavior belongs to the executable-level reconciliation tests, not this unit boundary.
+        drop(receipt);
+        drop(hashes);
+
+        let persisted = read_immutable_receipt(&receipt_path).unwrap();
+        assert_eq!(persisted.receipt_id, expected_id);
+        assert_eq!(persisted.provider, CloudProvider::Onedrive);
+        assert_eq!(persisted.candidate_fingerprint, planned.metadata_fingerprint);
+        assert_eq!(persisted.blake3, hash_file(&source).unwrap().blake3);
+        assert_eq!(
+            persisted.lineage.as_ref().unwrap().copy_verification_method,
+            CloudCopyVerificationMethod::CopiedByProviderApi
+        );
+        assert!(persisted.copy_verified);
+        assert!(!persisted.provider_sync_confirmed);
     }
 
     #[cfg(not(coverage))]
