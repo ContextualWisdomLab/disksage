@@ -96,6 +96,39 @@ fn read_only_list_uses_absolute_xdg_data_home_for_default_connection_document() 
 }
 
 #[test]
+fn explicit_home_keeps_its_connection_default_when_xdg_data_home_is_set() {
+    let temp = tempfile::tempdir().expect("temporary Linux authority root should be created");
+    let environment_home = temp.path().join("environment-home");
+    let explicit_home = temp.path().join("explicit-home");
+    let xdg_data_home = temp.path().join("xdg-data");
+    std::fs::create_dir(&environment_home).expect("environment HOME fixture should be created");
+
+    let connection = google_connection(&temp.path().join("cloud-root"));
+    let document = explicit_home
+        .join(".local/share")
+        .join(APP_IDENTIFIER)
+        .join("cloud-oauth-connections.json");
+    write_private_document(&document, &connection);
+
+    let output = command()
+        .env("HOME", &environment_home)
+        .env("XDG_DATA_HOME", &xdg_data_home)
+        .env_remove("USERPROFILE")
+        .arg("--home")
+        .arg(&explicit_home)
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout should remain JSON");
+    assert_eq!(value["connection_count"], 1);
+    assert_eq!(value["connections"][0]["connection_id"], connection.connection_id);
+}
+
+#[test]
 fn relative_xdg_data_home_is_ignored_in_favor_of_home_default() {
     let temp = tempfile::tempdir().expect("temporary Linux home should be created");
     let home = temp.path().join("home");
