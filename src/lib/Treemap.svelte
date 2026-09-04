@@ -49,7 +49,9 @@
   }
 </script>
 
-<canvas bind:this={canvas} width={W} height={H} onclick={click}></canvas>
+<div class="treemap-view">
+  <canvas bind:this={canvas} width={W} height={H} onclick={click} aria-hidden="true"></canvas>
+</div>
 
 <style>
   canvas { max-width: 100%; cursor: pointer; }
