@@ -38,6 +38,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
@@ -69,11 +81,22 @@ jobs:
 
   windows-home-resolution:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          if ($actualSha -ne $env:EXPECTED_SOURCE_SHA) {
+            Write-Error "Test job checked out $actualSha but expected source head $env:EXPECTED_SOURCE_SHA"
+            exit 1
+          }
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Windows absolute-home regression
         shell: pwsh
@@ -81,6 +104,9 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows development artifact allocation regressions
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
 
   llm-engine-build:
     runs-on: ubuntu-latest
@@ -89,6 +115,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
       - name: Install build deps (llama.cpp native + tauri)
         run: |
           sudo apt-get update
