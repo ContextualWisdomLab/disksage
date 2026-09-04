@@ -5,10 +5,10 @@
 //! home-directory selection before delegating to the existing OAuth execution boundary.
 
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod implementation {
-    use super::{OsString, Path, PathBuf};
+    use super::OsString;
 
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
