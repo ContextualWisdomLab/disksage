@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Bound Ubuntu test-runner disk use by compiling cloud/archive feature tests once, assigning the
+  measured base/feature/frontend sequence a 60-minute job deadline, disabling
+  unused Cargo incremental/debug artifacts, and reclaiming only image-owned SDKs outside the
+  DiskSage job capability set with exact before/after byte evidence.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
