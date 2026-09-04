@@ -96,6 +96,37 @@ fn read_only_list_uses_absolute_xdg_data_home_for_default_connection_document() 
 }
 
 #[test]
+fn read_only_list_can_use_absolute_xdg_data_home_without_home() {
+    let temp = tempfile::tempdir().expect("temporary Linux data-home root should be created");
+    let xdg_data_home = temp.path().join("xdg-data");
+    let connection = google_connection(&temp.path().join("cloud-root"));
+    let document = xdg_data_home
+        .join(APP_IDENTIFIER)
+        .join("cloud-oauth-connections.json");
+    write_private_document(&document, &connection);
+
+    let output = command()
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("XDG_DATA_HOME", &xdg_data_home)
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout should remain JSON");
+    assert_eq!(value["action"], "list");
+    assert_eq!(value["connection_count"], 1);
+    assert_eq!(value["connections"][0]["connection_id"], connection.connection_id);
+    assert_eq!(value["connection_document_effect"], "none");
+    assert_eq!(value["credential_store_effect"], "none");
+    assert_eq!(value["cloud_write_executed"], false);
+    assert_eq!(value["source_eviction_executed"], false);
+}
+
+#[test]
 fn explicit_home_keeps_its_connection_default_when_xdg_data_home_is_set() {
     let temp = tempfile::tempdir().expect("temporary Linux authority root should be created");
     let environment_home = temp.path().join("environment-home");
@@ -111,7 +142,7 @@ fn explicit_home_keeps_its_connection_default_when_xdg_data_home_is_set() {
     write_private_document(&document, &connection);
 
     let output = command()
-        .env("HOME", &environment_home)
+        .env("HOME", &home)
         .env("XDG_DATA_HOME", &xdg_data_home)
         .env_remove("USERPROFILE")
         .arg("--home")
