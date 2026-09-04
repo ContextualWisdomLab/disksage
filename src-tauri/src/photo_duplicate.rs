@@ -135,10 +135,12 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
         output.color_type,
         output.bit_depth,
     )?;
-    let metadata_field_count = u32::from(reader.info().source_gamma.is_some())
-        + u32::from(reader.info().source_chromaticities.is_some())
-        + u32::from(reader.info().source_srgb.is_some())
-        + u32::from(reader.info().source_iccp.is_some())
+    // Count encoded metadata chunks rather than derived source values. png 0.18 derives source
+    // gamma/chromaticities from one sRGB chunk, which would otherwise over-weight a single field.
+    let metadata_field_count = u32::from(reader.info().gama_chunk.is_some())
+        + u32::from(reader.info().chrm_chunk.is_some())
+        + u32::from(reader.info().srgb.is_some())
+        + u32::from(reader.info().icc_profile.is_some())
         + u32::try_from(reader.info().uncompressed_latin1_text.len()).unwrap_or(u32::MAX)
         + u32::try_from(reader.info().compressed_latin1_text.len()).unwrap_or(u32::MAX)
         + u32::try_from(reader.info().utf8_text.len()).unwrap_or(u32::MAX);
@@ -488,6 +490,18 @@ mod tests {
             .unwrap();
     }
 
+    fn png_with_srgb(path: &Path, width: u32, height: u32, value: u8) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&vec![value; (width * height) as usize])
+            .unwrap();
+    }
+
     fn png_16(path: &Path, width: u32, height: u32, value: u8) {
         let file = std::fs::File::create(path).unwrap();
         let mut encoder = png::Encoder::new(file, width, height);
@@ -584,6 +598,25 @@ mod tests {
             Some(documented.to_string_lossy().as_ref())
         );
         assert!(!audit.exact_groups[0].execution_available);
+    }
+
+    #[test]
+    fn srgb_chunk_counts_once_as_metadata_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = temp.path().join("plain.png");
+        let srgb = temp.path().join("srgb.png");
+        png(&plain, 12, 9, 80);
+        png_with_srgb(&srgb, 12, 9, 80);
+
+        let evidence = inspect_photo(&srgb).unwrap();
+        assert_eq!(evidence.metadata_field_count, 1);
+
+        let audit = audit_photos(&[plain, srgb.clone()], 7);
+        assert_eq!(audit.exact_groups.len(), 1);
+        assert_eq!(
+            audit.exact_groups[0].keeper_path.as_deref(),
+            Some(srgb.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
