@@ -160,6 +160,41 @@ fn read_only_list_falls_back_to_userprofile_when_home_is_absent() {
 
 #[cfg(unix)]
 #[test]
+fn native_non_utf8_filesystem_arguments_remain_lossless() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let temp = tempfile::tempdir().expect("isolated native-path root exists");
+    let home = temp
+        .path()
+        .join(OsString::from_vec(vec![b'h', b'o', b'm', b'e', b'-', 0xff]));
+    std::fs::create_dir(&home).expect("native non-UTF-8 home exists");
+    let connections = home.join(OsString::from_vec(vec![
+        b'c', b'o', b'n', b'n', b'e', b'c', b't', b'i', b'o', b'n', b's', b'-', 0xfe, b'.', b'j',
+        b's', b'o', b'n',
+    ]));
+
+    let output = command()
+        .arg("--home")
+        .arg(&home)
+        .arg("--connections")
+        .arg(&connections)
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI starts");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout remains machine JSON");
+    assert_eq!(value["action"], "list");
+    assert_eq!(value["connection_count"], 0);
+    assert_eq!(value["connection_document_effect"], "none");
+    assert!(!connections.exists(), "read-only list must not create the document");
+}
+
+#[cfg(unix)]
+#[test]
 fn non_utf8_host_argument_fails_without_panic_or_reflection() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
