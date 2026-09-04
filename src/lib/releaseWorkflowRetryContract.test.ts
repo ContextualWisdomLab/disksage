@@ -11,27 +11,32 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release workflow retry contract', () => {
-  it('cancels stale first attempts without self-cancelling explicit reruns', () => {
+  it('cancels superseded PR builds while preserving tag and manual releases', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain("cancel-in-progress: ${{ github.run_attempt == 1 }}");
-    expect(workflow).not.toContain('cancel-in-progress: true');
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}",
+    );
   });
 
   it('binds upload and download artifact names to the current rerun attempt', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const verifier = readRepositoryFile('.github/scripts/verify-release-artifacts.sh');
     expect(workflow).toContain(
       'name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}',
     );
     expect(
       workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
     ).toBe(3);
+    expect(verifier).toContain('release-disksage-windows-2022-${run_attempt}');
+    expect(verifier).not.toContain('release-disksage-windows-latest-${run_attempt}');
   });
 
-  it('documents retry-safe concurrency in authoritative evidence', () => {
+  it('documents trigger-aware release concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
-    expect(doctoring).toContain('explicit rerun attempts do not cancel themselves');
-    expect(doctoring).toContain('github.run_attempt == 1');
+    expect(doctoring).toContain('superseded pull-request build');
+    expect(doctoring).toContain("github.event_name == 'pull_request' && github.run_attempt == 1");
+    expect(doctoring).toContain('Re-run all jobs');
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });

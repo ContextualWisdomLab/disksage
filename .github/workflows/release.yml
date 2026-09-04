@@ -14,10 +14,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
-  # A fresh first attempt supersedes stale work, while GitHub's explicit
-  # rerun attempt must not cancel itself inside the same concurrency group.
-  cancel-in-progress: ${{ github.run_attempt == 1 }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 permissions:
   contents: read
