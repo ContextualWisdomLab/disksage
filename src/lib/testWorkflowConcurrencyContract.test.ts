@@ -13,7 +13,7 @@ function readTestWorkflow(): string {
 }
 
 describe('Test workflow supersession', () => {
-  it('cancels obsolete first-attempt work for one ref without making reruns self-cancel', () => {
+  it('cancels only obsolete first-attempt pull-request work without making reruns self-cancel', () => {
     const workflow = readTestWorkflow();
     const concurrencyStart = workflow.indexOf('concurrency:');
     const permissionsStart = workflow.indexOf('permissions:');
@@ -23,10 +23,10 @@ describe('Test workflow supersession', () => {
 
     const concurrencyBlock = workflow.slice(concurrencyStart, permissionsStart);
     expect(concurrencyBlock).toContain(
-      'group: test-${{ github.workflow }}-${{ github.ref }}',
+      'group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}',
     );
     expect(concurrencyBlock).toContain(
-      'cancel-in-progress: ${{ github.run_attempt == 1 }}',
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}",
     );
     expect(concurrencyBlock).not.toContain('github.sha');
     expect(concurrencyBlock).not.toContain('pull_request.head.sha');
