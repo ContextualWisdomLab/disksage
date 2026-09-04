@@ -12,6 +12,12 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 src-tauri/target
 
+# Generated DiskSage desktop icon outputs
+src-tauri/icons/*.png
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns
+src-tauri/icons/icon-manifest.json
+
 .superpowers/
 
 # CodeGraph's local SQLite index is regenerated per checkout and is not release source.
