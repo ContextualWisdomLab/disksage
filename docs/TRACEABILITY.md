@@ -1,0 +1,69 @@
+# DiskSage standards and evidence traceability
+
+**Status:** Living engineering evidence map
+
+**Snapshot:** 2026-09-05
+
+This document records why external standards and primary technical authorities constrain DiskSage behavior. It does not turn a cited source, an open pull request, or a test fixture into shipped evidence. Runtime code, exact-head tests, protected Git history, immutable release artifacts, and recovery receipts remain the acceptance evidence.
+
+## Filesystem publication and race safety
+
+### Connection-document publication — issue #342 / PR #339
+
+**Problem.** `save_connections()` validates a pathname and later creates and renames by pathname. An ancestor can therefore be replaced between check and use. The current implementation also synchronizes the temporary file but does not explicitly synchronize the containing directory after publication.
+
+**Constraints.** The repair must keep validation authority and mutation authority bound to the same directory object. On POSIX systems, temporary creation, replacement, and cleanup are descriptor-relative after the final parent is pinned; a second pathname check is not equivalent. Namespace durability is separate from atomic rename. On Windows, final publication must use a pinned native namespace authority, and temporary creation must not remain redirectable merely because the final rename is handle-relative.
+
+**Accepted design direction.** Linux/macOS use an opened final-directory descriptor with relative create/rename/unlink operations or an equivalent primitive. A successful durable-publication claim includes post-rename directory synchronization. Windows uses native handles/reparse-point-safe authority and a relative or otherwise namespace-pinned publication strategy; `FILE_RENAME_INFO.RootDirectory` is a candidate for the rename half, not proof that pathname temporary creation is safe.
+
+**Rejected alternatives.** Re-running `symlink_metadata()` immediately before rename, shrinking the race window, retry loops, broad permission changes, or pathname-only cleanup do not bind the checked object to the mutated object and therefore do not close CWE-367.
+
+**Exact acceptance evidence.** A real temporary filesystem fixture replaces visible parent A with B (1) before temporary creation and (2) after temporary-file sync but before final publication. Connection JSON must never be redirected into B. Existing destination symlink/reparse-point and non-regular-file cases remain fail closed. Successful publication must remain loadable, preserve Unix 0600 leaf permissions, and distinguish file-data synchronization from namespace synchronization.
+
+### Git-worktree deletion authority — PR #337 / historical donor #156
+
+Git `prunable` metadata, incomplete size/status evidence, dirty state, active process use, and truncated process evidence are not deletion authority. Current owner tests use real temporary Git repositories and linked worktrees. A stale registration whose worktree directory disappeared is an `EvidenceGap`; a dirty or actively used worktree is preserved; none of these read-only audits executes filesystem mutation.
+
+This boundary is intentionally stronger than a synthetic object-state unit test because deletion safety depends on Git registration state, filesystem presence, process state, and bounded evidence being observed together.
+
+## Ontology and provenance boundary
+
+DiskSage filesystem classification uses ontology terms as semantic evidence, not as mutation permission. OWL 2 remains the formal ontology-language reference. SHACL is the validation reference for RDF graph constraints where a shape contract is used. PROV-O is the provenance vocabulary reference when an evidence artifact needs explicit entity/activity/agent provenance. None of these vocabularies authorizes deletion, remote synchronization, or credential use by itself.
+
+Ontology labels remain separate from translated UI resources. A localized label may change presentation; it must not change an ontology identifier, filesystem invariant, reclaim policy, or evidence fingerprint.
+
+## Security mapping
+
+Issue #342 maps to CWE-367 (Time-of-check Time-of-use Race Condition): a resource property is checked, the resource can change before use, and later pathname-based mutation may act on a different object. The mitigation requirement is object/namespace authority continuity, not merely a faster second check.
+
+## Evidence-to-owner matrix
+
+| External authority | DiskSage decision | Canonical owner | Required repository evidence |
+| --- | --- | --- | --- |
+| POSIX.1-2024 `renameat()` | Use opened directory authority to avoid pathname-component replacement races on POSIX publication | #339 / issue #342 | Real ancestor-replacement RED→GREEN fixture; descriptor-relative create/rename/cleanup |
+| POSIX.1-2024 directory durability rationale | Atomic rename does not by itself justify a durable-new-entry claim | #339 / issue #342 | File sync plus containing-directory sync and explicit failure contract |
+| Microsoft `FILE_RENAME_INFO` | Relative rename may resolve against `RootDirectory`; temporary creation still needs pinned namespace authority | #339 / issue #342 | Windows reparse/ancestor replacement fixture and native-handle publication evidence |
+| CWE-367 | Pathname check/use gaps are a security weakness even without a final-component symlink | #339 / SECURITY/THREAT_MODEL | Causal test and stable-authority fix, not timing reduction |
+| OWL 2 | Formal classes/properties/individuals may express filesystem classification semantics | ontology/classification owner | Ontology conformance plus mapping tests; no mutation-authority inference |
+| SHACL | RDF graph validity may be checked against explicit shapes | ontology validation adapter | Fail-closed validation fixtures for required shapes |
+| PROV-O | Provenance relationships may describe evidence production/derivation | evidence/provenance adapter | Stable identifiers and provenance-preservation tests; no deletion authorization |
+
+## References
+
+Microsoft. (2026, May 20). *FILE_RENAME_INFO structure (winbase.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
+
+MITRE. (2026, April 30). *CWE-367: Time-of-check Time-of-use (TOCTOU) race condition (CWE 4.20).* Common Weakness Enumeration. https://cwe.mitre.org/data/definitions/367.html
+
+The Open Group. (2024). *rename, renameat — rename file.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
+
+The Open Group. (2024). *Rationale for Base Definitions: Directory operations and durability.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/xrat/V4_xbd_chap01.html
+
+World Wide Web Consortium. (2012, December 11). *OWL 2 Web Ontology Language: Document overview (Second Edition).* https://www.w3.org/TR/owl-overview/
+
+World Wide Web Consortium. (2013, April 30). *PROV-O: The PROV ontology.* https://www.w3.org/TR/prov-o/
+
+World Wide Web Consortium. (2017, July 20). *Shapes Constraint Language (SHACL).* https://www.w3.org/TR/shacl/
+
+## Source-management note
+
+The standards above are publicly accessible primary authorities. This snapshot does not claim that a local Zotero library contains them. If a Zotero-backed research ledger is later attached, cite its stable local item keys in addition to—not instead of—the canonical standards URLs.
