@@ -2,10 +2,10 @@
 set -euo pipefail
 
 artifact_root="${1:-release-artifacts}"
-run_attempt="${2:-}"
+run_identity="${2:-}"
 
-if [[ -z "$run_attempt" || ! "$run_attempt" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'run attempt must be a positive integer.\n' >&2
+if [[ -z "$run_identity" || ! "$run_identity" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'run identity must be a positive integer.\n' >&2
   exit 1
 fi
 if [[ ! -d "$artifact_root" ]]; then
@@ -40,9 +40,9 @@ require_exactly_one_file() {
 }
 
 expected_dirs=(
-  "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-2022-${run_attempt}"
-  "release-disksage-macos-latest-${run_attempt}"
+  "release-disksage-ubuntu-22.04-${run_identity}"
+  "release-disksage-windows-2022-${run_identity}"
+  "release-disksage-macos-latest-${run_identity}"
 )
 
 mapfile -d '' top_level_entries < <(find "$artifact_root" -mindepth 1 -maxdepth 1 -print0 | sort -z)
