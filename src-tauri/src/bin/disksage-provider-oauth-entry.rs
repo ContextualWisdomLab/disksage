@@ -131,13 +131,13 @@ fn command_line_args() -> Vec<OsString> {
 }
 
 /// Inject the XDG user-data location as the implicit connection document only when the caller did
-/// not select an explicit path. Relative XDG values are invalid authority and are ignored.
+/// not select an explicit home or connection path. Relative XDG values are invalid authority and
+/// are ignored.
 #[cfg(all(not(coverage), unix, not(target_os = "macos")))]
 fn apply_xdg_data_home_default_connections(args: &mut Vec<OsString>) {
-    if args
-        .iter()
-        .any(|argument| argument == OsStr::new("--connections"))
-    {
+    if args.iter().any(|argument| {
+        argument == OsStr::new("--home") || argument == OsStr::new("--connections")
+    }) {
         return;
     }
     let Some(raw_data_home) = std::env::var_os("XDG_DATA_HOME") else {
