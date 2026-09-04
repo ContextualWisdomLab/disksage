@@ -12,4 +12,7 @@ fn main() {
         .unwrap_or_default();
     let audit = disksage_lib::photo_duplicate::audit_photos(&paths, now);
     println!("{}", serde_json::to_string_pretty(&audit).unwrap());
+    if !audit.evidence_complete || audit.inspected_input_count == 0 {
+        std::process::exit(3);
+    }
 }
