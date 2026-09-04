@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Discover marker-adjacent mypy, pytest, and Ruff caches through the existing bounded development-
+  artifact manifest, so reviewed stale tool caches use the same identity-bound, reversible Trash
+  path as other regenerable artifacts; every development-artifact mutation now also requires a
+  complete, idle, bounded path-local active-use observation.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

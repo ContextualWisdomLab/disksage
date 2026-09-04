@@ -76,6 +76,16 @@ catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CA
 automatic action remains limited to the six incident-approved roots until each tool's rebuild and
 active-use contract is independently established.
 
+Project-local `.mypy_cache`, `.pytest_cache`, and `.ruff_cache` directories are regenerable
+development artifacts. DiskSage admits them only beside a matching Python/tool configuration
+marker, then applies the existing bounded metadata manifest, filesystem-object identity, age,
+re-scan, bounded path-local active-use, journal, and reversible OS-Trash gates. Active,
+unsupported, timed-out, failed, or incomplete process evidence leaves the artifact untouched. A
+matching directory name without a project
+marker grants no cleanup authority. A 2026-08-29 temporary-checkout inventory observed about
+1.2 GiB of these caches, principally mypy metadata; that observation justifies discovery but does
+not bypass review or the mutation-time revalidation.
+
 The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
 still preparing. A bounded read-only provider dump showed progress markers and stale `itemNotFound`
 errors, so the operation remained blocked. DiskSage reclaimed only explicitly regenerable package/tool

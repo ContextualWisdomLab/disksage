@@ -679,3 +679,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-29 Python tool-cache receipt
+
+- A read-only inventory of temporary agent checkouts found about 1.2 GiB of regenerable mypy,
+  pytest, and Ruff caches, with mypy metadata accounting for most of the cohort. DiskSage now
+  discovers these directories only when an adjacent tool or Python project marker proves the
+  project boundary.
+- Cleanup continues through the existing bounded manifest, filesystem identity, fresh re-scan,
+  journal, and OS-Trash path. Markerless lookalikes, changed objects, incomplete scans, and active
+  artifacts remain untouched; the observation is product-gap evidence, not deletion authority.

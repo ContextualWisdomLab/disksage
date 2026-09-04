@@ -39,6 +39,15 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (".mypy_cache", &["pyproject.toml", "setup.cfg", "mypy.ini"]),
+    (
+        ".pytest_cache",
+        &["pyproject.toml", "setup.cfg", "pytest.ini", "tox.ini"],
+    ),
+    (
+        ".ruff_cache",
+        &["pyproject.toml", "ruff.toml", ".ruff.toml"],
+    ),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
     (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
@@ -179,6 +188,12 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    // File Provider trees require provider-native state evidence. Treating a cache-shaped
+    // directory inside one as an ordinary local artifact could propagate a Trash mutation to the
+    // cloud account, so this generic cleanup path must not inventory it at all.
+    if crate::cloud::path_inside_managed_file_provider_storage(root) {
+        return Vec::new();
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -194,6 +209,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
+        if crate::cloud::path_inside_managed_file_provider_storage(path) {
+            continue;
+        }
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
         let Some((_, markers)) = artifact_kind(&name) else { continue };
         let parent = path.parent().unwrap_or(root);
@@ -249,7 +267,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
-/// Re-scan and move only unchanged development artifacts to OS Trash.
+/// Re-scan and move only unchanged, provably idle development artifacts to OS Trash.
 ///
 /// The request manifest is deliberately compared against a fresh bounded scan. A path match is
 /// not sufficient because a recreated `target` or `node_modules` directory could otherwise cause
@@ -289,6 +307,20 @@ pub fn clean_artifacts(
                 };
             }
 
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&request.path),
+                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if let Some(error) = active_use_blocker(&active_use) {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.into(),
+                };
+            }
+
             match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
                 &request.object_id,
@@ -309,6 +341,18 @@ pub fn clean_artifacts(
             }
         })
         .collect()
+}
+
+fn active_use_blocker(
+    evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
+) -> Option<&'static str> {
+    if !evidence.assessed || !evidence.evidence_complete {
+        Some("development-artifact-active-use-evidence-incomplete")
+    } else if evidence.active {
+        Some("development-artifact-active-use-detected")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -365,6 +409,42 @@ mod tests {
     }
 
     #[test]
+    fn finds_only_marker_adjacent_python_tool_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "typed", "mypy.ini", ".mypy_cache");
+        project(tmp.path(), "tested", "pytest.ini", ".pytest_cache");
+        project(tmp.path(), "linted", "ruff.toml", ".ruff_cache");
+        fs::create_dir_all(tmp.path().join("unowned/.mypy_cache")).unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let kinds: std::collections::BTreeSet<&str> = found
+            .iter()
+            .map(|artifact| artifact.kind.as_str())
+            .collect();
+
+        assert_eq!(
+            kinds,
+            [".mypy_cache", ".pytest_cache", ".ruff_cache"].into()
+        );
+        assert!(!found.iter().any(|artifact| artifact.project == "unowned"));
+    }
+
+    #[test]
+    fn provider_managed_python_cache_is_never_a_cleanup_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("Library/CloudStorage/OneDrive-Personal");
+        let cache = project(&provider_root, "app", "pytest.ini", ".pytest_cache");
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(cache.exists(), "inventory must not mutate provider content");
+
+        // Re-entering at the provider root must remain fail closed rather than bypassing the
+        // ancestor filter used by a wider scan.
+        assert!(find_artifacts(&provider_root, 0, u64::MAX).is_empty());
+        assert!(cache.exists(), "provider content must remain untouched");
+    }
+
+    #[test]
     fn respects_min_age() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
@@ -409,5 +489,30 @@ mod tests {
         assert!(live.exists());
         assert!(original.exists());
         assert!(!journal.exists(), "stale identity must not create a journal");
+    }
+
+    #[test]
+    fn cleanup_fails_closed_when_active_use_is_detected_or_unavailable() {
+        let mut evidence = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            method: "test".into(),
+            assessed: true,
+            evidence_complete: true,
+            active: true,
+            observed_pids: vec![42],
+            results_truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-detected")
+        );
+
+        evidence.active = false;
+        evidence.evidence_complete = false;
+        evidence.error = Some("test-unavailable".into());
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-evidence-incomplete")
+        );
     }
 }
