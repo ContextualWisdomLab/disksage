@@ -14,7 +14,7 @@ describe('release workflow retry contract', () => {
   it('cancels superseded PR builds while preserving tag and manual releases', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
     expect(workflow).toContain(
-      "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}",
     );
   });
 
@@ -35,7 +35,8 @@ describe('release workflow retry contract', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
     expect(doctoring).toContain('superseded pull-request build');
-    expect(doctoring).toContain("github.event_name == 'pull_request'");
+    expect(doctoring).toContain("github.event_name == 'pull_request' && github.run_attempt == 1");
+    expect(doctoring).toContain('Re-run all jobs');
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });
