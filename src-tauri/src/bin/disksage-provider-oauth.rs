@@ -5,8 +5,6 @@
 //! performs a cloud file write or source eviction.
 
 #[cfg(not(coverage))]
-use std::ffi::{OsStr, OsString};
-#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use std::process::Command;
@@ -17,10 +15,6 @@ use disksage_lib::cloud::{self, CloudProvider, CloudRoot};
 use disksage_lib::provider_capacity::{self, FixedHostProviderCapacityClient};
 #[cfg(not(coverage))]
 use disksage_lib::provider_oauth::{self, OAuthConnection};
-
-#[cfg(not(coverage))]
-#[path = "../home_resolution.rs"]
-mod home_resolution;
 
 #[cfg(not(coverage))]
 const OUTPUT_SCHEMA_VERSION: u32 = 1;
@@ -395,152 +389,9 @@ fn execute(args: Args) -> Result<Output, String> {
 }
 
 #[cfg(not(coverage))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TerminalArgs {
-    Help,
-    Run(Vec<OsString>),
-}
-
-#[cfg(not(coverage))]
-fn is_help(value: &OsStr) -> bool {
-    value == OsStr::new("--help") || value == OsStr::new("-h")
-}
-
-#[cfg(not(coverage))]
-fn parse_terminal_args(args: Vec<OsString>) -> Result<TerminalArgs, String> {
-    match args.as_slice() {
-        [only] if is_help(only) => return Ok(TerminalArgs::Help),
-        values if values.iter().any(|value| is_help(value)) => {
-            return Err("help must be used alone".into());
-        }
-        _ => {}
-    }
-    Ok(TerminalArgs::Run(args))
-}
-
-#[cfg(not(coverage))]
-fn host_path_surrogate(path: &Path) -> &'static str {
-    if path.is_absolute() {
-        #[cfg(windows)]
-        return "C:\\";
-        #[cfg(not(windows))]
-        return "/";
-    }
-    "relative"
-}
-
-#[cfg(not(coverage))]
-fn parse_host_args(args: Vec<OsString>, environment_home: Option<PathBuf>) -> Result<Args, String> {
-    let mut normalized = Vec::with_capacity(args.len());
-    let mut native_home = Vec::new();
-    let mut native_connections = Vec::new();
-    let mut native_cloud_root = Vec::new();
-    let mut index = 0usize;
-
-    while index < args.len() {
-        let option = args[index]
-            .to_str()
-            .ok_or_else(|| "argument-encoding-invalid".to_string())?;
-        match option {
-            "--home" | "--connections" | "--cloud-root" => {
-                normalized.push(option.to_string());
-                index += 1;
-                let raw = args
-                    .get(index)
-                    .ok_or_else(|| format!("{option} requires a value"))?;
-                let path = PathBuf::from(raw);
-                normalized.push(host_path_surrogate(&path).to_string());
-                match option {
-                    "--home" => native_home.push(path),
-                    "--connections" => native_connections.push(path),
-                    "--cloud-root" => native_cloud_root.push(path),
-                    _ => unreachable!("path option match is exhaustive"),
-                }
-            }
-            "--client-id" => {
-                normalized.push(option.to_string());
-                index += 1;
-                let raw = args
-                    .get(index)
-                    .ok_or_else(|| "--client-id requires a value".to_string())?;
-                normalized.push(
-                    raw.to_str()
-                        .ok_or_else(|| "argument-encoding-invalid".to_string())?
-                        .to_string(),
-                );
-            }
-            "--list" | "--connect" | "--verify-capacity" | "--disconnect"
-            | "--manual-browser" | "--write-access" | "--help" | "-h" => {
-                normalized.push(option.to_string());
-            }
-            _ => return Err("unknown argument".into()),
-        }
-        index += 1;
-    }
-
-    let explicit_home = !native_home.is_empty();
-    let explicit_connections = !native_connections.is_empty();
-    let mut parsed = parse_args(&normalized, environment_home)?;
-    if let Some(home) = native_home.into_iter().next() {
-        parsed.home = home;
-    }
-    if let Some(connections) = native_connections.into_iter().next() {
-        parsed.connections = connections;
-    } else if explicit_home && !explicit_connections {
-        parsed.connections = default_connections_path(&parsed.home);
-    }
-    if let Some(cloud_root) = native_cloud_root.into_iter().next() {
-        parsed.cloud_root = Some(cloud_root);
-    }
-    Ok(parsed)
-}
-
-#[cfg(not(coverage))]
-fn environment_home_from(
-    home: Option<PathBuf>,
-    user_profile: Option<PathBuf>,
-    windows_home_drive_path: Option<PathBuf>,
-    windows: bool,
-) -> Option<PathBuf> {
-    let candidates = if windows {
-        vec![home, user_profile, windows_home_drive_path]
-    } else {
-        vec![home]
-    };
-    home_resolution::select_absolute_home(candidates).ok()
-}
-
-#[cfg(all(not(coverage), windows))]
-fn environment_home() -> Option<PathBuf> {
-    environment_home_from(
-        std::env::var_os("HOME").map(PathBuf::from),
-        std::env::var_os("USERPROFILE").map(PathBuf::from),
-        home_resolution::windows_home_drive_path(),
-        true,
-    )
-}
-
-#[cfg(all(not(coverage), not(windows)))]
-fn environment_home() -> Option<PathBuf> {
-    environment_home_from(
-        std::env::var_os("HOME").map(PathBuf::from),
-        None,
-        None,
-        false,
-    )
-}
-
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let terminal_args = parse_terminal_args(std::env::args_os().skip(1).collect())?;
-    let args = match terminal_args {
-        TerminalArgs::Help => {
-            println!("{}", usage());
-            return Ok(());
-        }
-        TerminalArgs::Run(args) => args,
-    };
-    let parsed = parse_host_args(args, environment_home())?;
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let parsed = parse_args(&args, std::env::var_os("HOME").map(PathBuf::from))?;
     let output = execute(parsed)?;
     println!(
         "{}",
@@ -693,7 +544,7 @@ mod tests {
             home.clone(),
         )
         .is_err());
-        assert!(parse_args(&strings(&["--list", "--home", "relative"]), home).is_err());
+        assert!(parse_args(&strings(&["--list", "--home", "relative"]), home,).is_err());
     }
 
     #[test]
@@ -749,29 +600,5 @@ mod tests {
         assert_eq!(encoded["source_eviction_executed"], false);
         assert!(encoded.get("access_token").is_none());
         assert!(encoded.get("refresh_token").is_none());
-    }
-
-    #[test]
-    fn terminal_host_parser_keeps_help_success_separate_from_domain_parsing() {
-        assert_eq!(
-            parse_terminal_args(vec![OsString::from("--help")]).unwrap(),
-            TerminalArgs::Help
-        );
-        assert_eq!(
-            parse_terminal_args(vec![OsString::from("--help"), OsString::from("--list")])
-                .unwrap_err(),
-            "help must be used alone"
-        );
-    }
-
-    #[test]
-    fn windows_environment_home_falls_back_to_user_profile_without_importing_it_on_unix() {
-        let profile = std::env::temp_dir().join("disksage-user-profile");
-        let drive_path = std::env::temp_dir().join("disksage-home-drive-path");
-        assert_eq!(
-            environment_home_from(None, Some(profile.clone()), Some(drive_path), true),
-            Some(profile.clone())
-        );
-        assert_eq!(environment_home_from(None, Some(profile), None, false), None);
     }
 }
