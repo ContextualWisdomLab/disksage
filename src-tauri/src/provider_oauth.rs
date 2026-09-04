@@ -717,7 +717,7 @@ fn callback_code(target: &str, expected_state: &str) -> Result<String, String> {
 }
 
 #[cfg(not(coverage))]
-fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
+fn read_callback_target(stream: &mut TcpStream, expected_host: &str) -> Result<String, String> {
     stream
         .set_nonblocking(false)
         .map_err(|_| "oauth-callback-read-config-failed".to_string())?;
@@ -745,8 +745,8 @@ fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
         return Err("oauth-callback-request-invalid".into());
     }
     let request = std::str::from_utf8(&request).map_err(|_| "oauth-callback-request-invalid")?;
-    let first_line = request
-        .split("\r\n")
+    let mut lines = request.split("\r\n");
+    let first_line = lines
         .next()
         .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
     let mut fields = first_line.split_whitespace();
@@ -758,6 +758,31 @@ fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
         .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
     if fields.next() != Some("HTTP/1.1") || fields.next().is_some() {
         return Err("oauth-callback-request-invalid".into());
+    }
+    let mut host = None;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        let (name, raw_value) = line
+            .split_once(':')
+            .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
+        if name.is_empty() || name.trim() != name {
+            return Err("oauth-callback-request-invalid".into());
+        }
+        if name.eq_ignore_ascii_case("host") {
+            if host.is_some() {
+                return Err("oauth-callback-host-invalid".into());
+            }
+            let value = raw_value.trim_matches(|character| character == ' ' || character == '\t');
+            if value.is_empty() {
+                return Err("oauth-callback-host-invalid".into());
+            }
+            host = Some(value);
+        }
+    }
+    if !host.is_some_and(|value| value.eq_ignore_ascii_case(expected_host)) {
+        return Err("oauth-callback-host-invalid".into());
     }
     Ok(target.to_owned())
 }
@@ -789,7 +814,11 @@ fn send_callback_response(stream: &mut TcpStream, accepted: bool) {
 }
 
 #[cfg(not(coverage))]
-fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<String, String> {
+fn wait_for_callback(
+    listeners: &[TcpListener],
+    expected_state: &str,
+    expected_host: &str,
+) -> Result<String, String> {
     let deadline = Instant::now() + CALLBACK_TIMEOUT;
     while Instant::now() < deadline {
         for listener in listeners {
@@ -799,7 +828,7 @@ fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<
                         send_callback_response(&mut stream, false);
                         continue;
                     }
-                    let result = read_callback_target(&mut stream)
+                    let result = read_callback_target(&mut stream, expected_host)
                         .and_then(|target| callback_code(&target, expected_state));
                     match result {
                         Ok(code) => {
@@ -1090,7 +1119,15 @@ pub fn finish_authorization(
     if pending.provider != root.provider {
         return Err("provider-oauth-root-mismatch".into());
     }
-    let code = Zeroizing::new(wait_for_callback(&pending.listeners, &pending.state)?);
+    let expected_host = pending
+        .redirect_uri
+        .strip_prefix("http://")
+        .ok_or_else(|| "oauth-redirect-uri-invalid".to_string())?;
+    let code = Zeroizing::new(wait_for_callback(
+        &pending.listeners,
+        &pending.state,
+        expected_host,
+    )?);
     let grant = exchange_authorization_code(&pending, code.as_str())?;
     let refresh_token = grant
         .refresh_token
