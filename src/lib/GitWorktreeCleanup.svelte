@@ -251,9 +251,9 @@
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
-        <p class="muted">승인 기록: {removal.approval_path}</p>
+        <p class="muted">승인 기록을 DiskSage 데이터 폴더에 저장했습니다.</p>
         {#if removal.result_path}
-          <p class="muted">결과 기록: {removal.result_path}</p>
+          <p class="muted">결과 기록을 DiskSage 데이터 폴더에 저장했습니다.</p>
         {:else}
           <p class="error" role="alert">{GIT_WORKTREE_RESULT_RECORD_FAILURE}</p>
         {/if}
