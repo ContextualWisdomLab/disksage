@@ -19,12 +19,15 @@ describe('release workflow retry contract', () => {
 
   it('binds upload and download artifact names to the current rerun attempt', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const verifier = readRepositoryFile('.github/scripts/verify-release-artifacts.sh');
     expect(workflow).toContain(
       'name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}',
     );
     expect(
       workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
     ).toBe(3);
+    expect(verifier).toContain('release-disksage-windows-2022-${run_attempt}');
+    expect(verifier).not.toContain('release-disksage-windows-latest-${run_attempt}');
   });
 
   it('documents non-cancelling release concurrency in authoritative evidence', () => {
