@@ -22,6 +22,8 @@ This document records why external standards and primary technical authorities c
 
 **Durability scope.** POSIX.1-2024 explicitly distinguishes directory-operation atomicity from persistence of the modified directory entry: an application that needs the new entry to be durable synchronizes the directory. On Apple platforms, stronger primitives such as `F_FULLFSYNC` have different cost and guarantee boundaries from ordinary `fsync`; DiskSage must name and test the primitive it actually relies on rather than using “atomic” and “durable” interchangeably.
 
+**Research rationale.** Bishop and Dilger (1996) characterize file-access races as failures in which a pathname's name-to-object binding changes between repeated references. That supports treating a repeated pathname check as observation, not as mutation authority. Tsafrir et al. (2008) show that timing/probability-based TOCTTOU defenses can be defeated by adversarial filesystem structures and synchronization. DiskSage therefore uses those papers to justify the threat model and adversarial fixture design, while POSIX and platform APIs remain authoritative for the actual mitigation contract. Neither paper is used to claim that a particular DiskSage implementation is race-free without exact-head filesystem evidence.
+
 ### Git-worktree deletion authority — PR #337 / historical donor #156
 
 Git `prunable` metadata, incomplete size/status evidence, dirty state, active process use, and truncated process evidence are not deletion authority. Current owner tests use real temporary Git repositories and linked worktrees. A stale registration whose worktree directory disappeared is an `EvidenceGap`; a dirty or actively used worktree is preserved; none of these read-only audits executes filesystem mutation.
@@ -44,6 +46,8 @@ Issue #342 maps to CWE-367 (Time-of-check Time-of-use Race Condition): a resourc
 | --- | --- | --- | --- |
 | POSIX.1-2024 `renameat()` and *at-family rationale | Use opened directory authority to avoid pathname-component replacement races on POSIX publication | #344 foundation; #339/#342 consumer | Real ancestor-replacement RED→GREEN fixture; descriptor-relative create/rename/cleanup; domain adoption |
 | POSIX.1-2024 directory durability rationale | Atomic rename does not by itself justify a durable-new-entry claim | #344 foundation; #339/#342 consumer | File sync plus containing-directory sync and explicit failure/uncertainty contract |
+| Bishop & Dilger (1996) | Treat repeated pathname references as vulnerable when the name-to-object binding can change | #344 foundation; #339/#342 consumer | Object-bound authority plus deterministic namespace-replacement fixtures; no “second check” completion claim |
+| Tsafrir et al. (2008) | Do not rely on shrinking a TOCTTOU race window or probabilistic retry as the security boundary | #344 foundation; #339/#342 consumer | Stable namespace authority under adversarial scheduling/structure; platform contract remains primary |
 | Microsoft `FILE_RENAME_INFO` / `SetFileInformationByHandle` | Relative rename may resolve against `RootDirectory`; temporary creation still needs pinned namespace authority | #339 / issue #342 | Windows reparse/ancestor replacement fixture and native-handle creation/replacement evidence |
 | Apple `fsync(2)` / `fcntl(F_FULLFSYNC)` documentation | macOS persistence language must identify the primitive actually used and not overstate crash/power-loss guarantees | #344 foundation / #339 consumer | macOS filesystem fixture plus documented ordinary-vs-stronger sync decision, fallback, and cost |
 | CWE-367 | Pathname check/use gaps are a security weakness even without a final-component symlink | #339 / SECURITY/THREAT_MODEL | Causal test and stable-authority fix, not timing reduction |
@@ -57,6 +61,8 @@ Apple Inc. (n.d.). *Mac OS X manual page for fcntl(2).* Apple Developer Document
 
 Apple Inc. (n.d.). *Mac OS X manual page for fsync(2).* Apple Developer Documentation. https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html
 
+Bishop, M., & Dilger, M. (1996). Checking for race conditions in file accesses. *Computing Systems, 9*(2), 131–152. https://nob.cs.ucdavis.edu/bishop/papers/1996-compsys/
+
 Microsoft. (2026, May 15). *FILE_RENAME_INFO structure (winbase.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
 
 Microsoft. (2021, October 13). *SetFileInformationByHandle function (fileapi.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
@@ -69,6 +75,8 @@ The Open Group. (2024). *Rationale for Base Definitions: Directory operations an
 
 The Open Group. (2024). *Portability considerations: race-free and thread-safe file access.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/xrat/V4_port.html
 
+Tsafrir, D., Hertz, T., Wagner, D. A., & Da Silva, D. (2008). Portably solving file races with hardness amplification. *ACM Transactions on Storage, 4*(3), Article 9. https://doi.org/10.1145/1416944.1416948
+
 World Wide Web Consortium. (2012, December 11). *OWL 2 Web Ontology Language: Document overview (Second Edition).* https://www.w3.org/TR/owl-overview/
 
 World Wide Web Consortium. (2013, April 30). *PROV-O: The PROV ontology.* https://www.w3.org/TR/prov-o/
@@ -77,4 +85,4 @@ World Wide Web Consortium. (2017, July 20). *Shapes Constraint Language (SHACL).
 
 ## Source-management note
 
-The standards above are publicly accessible primary authorities. This snapshot does not claim that a local Zotero library contains them. If a Zotero-backed research ledger is later attached, cite its stable local item keys in addition to—not instead of—the canonical standards URLs.
+The standards and research above are publicly accessible primary/publisher/author sources. This snapshot does not claim that a local Zotero library contains them. If a Zotero-backed research ledger is later attached, cite its stable local item keys in addition to—not instead of—the canonical standards and publication URLs.
