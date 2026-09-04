@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Raise the DiskSage application MSRV and exact local, CI, and release compiler baseline from Rust 1.88 to 1.97.1; keep the compiler reproducible through the root toolchain manifest, enforced by CI and a repository contract test.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
