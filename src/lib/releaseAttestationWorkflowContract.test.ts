@@ -17,7 +17,7 @@ describe("release attestation workflow contract", () => {
     const checkoutIndex = attestJob.indexOf("actions/checkout@");
     const downloadIndex = attestJob.indexOf("name: Download exact release artifact set");
     const verifierIndex = attestJob.indexOf(
-      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
     );
     expect(checkoutIndex).toBeGreaterThanOrEqual(0);
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
