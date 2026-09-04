@@ -130,13 +130,45 @@ fn command_line_args() -> Vec<OsString> {
     std::env::args_os().skip(1).collect()
 }
 
+/// Inject the XDG user-data location as the implicit connection document only when the caller did
+/// not select an explicit path. Relative XDG values are invalid authority and are ignored.
+#[cfg(all(not(coverage), unix, not(target_os = "macos")))]
+fn apply_xdg_data_home_default_connections(args: &mut Vec<OsString>) {
+    if args
+        .iter()
+        .any(|argument| argument == OsStr::new("--connections"))
+    {
+        return;
+    }
+    let Some(raw_data_home) = std::env::var_os("XDG_DATA_HOME") else {
+        return;
+    };
+    if raw_data_home.is_empty() {
+        return;
+    }
+    let data_home = PathBuf::from(raw_data_home);
+    if !data_home.is_absolute() {
+        return;
+    }
+    args.push(OsString::from("--connections"));
+    args.push(
+        data_home
+            .join("com.contextualwisdomlab.disksage")
+            .join("cloud-oauth-connections.json")
+            .into_os_string(),
+    );
+}
+
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = command_line_args();
+    let mut args = command_line_args();
     if matches!(args.as_slice(), [flag] if flag == OsStr::new("--help") || flag == OsStr::new("-h")) {
         println!("{}", implementation::usage_text());
         return Ok(());
     }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    apply_xdg_data_home_default_connections(&mut args);
 
     let environment_home = environment_home_from(
         std::env::var_os("HOME").map(PathBuf::from),
