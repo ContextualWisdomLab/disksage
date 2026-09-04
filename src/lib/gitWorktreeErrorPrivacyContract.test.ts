@@ -31,6 +31,17 @@ describe("Git worktree privacy-safe failure feedback", () => {
     expect(source).toContain("GIT_WORKTREE_RESULT_RECORD_FAILURE");
   });
 
+  it("does not disclose immutable record paths in the desktop UI", () => {
+    const source = readSource("src/lib/GitWorktreeCleanup.svelte");
+
+    expect(source).not.toContain("승인 기록: {removal.approval_path}");
+    expect(source).not.toContain("결과 기록: {removal.result_path}");
+    expect(source).toContain("승인 기록을 DiskSage 데이터 폴더에 저장했습니다.");
+    expect(source).toContain("결과 기록을 DiskSage 데이터 폴더에 저장했습니다.");
+    expect(source).toContain("{#if removal.result_path}");
+    expect(source).toContain("GIT_WORKTREE_RESULT_RECORD_FAILURE");
+  });
+
   it("uses path-free failure copy that directs the next safe action", () => {
     expect(GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE).toBe(
       "Git 저장소를 선택하지 못했습니다. 폴더 접근 권한과 저장소 위치를 확인한 뒤 다시 선택하세요.",
@@ -107,17 +118,16 @@ describe("Git worktree privacy-safe failure feedback", () => {
   });
 
   it("deduplicates evidence guidance and never reflects unknown blocker text", () => {
+    const fallback =
+      "증거가 불완전합니다. 해당 worktree의 Git 상태와 활성 사용을 직접 확인한 뒤 다시 감사하세요.";
     const injected = "/Users/example/private-worktree: probe failed";
-    expect(evidenceGapActions([injected])).toEqual([
-      "증거가 불완전합니다. 해당 worktree의 Git 상태와 활성 사용을 직접 확인한 뒤 다시 감사하세요.",
-    ]);
+    expect(evidenceGapActions([injected])).toEqual([fallback]);
     expect(evidenceGapActions([injected]).join(" ")).not.toContain(injected);
-    expect(evidenceGapActions([])).toEqual([
-      "증거가 불완전합니다. 해당 worktree의 Git 상태와 활성 사용을 직접 확인한 뒤 다시 감사하세요.",
-    ]);
+    expect(evidenceGapActions([])).toEqual([fallback]);
     expect(
       evidenceGapActions(["active-use-evidence-incomplete", "active-use-evidence-incomplete"]),
     ).toHaveLength(1);
+    expect(evidenceGapActions(["toString", "constructor"])).toEqual([fallback]);
   });
 
   it("turns removal stop reasons into bounded stop-and-recheck actions", () => {
@@ -143,6 +153,8 @@ describe("Git worktree privacy-safe failure feedback", () => {
     expect(removalStoppedAction(injected)).toBe(fallback);
     expect(removalStoppedAction(null)).toBe(fallback);
     expect(removalStoppedAction("")).toBe(fallback);
+    expect(removalStoppedAction("toString")).toBe(fallback);
+    expect(removalStoppedAction("constructor")).toBe(fallback);
     expect(removalStoppedAction(injected)).not.toContain(injected);
   });
 
