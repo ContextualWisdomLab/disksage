@@ -85,7 +85,20 @@ mod implementation {
 
         let explicit_home = !native_home.is_empty();
         let explicit_connections = !native_connections.is_empty();
-        let mut parsed = parse_args(&normalized, environment_home)?;
+        let parser_home = if environment_home.is_none()
+            && !explicit_home
+            && explicit_connections
+            && normalized.iter().any(|argument| argument == "--list")
+        {
+            native_connections
+                .first()
+                .filter(|path| path.is_absolute())
+                .and_then(|path| path.parent())
+                .map(Path::to_path_buf)
+        } else {
+            environment_home
+        };
+        let mut parsed = parse_args(&normalized, parser_home)?;
         if let Some(home) = native_home.into_iter().next() {
             parsed.home = home;
         }
