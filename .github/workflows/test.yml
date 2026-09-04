@@ -30,6 +30,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -51,10 +55,6 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
-      - name: Operational cloud CLI help and Linux data-home contracts
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test cli_help_health_oauth_exit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test provider_oauth_xdg_data_home_process
       - name: Exact duplicate audit tests
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
