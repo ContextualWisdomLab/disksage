@@ -124,6 +124,11 @@ name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-colima-disk-reclaim"
+path = "src/bin/disksage-colima-disk-reclaim.rs"
+required-features = ["colima-macos-cli"]
+
+[[bin]]
 name = "disksage-provider-oauth"
 path = "src/bin/disksage-provider-oauth.rs"
 required-features = ["cloud-cli"]
@@ -193,6 +198,7 @@ plist = "1"
 volume-cli = []
 archive-cli = []
 cloud-cli = []
+colima-macos-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]

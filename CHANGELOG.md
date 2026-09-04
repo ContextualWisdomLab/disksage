@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a read-only, identity-bound Colima disk-allocation plan and fresh-approval unavailable receipt; running profiles, symlinked storage, traversal, and undocumented raw-disk compaction fail closed while the official CLI lacks stopped-VM native compaction.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
