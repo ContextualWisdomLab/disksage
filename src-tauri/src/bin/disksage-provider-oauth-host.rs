@@ -71,19 +71,39 @@ fn parse_terminal_args(args: Vec<OsString>) -> Result<TerminalArgs, String> {
     ))
 }
 
+#[cfg(not(coverage))]
+fn environment_home_from(
+    home: Option<PathBuf>,
+    user_profile: Option<PathBuf>,
+    windows_home_drive_path: Option<PathBuf>,
+    windows: bool,
+) -> Option<PathBuf> {
+    let candidates = if windows {
+        vec![home, user_profile, windows_home_drive_path]
+    } else {
+        vec![home]
+    };
+    home_resolution::select_absolute_home(candidates).ok()
+}
+
 #[cfg(all(not(coverage), windows))]
 fn environment_home() -> Option<PathBuf> {
-    home_resolution::select_absolute_home([
+    environment_home_from(
         std::env::var_os("HOME").map(PathBuf::from),
         std::env::var_os("USERPROFILE").map(PathBuf::from),
         home_resolution::windows_home_drive_path(),
-    ])
-    .ok()
+        true,
+    )
 }
 
 #[cfg(all(not(coverage), not(windows)))]
 fn environment_home() -> Option<PathBuf> {
-    home_resolution::select_absolute_home([std::env::var_os("HOME").map(PathBuf::from)]).ok()
+    environment_home_from(
+        std::env::var_os("HOME").map(PathBuf::from),
+        None,
+        None,
+        false,
+    )
 }
 
 #[cfg(not(coverage))]
@@ -94,7 +114,9 @@ fn main() {
             println!("{}", implementation::usage_text());
             Ok(())
         }
-        Ok(TerminalArgs::Run(args)) => implementation::run_with_environment(args, environment_home()),
+        Ok(TerminalArgs::Run(args)) => {
+            implementation::run_with_environment(args, environment_home())
+        }
         Err(error) => Err(error),
     };
     if let Err(error) = result {
@@ -125,5 +147,21 @@ mod tests {
             parse_terminal_args(vec![OsString::from("--list")]).unwrap(),
             TerminalArgs::Run(vec!["--list".to_string()])
         );
+    }
+
+    #[test]
+    fn windows_home_selection_uses_the_first_absolute_native_candidate() {
+        let profile = std::env::temp_dir().join("disksage-user-profile");
+        let drive_path = std::env::temp_dir().join("disksage-home-drive-path");
+        assert_eq!(
+            environment_home_from(None, Some(profile.clone()), Some(drive_path), true),
+            Some(profile)
+        );
+    }
+
+    #[test]
+    fn non_windows_home_selection_does_not_import_windows_fallbacks() {
+        let profile = std::env::temp_dir().join("disksage-user-profile");
+        assert_eq!(environment_home_from(None, Some(profile), None, false), None);
     }
 }
