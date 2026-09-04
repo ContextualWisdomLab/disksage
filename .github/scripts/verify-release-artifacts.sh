@@ -2,10 +2,10 @@
 set -euo pipefail
 
 artifact_root="${1:-release-artifacts}"
-run_attempt="${2:-}"
+run_identity="${2:-}"
 
-if [[ -z "$run_attempt" || ! "$run_attempt" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'run attempt must be a positive integer.\n' >&2
+if [[ -z "$run_identity" || ! "$run_identity" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'run identity must be a positive integer.\n' >&2
   exit 1
 fi
 if [[ ! -d "$artifact_root" ]]; then
@@ -13,28 +13,36 @@ if [[ ! -d "$artifact_root" ]]; then
   exit 1
 fi
 
+# Require exactly one regular bundle file directly inside its matrix-defined bundle directory.
 require_exactly_one_path() {
-  local path_pattern="$1" label="$2" count=0 matched_path=""
-  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -path "$path_pattern" -print0)
+  local directory="$1" file_pattern="$2" label="$3" count=0
+  if [[ -d "$artifact_root/$directory" ]]; then
+    while IFS= read -r -d '' _; do count=$((count + 1)); done < <(
+      find "$artifact_root/$directory" -mindepth 1 -maxdepth 1 -type f -name "$file_pattern" -print0
+    )
+  fi
   if [[ $count -ne 1 ]]; then
     printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
     exit 1
   fi
 }
 
+# Require exactly one named operational artifact directly inside its platform-scoped directory.
 require_exactly_one_file() {
-  local file_name="$1" count=0 matched_path=""
-  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -name "$file_name" -print0)
+  local directory="$1" file_name="$2" count=0
+  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(
+    find "$artifact_root/$directory" -mindepth 1 -maxdepth 1 -type f -name "$file_name" -print0
+  )
   if [[ $count -ne 1 ]]; then
-    printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
+    printf 'Expected exactly one release artifact named %s in %s, found %s.\n' "$file_name" "$directory" "$count" >&2
     exit 1
   fi
 }
 
 expected_dirs=(
-  "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-latest-${run_attempt}"
-  "release-disksage-macos-latest-${run_attempt}"
+  "release-disksage-ubuntu-22.04-${run_identity}"
+  "release-disksage-windows-2022-${run_identity}"
+  "release-disksage-macos-latest-${run_identity}"
 )
 
 mapfile -d '' top_level_entries < <(find "$artifact_root" -mindepth 1 -maxdepth 1 -print0 | sort -z)
@@ -55,22 +63,24 @@ if [[ -n "$unexpected_entry" ]]; then
   exit 1
 fi
 
-require_exactly_one_path '*/bundle/deb/*.deb' 'Debian bundle'
-require_exactly_one_path '*/bundle/appimage/*.AppImage' 'AppImage bundle'
-require_exactly_one_path '*/bundle/msi/*.msi' 'Windows MSI bundle'
-require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'
-require_exactly_one_path '*/bundle/dmg/*.dmg' 'macOS DMG bundle'
+require_exactly_one_path "${expected_dirs[0]}/bundle/deb" '*.deb' 'Debian bundle'
+require_exactly_one_path "${expected_dirs[0]}/bundle/appimage" '*.AppImage' 'AppImage bundle'
+require_exactly_one_path "${expected_dirs[1]}/bundle/msi" '*.msi' 'Windows MSI bundle'
+require_exactly_one_path "${expected_dirs[1]}/bundle/nsis" '*.exe' 'Windows NSIS bundle'
+require_exactly_one_path "${expected_dirs[2]}/bundle/dmg" '*.dmg' 'macOS DMG bundle'
 
-for required_name in \
-  disksage-cloud-plan-linux-x86_64 \
-  disksage-duplicate-audit-linux-x86_64 \
-  disksage-cloud-plan-windows-x86_64.exe \
-  disksage-duplicate-audit-windows-x86_64.exe \
-  disksage-cloud-plan-macos-arm64 \
-  disksage-duplicate-audit-macos-arm64; do
-  require_exactly_one_file "$required_name"
-  require_exactly_one_file "$required_name.sha256"
-done
+require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64
+require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64.sha256
+require_exactly_one_file "${expected_dirs[0]}" disksage-duplicate-audit-linux-x86_64
+require_exactly_one_file "${expected_dirs[0]}" disksage-duplicate-audit-linux-x86_64.sha256
+require_exactly_one_file "${expected_dirs[1]}" disksage-cloud-plan-windows-x86_64.exe
+require_exactly_one_file "${expected_dirs[1]}" disksage-cloud-plan-windows-x86_64.exe.sha256
+require_exactly_one_file "${expected_dirs[1]}" disksage-duplicate-audit-windows-x86_64.exe
+require_exactly_one_file "${expected_dirs[1]}" disksage-duplicate-audit-windows-x86_64.exe.sha256
+require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64
+require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64.sha256
+require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64
+require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64.sha256
 
 checksum_files=()
 checksum_file=""
@@ -113,8 +123,7 @@ for checksum_file in "${checksum_files[@]}"; do
 done
 
 regular_file_count=0
-matched_path=""
-while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
+while IFS= read -r -d '' _; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
 if [[ $regular_file_count -ne 17 ]]; then
   printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
   exit 1
