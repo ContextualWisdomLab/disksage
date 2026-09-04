@@ -73,6 +73,7 @@ pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
+pub mod onedrive_internal_pressure;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
