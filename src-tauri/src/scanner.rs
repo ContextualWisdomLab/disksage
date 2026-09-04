@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -44,12 +45,172 @@ pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_ro
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+pub(crate) fn provider_home_root() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|home| home.is_absolute())
+}
+
+fn provider_identity_path(path: &Path, traversal_root: &Path, identity_root: &Path) -> PathBuf {
+    path.strip_prefix(traversal_root)
+        .map(|relative| identity_root.join(relative))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_windows_icloud_drive_root(path: &Path, home_root: &Path) -> bool {
+    path == home_root.join("iCloud Drive")
+}
+
+pub(crate) fn is_within_managed_provider_scope(path: &Path, home_root: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return [
+            home_root.join("Library").join("CloudStorage"),
+            home_root.join("Library").join("Mobile Documents"),
+            home_root.join("Google Drive"),
+        ]
+        .iter()
+        .any(|provider_root| path.starts_with(provider_root));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Ok(relative) = path.strip_prefix(home_root) else {
+            return false;
+        };
+        let Some(first) = relative
+            .components()
+            .next()
+            .map(|component| component.as_os_str())
+        else {
+            return false;
+        };
+        let Some(name) = first.to_str() else {
+            return false;
+        };
+        name == "OneDrive"
+            || name.starts_with("OneDrive - ")
+            || name == "Google Drive"
+            || (cfg!(windows) && name == "iCloud Drive")
+    }
+}
+
+fn is_managed_provider_root_with_home(
+    path: &Path,
+    traversal_root: &Path,
+    home_root: Option<&Path>,
+) -> bool {
+    let Ok(relative) = path.strip_prefix(traversal_root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty() {
+        return false;
+    }
+    let Some(home_root) = home_root else {
+        return false;
+    };
+
+    #[cfg(target_os = "macos")]
+    let managed_roots = [
+        home_root.join("Library").join("CloudStorage"),
+        home_root.join("Library").join("Mobile Documents"),
+        home_root.join("Google Drive"),
+    ];
+    #[cfg(target_os = "macos")]
+    return managed_roots
+        .iter()
+        .any(|managed_root| managed_root == path && managed_root.starts_with(traversal_root));
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let is_known_root = [home_root.join("OneDrive"), home_root.join("Google Drive")]
+            .iter()
+            .any(|managed_root| managed_root == path);
+        let is_named_account_root = path
+            .parent()
+            .is_some_and(|parent| parent == home_root)
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "OneDrive" || name.starts_with("OneDrive - "));
+        #[cfg(windows)]
+        let is_windows_icloud_root = is_windows_icloud_drive_root(path, home_root);
+        #[cfg(not(windows))]
+        let is_windows_icloud_root = false;
+        return (is_known_root || is_named_account_root || is_windows_icloud_root)
+            && path.starts_with(traversal_root);
+    }
+}
+
+fn keep_scan_entry(
+    entry: &walkdir::DirEntry,
+    traversal_root: &Path,
+    provider_identity_root: &Path,
+    provider_roots_skipped: &Cell<u64>,
+    provider_home: Option<&Path>,
+) -> bool {
+    if !keep_entry(entry) {
+        return false;
+    }
+    if entry.file_type().is_dir() {
+        let is_provider_root = provider_home.is_some_and(|home| {
+            let identity_path =
+                provider_identity_path(entry.path(), traversal_root, provider_identity_root);
+            is_managed_provider_root_with_home(
+                &identity_path,
+                provider_identity_root,
+                Some(home),
+            )
+        });
+        if is_provider_root {
+            provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
+            return false;
+        }
+    }
+    true
+}
+
 /// ponytail: progress 간격을 파라미터로 뺀 것은 테스트 주입용, 외부 API는 scan_dir
 pub fn scan_dir_with_interval(
     root: &Path,
     cancel: &AtomicBool,
     progress_every: u64,
+    on_progress: impl FnMut(&ScanStats),
+) -> ScanResult {
+    let provider_home = provider_home_root();
+    scan_dir_with_interval_inner(
+        root,
+        cancel,
+        progress_every,
+        on_progress,
+        provider_home.as_deref(),
+    )
+}
+
+#[cfg(test)]
+fn scan_dir_with_interval_for_home(
+    root: &Path,
+    cancel: &AtomicBool,
+    progress_every: u64,
+    on_progress: impl FnMut(&ScanStats),
+    provider_home: &Path,
+) -> ScanResult {
+    scan_dir_with_interval_inner(
+        root,
+        cancel,
+        progress_every,
+        on_progress,
+        Some(provider_home),
+    )
+}
+
+fn scan_dir_with_interval_inner(
+    root: &Path,
+    cancel: &AtomicBool,
+    progress_every: u64,
     mut on_progress: impl FnMut(&ScanStats),
+    provider_home: Option<&Path>,
 ) -> ScanResult {
     let progress_every = progress_every.max(1);
     let mut dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
@@ -59,11 +220,46 @@ pub fn scan_dir_with_interval(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    // Compare provider identities in one canonical namespace without canonicalizing each walked
+    // entry. This avoids Windows `\\?\` path mismatches and macOS `/var` -> `/private/var`
+    // mismatches while preserving the requested/root spelling used for user-facing scan results.
+    let provider_identity_root = std::fs::canonicalize(&traversal_root)
+        .unwrap_or_else(|_| traversal_root.clone());
+    let normalized_provider_home = provider_home.map(|home| {
+        std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf())
+    });
+    if normalized_provider_home
+        .as_deref()
+        .is_some_and(|home| is_within_managed_provider_scope(&provider_identity_root, home))
+    {
+        let stats = ScanStats {
+            skipped: 1,
+            ..ScanStats::default()
+        };
+        on_progress(&stats);
+        return ScanResult {
+            root: root.to_path_buf(),
+            dir_sizes,
+            top_files: Vec::new(),
+            stats,
+            cancelled: false,
+        };
+    }
+    let provider_roots_skipped = Cell::new(0_u64);
+    let mut reported_provider_roots_skipped = 0_u64;
 
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(keep_entry);
+        .filter_entry(|entry| {
+            keep_scan_entry(
+                entry,
+                &traversal_root,
+                &provider_identity_root,
+                &provider_roots_skipped,
+                normalized_provider_home.as_deref(),
+            )
+        });
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -101,9 +297,20 @@ pub fn scan_dir_with_interval(
         }
         // dir도 file도 아닌 항목(FIFO/소켓 등)은 집계 없이 무시됨 (심링크/reparse는 keep_entry가 순회에서 제외)
         if seen % progress_every == 0 {
-            on_progress(&stats);
+            let skipped_provider_roots = provider_roots_skipped.get();
+            let mut progress = stats.clone();
+            progress.skipped = progress.skipped.saturating_add(skipped_provider_roots);
+            on_progress(&progress);
+            reported_provider_roots_skipped = skipped_provider_roots;
         }
     }
+    let final_provider_roots_skipped = provider_roots_skipped.get();
+    if final_provider_roots_skipped > reported_provider_roots_skipped {
+        let mut progress = stats.clone();
+        progress.skipped = progress.skipped.saturating_add(final_provider_roots_skipped);
+        on_progress(&progress);
+    }
+    stats.skipped = stats.skipped.saturating_add(final_provider_roots_skipped);
 
     let mut top_files: Vec<(PathBuf, u64)> = top
         .into_iter()
@@ -153,6 +360,74 @@ mod tests {
     // 공유 no-op 진행 콜백 — progress_every_zero_does_not_panic(간격 1)에서 실제로 실행되므로
     // 각 테스트마다 실행되지 않는 클로저(커버리지에 0으로 집계됨)를 만들지 않는다
     fn noop(_: &ScanStats) {}
+
+    fn scan_with_home(root: &Path, provider_home: &Path) -> ScanResult {
+        scan_dir_with_interval_for_home(root, &AtomicBool::new(false), 1, noop, provider_home)
+    }
+
+    #[test]
+    fn provider_identity_namespace_keeps_home_and_entries_comparable() {
+        let raw_root = Path::new("/raw-home");
+        let identity_root = Path::new("/identity-home");
+        let raw_provider = if cfg!(target_os = "macos") {
+            raw_root.join("Library").join("CloudStorage")
+        } else {
+            raw_root.join("OneDrive")
+        };
+        let identity_provider = provider_identity_path(&raw_provider, raw_root, identity_root);
+
+        assert!(is_managed_provider_root_with_home(
+            &identity_provider,
+            identity_root,
+            Some(identity_root),
+        ));
+    }
+
+    #[test]
+    fn windows_icloud_drive_identity_is_home_level_only() {
+        let home_root = Path::new("/synthetic-home");
+        assert!(is_windows_icloud_drive_root(
+            &home_root.join("iCloud Drive"),
+            home_root,
+        ));
+        assert!(!is_windows_icloud_drive_root(
+            &home_root.join("Projects").join("iCloud Drive"),
+            home_root,
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_provider_identity_prunes_onedrive() {
+        let raw_root = PathBuf::from(r"C:\Users\DiskSage");
+        let identity_root = PathBuf::from(r"\\?\C:\Users\DiskSage");
+        let raw_provider = raw_root.join("OneDrive");
+        let identity_provider = provider_identity_path(&raw_provider, &raw_root, &identity_root);
+
+        assert_eq!(identity_provider, identity_root.join("OneDrive"));
+        assert!(is_managed_provider_root_with_home(
+            &identity_provider,
+            &identity_root,
+            Some(&identity_root),
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_icloud_drive_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("iCloud Drive");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(!result.dir_sizes.contains_key(&provider_root));
+    }
 
     #[test]
     fn aggregates_dir_sizes_up_the_tree() {
@@ -235,6 +510,255 @@ mod tests {
         let res = scan_dir(root, &cancel, noop);
         assert!(res.cancelled);
         assert!(res.stats.files < 50);
+    }
+
+    #[test]
+    fn ancestor_scan_prunes_provider_root_before_file_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(!result
+            .top_files
+            .iter()
+            .any(|(path, _)| path.starts_with(&provider_root)));
+        assert!(!result.dir_sizes.contains_key(&provider_root));
+    }
+
+    #[test]
+    fn explicitly_selected_provider_root_is_not_traversed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("selected.bin"), 11);
+
+        let result = scan_with_home(&provider_root, tmp.path());
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(result.dir_sizes.is_empty());
+        assert!(result.top_files.is_empty());
+    }
+
+    #[test]
+    fn explicitly_selected_provider_descendant_is_not_traversed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library/CloudStorage/ProviderAccount")
+        } else {
+            tmp.path().join("OneDrive/Folder")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 11);
+
+        let result = scan_with_home(&provider_root, tmp.path());
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_home_scan_prunes_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_home = tmp.path().join("real-home");
+        fs::create_dir(&real_home).unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            real_home.join("Library").join("CloudStorage")
+        } else {
+            real_home.join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        let selected_home = tmp.path().join("selected-home");
+        std::os::unix::fs::symlink(&real_home, &selected_home).unwrap();
+
+        let result = scan_with_home(&selected_home, &selected_home);
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(result.top_files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ancestor_of_symlinked_home_still_prunes_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_home = tmp.path().join("real-home");
+        fs::create_dir(&real_home).unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            real_home.join("Library").join("CloudStorage")
+        } else {
+            real_home.join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        let home_alias = tmp.path().join("home-alias");
+        std::os::unix::fs::symlink(&real_home, &home_alias).unwrap();
+
+        let result = scan_with_home(tmp.path(), &home_alias);
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(result.top_files.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn library_ancestor_scan_prunes_cloud_storage_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("Library");
+        let provider_root = library.join("CloudStorage");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&library.join("local.bin"), 7);
+
+        let result = scan_with_home(&library, tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_google_drive_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("Google Drive");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[test]
+    fn progress_includes_pruned_provider_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+        let observed_skipped = Cell::new(0_u64);
+
+        let result = scan_dir_with_interval_for_home(
+            tmp.path(),
+            &AtomicBool::new(false),
+            1,
+            |progress| observed_skipped.set(progress.skipped),
+            tmp.path(),
+        );
+
+        assert_eq!(result.stats.skipped, 1);
+        assert_eq!(observed_skipped.get(), 1);
+    }
+
+    #[test]
+    fn final_progress_reports_provider_root_skip_without_followup_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        let observed_skipped = Cell::new(0_u64);
+
+        let result = scan_dir_with_interval_for_home(
+            tmp.path(),
+            &AtomicBool::new(false),
+            1,
+            |progress| observed_skipped.set(progress.skipped),
+            tmp.path(),
+        );
+
+        assert_eq!(result.stats.skipped, 1);
+        assert_eq!(observed_skipped.get(), 1);
+    }
+
+    #[test]
+    fn nested_provider_named_directory_is_scanned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("Projects");
+        let nested_provider = nested.join(if cfg!(target_os = "macos") {
+            "Google Drive"
+        } else {
+            "OneDrive"
+        });
+        fs::create_dir_all(&nested_provider).unwrap();
+        write(&nested_provider.join("local.bin"), 13);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 13);
+        assert_eq!(result.stats.skipped, 0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn named_onedrive_account_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("OneDrive - Example");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_scan_root_still_prunes_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_home = tmp.path().join("real-home");
+        let alias = tmp.path().join("home-alias");
+        let provider_root = if cfg!(target_os = "macos") {
+            real_home.join("Library").join("CloudStorage")
+        } else {
+            real_home.join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&real_home.join("local.bin"), 7);
+        std::os::unix::fs::symlink(&real_home, &alias).unwrap();
+
+        let result = scan_with_home(&alias, &real_home);
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
     }
 
     #[cfg(unix)]
