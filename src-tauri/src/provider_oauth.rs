@@ -719,6 +719,9 @@ fn callback_code(target: &str, expected_state: &str) -> Result<String, String> {
 #[cfg(not(coverage))]
 fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
     stream
+        .set_nonblocking(false)
+        .map_err(|_| "oauth-callback-read-config-failed".to_string())?;
+    stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|_| "oauth-callback-read-config-failed".to_string())?;
     let mut request = Vec::new();
