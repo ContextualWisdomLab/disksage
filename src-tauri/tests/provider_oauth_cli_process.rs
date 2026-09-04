@@ -27,7 +27,7 @@ fn connection_id(provider: CloudProvider, root_id: &str, root_path: &str) -> Str
     hasher
         .finalize()
         .iter()
-        .map(|byte| format!("{byte:02x}"))
+        .map(|byte| format!("{byte:02h}"))
         .collect()
 }
 
@@ -79,6 +79,7 @@ fn read_only_list_uses_userprofile_when_home_is_absent() {
     let temp = tempfile::tempdir().expect("temporary Windows profile root should be created");
     let output = command()
         .env_remove("HOME")
+        .env_remove("APPDATA")
         .env("USERPROFILE", temp.path())
         .arg("--list")
         .output()
@@ -138,6 +139,39 @@ fn read_only_list_uses_redirected_roaming_appdata_for_default_connection_documen
             .exists(),
         "read-only list must not create a stale local-profile connection document"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn read_only_list_can_use_redirected_roaming_appdata_without_userprofile() {
+    let temp = tempfile::tempdir().expect("temporary Windows authority root should be created");
+    let appdata = temp.path().join("redirected-roaming-appdata");
+    let app_directory = appdata.join(APP_IDENTIFIER);
+    std::fs::create_dir_all(&app_directory).expect("redirected APPDATA fixture should be created");
+
+    let connection = google_connection(&temp.path().join("cloud-root"));
+    let document = app_directory.join("cloud-oauth-connections.json");
+    write_private_document(&document, std::slice::from_ref(&connection));
+
+    let output = command()
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("APPDATA", &appdata)
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout should remain JSON");
+    assert_eq!(value["action"], "list");
+    assert_eq!(value["connection_count"], 1);
+    assert_eq!(value["connections"][0]["connection_id"], connection.connection_id);
+    assert_eq!(value["connection_document_effect"], "none");
+    assert_eq!(value["credential_store_effect"], "none");
+    assert_eq!(value["cloud_write_executed"], false);
+    assert_eq!(value["source_eviction_executed"], false);
 }
 
 #[cfg(unix)]
