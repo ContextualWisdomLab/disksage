@@ -9,6 +9,8 @@ mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
+mod preferred_scan_roots;
+#[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
@@ -105,7 +107,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
-            commands::list_roots,
+            preferred_scan_roots::list_roots,
             commands::start_scan,
             commands::cancel_scan,
             commands::cancel_cloud_copy,

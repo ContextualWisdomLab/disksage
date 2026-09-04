@@ -248,25 +248,6 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .collect()
 }
 
-#[tauri::command]
-pub fn list_roots() -> Vec<String> {
-    #[cfg(windows)]
-    {
-        ('A'..='Z')
-            .filter_map(|c| {
-                let d = format!("{c}:\\");
-                Path::new(&d).exists().then_some(d)
-            })
-            .collect()
-    }
-    #[cfg(not(windows))]
-    {
-        let mut roots = vec!["/".to_string()];
-        roots.extend(std::env::var("HOME").ok());
-        roots
-    }
-}
-
 /// 순수: TTL 문자열 → Ontology (테스트 대상). 잘못된 TTL은 Err.
 pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String> {
     crate::ontology::parse_ttl(ttl)
@@ -3512,16 +3493,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn parse_move_entry_malformed_is_none() {
         assert_eq!(parse_move_entry("no arrow here"), None);
-    }
-
-    #[test]
-    fn list_roots_returns_platform_roots() {
-        let roots = list_roots();
-        assert!(!roots.is_empty());
-        #[cfg(windows)]
-        assert!(roots.iter().any(|r| r.ends_with(":\\")));
-        #[cfg(not(windows))]
-        assert!(roots.contains(&"/".to_string()));
     }
 
     #[test]

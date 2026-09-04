@@ -1,0 +1,62 @@
+name: Storybook Accessibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storybook-accessibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  storybook-accessibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          persist-credentials: false
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          test "$actual_head" = "$EXPECTED_HEAD_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+          cache: npm
+      - run: npm ci
+      - name: Build static Storybook
+        run: npm run build-storybook
+      - name: Install Chromium for Storybook interaction tests
+        run: npx playwright install --with-deps chromium
+      - name: Run Storybook accessibility and interaction tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 6006 --directory storybook-static >/tmp/disksage-storybook.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:6006/ >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == "30" ]]; then
+              cat /tmp/disksage-storybook.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          npm run test-storybook -- --url http://127.0.0.1:6006

@@ -73,7 +73,7 @@
   }
 </script>
 
-<main>
+<main id="main-content" tabindex="-1">
   <h1>DiskSage</h1>
   <div class="controls">
     <select bind:value={selectedRoot} disabled={scanning}>

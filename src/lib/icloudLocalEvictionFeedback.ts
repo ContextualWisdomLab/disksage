@@ -27,7 +27,7 @@ const PLAN_BLOCKER_ACTIONS: Readonly<Record<string, string>> = {
     "이미 로컬 사본이 없을 수 있습니다. Finder에서 다운로드 상태를 확인하세요.",
   "icloud-item-not-ubiquitous": "iCloud Drive 안의 파일을 다시 선택하세요.",
   "icloud-file-provider-native-status-unavailable":
-    "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 판정하세요.",
+    "iCloud 상태 확인이 끝나지 않았습니다. 잠시 후 다시 확인하세요.",
   "icloud-upload-not-confirmed":
     "iCloud 업로드가 완료될 때까지 기다린 뒤 다시 판정하세요.",
   "icloud-upload-still-running":
