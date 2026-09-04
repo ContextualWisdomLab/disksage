@@ -166,7 +166,7 @@ describe('release artifact verifier directory contract', () => {
     const attestJob = workflow.slice(attestStart, publishStart);
     const downloadOffset = attestJob.indexOf('- name: Download exact release artifact set');
     const verifierOffset = attestJob.indexOf(
-      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
     );
     const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
 
