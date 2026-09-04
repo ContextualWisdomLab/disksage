@@ -11,10 +11,11 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release workflow retry contract', () => {
-  it('preserves in-flight release builds across newer heads and explicit reruns', () => {
+  it('cancels superseded PR builds while preserving tag and manual releases', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain('cancel-in-progress: false');
-    expect(workflow).not.toContain('cancel-in-progress: true');
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+    );
   });
 
   it('binds upload and download artifact names to the current rerun attempt', () => {
@@ -30,11 +31,11 @@ describe('release workflow retry contract', () => {
     expect(verifier).not.toContain('release-disksage-windows-latest-${run_attempt}');
   });
 
-  it('documents non-cancelling release concurrency in authoritative evidence', () => {
+  it('documents trigger-aware release concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
-    expect(doctoring).toContain('release concurrency never cancels an in-flight build');
-    expect(doctoring).toContain('cancel-in-progress: false');
+    expect(doctoring).toContain('superseded pull-request build');
+    expect(doctoring).toContain("github.event_name == 'pull_request'");
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });
