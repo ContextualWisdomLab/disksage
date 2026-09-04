@@ -4,6 +4,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     paths:
       - ".github/workflows/release.yml"
       - ".github/scripts/verify-release-artifacts.sh"
@@ -14,14 +15,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  # A fresh first attempt supersedes stale work, while GitHub's explicit
+  # rerun attempt must not cancel itself inside the same concurrency group.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     permissions:
       contents: read
     env:
