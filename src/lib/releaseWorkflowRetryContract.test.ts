@@ -11,27 +11,26 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release workflow retry contract', () => {
-  it('cancels stale first attempts without self-cancelling explicit reruns', () => {
+  it('preserves in-flight release builds across newer heads and explicit reruns', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain("cancel-in-progress: ${{ github.run_attempt == 1 }}");
+    expect(workflow).toContain('cancel-in-progress: false');
     expect(workflow).not.toContain('cancel-in-progress: true');
   });
 
-  it('binds upload and download artifact names to the current rerun attempt', () => {
+  it('binds release artifact names to the stable workflow run identity', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
     expect(workflow).toContain(
-      'name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}',
+      'name: release-disksage-${{ matrix.os }}-${{ github.run_id }}',
     );
-    expect(
-      workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
-    ).toBe(3);
+    expect(workflow.split('pattern: release-disksage-*-${{ github.run_id }}').length - 1).toBe(3);
+    expect(workflow).not.toContain('release-disksage-${{ matrix.os }}-${{ github.run_attempt }}');
   });
 
-  it('documents retry-safe concurrency in authoritative evidence', () => {
+  it('documents non-cancelling release concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
-    expect(doctoring).toContain('explicit rerun attempts do not cancel themselves');
-    expect(doctoring).toContain('github.run_attempt == 1');
+    expect(doctoring).toContain('release concurrency never cancels an in-flight build');
+    expect(doctoring).toContain('cancel-in-progress: false');
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });

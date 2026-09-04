@@ -14,10 +14,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
-  # A fresh first attempt supersedes stale work, while GitHub's explicit
-  # rerun attempt must not cancel itself inside the same concurrency group.
-  cancel-in-progress: ${{ github.run_attempt == 1 }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -209,9 +207,10 @@ jobs:
       - name: Upload release artifact set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}
+          name: release-disksage-${{ matrix.os }}-${{ github.run_id }}
           path: ${{ matrix.bundles }}
           if-no-files-found: error
+          overwrite: true
 
   download-artifact-pr-compat:
     if: github.event_name == 'pull_request'
@@ -227,12 +226,12 @@ jobs:
       - name: Download exact release artifact set with v8
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
       - name: Verify downloaded release artifact contract
         shell: bash
-        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"
 
   attest-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -255,13 +254,13 @@ jobs:
       - name: Download exact release artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
 
       - name: Verify downloaded release artifact contract
         shell: bash
-        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"
 
       - name: Generate and validate source-bound SBOM
         shell: bash
@@ -279,90 +278,6 @@ jobs:
           node scripts/ci/generate-release-sbom.mjs \
             --validate release-artifacts/sbom/disksage.spdx.json
 
-      - name: Verify release artifact checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          require_exactly_one_path() {
-            local path_pattern="$1" label="$2" count=0
-            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
-            if [[ $count -ne 1 ]]; then
-              printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
-              exit 1
-            fi
-          }
-          require_exactly_one_file() {
-            local file_name="$1" count=0
-            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
-            if [[ $count -ne 1 ]]; then
-              printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
-              exit 1
-            fi
-          }
-          require_exactly_one_path '*/bundle/deb/*.deb' 'Debian bundle'
-          require_exactly_one_path '*/bundle/appimage/*.AppImage' 'AppImage bundle'
-          require_exactly_one_path '*/bundle/msi/*.msi' 'Windows MSI bundle'
-          require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'
-          require_exactly_one_path '*/bundle/dmg/*.dmg' 'macOS DMG bundle'
-          for required_name in \
-            disksage-cloud-plan-linux-x86_64 \
-            disksage-duplicate-audit-linux-x86_64 \
-            disksage-cloud-plan-windows-x86_64.exe \
-            disksage-duplicate-audit-windows-x86_64.exe \
-            disksage-cloud-plan-macos-arm64 \
-            disksage-duplicate-audit-macos-arm64; do
-            require_exactly_one_file "$required_name"
-            require_exactly_one_file "$required_name.sha256"
-          done
-          checksum_files=()
-          checksum_file=""
-          while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
-          if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
-            exit 1
-          fi
-          for checksum_file in "${checksum_files[@]}"; do
-            checksum_dir="$(dirname "$checksum_file")"
-            checksum_name="$(basename "$checksum_file")"
-            expected_asset_name="${checksum_name%.sha256}"
-            checksum_line="" line="" line_count=0
-            while IFS= read -r line || [[ -n "$line" ]]; do
-              line_count=$((line_count + 1))
-              checksum_line="$line"
-            done <"$checksum_file"
-            if [[ $line_count -ne 1 ]]; then
-              printf 'Checksum file %s must contain exactly one record.\n' "$checksum_name" >&2
-              exit 1
-            fi
-            recorded_digest="" recorded_name="" extra_field=""
-            read -r recorded_digest recorded_name extra_field <<<"$checksum_line"
-            if [[ ! "$recorded_digest" =~ ^[0-9a-fA-F]{64}$ ]] || [[ "$recorded_name" != "$expected_asset_name" ]] || [[ -n "$extra_field" ]]; then
-              printf 'Checksum file %s must reference its adjacent operational CLI %s exactly once.\n' "$checksum_name" "$expected_asset_name" >&2
-              exit 1
-            fi
-            if command -v sha256sum >/dev/null 2>&1; then
-              (cd "$checksum_dir" && sha256sum --check "$checksum_name")
-            elif command -v shasum >/dev/null 2>&1; then
-              (cd "$checksum_dir" && shasum -a 256 --check "$checksum_name")
-            else
-              printf 'No SHA-256 checksum verifier is available.\n' >&2
-              exit 1
-            fi
-          done
-          require_exactly_one_file disksage.spdx.json
-          node "$GITHUB_WORKSPACE/scripts/ci/generate-release-sbom.mjs" --validate "$(find release-artifacts -type f -name 'disksage.spdx.json' -print -quit)"
-          unexpected_entry="$(find release-artifacts -mindepth 1 ! -type d ! -type f -print -quit)"
-          if [[ -n "$unexpected_entry" ]]; then
-            printf 'Unexpected release artifact entries: non-regular path %s is not publishable.\n' "$unexpected_entry" >&2
-            exit 1
-          fi
-          regular_file_count=0
-          while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 18 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
-            exit 1
-          fi
-
       - name: Generate GitHub build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -371,10 +286,11 @@ jobs:
       - name: Upload attested release SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-sbom-${{ github.run_attempt }}
+          name: release-sbom-${{ github.run_id }}
           path: release-artifacts/sbom/disksage.spdx.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -386,14 +302,14 @@ jobs:
       - name: Download attested release artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
 
       - name: Download attested release SBOM
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-sbom-${{ github.run_attempt }}
+          name: release-sbom-${{ github.run_id }}
           path: release-artifacts/sbom
       - name: Publish attested artifacts to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
