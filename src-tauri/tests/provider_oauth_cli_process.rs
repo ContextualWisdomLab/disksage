@@ -27,7 +27,7 @@ fn connection_id(provider: CloudProvider, root_id: &str, root_path: &str) -> Str
     hasher
         .finalize()
         .iter()
-        .map(|byte| format!("{byte:02h}"))
+        .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
