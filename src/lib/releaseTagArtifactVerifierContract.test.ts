@@ -19,7 +19,7 @@ describe('tag release artifact verifier contract', () => {
     expect(publishStart).toBeGreaterThan(attestStart);
 
     const attestJob = workflow.slice(attestStart, publishStart);
-    const sharedVerifier = 'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"';
+    const sharedVerifier = 'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"';
     const verifierOffset = attestJob.indexOf(sharedVerifier);
     const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
 
