@@ -130,17 +130,23 @@ fn command_line_args() -> Vec<OsString> {
     std::env::args_os().skip(1).collect()
 }
 
-/// Inject the XDG user-data location as the implicit connection document only when the caller did
-/// not select an explicit home or connection path. Relative XDG values are invalid authority and
-/// are ignored.
-#[cfg(all(not(coverage), unix, not(target_os = "macos")))]
-fn apply_xdg_data_home_default_connections(args: &mut Vec<OsString>) {
+/// Inject the platform user-data directory as the implicit connection-document authority only when
+/// the caller did not select an explicit home or connection path. Empty or relative environment
+/// values never gain filesystem authority.
+#[cfg(all(
+    not(coverage),
+    any(windows, all(unix, not(target_os = "macos")))
+))]
+fn apply_environment_data_home_default_connections(
+    args: &mut Vec<OsString>,
+    raw_data_home: Option<OsString>,
+) {
     if args.iter().any(|argument| {
         argument == OsStr::new("--home") || argument == OsStr::new("--connections")
     }) {
         return;
     }
-    let Some(raw_data_home) = std::env::var_os("XDG_DATA_HOME") else {
+    let Some(raw_data_home) = raw_data_home else {
         return;
     };
     if raw_data_home.is_empty() {
@@ -167,8 +173,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    #[cfg(windows)]
+    apply_environment_data_home_default_connections(&mut args, std::env::var_os("APPDATA"));
     #[cfg(all(unix, not(target_os = "macos")))]
-    apply_xdg_data_home_default_connections(&mut args);
+    apply_environment_data_home_default_connections(&mut args, std::env::var_os("XDG_DATA_HOME"));
 
     let environment_home = environment_home_from(
         std::env::var_os("HOME").map(PathBuf::from),
