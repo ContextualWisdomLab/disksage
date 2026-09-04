@@ -23,7 +23,7 @@ fn animated_png_is_not_misreported_as_first_frame_exact_evidence() {
     write_apng(&path);
     assert_eq!(
         inspect_photo(&path).unwrap_err(),
-        "photo-animation-unsupported"
+        "photo-animated-png-unsupported"
     );
 }
 
