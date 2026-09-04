@@ -8,17 +8,19 @@ This document records why external standards and primary technical authorities c
 
 ## Filesystem publication and race safety
 
-### Connection-document publication — issue #342 / PR #339
+### Connection-document publication — issue #342 / PRs #344 and #339
 
-**Problem.** `save_connections()` validates a pathname and later creates and renames by pathname. An ancestor can therefore be replaced between check and use. The current implementation also synchronizes the temporary file but does not explicitly synchronize the containing directory after publication.
+**Problem.** `save_connections()` on #339 validates a pathname and later creates and renames by pathname. An ancestor can therefore be replaced between check and use. The current domain implementation also synchronizes the temporary file but does not explicitly synchronize the containing directory after publication.
 
-**Constraints.** The repair must keep validation authority and mutation authority bound to the same directory object. On POSIX systems, temporary creation, replacement, and cleanup are descriptor-relative after the final parent is pinned; a second pathname check is not equivalent. Namespace durability is separate from atomic rename. On Windows, final publication must use a pinned native namespace authority, and temporary creation must not remain redirectable merely because the final rename is handle-relative.
+**Constraints.** Validation authority and mutation authority must remain bound to the same directory object. On POSIX systems, temporary creation, replacement, and cleanup are descriptor-relative after the final parent is pinned; a second pathname check is not equivalent. Namespace durability is separate from atomic rename. On Windows, final publication must use pinned native namespace authority, and temporary creation must not remain redirectable merely because the final rename is handle-relative.
 
-**Accepted design direction.** Linux/macOS use an opened final-directory descriptor with relative create/rename/unlink operations or an equivalent primitive. A successful durable-publication claim includes post-rename directory synchronization. Windows uses native handles/reparse-point-safe authority and a relative or otherwise namespace-pinned publication strategy; `FILE_RENAME_INFO.RootDirectory` is a candidate for the rename half, not proof that pathname temporary creation is safe.
+**Accepted design direction.** #344 owns the reusable foundation. Its current Unix primitive opens/pins the final directory, creates a create-new temporary record with `openat`, keeps cleanup descriptor-relative with `unlinkat`, replaces with `renameat`, synchronizes file data before replacement, and synchronizes the containing directory after replacement. Real temporary-filesystem hooks replace the visible parent before temporary creation, after temporary sync, and after rename. #339 remains responsible for consuming that primitive and mapping its failure states into provider-OAuth domain semantics. Windows intentionally has no pathname fallback; native handle-bound temporary creation/replacement parity remains open.
 
 **Rejected alternatives.** Re-running `symlink_metadata()` immediately before rename, shrinking the race window, retry loops, broad permission changes, or pathname-only cleanup do not bind the checked object to the mutated object and therefore do not close CWE-367.
 
-**Exact acceptance evidence.** A real temporary filesystem fixture replaces visible parent A with B (1) before temporary creation and (2) after temporary-file sync but before final publication. Connection JSON must never be redirected into B. Existing destination symlink/reparse-point and non-regular-file cases remain fail closed. Successful publication must remain loadable, preserve Unix 0600 leaf permissions, and distinguish file-data synchronization from namespace synchronization.
+**Exact acceptance evidence.** Foundation and domain evidence are both required. A real temporary filesystem fixture replaces visible parent A with B (1) before temporary creation and (2) after temporary-file sync but before final publication. Connection JSON must never be redirected into B. Existing destination symlink/reparse-point and non-regular-file cases remain fail closed. Successful publication must remain loadable, preserve Unix 0600 leaf permissions, and distinguish file-data synchronization from namespace synchronization. A post-publication namespace change is reported separately because publication to the already-admitted directory object may have occurred.
+
+**Durability scope.** POSIX.1-2024 explicitly distinguishes directory-operation atomicity from persistence of the modified directory entry: an application that needs the new entry to be durable synchronizes the directory. On Apple platforms, stronger primitives such as `F_FULLFSYNC` have different cost and guarantee boundaries from ordinary `fsync`; DiskSage must name and test the primitive it actually relies on rather than using “atomic” and “durable” interchangeably.
 
 ### Git-worktree deletion authority — PR #337 / historical donor #156
 
@@ -40,9 +42,10 @@ Issue #342 maps to CWE-367 (Time-of-check Time-of-use Race Condition): a resourc
 
 | External authority | DiskSage decision | Canonical owner | Required repository evidence |
 | --- | --- | --- | --- |
-| POSIX.1-2024 `renameat()` | Use opened directory authority to avoid pathname-component replacement races on POSIX publication | #339 / issue #342 | Real ancestor-replacement RED→GREEN fixture; descriptor-relative create/rename/cleanup |
-| POSIX.1-2024 directory durability rationale | Atomic rename does not by itself justify a durable-new-entry claim | #339 / issue #342 | File sync plus containing-directory sync and explicit failure contract |
-| Microsoft `FILE_RENAME_INFO` | Relative rename may resolve against `RootDirectory`; temporary creation still needs pinned namespace authority | #339 / issue #342 | Windows reparse/ancestor replacement fixture and native-handle publication evidence |
+| POSIX.1-2024 `renameat()` and *at-family rationale | Use opened directory authority to avoid pathname-component replacement races on POSIX publication | #344 foundation; #339/#342 consumer | Real ancestor-replacement RED→GREEN fixture; descriptor-relative create/rename/cleanup; domain adoption |
+| POSIX.1-2024 directory durability rationale | Atomic rename does not by itself justify a durable-new-entry claim | #344 foundation; #339/#342 consumer | File sync plus containing-directory sync and explicit failure/uncertainty contract |
+| Microsoft `FILE_RENAME_INFO` / `SetFileInformationByHandle` | Relative rename may resolve against `RootDirectory`; temporary creation still needs pinned namespace authority | #339 / issue #342 | Windows reparse/ancestor replacement fixture and native-handle creation/replacement evidence |
+| Apple `fsync(2)` / `fcntl(F_FULLFSYNC)` documentation | macOS persistence language must identify the primitive actually used and not overstate crash/power-loss guarantees | #344 foundation / #339 consumer | macOS filesystem fixture plus documented ordinary-vs-stronger sync decision, fallback, and cost |
 | CWE-367 | Pathname check/use gaps are a security weakness even without a final-component symlink | #339 / SECURITY/THREAT_MODEL | Causal test and stable-authority fix, not timing reduction |
 | OWL 2 | Formal classes/properties/individuals may express filesystem classification semantics | ontology/classification owner | Ontology conformance plus mapping tests; no mutation-authority inference |
 | SHACL | RDF graph validity may be checked against explicit shapes | ontology validation adapter | Fail-closed validation fixtures for required shapes |
@@ -50,13 +53,21 @@ Issue #342 maps to CWE-367 (Time-of-check Time-of-use Race Condition): a resourc
 
 ## References
 
-Microsoft. (2026, May 20). *FILE_RENAME_INFO structure (winbase.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
+Apple Inc. (n.d.). *Mac OS X manual page for fcntl(2).* Apple Developer Documentation. https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fcntl.2.html
+
+Apple Inc. (n.d.). *Mac OS X manual page for fsync(2).* Apple Developer Documentation. https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html
+
+Microsoft. (2026, May 15). *FILE_RENAME_INFO structure (winbase.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
+
+Microsoft. (2021, October 13). *SetFileInformationByHandle function (fileapi.h).* Microsoft Learn. https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
 
 MITRE. (2026, April 30). *CWE-367: Time-of-check Time-of-use (TOCTOU) race condition (CWE 4.20).* Common Weakness Enumeration. https://cwe.mitre.org/data/definitions/367.html
 
 The Open Group. (2024). *rename, renameat — rename file.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
 
 The Open Group. (2024). *Rationale for Base Definitions: Directory operations and durability.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/xrat/V4_xbd_chap01.html
+
+The Open Group. (2024). *Portability considerations: race-free and thread-safe file access.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/xrat/V4_port.html
 
 World Wide Web Consortium. (2012, December 11). *OWL 2 Web Ontology Language: Document overview (Second Edition).* https://www.w3.org/TR/owl-overview/
 
