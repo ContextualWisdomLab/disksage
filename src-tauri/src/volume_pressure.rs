@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io;
 use std::io::Write as _;
@@ -89,6 +90,58 @@ pub struct LocalVolumeComparison {
     pub physical_reclaim_attribution: PhysicalReclaimAttribution,
     pub reason_codes: Vec<String>,
     pub evidence_fingerprint: String,
+}
+
+/// One completed action's path-free, allocation-based reclaim evidence.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionReclaimReceipt {
+    pub receipt_id: String,
+    pub completed: bool,
+    pub attributable_allocated_bytes: u64,
+}
+
+/// Keeps shared-volume movement separate from bytes supported by completed action receipts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReclaimProgressSummary {
+    pub global_available_change: ByteChange,
+    pub action_attributable_bytes: u64,
+    pub completed_receipt_count: usize,
+    pub limitations: Vec<String>,
+}
+
+/// Summarizes progress without treating concurrent APFS movement as action attribution.
+pub fn summarize_reclaim_progress(
+    comparison: &LocalVolumeComparison,
+    receipts: &[ActionReclaimReceipt],
+) -> Result<ReclaimProgressSummary, String> {
+    validate_comparison(comparison)?;
+    let mut seen = BTreeSet::new();
+    let mut action_attributable_bytes = 0_u64;
+    let mut completed_receipt_count = 0_usize;
+    for receipt in receipts {
+        if !is_lower_hex_64(&receipt.receipt_id) || !seen.insert(receipt.receipt_id.as_str()) {
+            return Err("reclaim-progress-receipt-identity-invalid".into());
+        }
+        if receipt.completed {
+            action_attributable_bytes = action_attributable_bytes
+                .checked_add(receipt.attributable_allocated_bytes)
+                .ok_or_else(|| "reclaim-progress-attribution-overflow".to_string())?;
+            completed_receipt_count += 1;
+        } else if receipt.attributable_allocated_bytes != 0 {
+            return Err("reclaim-progress-incomplete-receipt-claims-bytes".into());
+        }
+    }
+    Ok(ReclaimProgressSummary {
+        global_available_change: comparison.available_change,
+        action_attributable_bytes,
+        completed_receipt_count,
+        limitations: vec![
+            "global-filesystem-change-is-concurrently-influenced".into(),
+            "action-total-includes-completed-receipts-only".into(),
+        ],
+    })
 }
 
 pub fn snapshot_volume(path: &Path, observed_at_ms: u64) -> Result<LocalVolumeSnapshot, String> {
@@ -546,6 +599,66 @@ mod tests {
             .reason_codes
             .contains(&"available-space-decreased-despite-logical-removal".into()));
         assert!(validate_comparison(&comparison).is_ok());
+    }
+
+    #[test]
+    fn progress_keeps_global_delta_separate_from_completed_receipts() {
+        let before = snapshot(10_000, 2_000, 1_500, 10);
+        let after = snapshot(10_000, 3_500, 3_000, 20);
+        let comparison = compare_snapshots(&before, &after, Some(900)).unwrap();
+        let summary = summarize_reclaim_progress(
+            &comparison,
+            &[
+                ActionReclaimReceipt {
+                    receipt_id: "a".repeat(64),
+                    completed: true,
+                    attributable_allocated_bytes: 600,
+                },
+                ActionReclaimReceipt {
+                    receipt_id: "b".repeat(64),
+                    completed: false,
+                    attributable_allocated_bytes: 0,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(summary.global_available_change.bytes, 1_500);
+        assert_eq!(summary.action_attributable_bytes, 600);
+        assert_eq!(summary.completed_receipt_count, 1);
+    }
+
+    #[test]
+    fn progress_rejects_duplicate_incomplete_and_overflowing_receipts() {
+        let before = snapshot(10_000, 2_000, 1_500, 10);
+        let after = snapshot(10_000, 3_000, 2_500, 20);
+        let comparison = compare_snapshots(&before, &after, None).unwrap();
+        let completed = |id: &str, bytes| ActionReclaimReceipt {
+            receipt_id: id.repeat(64),
+            completed: true,
+            attributable_allocated_bytes: bytes,
+        };
+        assert_eq!(
+            summarize_reclaim_progress(&comparison, &[completed("a", 1), completed("a", 1)])
+                .unwrap_err(),
+            "reclaim-progress-receipt-identity-invalid"
+        );
+        assert_eq!(
+            summarize_reclaim_progress(
+                &comparison,
+                &[ActionReclaimReceipt {
+                    receipt_id: "b".repeat(64),
+                    completed: false,
+                    attributable_allocated_bytes: 1,
+                }]
+            )
+            .unwrap_err(),
+            "reclaim-progress-incomplete-receipt-claims-bytes"
+        );
+        assert_eq!(
+            summarize_reclaim_progress(&comparison, &[completed("c", u64::MAX), completed("d", 1)])
+                .unwrap_err(),
+            "reclaim-progress-attribution-overflow"
+        );
     }
 
     #[test]
