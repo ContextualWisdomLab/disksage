@@ -4,9 +4,12 @@
 //! this real entrypoint. This entry owns host argument decoding, terminal help, and platform
 //! home-directory selection before delegating to the existing OAuth execution boundary.
 
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 mod implementation {
+    use super::{OsString, Path, PathBuf};
+
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/provider_oauth_cli_impl.rs.inc"
@@ -18,11 +21,83 @@ mod implementation {
     }
 
     #[cfg(not(coverage))]
+    fn host_path_surrogate(path: &Path) -> &'static str {
+        if path.is_absolute() {
+            #[cfg(windows)]
+            return "C:\\";
+            #[cfg(not(windows))]
+            return "/";
+        }
+        "relative"
+    }
+
+    #[cfg(not(coverage))]
     pub(super) fn run_with_environment_home(
-        args: &[String],
+        args: Vec<OsString>,
         environment_home: Option<PathBuf>,
     ) -> Result<(), String> {
-        let parsed = parse_args(args, environment_home)?;
+        let mut normalized = Vec::with_capacity(args.len());
+        let mut native_home = Vec::new();
+        let mut native_connections = Vec::new();
+        let mut native_cloud_root = Vec::new();
+        let mut index = 0usize;
+
+        while index < args.len() {
+            let option = args[index]
+                .to_str()
+                .ok_or_else(|| "provider-oauth-invalid-utf8-argument".to_string())?;
+            match option {
+                "--home" | "--connections" | "--cloud-root" => {
+                    normalized.push(option.to_string());
+                    index += 1;
+                    let raw = args
+                        .get(index)
+                        .ok_or_else(|| format!("{option} requires a value"))?;
+                    let path = PathBuf::from(raw);
+                    normalized.push(host_path_surrogate(&path).to_string());
+                    match option {
+                        "--home" => native_home.push(path),
+                        "--connections" => native_connections.push(path),
+                        "--cloud-root" => native_cloud_root.push(path),
+                        _ => unreachable!("path option match is exhaustive"),
+                    }
+                }
+                "--client-id" => {
+                    normalized.push(option.to_string());
+                    index += 1;
+                    let raw = args
+                        .get(index)
+                        .ok_or_else(|| "--client-id requires a value".to_string())?;
+                    normalized.push(
+                        raw.to_str()
+                            .ok_or_else(|| "provider-oauth-invalid-utf8-argument".to_string())?
+                            .to_string(),
+                    );
+                }
+                "--list" | "--connect" | "--verify-capacity" | "--disconnect"
+                | "--manual-browser" | "--write-access" | "--help" | "-h" => {
+                    normalized.push(option.to_string());
+                }
+                _ => return Err("unknown argument".into()),
+            }
+            index += 1;
+        }
+
+        let explicit_home = !native_home.is_empty();
+        let explicit_connections = !native_connections.is_empty();
+        let mut parsed = parse_args(&normalized, environment_home)?;
+        if let Some(home) = native_home.into_iter().next() {
+            parsed.home = home;
+        }
+        if let Some(connections) = native_connections.into_iter().next() {
+            parsed.connections = connections;
+        } else if explicit_home && !explicit_connections {
+            parsed.connections = default_connections_path(&parsed.home);
+        }
+        if let Some(cloud_root) = native_cloud_root.into_iter().next() {
+            parsed.cloud_root = Some(cloud_root);
+        }
+
         let output = execute(parsed)?;
         println!(
             "{}",
@@ -51,21 +126,14 @@ pub(crate) fn environment_home_from(
 }
 
 #[cfg(not(coverage))]
-fn command_line_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "provider-oauth-invalid-utf8-argument".to_string())
-        })
-        .collect()
+fn command_line_args() -> Vec<OsString> {
+    std::env::args_os().skip(1).collect()
 }
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = command_line_args()?;
-    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+    let args = command_line_args();
+    if matches!(args.as_slice(), [flag] if flag == OsStr::new("--help") || flag == OsStr::new("-h")) {
         println!("{}", implementation::usage_text());
         return Ok(());
     }
@@ -75,7 +143,7 @@ fn run() -> Result<(), String> {
         std::env::var_os("USERPROFILE").map(PathBuf::from),
         cfg!(windows),
     );
-    implementation::run_with_environment_home(&args, environment_home)
+    implementation::run_with_environment_home(args, environment_home)
 }
 
 #[cfg(not(coverage))]
