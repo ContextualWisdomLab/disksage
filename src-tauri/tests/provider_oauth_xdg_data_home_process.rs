@@ -52,7 +52,7 @@ fn write_private_document(path: &Path, connection: &OAuthConnection) {
     let document = serde_json::json!({"version": 1, "connections": [connection]});
     std::fs::write(
         path,
-        serde_json::to_vec(&document).expect("connection document serializes"),
+        serde_json::to_vec(&connection_document).expect("connection document serializes"),
     )
     .expect("connection document writes");
 
@@ -142,7 +142,7 @@ fn explicit_home_keeps_its_connection_default_when_xdg_data_home_is_set() {
     write_private_document(&document, &connection);
 
     let output = command()
-        .env("HOME", &home)
+        .env("HOME", &environment_home)
         .env("XDG_DATA_HOME", &xdg_data_home)
         .env_remove("USERPROFILE")
         .arg("--home")
