@@ -36,7 +36,7 @@ fn callback_reader_normalizes_nonblocking_accepted_stream_before_waiting_for_req
         .set_nonblocking(true)
         .expect("fixture forces inherited-nonblocking shape");
 
-    let target = read_callback_target(&mut stream)
+    let target = read_callback_target(&mut stream, "127.0.0.1")
         .expect("callback reader must own a blocking-with-timeout read boundary");
     assert_eq!(target, "/?code=delayed&state=expected");
 
