@@ -55,9 +55,17 @@ const REMOVAL_STOP_ACTIONS: Readonly<Record<string, string>> = {
     "제거 후 경로·등록·브랜치 보존을 모두 확인하지 못했습니다. Git worktree 목록과 브랜치를 확인하고 추가 제거를 중단하세요.",
 };
 
+function ownAction(
+  actions: Readonly<Record<string, string>>,
+  code: string,
+  fallback: string,
+): string {
+  return Object.prototype.hasOwnProperty.call(actions, code) ? actions[code] : fallback;
+}
+
 /**
  * Convert native evidence-gap codes into deduplicated, bounded customer actions.
- * Unknown or missing values never cross the UI boundary and still produce safe guidance.
+ * Unknown, inherited, or missing values never cross the UI boundary and still produce safe guidance.
  */
 export function evidenceGapActions(codes: readonly string[]): string[] {
   if (codes.length === 0) return [UNKNOWN_EVIDENCE_GAP_ACTION];
@@ -65,7 +73,7 @@ export function evidenceGapActions(codes: readonly string[]): string[] {
   const actions: string[] = [];
   const seen = new Set<string>();
   for (const code of codes) {
-    const action = EVIDENCE_GAP_ACTIONS[code] ?? UNKNOWN_EVIDENCE_GAP_ACTION;
+    const action = ownAction(EVIDENCE_GAP_ACTIONS, code, UNKNOWN_EVIDENCE_GAP_ACTION);
     if (!seen.has(action)) {
       seen.add(action);
       actions.push(action);
@@ -76,9 +84,9 @@ export function evidenceGapActions(codes: readonly string[]): string[] {
 
 /**
  * Convert a native removal stop code into a bounded stop-and-recheck action.
- * Unknown or missing values never cross the UI boundary.
+ * Unknown, inherited, or missing values never cross the UI boundary.
  */
 export function removalStoppedAction(reason: string | null): string {
   if (!reason) return UNKNOWN_REMOVAL_STOP_ACTION;
-  return REMOVAL_STOP_ACTIONS[reason] ?? UNKNOWN_REMOVAL_STOP_ACTION;
+  return ownAction(REMOVAL_STOP_ACTIONS, reason, UNKNOWN_REMOVAL_STOP_ACTION);
 }
