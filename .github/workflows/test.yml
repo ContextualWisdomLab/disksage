@@ -51,8 +51,10 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
-      - name: Operational cloud CLI help contracts
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test cli_help_health_oauth_exit
+      - name: Operational cloud CLI help and Linux data-home contracts
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test cli_help_health_oauth_exit
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test provider_oauth_xdg_data_home_process
       - name: Exact duplicate audit tests
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
