@@ -1,17 +1,21 @@
 //! Evidence-bound photo duplicate audit.
 //!
 //! The current product boundary is intentionally conservative: exact decoded-pixel grouping is
-//! available for bounded PNG inputs, while perceptual grouping and permanent cleanup remain
+//! available for bounded local PNG inputs, while perceptual grouping and permanent cleanup remain
 //! unavailable until calibrated evidence and a unique keeper decision exist.
 
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+const MAX_ENCODED_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DECODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_NORMALIZED_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_AUDIT_INPUTS: usize = 4_096;
+const MAX_AUDIT_DECLARED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EvidenceState {
     Unavailable,
     Observed,
@@ -61,6 +65,16 @@ pub struct PhotoDuplicateAudit {
     pub filesystem_mutation_executed: bool,
 }
 
+fn bit_depth_value(depth: png::BitDepth) -> u8 {
+    match depth {
+        png::BitDepth::One => 1,
+        png::BitDepth::Two => 2,
+        png::BitDepth::Four => 4,
+        png::BitDepth::Eight => 8,
+        png::BitDepth::Sixteen => 16,
+    }
+}
+
 fn admission_blocker(path: &Path, metadata: &std::fs::Metadata) -> Option<&'static str> {
     if metadata.file_type().is_symlink() {
         return Some("photo-input-symlink-rejected");
@@ -68,28 +82,33 @@ fn admission_blocker(path: &Path, metadata: &std::fs::Metadata) -> Option<&'stat
     if !metadata.is_file() {
         return Some("photo-input-not-regular-file");
     }
-    let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
-    if normalized.contains("/photos library.photoslibrary/") {
+    if crate::cloud::metadata_is_dataless(metadata) {
+        return Some("photo-input-dataless");
+    }
+    if crate::cloud::path_inside_managed_photo_library(path) {
         return Some("photo-input-managed-library");
     }
-    if normalized.contains("/library/cloudstorage/")
-        || normalized.contains("/onedrive")
-        || normalized.contains("/dropbox")
-        || normalized.contains("/google drive")
-    {
+    if crate::cloud::path_inside_managed_file_provider_storage(path) {
         return Some("photo-input-provider-managed");
+    }
+    if metadata.len() > MAX_ENCODED_IMAGE_BYTES {
+        return Some("photo-encoded-size-unsupported");
     }
     None
 }
 
 fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    // EXPAND makes palette/low-depth samples and tRNS transparency explicit before semantic
+    // hashing. The source bit depth remains separately recorded as keeper evidence.
+    decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder
         .read_info()
         .map_err(|_| "photo-codec-decode-failed".to_string())?;
     if reader.info().is_animated() {
         return Err("photo-animated-png-unsupported".into());
     }
+    let source_bit_depth = bit_depth_value(reader.info().bit_depth);
     let width = reader.info().width;
     let height = reader.info().height;
     let pixel_count = u64::from(width)
@@ -111,13 +130,6 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
     let output = reader
         .next_frame(&mut decoded)
         .map_err(|_| "photo-codec-decode-failed".to_string())?;
-    let bit_depth = match output.bit_depth {
-        png::BitDepth::One => 1,
-        png::BitDepth::Two => 2,
-        png::BitDepth::Four => 4,
-        png::BitDepth::Eight => 8,
-        png::BitDepth::Sixteen => 16,
-    };
     let normalized = normalize_rgba16(
         &decoded[..output.buffer_size()],
         output.color_type,
@@ -130,12 +142,17 @@ fn read_png_evidence(bytes: &[u8]) -> Result<(u32, u32, u8, u32, String), String
         + u32::try_from(reader.info().uncompressed_latin1_text.len()).unwrap_or(u32::MAX)
         + u32::try_from(reader.info().compressed_latin1_text.len()).unwrap_or(u32::MAX)
         + u32::try_from(reader.info().utf8_text.len()).unwrap_or(u32::MAX);
+    let mut semantic = blake3::Hasher::new();
+    semantic.update(b"disksage-png-rgba16-raster-v2\0");
+    semantic.update(&output.width.to_be_bytes());
+    semantic.update(&output.height.to_be_bytes());
+    semantic.update(&normalized);
     Ok((
         output.width,
         output.height,
-        bit_depth,
+        source_bit_depth,
         metadata_field_count,
-        blake3::hash(&normalized).to_hex().to_string(),
+        semantic.finalize().to_hex().to_string(),
     ))
 }
 
@@ -235,25 +252,36 @@ fn hash_current_file(
     expected: &std::fs::Metadata,
     expected_identity: &str,
 ) -> Result<(String, Vec<u8>), String> {
+    if expected.len() > MAX_ENCODED_IMAGE_BYTES {
+        return Err("photo-encoded-size-unsupported".into());
+    }
     let mut file = std::fs::File::open(path).map_err(|_| "photo-input-open-failed".to_string())?;
     let opened = file
         .metadata()
         .map_err(|_| "photo-input-metadata-unavailable".to_string())?;
     let opened_identity = opened_file_object_id(&file)?;
+    if opened.len() > MAX_ENCODED_IMAGE_BYTES {
+        return Err("photo-encoded-size-unsupported".into());
+    }
     if opened.len() != expected.len()
         || opened.modified().ok() != expected.modified().ok()
         || !metadata_identity_matches(Some(opened_identity.as_str()), expected_identity)
     {
         return Err("photo-input-changed".into());
     }
-    let mut hasher = blake3::Hasher::new();
-    let mut bytes = Vec::with_capacity(expected.len() as usize);
-    file.read_to_end(&mut bytes)
+    let capacity = usize::try_from(expected.len()).unwrap_or_default();
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut bounded = (&mut file).take(MAX_ENCODED_IMAGE_BYTES + 1);
+    bounded
+        .read_to_end(&mut bytes)
         .map_err(|_| "photo-input-read-failed".to_string())?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ENCODED_IMAGE_BYTES {
+        return Err("photo-encoded-size-unsupported".into());
+    }
     if bytes.len() as u64 != expected.len() {
         return Err("photo-input-changed".into());
     }
-    hasher.update(&bytes);
+    let blake3 = blake3::hash(&bytes).to_hex().to_string();
     let after = std::fs::symlink_metadata(path).map_err(|_| "photo-input-changed".to_string())?;
     if after.len() != expected.len()
         || after.modified().ok() != expected.modified().ok()
@@ -261,7 +289,7 @@ fn hash_current_file(
     {
         return Err("photo-input-changed".into());
     }
-    Ok((hasher.finalize().to_hex().to_string(), bytes))
+    Ok((blake3, bytes))
 }
 
 fn metadata_identity_matches(observed: Option<&str>, expected: &str) -> bool {
@@ -279,8 +307,8 @@ pub fn inspect_photo(path: &Path) -> Result<PhotoEvidence, String> {
     }
     let identity = crate::safety::filesystem_object_id(path)
         .map_err(|_| "photo-input-identity-unavailable".to_string())?;
-    // Audit is read-only. Active-use evidence belongs to the fresh execution preflight; requiring
-    // Unix `lsof` here made otherwise valid Windows evidence impossible to collect.
+    // Audit is read-only. Active-use evidence belongs to a fresh execution preflight immediately
+    // before any future mutation; requiring it here made valid cross-platform evidence unavailable.
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -328,7 +356,25 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
     let mut by_digest = std::collections::BTreeMap::<String, Vec<PhotoEvidence>>::new();
     let mut rejected_input_counts = std::collections::BTreeMap::<String, u64>::new();
     let mut inspected_input_count = 0_u64;
-    for path in paths {
+    let mut declared_bytes = 0_u64;
+
+    for (index, path) in paths.iter().enumerate() {
+        if index >= MAX_AUDIT_INPUTS {
+            *rejected_input_counts
+                .entry("photo-audit-input-limit-exceeded".into())
+                .or_default() += 1;
+            continue;
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            let next_declared = declared_bytes.checked_add(metadata.len());
+            if next_declared.is_none_or(|value| value > MAX_AUDIT_DECLARED_BYTES) {
+                *rejected_input_counts
+                    .entry("photo-audit-byte-budget-exceeded".into())
+                    .or_default() += 1;
+                continue;
+            }
+            declared_bytes = next_declared.unwrap_or(declared_bytes);
+        }
         match inspect_photo(path) {
             Ok(evidence) => {
                 inspected_input_count += 1;
@@ -340,6 +386,7 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
             Err(reason) => *rejected_input_counts.entry(reason).or_default() += 1,
         }
     }
+
     let exact_groups = by_digest
         .into_iter()
         .filter_map(|(content_digest, mut members)| {
@@ -352,7 +399,7 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
             let keeper_path = unique_pareto_keeper(&members).map(|member| member.path.clone());
             Some(ExactPhotoGroup {
                 content_digest,
-                grouping_basis: "decoded-pixel-rgba16-exact".into(),
+                grouping_basis: "decoded-pixel-rgba16-raster-exact-v2".into(),
                 members,
                 keeper_path: keeper_path.clone(),
                 keeper_blocker: keeper_path
@@ -363,7 +410,7 @@ pub fn audit_photos(paths: &[PathBuf], generated_at_ms: u64) -> PhotoDuplicateAu
         })
         .collect();
     PhotoDuplicateAudit {
-        schema_kind: "disksage.photo-duplicate-audit.v1".into(),
+        schema_kind: "disksage.photo-duplicate-audit.v2".into(),
         generated_at_ms,
         exact_groups,
         inspected_input_count,
@@ -454,6 +501,18 @@ mod tests {
         writer.write_image_data(&bytes).unwrap();
     }
 
+    fn png_with_trns(path: &Path, value: u8, transparent: bool) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(file, 4, 4);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        if transparent {
+            encoder.set_trns(vec![0, value]);
+        }
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&vec![value; 16]).unwrap();
+    }
+
     #[test]
     fn exact_duplicates_are_grouped_without_inventing_a_keeper() {
         let temp = tempfile::tempdir().unwrap();
@@ -467,6 +526,29 @@ mod tests {
         assert!(!audit.exact_groups[0].execution_available);
         assert!(!audit.perceptual_grouping_available);
         assert!(!audit.permanent_delete_available);
+        assert_eq!(audit.schema_kind, "disksage.photo-duplicate-audit.v2");
+    }
+
+    #[test]
+    fn raster_dimensions_are_part_of_exact_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let row = temp.path().join("row.png");
+        let square = temp.path().join("square.png");
+        png(&row, 4, 1, 120);
+        png(&square, 2, 2, 120);
+        let audit = audit_photos(&[row, square], 7);
+        assert!(audit.exact_groups.is_empty());
+    }
+
+    #[test]
+    fn trns_transparency_is_part_of_normalized_pixel_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let opaque = temp.path().join("opaque.png");
+        let transparent = temp.path().join("transparent.png");
+        png_with_trns(&opaque, 5, false);
+        png_with_trns(&transparent, 5, true);
+        let audit = audit_photos(&[opaque, transparent], 7);
+        assert!(audit.exact_groups.is_empty());
     }
 
     #[test]
@@ -495,7 +577,7 @@ mod tests {
         assert_eq!(audit.exact_groups.len(), 1);
         assert_eq!(
             audit.exact_groups[0].grouping_basis,
-            "decoded-pixel-rgba16-exact"
+            "decoded-pixel-rgba16-raster-exact-v2"
         );
         assert_eq!(
             audit.exact_groups[0].keeper_path.as_deref(),
@@ -505,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn higher_bit_depth_is_the_unique_pareto_keeper_for_identical_samples() {
+    fn higher_source_bit_depth_is_the_unique_pareto_keeper_for_identical_samples() {
         let temp = tempfile::tempdir().unwrap();
         let eight = temp.path().join("eight.png");
         let sixteen = temp.path().join("sixteen.png");
@@ -536,14 +618,14 @@ mod tests {
     }
 
     #[test]
-    fn provider_and_photos_library_paths_fail_closed() {
+    fn shared_managed_storage_classifiers_fail_closed_without_brand_substrings() {
         let temp = tempfile::tempdir().unwrap();
         let provider = temp
             .path()
             .join("Library/CloudStorage/OneDrive-Personal/image.png");
         let library = temp
             .path()
-            .join("Pictures/Photos Library.photoslibrary/originals/image.png");
+            .join("Pictures/Custom.photoslibrary/originals/image.png");
         std::fs::create_dir_all(provider.parent().unwrap()).unwrap();
         std::fs::create_dir_all(library.parent().unwrap()).unwrap();
         png(&provider, 8, 8, 1);
@@ -555,6 +637,27 @@ mod tests {
         assert_eq!(
             inspect_photo(&library).unwrap_err(),
             "photo-input-managed-library"
+        );
+    }
+
+    #[test]
+    fn provider_brand_in_an_ordinary_local_component_is_not_a_blocker() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("dropbox-exports/image.png");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        png(&local, 8, 8, 1);
+        assert!(inspect_photo(&local).is_ok());
+    }
+
+    #[test]
+    fn encoded_size_is_rejected_before_content_allocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let oversized = temp.path().join("oversized.png");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(MAX_ENCODED_IMAGE_BYTES + 1).unwrap();
+        assert_eq!(
+            inspect_photo(&oversized).unwrap_err(),
+            "photo-encoded-size-unsupported"
         );
     }
 
