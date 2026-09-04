@@ -48,7 +48,8 @@ fn write_declared_grayscale_png(path: &Path, width: u32, height: u32) {
 fn declared_dimension_limit_is_checked_before_decode_allocation() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("too-wide.png");
-    write_declared_grayscale_png(&path, 20_000, 1);
+    // 67,108,865 RGBA16-normalized pixels require 512 MiB + 8 bytes.
+    write_declared_grayscale_png(&path, 67_108_865, 1);
     assert_eq!(
         inspect_photo(&path).unwrap_err(),
         "photo-decoded-size-unsupported"
@@ -59,7 +60,8 @@ fn declared_dimension_limit_is_checked_before_decode_allocation() {
 fn normalized_pixel_budget_is_checked_before_decode_allocation() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("pixel-bomb.png");
-    write_declared_grayscale_png(&path, 8_192, 8_192);
+    // 8,193 × 8,192 pixels exceed the 512 MiB RGBA16-normalized budget.
+    write_declared_grayscale_png(&path, 8_193, 8_192);
     assert_eq!(
         inspect_photo(&path).unwrap_err(),
         "photo-decoded-size-unsupported"
