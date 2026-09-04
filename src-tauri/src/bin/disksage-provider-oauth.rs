@@ -398,7 +398,7 @@ fn execute(args: Args) -> Result<Output, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TerminalArgs {
     Help,
-    Run(Vec<String>),
+    Run(Vec<OsString>),
 }
 
 #[cfg(not(coverage))]
@@ -408,9 +408,6 @@ fn is_help(value: &OsStr) -> bool {
 
 #[cfg(not(coverage))]
 fn parse_terminal_args(args: Vec<OsString>) -> Result<TerminalArgs, String> {
-    if args.iter().any(|value| value.to_str().is_none()) {
-        return Err("argument-encoding-invalid".into());
-    }
     match args.as_slice() {
         [only] if is_help(only) => return Ok(TerminalArgs::Help),
         values if values.iter().any(|value| is_help(value)) => {
@@ -418,15 +415,84 @@ fn parse_terminal_args(args: Vec<OsString>) -> Result<TerminalArgs, String> {
         }
         _ => {}
     }
-    Ok(TerminalArgs::Run(
-        args.into_iter()
-            .map(|value| {
-                value
-                    .into_string()
-                    .expect("non-UTF-8 arguments were rejected before domain parsing")
-            })
-            .collect(),
-    ))
+    Ok(TerminalArgs::Run(args))
+}
+
+#[cfg(not(coverage))]
+fn host_path_surrogate(path: &Path) -> &'static str {
+    if path.is_absolute() {
+        #[cfg(windows)]
+        return "C:\\";
+        #[cfg(not(windows))]
+        return "/";
+    }
+    "relative"
+}
+
+#[cfg(not(coverage))]
+fn parse_host_args(args: Vec<OsString>, environment_home: Option<PathBuf>) -> Result<Args, String> {
+    let mut normalized = Vec::with_capacity(args.len());
+    let mut native_home = Vec::new();
+    let mut native_connections = Vec::new();
+    let mut native_cloud_root = Vec::new();
+    let mut index = 0usize;
+
+    while index < args.len() {
+        let option = args[index]
+            .to_str()
+            .ok_or_else(|| "argument-encoding-invalid".to_string())?;
+        match option {
+            "--home" | "--connections" | "--cloud-root" => {
+                normalized.push(option.to_string());
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| format!("{option} requires a value"))?;
+                let path = PathBuf::from(raw);
+                normalized.push(host_path_surrogate(&path).to_string());
+                match option {
+                    "--home" => native_home.push(path),
+                    "--connections" => native_connections.push(path),
+                    "--cloud-root" => native_cloud_root.push(path),
+                    _ => unreachable!("path option match is exhaustive"),
+                }
+            }
+            "--client-id" => {
+                normalized.push(option.to_string());
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| "--client-id requires a value".to_string())?;
+                normalized.push(
+                    raw.to_str()
+                        .ok_or_else(|| "argument-encoding-invalid".to_string())?
+                        .to_string(),
+                );
+            }
+            "--list" | "--connect" | "--verify-capacity" | "--disconnect"
+            | "--manual-browser" | "--write-access" | "--help" | "-h" => {
+                normalized.push(option.to_string());
+            }
+            _ => return Err("unknown argument".into()),
+        }
+        index += 1;
+    }
+
+    let explicit_home = !native_home.is_empty();
+    let explicit_connections = !native_connections.is_empty();
+    let mut parsed = parse_args(&normalized, environment_home)?;
+    if let Some(home) = native_home.into_iter().next() {
+        parsed.home = home;
+    }
+    if let Some(connections) = native_connections.into_iter().next() {
+        parsed.connections = connections;
+    } else if explicit_home && !explicit_connections {
+        parsed.connections = default_connections_path(&parsed.home);
+    }
+    if let Some(cloud_root) = native_cloud_root.into_iter().next() {
+        parsed.cloud_root = Some(cloud_root);
+    }
+    Ok(parsed)
 }
 
 #[cfg(not(coverage))]
@@ -474,7 +540,7 @@ fn run() -> Result<(), String> {
         }
         TerminalArgs::Run(args) => args,
     };
-    let parsed = parse_args(&args, environment_home())?;
+    let parsed = parse_host_args(args, environment_home())?;
     let output = execute(parsed)?;
     println!(
         "{}",
