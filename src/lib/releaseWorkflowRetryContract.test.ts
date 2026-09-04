@@ -11,9 +11,14 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release workflow retry contract', () => {
-  it('preserves in-flight release builds across newer heads and explicit reruns', () => {
+  it('cancels stale first-attempt PR runs without cancelling explicit reruns', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain('cancel-in-progress: false');
+    expect(workflow).toContain(
+      'group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}',
+    );
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}",
+    );
     expect(workflow).not.toContain('cancel-in-progress: true');
   });
 
@@ -26,11 +31,11 @@ describe('release workflow retry contract', () => {
     expect(workflow).not.toContain('release-disksage-${{ matrix.os }}-${{ github.run_attempt }}');
   });
 
-  it('documents non-cancelling release concurrency in authoritative evidence', () => {
+  it('documents trigger-aware retry-safe release concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
-    expect(doctoring).toContain('release concurrency never cancels an in-flight build');
-    expect(doctoring).toContain('cancel-in-progress: false');
+    expect(doctoring).toContain('fresh first-attempt PR run cancels stale work');
+    expect(doctoring).toContain('explicit rerun never cancels itself');
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });
