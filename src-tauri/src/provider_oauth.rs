@@ -8,12 +8,13 @@ use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
 #[cfg(not(coverage))]
-use std::io::{Read, Write};
+use std::io::Write;
 #[cfg(not(coverage))]
 use std::net::{TcpListener, TcpStream};
 #[cfg(not(coverage))]
@@ -25,6 +26,13 @@ const MAX_CONNECTIONS: usize = 32;
 const MAX_CLIENT_ID_BYTES: usize = 512;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const KEYRING_SERVICE: &str = "org.contextualwisdomlab.disksage.cloud-oauth";
+
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 #[cfg(not(coverage))]
 const MAX_CALLBACK_REQUEST_BYTES: usize = 16 * 1024;
@@ -376,14 +384,47 @@ fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Re
     Ok(())
 }
 
+fn open_connection_document(path: &Path) -> Result<Option<std::fs::File>, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    match options.open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            Err("oauth-connection-document-not-regular-file".into())
+        }
+        Err(_) => Err("oauth-connection-document-unavailable".into()),
+    }
+}
+
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     validate_connection_document_parent(connection_document_parent(path), true)?;
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("oauth-connection-document-unavailable".into()),
+    let file = match open_connection_document(path)? {
+        Some(file) => file,
+        None => return Ok(Vec::new()),
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = file
+        .metadata()
+        .map_err(|_| "oauth-connection-document-unavailable")?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("oauth-connection-document-not-regular-file".into());
+        }
+    }
+    if !metadata.is_file() {
         return Err("oauth-connection-document-not-regular-file".into());
     }
     #[cfg(unix)]
@@ -396,7 +437,14 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
     }
-    let bytes = std::fs::read(path).map_err(|_| "oauth-connection-document-unreadable")?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut reader = file.take(MAX_CONNECTION_DOCUMENT_BYTES + 1);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| "oauth-connection-document-unreadable")?;
+    if bytes.len() as u64 > MAX_CONNECTION_DOCUMENT_BYTES {
+        return Err("oauth-connection-document-too-large".into());
+    }
     let document: ConnectionDocument =
         serde_json::from_slice(&bytes).map_err(|_| "oauth-connection-document-invalid")?;
     if document.version != CONNECTION_DOCUMENT_VERSION
