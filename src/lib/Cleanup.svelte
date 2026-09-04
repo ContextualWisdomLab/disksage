@@ -6,6 +6,7 @@
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
+  import DeletedOpenCleanup from "./DeletedOpenCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -271,6 +272,7 @@
 
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
+  <DeletedOpenCleanup />
 
   <h3>Podman VM 저장소</h3>
   <p class="notice">
