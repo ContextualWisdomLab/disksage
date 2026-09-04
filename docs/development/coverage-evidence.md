@@ -74,6 +74,16 @@ The group intentionally omits source SHA so a newer first-attempt run can supers
 
 GitHub documents concurrency groups as the mechanism for limiting simultaneous workflow/job execution and canceling outdated runs. It also documents workflow artifacts as the mechanism for persisting outputs such as test and coverage results after a job completes.
 
+## Latest measured gap and recovery
+
+The latest completed repository-wide Rust measurement that produced usable coverage totals is predecessor head `af39bce9bb6ac3186e3940e2c94dd8381080f619` from Test run `33779617794`. It measured 64,391/80,218 regions (80.270014%), 5,292/8,991 branches (58.858859%), 3,357/4,924 functions (68.176280%), and 42,867/53,111 lines (80.712094%). Those values are RED evidence: none is reusable as passing evidence for a later head.
+
+The bounded diagnostic identified `src-tauri/src/commands.rs` (2,364 uncovered lines), `src-tauri/src/cloud.rs` (687), `src-tauri/src/icloud_sync_health.rs` (474), and `src-tauri/src/provider_oauth.rs` (388) as the largest then-current uncovered production contributors. Recovery is therefore ordered by measured contribution instead of by arbitrary test-file count.
+
+Current coverage-owner lineage has adopted the still-valid command-layer public coverage and HOME-absent environment fixture from historical PR #156, then adopted `src-tauri/tests/cloud_public_coverage.rs` after verifying its public cloud contracts against current `cloud.rs`. These are test-only changes; they do not narrow the denominator or substitute synthetic data for destructive/recovery acceptance. Their value is not considered inherited until an unchanged exact head compiles, runs them, and emits the next real measurement.
+
+The next historical donor, `src-tauri/tests/icloud_sync_health_public_coverage.rs`, is not source-compatible verbatim. Current `IcloudSyncHealthReport` includes `native_status` and `file_provider_activity`; the older fixture predates those fields. Its filesystem/admission semantics remain candidates for recovery, but the donor must first be minimally adapted to the current report shape and then pass exact-head execution. Copying a stale blob merely to increase test count is not acceptable evidence.
+
 ## Operating rule
 
 A missing `coverage-evidence` artifact is not passing. Queued, pending, canceled, failed, stale-head, malformed, less-than-100%, predecessor, or synthetic-merge evidence is non-passing. Engineers must add realistic tests or remove genuinely unreachable production code; they must not lower thresholds, hard-code percentages, narrow the production denominator, or reuse an artifact from a different head.
