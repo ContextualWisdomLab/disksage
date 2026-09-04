@@ -18,8 +18,13 @@
     boundedCloudArchiveErrorMessage,
     isCloudCopyCancelled,
   } from "./cloudArchiveErrorFeedback";
+  import {
+    blockedSinceMs as resolveBlockedSinceMs,
+    icloudBlockedSinceMs as resolveIcloudBlockedSinceMs,
+  } from "./cloudArchiveHealthTiming";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
+  import { buildCloudLineageExport } from "./cloudLineageExport";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
@@ -34,6 +39,7 @@
   ]);
   const PROVIDER_FINDER_COPY_BLOCKERS = new Set([
     "provider-global-sync-transfer-active",
+    "provider-global-sync-indexing-pending",
     "provider-global-sync-reconciliation-pending",
     "provider-global-sync-temporarily-disconnected",
     "provider-global-sync-server-unreachable",
@@ -238,7 +244,7 @@
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && capacityEvidenceAvailable
-      && api.localCopyHasHeadroom(report?.local_volume, candidate.bytes)
+      && !nativeCopyHeadroomBlocked(candidate)
       && !providerAdmissionBlocked
       && !icloudAdmissionBlocked
       && !icloudPreCopyEvidenceBlocked
@@ -246,7 +252,18 @@
   }
 
   function nativeCopyHeadroomBlocked(candidate: api.CloudCandidate): boolean {
-    return !api.localCopyHasHeadroom(report?.local_volume, candidate.bytes);
+    const candidateBlocked = candidate.blocked_reason === "local-volume-headroom-insufficient"
+      || candidate.blocked_reason === "local-volume-headroom-unverified";
+    if (candidateBlocked) return true;
+    // Older reports carried only a plan-wide notice. Keep those fail-closed while allowing
+    // current reports to admit candidates whose own destination probe passed.
+    const hasPerCandidateEvidence = report?.candidates.some((item) =>
+      item.blocked_reason === "local-volume-headroom-insufficient"
+      || item.blocked_reason === "local-volume-headroom-unverified"
+    ) === true;
+    return !hasPerCandidateEvidence
+      && (report?.notices.includes("local-volume-headroom-insufficient") === true
+        || report?.notices.includes("local-volume-headroom-unverified") === true);
   }
 
   function providerApiWriteConnected(): boolean {
@@ -263,10 +280,12 @@
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
     const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    const onlyNativeStagingBlocker = candidate.blocked_reason === null
+      || candidate.blocked_reason.startsWith("local-volume-headroom-");
     return selectedRootDetails()?.provider !== "icloud"
       && hasProviderAdmissionBlocker(report?.notices ?? [])
       && providerApiWriteConnected()
-      && candidate.blocked_reason === null
+      && onlyNativeStagingBlocker
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && api.cloudCapacityAllowsCopy(report?.capacity)
@@ -496,6 +515,19 @@
     }
   }
 
+  function downloadLineageExport() {
+    if (!copied) return;
+    const graph = buildCloudLineageExport(copied, attestation, eviction);
+    if (!graph) return;
+    const blob = new Blob([JSON.stringify(graph, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `disksage-lineage-${graph.content_id.slice(0, 12)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function reconcileCloudReceipts() {
     reconciling = true;
     reconciliationError = "";
@@ -532,6 +564,7 @@
         activity?.no_progress_create_count ?? 0,
         activity?.materialization_failure_count ?? 0,
         activity?.staged_item_missing_count ?? 0,
+        activity?.pending_indexable_count ?? "",
         activity?.active_upload_count ?? 0,
         activity?.active_download_count ?? 0,
         activity?.active_upload_progress_millionths ?? "",
@@ -544,7 +577,10 @@
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = observedAtMs;
+        icloudHealthBlockedSinceMs = resolveIcloudBlockedSinceMs(
+          next.admission_blocked_since_ms,
+          next.observed_at_ms,
+        );
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
@@ -602,6 +638,13 @@
     try {
       const observedAtMs = Date.now();
       const next = await api.inspectCloudProviderGlobalSync(root.path);
+      const backendObservedAtMs = Number.isInteger(next.observed_at_ms) && next.observed_at_ms > 0
+        ? next.observed_at_ms
+        : observedAtMs;
+      const backendBlockedSinceMs = resolveBlockedSinceMs(
+        next.admission_blocked_since_ms,
+        backendObservedAtMs,
+      );
       const fingerprint = [
         next.provider,
         next.state,
@@ -614,12 +657,14 @@
         providerGlobalSyncBlockedSinceMs = 0;
         providerGlobalSyncFingerprint = "";
       } else if (providerGlobalSyncFingerprint !== fingerprint) {
-        providerGlobalSyncBlockedSinceMs = observedAtMs;
+        providerGlobalSyncBlockedSinceMs = backendBlockedSinceMs;
         providerGlobalSyncFingerprint = fingerprint;
+      } else if (backendBlockedSinceMs < providerGlobalSyncBlockedSinceMs) {
+        providerGlobalSyncBlockedSinceMs = backendBlockedSinceMs;
       }
       providerGlobalSync = next;
-      providerGlobalSyncObservedAtMs = observedAtMs;
-      providerGlobalSyncNextCheckAt = observedAtMs
+      providerGlobalSyncObservedAtMs = backendObservedAtMs;
+      providerGlobalSyncNextCheckAt = backendObservedAtMs
         + (next.blockers.length === 0
           ? RECONCILIATION_INTERVAL_MS
           : PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS);
@@ -823,17 +868,20 @@
       "icloud-native-sync-up-pending": "macOS iCloud sync-up이 아직 끝나지 않음",
       "icloud-native-sync-down-pending": "macOS iCloud sync-down이 아직 끝나지 않음",
       "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
-      "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
-      "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
-      "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
-      "icloud-file-provider-item-locked": "File Provider 항목이 전파 잠금 상태임",
-      "icloud-file-provider-stalled": "File Provider 오래된 오류로 전송이 정지된 상태임",
+      "icloud-native-status-command-timeout": "iCloud 상태 확인이 늦어지고 있습니다. 잠시 후 다시 확인하세요.",
+      "icloud-native-status-pending-scan": "iCloud가 파일 목록을 준비 중입니다. 완료될 때까지 복사를 기다리세요.",
+      "icloud-file-provider-no-progress": "iCloud 요청이 진행되지 않습니다. Finder 복사를 취소한 뒤 다시 확인하세요.",
+      "icloud-file-provider-materialization-failed": "iCloud가 파일을 준비하지 못했습니다. Finder 복사를 취소한 뒤 다시 시도하세요.",
+      "icloud-file-provider-item-locked": "iCloud가 파일을 처리 중입니다. Finder 작업을 취소하고 잠시 후 다시 확인하세요.",
+      "icloud-file-provider-stalled": "iCloud 전송이 오래 멈춰 있습니다. Finder 복사를 취소한 뒤 다시 확인하세요.",
       "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
       "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
-      "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
-      "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
-      "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
-      "icloud-file-provider-evidence-unavailable": "File Provider 상태 증거를 확인할 수 없음",
+      "icloud-file-provider-indexing-pending": "iCloud가 파일 목록을 준비 중입니다. 기존 전송이 끝난 뒤 다시 확인하세요.",
+      "icloud-file-provider-disk-import-active": "iCloud가 로컬 파일을 정리 중입니다. 완료될 때까지 새 복사를 기다리세요.",
+      "icloud-file-provider-transfer-active": "iCloud의 기존 업로드 또는 다운로드가 끝난 뒤 다시 확인하세요.",
+      "icloud-file-provider-dump-timeout": "iCloud 상태 확인이 늦어지고 있습니다. 잠시 후 다시 확인하세요.",
+      "icloud-file-provider-dump-output-truncated": "iCloud 상태를 모두 확인하지 못했습니다. 잠시 후 다시 확인하세요.",
+      "icloud-file-provider-evidence-unavailable": "iCloud 상태를 확인할 수 없습니다. 연결과 여유 공간을 확인하세요.",
       "icloud-item-error-octagon-not-signed-in": "iCloud 계정 인증이 필요함",
       "icloud-item-error-older-than-24h": "iCloud 동기화 오류가 24시간 이상 지속됨",
     };
@@ -843,8 +891,8 @@
   function providerGlobalSyncBlockerLabel(blocker: string): string {
     const labels: Record<string, string> = {
       "provider-global-sync-transfer-active": "전역 파일 전송이 진행 중임",
-      "provider-global-sync-indexing-pending": "공급자 인덱싱이 끝나지 않음",
-      "provider-global-sync-reconciliation-pending": "공급자 reconciliation 대기 항목이 있음",
+      "provider-global-sync-indexing-pending": "파일 목록 준비가 끝난 뒤 다시 확인하세요.",
+      "provider-global-sync-reconciliation-pending": "클라우드 확인 작업이 끝난 뒤 다시 확인하세요.",
       "provider-global-sync-filename-too-long": "파일명 제한 오류가 있음",
       "provider-global-sync-temporarily-disconnected": "공급자가 일시적으로 연결 해제됨",
       "provider-global-sync-server-unreachable": "공급자 서버에 연결할 수 없음",
@@ -910,19 +958,19 @@
       <button onclick={() => refreshIcloudHealth(true)} disabled={checkingIcloudHealth || busy}>
         {checkingIcloudHealth ? "iCloud 상태 확인 중…" : "iCloud 상태 즉시 재확인"}
       </button>
-      <span class="muted">화면이 열려 있는 동안 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal을 갱신합니다. iCloud가 막히면 자동 확인은 최대 5분 간격으로 줄어듭니다.</span>
+      <span class="muted">화면이 열려 있는 동안 파일을 변경하지 않고 동기화 상태를 갱신합니다. iCloud가 지연되면 5분 간격으로 다시 확인합니다.</span>
     </div>
     {#if selectedRootDetails() && !selectedRootDetails()?.readable}
       <p class="warning">
-        이 File Provider 루트는 현재 읽을 수 없습니다. 공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용하며,
-        복사·attestation·원본 정리는 루트가 다시 읽힐 때까지 차단합니다.
+        이 클라우드 폴더를 읽을 수 없습니다. 클라우드 앱을 다시 연 뒤 상태를 확인하세요.
+        폴더를 다시 읽을 수 있을 때까지 복사와 원본 정리는 보류됩니다.
       </p>
     {/if}
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>재시작 후 영수증 재검증</strong>
         <span class="context">
-          {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 provider 증거 갱신 ·
+          {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 업로드 상태 갱신 ·
           {reconciliation.pending_count}개 업로드 대기 · {reconciliation.error_count}개 확인 실패
           {#if reconciliation.incomplete_reconciliation} · {reconciliation.unprocessed_count}개 미처리{/if}
         </span>
@@ -939,32 +987,37 @@
             </p>
           {/each}
         {/if}
-        <p class="muted">이 작업은 provider 증거와 동적 ADR/Goal만 갱신하며 클라우드 쓰기·원본 삭제는 수행하지 않습니다.</p>
+        <p class="muted">이 작업은 이전 복사 상태만 다시 확인하며 파일을 변경하거나 삭제하지 않습니다.</p>
       </div>
     {/if}
     {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
     {#if icloudHealth}
       <div class="receipt-reconciliation" aria-live="polite">
-        <strong>iCloud 새 복사 admission</strong>
+        <strong>iCloud 복사 준비 상태</strong>
         <span class="context">
-          {icloudHealth.new_copy_admission_state === "clear" ? "새 복사 허용 가능" : "새 복사 차단"} ·
+          {icloudHealth.new_copy_admission_state === "clear" ? "지금 복사 가능" : "복사 보류"} ·
           대기 {icloudHealth.upload_queue.scheduled_waiting_count}개 ·
           진행 {icloudHealth.upload_queue.scheduled_active_count}개 ·
-          sync-up 차단 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
+          업로드 보류 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
           오류 {icloudHealth.upload_queue.item_error_count}개
           {#if icloudHealth.file_provider_activity}
-            · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
-            materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
-            활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
+            · 응답 없는 요청 {icloudHealth.file_provider_activity.no_progress_fetch_count + icloudHealth.file_provider_activity.no_progress_create_count}개 ·
+            파일 준비 실패 {icloudHealth.file_provider_activity.materialization_failure_count + icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
+            파일 목록 준비 {icloudHealth.file_provider_activity.pending_indexable_count ?? 0}개 ·
+            로컬 파일 정리 {icloudHealth.file_provider_activity.notices.includes("icloud-file-provider-disk-import-active") ? "진행 중" : "없음"} ·
+            기존 업로드 {icloudHealth.file_provider_activity.active_upload_count}개 / 다운로드 {icloudHealth.file_provider_activity.active_download_count}개
             {#if providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
-              · upload 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
+                · 업로드 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
             {/if}
             {#if providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
-              · download 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
+                · 다운로드 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
             {/if}
           {/if}
+          {#if icloudHealth.native_status}
+            · 추가 확인 대기 {icloudHealth.native_status.pending_scan_count ?? 0}개
+          {/if}
         </span>
-        <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
+        <p class="muted">마지막 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
         {#if icloudHealthBlockedSinceMs > 0}
           <p class="muted">
             동일 차단 지속: {duration(Math.max(0, icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs))}
@@ -972,8 +1025,8 @@
         {/if}
         {#if hasIcloudHealthEvidencePersistenceFailure(icloudHealth.notices)}
           <p class="warning">
-            iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 관찰값은 표시하되 장기 비교에는 사용하지 않으며,
-            복사·원본 정리 판정은 현재 증거가 다시 저장될 때까지 보수적으로 유지합니다.
+            iCloud 상태 기록을 저장하지 못했습니다. 여유 공간을 확보한 뒤 “상태 다시 확인”을 누르세요.
+            상태가 저장될 때까지 복사와 원본 정리는 보류됩니다.
           </p>
         {/if}
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
@@ -986,12 +1039,17 @@
             || icloudHealth.file_provider_activity.no_progress_create_count > 0
             || icloudHealth.file_provider_activity.materialization_failure_count > 0
             || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+            || (icloudHealth.file_provider_activity.pending_indexable_count ?? 0) > 0
+            || icloudHealth.file_provider_activity.notices.includes("icloud-file-provider-disk-import-active")
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
             || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")
             || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")
-          )}
+          ) || (icloudHealth.native_status?.pending_scan_count ?? 0) > 0}
+            <p class="muted">
+              Finder 복사를 취소하면 현재 화면의 대기 요청만 중지합니다. 파일이나 클라우드 데이터는 변경되지 않습니다.
+            </p>
             <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingIcloudHealth}>
               {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
             </button>
@@ -999,48 +1057,66 @@
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
-              Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다. Finder에 남은 복사 대기는 취소하고,
-              File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
+              Finder가 “복사 준비 중”에서 멈춰 있습니다. Finder에 남은 복사 대기를 취소하고,
+              iCloud 전송이 정상화된 뒤 “상태 다시 확인”을 누르세요.
+            </p>
+          {/if}
+          {#if (icloudHealth.native_status?.pending_scan_count ?? 0) > 0}
+            <p class="warning">
+              iCloud가 아직 {icloudHealth.native_status?.pending_scan_count}개 항목을 확인 중입니다.
+              Finder 전송이 끝난 뒤 “상태 다시 확인”을 누르세요. 완료 전에는 새 복사와 원본 정리를 진행하지 않습니다.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.materialization_failure_count > 0 || icloudHealth.file_provider_activity.staged_item_missing_count > 0)}
             <p class="warning">
-              File Provider가 파일 materialization에 실패했거나 staged item을 잃었습니다. 현재 복사는 완료로 간주하지 않으며,
-              새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
+              iCloud가 파일을 준비하지 못했습니다. Finder 복사를 취소하고 “상태 다시 확인”을 누르세요.
+              상태가 정상화될 때까지 새 복사와 원본 정리는 보류됩니다.
             </p>
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
             <p class="warning">
-              File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다. Finder의 대기 작업을 취소하고,
-              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+              iCloud가 파일을 처리 중이라 Finder 복사가 기다리고 있습니다. Finder의 대기 작업을 취소하고,
+              잠시 후 “상태 다시 확인”을 누르세요.
             </p>
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")}
             <p class="warning">
-              File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다. Finder의 “복사 준비 중” 작업을 취소하고,
-              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+              iCloud 전송이 15분 이상 진행되지 않았습니다. Finder의 “복사 준비 중” 작업을 취소하고,
+              잠시 후 “상태 다시 확인”을 누르세요.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}
             <p class="warning">
-              File Provider 상태 확인이 제한시간을 넘었습니다. Finder에 남은 복사 대기를 취소하고,
-              DiskSage에서 상태를 다시 확인한 뒤 admission이 clear일 때만 새 복사를 시작하십시오.
+              iCloud 상태 확인이 제한시간을 넘었습니다. Finder에 남은 복사 대기를 취소하고,
+              “상태 다시 확인” 결과가 복사 가능일 때만 새 복사를 시작하세요.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.active_upload_count > 0 || icloudHealth.file_provider_activity.active_download_count > 0)}
             <p class="warning">
-              iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
-              clear가 될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
+              iCloud에 기존 전송이 진행 중입니다. 업로드와 다운로드가 끝난 뒤 “상태 다시 확인”을 누르세요.
+              화면에 “지금 복사 가능”이 표시될 때까지 새 복사와 원본 정리는 보류됩니다.
+            </p>
+          {/if}
+          {#if (icloudHealth.file_provider_activity?.pending_indexable_count ?? 0) > 0}
+            <p class="warning">
+              iCloud가 {icloudHealth.file_provider_activity?.pending_indexable_count}개 파일의 목록을 준비 중입니다.
+              기존 전송이 끝난 뒤 “상태 다시 확인”을 누르세요. 그전에는 복사를 완료로 간주하지 않습니다.
+            </p>
+          {/if}
+          {#if icloudHealth.file_provider_activity?.notices.includes("icloud-file-provider-disk-import-active")}
+            <p class="warning">
+              iCloud가 로컬 파일을 정리 중입니다. 작업이 끝난 뒤 “상태 다시 확인”을 누르세요.
+              완료 전에는 새 복사와 원본 정리를 시작하지 않습니다.
             </p>
           {/if}
           {#if icloudHealthBlockedSinceMs > 0 && icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
             <p class="warning">
               동일한 iCloud 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
-              iCloud 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+              “상태 다시 확인” 결과가 “지금 복사 가능”이 될 때까지 새 복사와 원본 정리를 시작하지 마세요.
             </p>
           {/if}
         {:else}
-          <p class="capacity-ok">iCloud 전역 업로드 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+          <p class="capacity-ok">iCloud 업로드 대기열이 비어 있습니다. 복사할 파일의 업로드 상태를 확인한 뒤 원본을 정리하세요.</p>
         {/if}
         {#if typeof icloudHealth.managed_database_allocated_bytes === "number"}
           <p class="warning">
@@ -1057,25 +1133,25 @@
               .join(", ")}
           </p>
         {/if}
-        <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+        <p class="muted">이 상태만으로 원격 여유 공간이나 개별 파일의 업로드 완료를 확인할 수 없습니다. 원본 정리 전에 파일별 상태를 확인하세요.</p>
       </div>
     {/if}
     {#if icloudHealthError}
       <p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>
       <p class="warning">
-        iCloud File Provider 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
-        로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
+        iCloud 상태를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
+        로컬 여유 공간을 확보한 뒤 “상태 다시 확인”을 누르세요.
       </p>
     {/if}
     {#if providerGlobalSync}
       <div class="receipt-reconciliation" aria-live="polite">
-        <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
+        <strong>{providerGlobalSync.provider} 복사 준비 상태</strong>
         <span class="context">
-          {providerGlobalSync.state === "clear" && providerGlobalSync.blockers.length === 0 ? "새 복사 허용 가능" : "새 복사 차단"} ·
+          {providerGlobalSync.state === "clear" && providerGlobalSync.blockers.length === 0 ? "지금 복사 가능" : "복사 보류"} ·
           업로드 전송 {providerGlobalSync.upload_progress_present ? "진행 중" : "없음"} ·
           다운로드 전송 {providerGlobalSync.download_progress_present ? "진행 중" : "없음"}
           {#if providerGlobalSync.pending_indexable_count !== null}
-            · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
+            · 파일 목록 준비 {providerGlobalSync.pending_indexable_count}개
           {/if}
           · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} ·
           {providerGlobalSync.blockers.length === 0 ? "1분" : "5분"} 후 자동 재확인
@@ -1089,15 +1165,18 @@
           </p>
           {#if providerGlobalSyncBlockedSinceMs > 0 && providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
             <p class="warning">
-              동일한 공급자 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
-              공급자 앱을 재기동한 뒤 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+              동일한 클라우드 지연이 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
+              클라우드 앱을 다시 연 뒤 상태를 확인하세요. “지금 복사 가능”이 표시될 때까지 새 복사와 원본 정리는 보류됩니다.
             </p>
           {/if}
           {#if selectedRootDetails()?.provider !== "icloud"}
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
-              {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
+              {recoveringProvider ? "클라우드 앱 다시 여는 중…" : "클라우드 앱 다시 열고 상태 확인"}
             </button>
             {#if canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+              <p class="muted">
+                이 작업은 Finder에 Escape 키를 보내므로 macOS 손쉬운 사용 설정에서 DiskSage의 System Events 제어 권한이 필요합니다. 권한이 없으면 요청만 실패하며 파일·클라우드 데이터는 변경되지 않습니다.
+              </p>
               <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingProviderGlobalSync}>
                 {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
               </button>
@@ -1105,7 +1184,7 @@
             {/if}
           {/if}
         {:else}
-          <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+          <p class="capacity-ok">클라우드 업로드 대기열이 비어 있습니다. 복사할 파일의 업로드 상태를 확인한 뒤 원본을 정리하세요.</p>
         {/if}
         {#if providerRecovery}
           <p class:warning={providerRecovery.blockers.length > 0} class="muted">
@@ -1114,14 +1193,14 @@
             {#if providerRecovery.blockers.length > 0} · {providerRecovery.blockers.join(", ")}{/if}
           </p>
         {/if}
-        <p class="muted">읽기 전용 File Provider 집계 증거이며, 클라우드 쓰기·개별 파일 attestation·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+        <p class="muted">이 상태 확인은 파일을 변경하지 않습니다. 원본 정리 전에 복사한 파일의 업로드 완료를 확인하세요.</p>
       </div>
     {/if}
     {#if providerGlobalSyncError}
-      <p class="error" role="alert">공급자 전역 동기화 상태 확인: {providerGlobalSyncError}</p>
+      <p class="error" role="alert">클라우드 상태를 확인하지 못했습니다: {providerGlobalSyncError}</p>
       <p class="warning">
-        공급자 전역 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
-        공급자 앱이 정상으로 관찰될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+        Finder에 남은 복사 대기를 취소하고 클라우드 앱을 다시 여세요.
+        “지금 복사 가능”이 표시될 때까지 새 복사와 원본 정리는 보류됩니다.
       </p>
     {/if}
     {#if roots.some((root) => !root.readable)}
@@ -1268,8 +1347,8 @@
       {/if}
       {#if report.candidates.some(nativeCopyHeadroomBlocked)}
         <p class="warning">
-          네이티브 File Provider 복사는 후보 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)} 여유공간을 함께 확보해야 합니다.
-          현재 여유공간이 부족한 후보는 버튼을 비활성화합니다. 명시적 OAuth 공급자 API 업로드는 별도 경로입니다.
+          네이티브 File Provider 복사는 목적지 staging 볼륨에 후보 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)} 여유공간을 함께 확보해야 합니다.
+          목적지 여유공간이 부족하거나 확인되지 않은 경우 native 버튼을 비활성화합니다. 명시적 OAuth 공급자 API 업로드는 별도 경로입니다.
         </p>
       {/if}
     {/if}
@@ -1338,6 +1417,12 @@
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
         <p class="muted">Goal: {copied.goal_state} · 상태: {copied.goal_status ?? "미확인"} · 동적 ADR: {copied.adr_path ?? "실패"} · 동적 Goal: {copied.goal_path ?? "실패"}</p>
+        {#if buildCloudLineageExport(copied, attestation, eviction)}
+          <button class="secondary" onclick={downloadLineageExport}>
+            path-free lineage JSON 내보내기
+          </button>
+          <p class="muted">원본·목적지 경로 없이 stable content ID, metadata provenance, provider sync, Goal, eviction 관계와 차단 사유만 내보냅니다.</p>
+        {/if}
         {#each copied.projection_warnings as warning}
           <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
         {/each}

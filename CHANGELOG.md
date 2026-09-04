@@ -39,6 +39,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.
+- Include the redacted iCloud File Provider `pending-indexable-count` in admission evidence and
+  surface `icloud-file-provider-indexing-pending` when Finder remains in “복사 준비 중”.
+- Record the redacted File Provider `disk import: yes` marker as
+  `icloud-file-provider-disk-import-active`, show it beside the iCloud admission evidence, and
+  keep Finder copy, attestation, and source cleanup blocked while macOS is importing a provider
+  disk.
+- Persist the earliest retained timestamp for an unchanged iCloud admission-blocker set, so a
+  restart cannot reset the stalled-copy duration; this diagnostic never grants copy, attestation,
+  or eviction authority.
+- Persist bounded, path-free OneDrive/Google Drive provider-global observations and return
+  `admission_blocked_since_ms` for an unchanged blocker cohort, so a Finder “복사 준비 중” stall
+  remains visible across DiskSage or system restarts; tampered evidence is ignored and the journal
+  never grants copy, attestation, or source-eviction authority.
 - Bind Tauri packaging to a fail-closed cross-manifest release-version verifier so `package.json`, `Cargo.toml`, `tauri.conf.json`, and any `v*` release tag must agree on one valid Semantic Version before a bundle is built.
 - Add retry-safe release concurrency: fresh first attempts may supersede stale runs, while explicit GitHub rerun attempts do not self-cancel inside the same concurrency group.
 - Replace generator-era Cargo package metadata with the DiskSage product description, MIT license expression, canonical source repository URL, and `publish = false` registry-publication boundary; deliberately omit Cargo's deprecated `authors` field, verify publication refusal through Cargo's versioned parsed metadata rather than substring matching, and regression-test commented/out-of-table decoys together with the retained acquisition metadata and doctoring evidence.
@@ -52,6 +65,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Consume the persisted iCloud `admission_blocked_since_ms` diagnostic in the UI stall clock, so a
+  system or application restart preserves the visible duration of an unchanged provider block;
+  durable evidence remains advisory and fail-closed.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
@@ -63,6 +79,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.
+
+- Bound numeric File Provider disk-full markers for `errno`, `odresult_errno`, and
+  `OSStatus -34`, so longer codes such as `errno 280` cannot be misclassified as
+  local-disk-full evidence.
+
+- Include `icloud-file-provider-indexing-pending` in the Naruon iCloud admission-blocker binding,
+  so a signed non-iCloud envelope cannot smuggle that provider blocker through validation.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety

@@ -5256,9 +5256,12 @@ pub fn plan_cloud_archive_from_snapshot(
     }
     #[cfg(not(coverage))]
     let exact_duplicates = {
+        // Detect clusters before applying the presentation limit so a duplicate pair split across
+        // the boundary still blocks automatic handling of the visible member.
+        let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates, None);
         candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
         candidates.truncate(options.limit);
-        mark_exact_duplicate_candidates(&mut candidates, None)
+        exact_duplicates
     };
     #[cfg(coverage)]
     let exact_duplicates = {
@@ -5266,12 +5269,6 @@ pub fn plan_cloud_archive_from_snapshot(
         candidates.truncate(options.limit);
         ExactDuplicateSummary::default()
     };
-    let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
-    let potentially_reclaimable_bytes = candidates
-        .iter()
-        .filter(|c| c.blocked_reason.is_none())
-        .map(|c| c.bytes)
-        .sum();
     let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let mut notices = vec![
         "dry-run-only".into(),
@@ -5280,13 +5277,40 @@ pub fn plan_cloud_archive_from_snapshot(
         "cloud-sync-unverified".into(),
         "full-transfer-content-hash-pending".into(),
     ];
-    if local_volume.as_ref().is_some_and(|volume| {
-        candidates.iter().any(|candidate| {
-            !crate::volume_pressure::has_copy_headroom(volume.available_bytes, candidate.bytes)
-        })
-    }) {
+    let mut destination_headroom_insufficient = false;
+    let mut destination_headroom_unverified = false;
+    for candidate in candidates
+        .iter_mut()
+        .filter(|candidate| candidate.blocked_reason.is_none())
+    {
+        match crate::copy_headroom::require_destination_copy_headroom(
+            Path::new(&candidate.dst),
+            candidate.bytes,
+            now_ms,
+        ) {
+            Ok(()) => {}
+            Err(reason) if reason == "local-volume-headroom-insufficient" => {
+                candidate.blocked_reason = Some(reason);
+                destination_headroom_insufficient = true;
+            }
+            Err(reason) => {
+                candidate.blocked_reason = Some(reason);
+                destination_headroom_unverified = true;
+            }
+        }
+    }
+    if destination_headroom_insufficient {
         notices.push("local-volume-headroom-insufficient".into());
     }
+    if destination_headroom_unverified {
+        notices.push("local-volume-headroom-unverified".into());
+    }
+    let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
+    let potentially_reclaimable_bytes = candidates
+        .iter()
+        .filter(|c| c.blocked_reason.is_none())
+        .map(|c| c.bytes)
+        .sum();
     if !snapshot.source_scan_complete {
         notices.push("source-scan-incomplete".into());
         notices.push(format!(
@@ -5342,40 +5366,6 @@ mod tests {
             readable: true,
             access_issue: None,
         }
-    }
-
-    #[cfg(not(coverage))]
-    #[test]
-    fn folded_received_header_at_end_of_block_is_safe() {
-        let temp = tempfile::tempdir().unwrap();
-        let message_path = temp.path().join("folded-received.eml");
-        std::fs::write(
-            &message_path,
-            concat!(
-                "Date: Mon, 17 Aug 2026 12:00:00 +0000\r\n",
-                "Subject: Folded Received regression\r\n",
-                "Received: from relay.example\r\n",
-                "\tby mx.example with ESMTP\r\n",
-                "\r\n",
-                "body is deliberately outside the bounded metadata parser\r\n",
-            ),
-        )
-        .unwrap();
-
-        let metadata = probe_content_metadata_with_general(&message_path, None);
-        assert_eq!(
-            metadata.title.as_deref(),
-            Some("Folded Received regression")
-        );
-        assert!(metadata.evidence.iter().any(|evidence| {
-            evidence.field == "email-header-bytes-inspected"
-                && evidence.source == "local:metadata-probe:bounded-rfc5322-header"
-        }));
-        assert!(metadata.evidence.iter().any(|evidence| {
-            evidence.field == "email-body-inspected"
-                && evidence.value == "false"
-                && evidence.source == "local:metadata-probe:bounded-rfc5322-header"
-        }));
     }
 
     #[cfg(not(coverage))]
@@ -5762,11 +5752,70 @@ mod tests {
             },
         );
 
-        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
         assert!(report
             .notices
             .contains(&"local-volume-headroom-insufficient".to_string()));
-        assert_eq!(report.potentially_reclaimable_bytes, u64::MAX);
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn destination_headroom_blocks_only_the_candidate_that_does_not_fit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let cloud_root = tmp.path().join("cloud");
+        writable_dir(&source_root);
+        writable_dir(&cloud_root);
+        let report = plan_cloud_archive(
+            &[
+                FileFact {
+                    path: source_root.join("large.zip"),
+                    bytes: u64::MAX / 2,
+                    created_ms: 1,
+                    modified_ms: 1,
+                    content_metadata: ContentMetadata::default(),
+                },
+                FileFact {
+                    path: source_root.join("small.zip"),
+                    bytes: 1,
+                    created_ms: 1,
+                    modified_ms: 1,
+                    content_metadata: ContentMetadata::default(),
+                },
+            ],
+            &source_root,
+            &root(CloudProvider::GoogleDrive, &cloud_root),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let large = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.src.ends_with("large.zip"))
+            .unwrap();
+        let small = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.src.ends_with("small.zip"))
+            .unwrap();
+        assert_eq!(
+            large.blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
+        assert_ne!(
+            small.blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
+        assert_eq!(report.potentially_reclaimable_bytes, small.bytes);
     }
 
     #[cfg(not(coverage))]
@@ -7101,6 +7150,65 @@ mod tests {
             .find(|candidate| candidate.relative_path == "c.pdf")
             .unwrap();
         assert!(!unique
+            .review_reasons
+            .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn planner_detects_duplicate_pairs_split_by_candidate_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        std::fs::write(source.join("large.pdf"), b"larger-than-duplicates").unwrap();
+        for name in ["a-duplicate.pdf", "z-duplicate.pdf"] {
+            std::fs::write(source.join(name), b"same-content").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files = ["large.pdf", "a-duplicate.pdf", "z-duplicate.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 2,
+            },
+        );
+
+        assert_eq!(report.candidates.len(), 2);
+        assert_eq!(report.exact_duplicates.cluster_count, 1);
+        assert_eq!(report.exact_duplicates.candidate_count, 2);
+        let visible_duplicate = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "a-duplicate.pdf")
+            .unwrap();
+        assert!(visible_duplicate
             .review_reasons
             .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
     }

@@ -1327,6 +1327,21 @@ mod tests {
     }
 
     #[test]
+    fn local_current_but_not_uploaded_is_pending_upload_evidence() {
+        let output = uploaded_file_provider_output().replace("isUploaded = 1", "isUploaded = 0");
+        let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+        assert!(snapshot.is_local_current());
+        assert!(!snapshot.is_sync_complete());
+
+        let evidence =
+            evidence_from_file_provider_snapshot(&receipt(CloudProvider::Onedrive), &snapshot, 30)
+                .unwrap();
+        assert!(!evidence.sync_complete);
+        assert_eq!(evidence.sync_state, ProviderSyncState::PendingUpload);
+        assert_eq!(incomplete_sync_blocker(evidence.sync_complete), Some("provider-sync-incomplete"));
+    }
+
+    #[test]
     fn trashed_file_provider_item_remains_incomplete() {
         let output = uploaded_file_provider_output().replace("isTrashed = 0", "isTrashed = 1");
         let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();

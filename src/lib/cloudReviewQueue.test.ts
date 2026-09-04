@@ -285,6 +285,8 @@ describe("cloud review queue", () => {
       .toBe("공급자 동기화 증거가 불완전하여 기존 목적지를 채택할 수 없음");
     expect(cloudDecisionReasonLabel("local-volume-headroom-insufficient"))
       .toBe("복사에 필요한 로컬 여유공간이 부족함");
+    expect(cloudDecisionReasonLabel("local-volume-headroom-unverified"))
+      .toBe("복사 대상 볼륨의 여유공간을 확인하지 못함");
     expect(cloudDecisionReasonLabel("future-review-reason"))
       .toBe("future-review-reason");
   });
