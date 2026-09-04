@@ -15,6 +15,7 @@ describe('Vitest hosted-runner worker budget', () => {
     const config = readVitestConfig();
 
     expect(config).toContain('maxWorkers: process.env.CI ? 2 : undefined');
+    expect(config).toContain('include: ["src/**/*.test.ts"]');
     expect(config).not.toContain('fileParallelism: false');
     expect(config).not.toContain('pool: "threads"');
     expect(config).not.toContain("pool: 'threads'");
