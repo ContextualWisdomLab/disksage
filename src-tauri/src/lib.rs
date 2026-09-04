@@ -44,6 +44,8 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
+#[cfg(test)]
+mod brew_cleanup_audit_authority_tests;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
