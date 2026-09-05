@@ -1,0 +1,33 @@
+name: Provider OAuth Windows Contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: provider-oauth-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
+permissions:
+  contents: read
+
+jobs:
+  provider-oauth-windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUST_TEST_THREADS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - name: Run shipped provider OAuth Windows process contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process

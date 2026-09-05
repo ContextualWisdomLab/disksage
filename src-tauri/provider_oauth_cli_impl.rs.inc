@@ -1,8 +1,8 @@
-//! Headless OAuth lifecycle for OneDrive and Google Drive evidence and explicit API uploads.
-//!
-//! Refresh tokens remain in the operating-system credential store. This command emits only
-//! non-secret connection descriptors and provider capacity evidence; this command itself never
-//! performs a cloud file write or source eviction.
+// Headless OAuth lifecycle for OneDrive and Google Drive evidence and explicit API uploads.
+//
+// Refresh tokens remain in the operating-system credential store. This command emits only
+// non-secret connection descriptors and provider capacity evidence; this command itself never
+// performs a cloud file write or source eviction.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
@@ -94,7 +94,9 @@ fn usage() -> String {
         "[--connections ABSOLUTE_PATH] ",
         "(--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID ",
         "[--manual-browser] [--write-access] | --verify-capacity --cloud-root ABSOLUTE_PATH | ",
-        "--disconnect --cloud-root ABSOLUTE_PATH)"
+        "--disconnect --cloud-root ABSOLUTE_PATH)\n",
+        "다음 단계: 먼저 --list로 연결을 확인하세요. --connect는 동의 후 자격 증명을 로컬 보안 저장소에 보관하며, ",
+        "--write-access는 명시적으로 선택할 때만 요청됩니다. 출력에는 토큰이 포함되지 않습니다."
     )
     .into()
 }
@@ -387,30 +389,6 @@ fn execute(args: Args) -> Result<Output, String> {
         }
     }
 }
-
-#[cfg(not(coverage))]
-fn run() -> Result<(), String> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let parsed = parse_args(&args, std::env::var_os("HOME").map(PathBuf::from))?;
-    let output = execute(parsed)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output)
-            .map_err(|_| "provider-oauth-output-serialization-failed".to_string())?
-    );
-    Ok(())
-}
-
-#[cfg(not(coverage))]
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
-}
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(all(test, not(coverage)))]
 mod tests {

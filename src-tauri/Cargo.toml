@@ -125,7 +125,7 @@ path = "src/bin/disksage-podman-reclaim-plan.rs"
 
 [[bin]]
 name = "disksage-provider-oauth"
-path = "src/bin/disksage-provider-oauth.rs"
+path = "src/bin/disksage-provider-oauth-entry.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
