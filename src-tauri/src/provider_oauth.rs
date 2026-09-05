@@ -504,10 +504,15 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     validate_connection_document_parent(parent, true)?;
     std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
     validate_connection_document_parent(parent, false)?;
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err("oauth-connection-document-not-regular-file".into());
         }
+        Ok(_) => {
+            return Err("oauth-connection-document-object-bound-replacement-unavailable".into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("oauth-connection-document-unavailable".into()),
     }
     crate::object_bound_publication::replace_object_bound_bytes(path, &encoded, 0o600)
         .map_err(map_connection_publication_error)
@@ -635,7 +640,7 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 
 fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
