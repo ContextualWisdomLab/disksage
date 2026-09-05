@@ -50,7 +50,7 @@ fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
 }
 
 #[test]
-fn trash_receipt_is_not_owner_writable() {
+fn trash_receipt_requires_preprovisioned_private_parent_and_is_not_owner_writable() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -88,19 +88,50 @@ fn trash_receipt_is_not_owner_writable() {
     };
     let data = temp.path().join("data");
     fs::create_dir_all(&data).unwrap();
+    let receipt_dir = data.join("receipts");
 
-    let result = execute_trash(
+    let error = execute_trash(
         &home,
         &applications,
         &podman,
-        &[request],
+        std::slice::from_ref(&request),
         &plan.plan_fingerprint,
         &plan.plan_fingerprint,
         plan.trash_approval_phrase.as_deref().unwrap(),
         "verified regenerable provider cache",
         &data.join("journal.jsonl"),
-        &data.join("receipts"),
+        &receipt_dir,
         2,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "provider-cache-receipt-object-bound-publication-failed"
+    );
+    assert!(
+        !receipt_dir.exists(),
+        "provider-cache must not create receipt parents through pathname authority"
+    );
+    assert!(
+        Path::new(&request.path).exists(),
+        "receipt admission failure must happen before cache mutation"
+    );
+
+    fs::create_dir(&receipt_dir).unwrap();
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let result = execute_trash(
+        &home,
+        &applications,
+        &podman,
+        std::slice::from_ref(&request),
+        &plan.plan_fingerprint,
+        &plan.plan_fingerprint,
+        plan.trash_approval_phrase.as_deref().unwrap(),
+        "verified regenerable provider cache",
+        &data.join("journal.jsonl"),
+        &receipt_dir,
+        3,
     )
     .unwrap();
 
