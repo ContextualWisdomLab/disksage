@@ -1,7 +1,7 @@
 //! Contract guard for provider-cache receipt publication authority.
 //!
 //! Provider-cache must consume the inherited private-evidence create-new primitive rather than
-//! reopening the final record or containing directory by pathname after admission.
+//! reopening the final record or provisioning its containing directory by pathname after admission.
 
 use std::{fs, path::PathBuf};
 
@@ -34,5 +34,13 @@ fn receipt_writer_delegates_final_record_publication_to_object_bound_foundation(
     assert!(
         !writer.contains("File::open(receipt_dir)"),
         "provider-cache must not reopen the containing directory by pathname for durability"
+    );
+    assert!(
+        !writer.contains("create_dir_all(receipt_dir)"),
+        "provider-cache must not provision receipt ancestors by pathname; reusable private-directory authority must own provisioning"
+    );
+    assert!(
+        !writer.contains("set_permissions(receipt_dir"),
+        "provider-cache must not normalize receipt-directory permissions through pathname mutation"
     );
 }
