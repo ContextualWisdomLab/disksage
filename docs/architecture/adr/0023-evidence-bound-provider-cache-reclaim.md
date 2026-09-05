@@ -40,26 +40,26 @@ Planning is read-only. It fails closed when inventory traversal, recreation evid
 identity, or active-use evidence is incomplete. Execution re-plans and rechecks the selected
 candidate triplets (`path`, `evidence_fingerprint`, `object_id`) against the approved plan.
 
-All public Rust and Tauri mutation surfaces expose **Trash only**. The public Rust facade owns its
-`ProviderCacheReclaimPlan` instead of re-exporting the historical lower-level plan; the commercial
-plan contains `trash_approval_phrase` and has no `exact_approval_phrase` field. The Tauri planning
-command projects the lower-level evidence into that same facade-owned DTO, so unavailable
+All public Rust, Tauri, and TypeScript mutation surfaces expose **Trash only**. The public Rust facade
+owns its `ProviderCacheReclaimPlan` instead of re-exporting the historical lower-level plan; the
+commercial plan contains `trash_approval_phrase` and has no `exact_approval_phrase` field. The Tauri
+planning command projects the lower-level evidence into that same facade-owned DTO, so unavailable
 irreversible approval is omitted from the serialized schema rather than emitted as `null`. Tauri
 execution has no caller-selected cleanup-mode argument, delegates every product call as internal
-Trash, and projects the result through the facade-owned one-variant `ProviderCacheCleanupMode::Trash`
-DTO.
+Trash, and projects the result through the facade-owned one-variant
+`ProviderCacheCleanupMode::Trash` DTO.
+
+The TypeScript `ProviderCacheReclaimPlan` mirrors that wire schema: it exposes
+`trash_approval_phrase` but no `exact_approval_phrase`. Its execution wrapper accepts no cleanup-mode
+argument and sends no `mode` field to `execute_provider_cache_reclaim`; the backend therefore remains
+the sole authority for the fixed Trash product action rather than accepting a redundant client-side
+mode assertion.
 
 The headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before
 manifest or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls
 only `execute_trash`. The historical `ProviderCacheCleanupMode`, lower-level plan/result, and
 `provider_cache_reclaim` pathname-staged irreversible executor remain crate-private implementation
 and repair evidence.
-
-The TypeScript wrapper does not accept a cleanup-mode argument and its cleanup result is typed as
-Trash-only, but its current plan interface still declares `exact_approval_phrase: string | null` and
-its invoke payload still sends `mode: "trash"` even though the Tauri command no longer accepts a mode.
-Those stale client-schema remnants are a code-current follow-up and must be removed before this ADR
-can become Accepted; they do not restore irreversible backend authority.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -110,8 +110,17 @@ projection; `defac8ff38c84fa2d08efd1b9f9abdcf897a7799` routes the shipped Tauri 
 the facade-owned schemas. Contract update `e125f256f6f26972fa9a3fbb1cf9dd181f01736e` verifies that
 the Tauri boundary no longer serializes `exact_approval_phrase` as a nullable field.
 
-The RED commits above are source-contract evidence only; no hosted failing run for their intermediate
-heads is claimed. Exact-current hosted tests, review, ancestry, and protected integration remain
+The remaining client mismatch was made executable in test-only commit
+`44107488869850df6b5d67810182618216ad961a`: the Vitest wrapper contract requires the provider-cache
+execution payload to omit the obsolete `mode` key. At that head the production wrapper still sent
+`mode: "trash"`, so the test and implementation intentionally disagreed; no hosted failing result is
+claimed unless that exact intermediate head is observed failing. Production commit
+`112988abfc9bbcd8ccc7e5945cbdea636146392f` removes both the stale TypeScript
+`exact_approval_phrase` declaration and the redundant invoke `mode` payload, aligning the client with
+the already Trash-only Rust/Tauri schema.
+
+The RED commits above are contract evidence; hosted status is reported only from the exact head on
+which it actually ran. Exact-current hosted tests, review, ancestry, and protected integration remain
 required before this ADR may become Accepted.
 
 ## Consequences
@@ -124,8 +133,8 @@ output are not substituted for that observation.
 Operators may save selected candidate triplets as an absolute JSON manifest and invoke
 `disksage-provider-cache-reclaim execute` with both fingerprint fields, the Trash approval phrase, a
 rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible approval is not part of
-the shipped CLI, Rust, or Tauri plan/execution contract while the required deletion authority is
-unavailable.
+the shipped CLI, Rust, Tauri, or TypeScript plan/execution contract while the required deletion
+authority is unavailable.
 
 The historical `PermanentPurge` variant and pathname-staged purge helpers remain crate-private repair
 evidence with unit coverage. They no longer form an external Rust capability. They must not become
@@ -134,9 +143,9 @@ its cross-platform destructive acceptance evidence. External Rust callers can na
 facade-owned Trash plan/mode/result contracts; internal irreversible plan/mode/result types are not
 part of the commercial API.
 
-The TypeScript provider-cache plan and invoke payload still need a schema-cleanup follow-up so the
-client contract exactly matches the stronger Tauri/Rust boundary. Until that lands and exact-head
-checks are terminal green, this ADR remains Proposed.
+Client-schema parity removes one P1 contract mismatch but does not make permanent deletion safe or
+complete. Until same-object deletion/recovery, cross-platform destructive acceptance, exact-head
+checks, review, and protected integration are complete, this ADR remains Proposed.
 
 ## Rejected alternatives
 
@@ -152,6 +161,9 @@ checks are terminal green, this ADR remains Proposed.
   commercial result coupled to an internal mode type.
 - Re-exporting the historical plan while clearing `exact_approval_phrase` at runtime: rejected because
   the public type still names and serializes unsupported irreversible authority.
+- Keeping a TypeScript-only `mode: "trash"` field after the Tauri command removed mode selection:
+  rejected because duplicated authority drifts from the canonical command schema and can falsely
+  imply that the client selects mutation mode.
 - Shipping pathname-authorized permanent file deletion while UI/CLI merely warn: rejected because a
   warning does not repair the mutation authority.
 - Permanent recursive purge of provider directories: rejected because partial recursive deletion
