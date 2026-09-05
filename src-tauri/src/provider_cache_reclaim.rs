@@ -709,6 +709,7 @@ where
     Ok(path)
 }
 
+#[cfg(test)]
 fn restore_staged_file_without_replacement(staged: &Path, original: &Path) -> Result<(), String> {
     match fs::hard_link(staged, original) {
         Ok(()) => fs::remove_file(staged)
@@ -720,6 +721,7 @@ fn restore_staged_file_without_replacement(staged: &Path, original: &Path) -> Re
     }
 }
 
+#[cfg(test)]
 fn permanently_purge_exact(
     candidate: &ProviderCacheCandidate,
     journal_path: &Path,
@@ -728,6 +730,7 @@ fn permanently_purge_exact(
     permanently_purge_exact_with_after_stage(candidate, journal_path, now_ms, |_, _| Ok(()))
 }
 
+#[cfg(test)]
 fn permanently_purge_exact_with_after_stage<F>(
     candidate: &ProviderCacheCandidate,
     journal_path: &Path,
@@ -823,6 +826,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn finish_purge_result(
     deletion: Result<(), String>,
     audit: Result<(), String>,
@@ -855,10 +859,7 @@ pub fn execute(
         return Err("provider-cache-identity-bound-permanent-delete-unavailable".into());
     }
     let current = plan_with_runtime(home, applications, podman_bin, executed_at_ms);
-    let expected_phrase = match mode {
-        ProviderCacheCleanupMode::Trash => current.trash_approval_phrase.as_deref(),
-        ProviderCacheCleanupMode::PermanentPurge => current.exact_approval_phrase.as_deref(),
-    };
+    let expected_phrase = current.trash_approval_phrase.as_deref();
     if !current.evidence_complete
         || current.plan_fingerprint != approved_plan_fingerprint
         || current.plan_fingerprint != confirm_plan_fingerprint
@@ -883,19 +884,12 @@ pub fn execute(
             .ok_or("provider-cache-cleanup-candidate-changed")?;
         selected.push(candidate.clone());
     }
-    if mode == ProviderCacheCleanupMode::PermanentPurge
-        && selected
-            .iter()
-            .any(|candidate| candidate.kind != ProviderCacheKind::PodmanMachineSeed)
-    {
-        return Err("provider-cache-permanent-directory-purge-disabled".into());
-    }
     let receipt = write_immutable_receipt(
         receipt_dir,
         &current,
         requested,
         rationale,
-        mode,
+        ProviderCacheCleanupMode::Trash,
         confirmation_phrase,
         executed_at_ms,
     )?;
@@ -907,23 +901,16 @@ pub fn execute(
             if !active_use_safe(&active) {
                 return Err("provider-cache-active-use-or-provider-evidence-gap".into());
             }
-            match mode {
-                ProviderCacheCleanupMode::Trash => {
-                    candidate_content_still_matches(&candidate)?;
-                    crate::safety::trash_delete_if_identity(
-                        Path::new(&candidate.path),
-                        &candidate.object_id,
-                        candidate.logical_bytes,
-                        journal_path,
-                        executed_at_ms,
-                    )
-                    .map_err(|error| error.to_string())
-                    .map(|()| None)
-                }
-                ProviderCacheCleanupMode::PermanentPurge => {
-                    permanently_purge_exact(&candidate, journal_path, executed_at_ms)
-                }
-            }
+            candidate_content_still_matches(&candidate)?;
+            crate::safety::trash_delete_if_identity(
+                Path::new(&candidate.path),
+                &candidate.object_id,
+                candidate.logical_bytes,
+                journal_path,
+                executed_at_ms,
+            )
+            .map_err(|error| error.to_string())
+            .map(|()| None)
         });
         let (outcome, audit_error) = result.map_or_else(
             |error| (Err(error), None),
@@ -943,7 +930,7 @@ pub fn execute(
         completed_count,
         executed_at_ms,
         rationale: rationale.into(),
-        mode,
+        mode: ProviderCacheCleanupMode::Trash,
         immutable_receipt_path: receipt.to_string_lossy().into_owned(),
         items,
     })
