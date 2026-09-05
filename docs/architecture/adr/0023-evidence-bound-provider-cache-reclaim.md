@@ -69,6 +69,21 @@ production path then uses the Trash approval phrase, writes a Trash receipt, inv
 pathname-based permanent deletion by bypassing the public facade or by relying on an unreachable
 match arm.
 
+Provider-cache now inherits the reusable Unix private-publication foundation from #344 through an
+actual non-force two-parent ancestry adoption rather than source copying. Receipt finalization has an
+additional invariant: once the receipt file has been opened create-new, an error path must never
+unlink the visible pathname. A same-user actor can replace that name while the original file remains
+open. Failure therefore invalidates only the exact open receipt by truncating and syncing that file
+descriptor. A zero-length private tombstone may remain when the original name still resolves to the
+opened object. Deleting such a tombstone is an explicit later operation, not error cleanup.
+
+This repair does not yet claim that provider-cache receipt creation itself is fully object-bound. The
+current receipt directory creation, permission update, record open, and containing-directory sync are
+still pathname-based in the provider-cache writer. The adopted #344 foundation supplies the canonical
+Unix descriptor-relative publication primitive and must be consumed rather than copied when that
+remaining receipt-publication gap is repaired. Windows remains fail closed wherever native handle
+parity is absent.
+
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
 ancestor/symlink/reparse/hardlink resistance, durable pre-mutation recovery evidence, partial-failure
@@ -149,6 +164,19 @@ its audit helper to tests, removes the permanent branch and permanent-only direc
 production `execute`, fixes receipt/result mode to Trash after the fail-closed guard, and leaves the
 real replacement-race fixtures available under the unit-test configuration.
 
+The next review moved from deletion to its audit artifact. Provider-cache receipt finalization used to
+drop the opened receipt and call `fs::remove_file(&path)` when sealing or directory sync failed. That
+cleanup could delete an unrelated replacement record if the visible name changed after create-new.
+Source-contract RED `511f373d4282c88410663a924196d074c9f81be8` forbids pathname unlink in this
+post-create failure path. Production repair `727746b08b6320d44a813dec2b183a9382809130`
+truncates and syncs the already-open receipt handle instead. Its Unix real-filesystem test removes the
+original visible name, creates replacement bytes at the same pathname from the finalization hook, and
+verifies that the replacement remains byte-identical after the failure. The preceding ancestry commit
+`ff0468dbfa0bbe87d6f0fbd128d85e243ffa0932` adopts #344 exact
+`2a23a1d7de5b929a76b432c192d2b9e537fbbbdd` as a second parent and semantically retains both owner
+deltas. The source-contract RED's hosted failure is not claimed unless that exact intermediate head is
+observed failing.
+
 The RED commits above are contract evidence; hosted status is reported only from the exact head on
 which it actually ran. Exact-current hosted tests, review, ancestry, and protected integration remain
 required before this ADR may become Accepted.
@@ -165,6 +193,11 @@ Operators may save selected candidate triplets as an absolute JSON manifest and 
 rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible approval is not part of
 the shipped CLI, Rust, Tauri, or TypeScript plan/execution contract while the required deletion
 authority is unavailable.
+
+A failed provider-cache receipt finalization may leave a zero-length private create-new tombstone
+rather than unlinking a pathname that another same-user actor could have replaced. This is an
+intentional safety trade: preserving an unrelated replacement object is more important than silently
+removing an incomplete receipt name. Successful receipts remain create-new and read-only.
 
 The historical `PermanentPurge` variant and lower-level planning/result evidence remain crate-private,
 but pathname-staged purge/rollback helpers are test-only and production `execute` has no call edge to
@@ -196,6 +229,8 @@ Proposed.
 - Leaving the pathname purge helper compiled and statically referenced behind an earlier runtime
   rejection: rejected because an unreachable branch is weaker than removing the production call edge,
   and future control-flow edits could silently reconnect irreversible mutation.
+- Removing a failed create-new receipt by pathname: rejected because the visible name can refer to a
+  different object by cleanup time; failure invalidation acts only on the exact open handle.
 - Re-exporting the historical cleanup mode/result while hiding only the executor: rejected because it
   advertises an unavailable irreversible lifecycle in the external Rust contract and leaves the
   commercial result coupled to an internal mode type.
