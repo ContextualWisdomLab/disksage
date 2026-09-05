@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-08-29
-- Last reviewed: 2026-09-05
+- Last reviewed: 2026-09-06
 
 ## Context
 
@@ -10,7 +10,7 @@ DiskSage can identify provider-owned local artifacts that are regenerable, inclu
 
 OS Trash is the supported reversible product action. Permanent provider-cache deletion is materially different. The historical lower-level implementation stages a candidate through pathname rename and then removes it. Its identity/content checks, double fingerprint confirmation, receipt, and journal are useful test evidence, but they do not bind irreversible mutation to the same reviewed filesystem object across ancestor replacement, crash recovery, and Windows/Linux/macOS. Those destructive helpers therefore remain `#[cfg(test)]`; production has no static call edge to them.
 
-Receipt publication is also a security boundary. A receipt that authorizes mutation must not be redirected through parent replacement, permission drift, or same-name substitution, and failure cleanup must not unlink a same-name replacement created by another same-user process. Provider-cache must consume reusable filesystem authority rather than creating or chmodding receipt directories by pathname.
+Receipt publication is also a security boundary. A receipt that authorizes mutation must not be redirected through parent replacement, permission drift, special-bit drift, or same-name substitution, and failure cleanup must not unlink a same-name replacement created by another same-user process. Provider-cache must consume reusable filesystem authority rather than creating or chmodding receipt directories by pathname.
 
 ## Decision
 
@@ -24,7 +24,7 @@ Planning is read-only and fails closed when inventory traversal, recreation evid
 
 All shipped Rust facade, Tauri, TypeScript, and headless CLI mutation contracts expose Trash only. The external Rust plan contains `trash_approval_phrase` and no `exact_approval_phrase`; the Tauri command accepts no cleanup-mode argument; the TypeScript wrapper sends no mode field; and the CLI rejects `--permanent-purge` before manifest or executor work. The crate-private executor rejects `PermanentPurge` before re-planning or receipt creation. After that guard, production execution writes a Trash receipt, calls only `trash_delete_if_identity`, and returns the Trash mode.
 
-#303 adopts the current #344 private-publication owner exact `f192567dc6f25d1c9ba921346efa18c3c3287dba` through non-force second-parent ancestry. Merge `a20a8c0f30010caa42e7ea159fa0262361c1dd56` adopted the initial staging-identity repair head, and follow-up merge `76df1bfa9f2fe2f2be4478b48131706fab390a60` adopted the final owner contract without force. The inherited owner source/test blob remains canonical; provider-cache does not maintain a copied publication implementation.
+#303 adopts the current #344 private-publication owner exact `431b192f1630aaf34b4c09dd72c3ff4897fd5789` through non-force second-parent ancestry. Merge `76df1bfa9f2fe2f2be4478b48131706fab390a60` adopted the staging-identity repair lineage, and merge `6b5439c844122d835806dcaa450bccd0f11b427f` adopts the exact special-mode repair without force. The inherited owner source/test blobs remain canonical; provider-cache does not maintain a copied publication implementation.
 
 For the final receipt record, `write_immutable_receipt` continues to call the crate-private `private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)` contract. #344 owns that contract as a publication facade: when no forbidden-root policy is requested it delegates to the canonical `private_directory_publication::write_private_bytes_create_new_with_parents(..., 0o400, 0o700)` primitive. Existing forbidden-root consumers retain the original parent-must-exist object-bound implementation because directory provisioning does not yet carry a forbidden-root policy.
 
@@ -36,7 +36,9 @@ A later review found the analogous final-parent gap when the final parent itself
 
 Fresh review of the reusable atomic-replacement primitive then found a distinct source-name substitution window. The staging file was written and synced through its exact opened descriptor, but after the deterministic post-sync hook the implementation revalidated only the parent and destination before calling `renameat` with the staging pathname. A same-user namespace replacement could therefore cause different bytes to be renamed into the final record. Test-first commit `471b1525511f47f5529c8e3a30ac8d3198452bf6` removes the admitted staging name after sync, installs different bytes under the same name, and requires fail-closed behavior with the original destination preserved. Its hosted Test remained queued when production advanced, so it is source/test RED only. Production `4d8f6cc5cbe8bba2c51a46b925ea41abf24dd909` revalidates staging type/device/inode/mode against the exact opened file immediately before `renameat`, verifies the final name against that same file after publication, and replaces pathname unlink cleanup with exact-descriptor invalidation so a replacement staging name is never deleted. Follow-up `f192567dc6f25d1c9ba921346efa18c3c3287dba` preserves the existing domain error contract while keeping those checks.
 
-That repair closes the deterministic post-sync substitution fixture but does not convert POSIX `renameat` into a source-handle-conditioned rename: the syscall still identifies its source by directory-relative name. The final pre-rename identity check therefore leaves a smaller check-to-rename interval that this ADR does not misrepresent as eliminated. This residual is a reason to keep ADR-0023 Proposed and to keep irreversible deletion unavailable; #342 likewise cannot claim full same-object replacement immunity solely from this primitive.
+Review of that replacement revalidation found one additional exact-mode defect: the opened staging and visible staging/final comparisons masked only `0o777`. A same-UID process could therefore set setuid/setgid/sticky bits on the admitted object while the nominal `0o600` owner/group/other bits continued to compare equal. Source-contract RED `8c9c2f4793f20d8ca01662d8c53239a415108b04` requires the opened and visible comparisons to include the full `0o7777` special/permission mask. Production #344 `431b192f1630aaf34b4c09dd72c3ff4897fd5789` applies that exact mask to opened-descriptor, visible-stat, and pre-publication metadata checks. The RED head was not observed failing in hosted CI and is therefore source-contract evidence only.
+
+These repairs close the demonstrated post-sync substitution fixture and special-bit drift but do not convert POSIX `renameat` into a source-handle-conditioned rename: the syscall still identifies its source by directory-relative name. The final pre-rename identity check therefore leaves a smaller check-to-rename interval that this ADR does not misrepresent as eliminated. This residual is a reason to keep ADR-0023 Proposed and to keep irreversible deletion unavailable; #342 likewise cannot claim full same-object replacement immunity solely from this primitive.
 
 The consumer regression `1dc3c3e259f5fb31ab4d847b9f26c2156803f1ac` requires first-use Trash cleanup to create a missing receipt hierarchy safely rather than fail only because the directory is absent. After adopting #344, the same real-filesystem path must provision the receipt parent at exact `0700`, publish the receipt without owner-write bits, and only then allow the approved cache to move to Trash. The intermediate RED was queued when the production lineage advanced, so no hosted RED conclusion is claimed for that exact commit.
 
@@ -69,7 +71,8 @@ The contract-repair lineage includes:
 - `1dc3c3e259f5fb31ab4d847b9f26c2156803f1ac`: consumer real-filesystem RED requiring safe first-use receipt-parent provisioning.
 - `41759c1d2531392d07263236f7eed1d58f2dce47` / `b400437d5024504cb0e4156b2d940a905df5fdbc`: #344 real-filesystem final-record mode-drift RED and production repair.
 - `abbf1d2fe7758bfb6d51f23ea87a3c8c165fe5da` / `457515961fa1abaabc768061ce78d38c47dba911`: #344 real-filesystem existing-final-parent mode-drift RED and production repair.
-- `471b1525511f47f5529c8e3a30ac8d3198452bf6` / `4d8f6cc5cbe8bba2c51a46b925ea41abf24dd909` / `f192567dc6f25d1c9ba921346efa18c3c3287dba`: #344 deterministic staging-name substitution RED, descriptor-identity/invalidation repair, and final stable-error-contract owner head; #303 merge `76df1bfa9f2fe2f2be4478b48131706fab390a60` inherits that owner blob non-force.
+- `471b1525511f47f5529c8e3a30ac8d3198452bf6` / `4d8f6cc5cbe8bba2c51a46b925ea41abf24dd909` / `f192567dc6f25d1c9ba921346efa18c3c3287dba`: #344 deterministic staging-name substitution RED, descriptor-identity/invalidation repair, and stable-error-contract repair.
+- `8c9c2f4793f20d8ca01662d8c53239a415108b04` / `431b192f1630aaf34b4c09dd72c3ff4897fd5789`: #344 source-contract RED and production repair requiring all replacement publication exact-mode revalidation to include setuid/setgid/sticky bits; #303 merge `6b5439c844122d835806dcaa450bccd0f11b427f` inherits the exact owner blobs non-force.
 
 Intermediate RED commits are source/test contract evidence only unless an exact-head hosted failure was actually observed.
 
@@ -77,7 +80,7 @@ Intermediate RED commits are source/test contract evidence only unless an exact-
 
 DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup without exposing unsupported irreversible authority. On Unix, first-use provider-cache receipt publication no longer requires a caller to pre-create the receipt hierarchy: the canonical filesystem owner provisions missing private ancestors and publishes the final read-only create-new receipt through one descriptor-bound chain before Trash mutation proceeds.
 
-Final success now requires the admitted record identity, exact record mode, and exact final-parent private mode to survive the final race window. The reusable atomic-replacement primitive additionally rejects the demonstrated post-sync staging-name substitution and invalidates only its exact opened staging object on failure. It still does not claim that POSIX `renameat` is source-handle-conditioned, so the narrower final check-to-rename race remains tracked instead of being hidden by an “object-bound” label.
+Final success now requires the admitted record identity, exact record mode including special bits, and exact final-parent private mode to survive the final race window. The reusable atomic-replacement primitive additionally rejects the demonstrated post-sync staging-name substitution and invalidates only its exact opened staging object on failure. It still does not claim that POSIX `renameat` is source-handle-conditioned, so the narrower final check-to-rename race remains tracked instead of being hidden by an “object-bound” label.
 
 The cross-platform publication gap remains: Windows must gain native handle-relative parity before the same claim applies there. ADR-0023 remains Proposed until applicable platform and deletion/recovery prerequisites are satisfied.
 
