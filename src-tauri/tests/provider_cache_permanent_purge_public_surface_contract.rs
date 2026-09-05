@@ -67,36 +67,51 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
         .map(|offset| cli_guard + offset)
         .expect("headless CLI must reject permanent purge with the stable error");
     let cli_execute = cli
-        .find("serde_json::to_value(execute(")
-        .expect("Trash CLI execution must remain available");
+        .find("serde_json::to_value(execute_trash(")
+        .expect("Trash CLI execution must remain available through the safe public facade");
     assert!(
         cli_guard < cli_rejection && cli_rejection < cli_execute,
-        "CLI permanent-purge rejection must happen before the deletion executor"
+        "CLI permanent-purge rejection must happen before the Trash executor"
     );
 }
 
 #[test]
-fn lower_level_executor_rejects_permanent_purge_before_replan_or_mutation_evidence() {
-    let lower_level = source("src/provider_cache_reclaim.rs");
-    let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
-    let execute_start = lower_level
-        .find("pub fn execute(")
-        .expect("lower-level provider-cache executor must remain observable while repair evidence exists");
-    let execute_body = &lower_level[execute_start..];
-    let guard = execute_body
-        .find("mode == ProviderCacheCleanupMode::PermanentPurge")
-        .expect("lower-level executor must explicitly fail closed on irreversible mode");
-    let replan = execute_body
-        .find("let current = plan_with_runtime")
-        .expect("Trash execution must continue to re-plan before mutation");
-    let receipt = execute_body
-        .find("let receipt = write_immutable_receipt")
-        .expect("Trash execution must retain immutable receipt evidence");
+fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
+    let lib = source("src/lib.rs");
+    let public_api = source("src/provider_cache.rs");
+    let cli = source("src/bin/disksage-provider-cache-reclaim.rs");
 
     assert!(
-        guard < replan
-            && guard < receipt
-            && execute_body[guard..replan].contains(unavailable),
-        "direct Rust callers must be refused permanent purge before re-plan, receipt publication, or filesystem mutation"
+        lib.contains("mod provider_cache_reclaim;"),
+        "historical irreversible implementation must stay crate-private repair evidence"
+    );
+    assert!(
+        !lib.contains("pub mod provider_cache_reclaim;"),
+        "direct Rust callers must not receive the historical lower-level executor"
+    );
+    assert!(
+        lib.contains("pub mod provider_cache;"),
+        "commercial Rust callers need one explicit safe provider-cache facade"
+    );
+    assert!(
+        public_api.contains("pub fn execute_trash("),
+        "the public Rust facade must expose the reversible lifecycle explicitly"
+    );
+    let execute_start = public_api
+        .find("pub fn execute_trash(")
+        .expect("Trash facade must remain available");
+    let execute_body = &public_api[execute_start..];
+    assert!(
+        !execute_body.contains("ProviderCacheCleanupMode::PermanentPurge")
+            && execute_body.contains("ProviderCacheCleanupMode::Trash"),
+        "the public Rust facade must never delegate irreversible mode"
+    );
+    assert!(
+        cli.contains("use disksage_lib::provider_cache::{"),
+        "the shipped headless CLI must consume the safe public Rust facade"
+    );
+    assert!(
+        !cli.contains("disksage_lib::provider_cache_reclaim"),
+        "the shipped CLI must not import the crate-private historical executor"
     );
 }
