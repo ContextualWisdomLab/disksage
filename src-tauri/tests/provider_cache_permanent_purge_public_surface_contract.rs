@@ -32,37 +32,40 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
         "Tauri must not expose the lower-level provider-cache executor directly"
     );
 
-    let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
-    assert!(
-        boundary.contains(unavailable) && cli.contains(unavailable),
-        "Tauri and CLI boundaries must share one stable permanent-purge rejection code"
-    );
     assert!(
         boundary.contains("plan.exact_approval_phrase = None"),
         "shipped plans must not advertise permanent deletion while that authority is unavailable"
     );
-    let guard = boundary
-        .find("if mode == ProviderCacheCleanupMode::PermanentPurge")
-        .expect("public boundary must explicitly branch on permanent purge");
-    let rejection = boundary[guard..]
-        .find("PERMANENT_PURGE_UNAVAILABLE")
-        .map(|offset| guard + offset)
-        .expect("public boundary must reject permanent purge with the stable error constant");
-    let delegate = boundary
+
+    let command_start = boundary
+        .find("pub fn execute_provider_cache_reclaim(")
+        .expect("Tauri provider-cache execution command must remain registered");
+    let command_body = &boundary[command_start..];
+    let delegate = command_body
         .find("crate::commands::execute_provider_cache_reclaim")
         .expect("Trash must continue through the existing evidence-bound command");
+    let public_signature = &command_body[..delegate];
     assert!(
-        guard < rejection && rejection < delegate,
-        "permanent purge must fail before the lower-level executor can run"
+        !public_signature.contains("mode: ProviderCacheCleanupMode"),
+        "the shipped Tauri command must not deserialize a caller-selected irreversible mode"
+    );
+    assert!(
+        command_body[delegate..].contains("ProviderCacheCleanupMode::Trash"),
+        "the shipped Tauri command must delegate with the sole commercial-safe Trash mode"
     );
 
+    let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
+    assert!(
+        cli.contains(unavailable),
+        "the headless CLI must retain one stable permanent-purge rejection code"
+    );
     let cli_guard = cli
         .find("if permanent_purge")
         .expect("headless CLI must branch on permanent purge before execution");
     let cli_rejection = cli[cli_guard..]
         .find("PERMANENT_PURGE_UNAVAILABLE")
         .map(|offset| cli_guard + offset)
-        .expect("headless CLI must reject permanent purge with the same stable error");
+        .expect("headless CLI must reject permanent purge with the stable error");
     let cli_execute = cli
         .find("serde_json::to_value(execute(")
         .expect("Trash CLI execution must remain available");
