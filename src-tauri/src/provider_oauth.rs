@@ -1,8 +1,8 @@
-//! Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
-//!
-//! DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
-//! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
-//! access tokens live only long enough to perform one bounded provider operation.
+// Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
+//
+// DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
+// hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
+// access tokens live only long enough to perform one bounded provider operation.
 
 use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
