@@ -151,6 +151,10 @@ fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
 
     assert_eq!(error, "private-directory-publication-file-mode-drift");
     assert_eq!(fs::metadata(&target).unwrap().len(), 0);
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+        0o400
+    );
 }
 
 #[test]
