@@ -74,3 +74,29 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
         "CLI permanent-purge rejection must happen before the deletion executor"
     );
 }
+
+#[test]
+fn lower_level_executor_rejects_permanent_purge_before_replan_or_mutation_evidence() {
+    let lower_level = source("src/provider_cache_reclaim.rs");
+    let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
+    let execute_start = lower_level
+        .find("pub fn execute(")
+        .expect("lower-level provider-cache executor must remain observable while repair evidence exists");
+    let execute_body = &lower_level[execute_start..];
+    let guard = execute_body
+        .find("mode == ProviderCacheCleanupMode::PermanentPurge")
+        .expect("lower-level executor must explicitly fail closed on irreversible mode");
+    let replan = execute_body
+        .find("let current = plan_with_runtime")
+        .expect("Trash execution must continue to re-plan before mutation");
+    let receipt = execute_body
+        .find("let receipt = write_immutable_receipt")
+        .expect("Trash execution must retain immutable receipt evidence");
+
+    assert!(
+        guard < replan
+            && guard < receipt
+            && execute_body[guard..replan].contains(unavailable),
+        "direct Rust callers must be refused permanent purge before re-plan, receipt publication, or filesystem mutation"
+    );
+}
