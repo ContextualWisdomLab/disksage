@@ -241,7 +241,7 @@ export interface ProviderCacheCleanupResult {
   completed_count: number;
   executed_at_ms: number;
   rationale: string;
-  mode: "trash" | "permanent_purge";
+  mode: "trash";
   immutable_receipt_path: string;
   items: Array<{ path: string; completed: boolean; error: string | null; audit_error: string | null }>;
 }
@@ -252,14 +252,13 @@ export const executeProviderCacheReclaim = (
   confirmPlanFingerprint: string,
   confirmationPhrase: string,
   rationale: string,
-  mode: "trash" | "permanent_purge" = "trash",
 ) => invoke<ProviderCacheCleanupResult>("execute_provider_cache_reclaim", {
   requests,
   approvedPlanFingerprint,
   confirmPlanFingerprint,
   confirmationPhrase,
   rationale,
-  mode,
+  mode: "trash",
 });
 
 export interface PodmanDanglingImagePruneExecution {
@@ -397,7 +396,6 @@ export const downloadModel = () => invoke<void>("download_model");
 export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_verdicts", { paths });
 export const summarizeUnknownBucket = (paths: string[]) =>
   invoke<string | null>("summarize_unknown_bucket", { paths });
-
 export interface BrewCleanupPlan {
   schema_version: number;
   platform: "macos";
@@ -598,7 +596,6 @@ export interface IcloudLocalCopyEvictionOutput {
 }
 
 export type GitWorktreeDisposition = "removal-candidate" | "preserve" | "evidence-gap";
-
 export interface GitWorktreeSizeEvidence {
   method: string;
   evidence_complete: boolean;
