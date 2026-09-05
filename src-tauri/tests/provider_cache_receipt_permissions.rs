@@ -1,8 +1,7 @@
 #![cfg(unix)]
 
-use disksage_lib::provider_cache_reclaim::{
-    execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
-    ProviderCacheKind,
+use disksage_lib::provider_cache::{
+    execute_trash, plan_with_runtime, ProviderCacheCleanupRequest, ProviderCacheKind,
 };
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -51,7 +50,7 @@ fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
 }
 
 #[test]
-fn permanent_purge_receipt_is_not_owner_writable() {
+fn trash_receipt_is_not_owner_writable() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -76,6 +75,7 @@ fn permanent_purge_receipt_is_not_owner_writable() {
 
     let plan = plan_with_runtime(&home, &applications, &podman, 1);
     assert!(plan.evidence_complete, "{:?}", plan.issues);
+    assert!(plan.exact_approval_phrase.is_none());
     let candidate = plan
         .candidates
         .iter()
@@ -89,18 +89,17 @@ fn permanent_purge_receipt_is_not_owner_writable() {
     let data = temp.path().join("data");
     fs::create_dir_all(&data).unwrap();
 
-    let result = execute(
+    let result = execute_trash(
         &home,
         &applications,
         &podman,
         &[request],
         &plan.plan_fingerprint,
         &plan.plan_fingerprint,
-        plan.exact_approval_phrase.as_deref().unwrap(),
+        plan.trash_approval_phrase.as_deref().unwrap(),
         "verified regenerable provider cache",
         &data.join("journal.jsonl"),
         &data.join("receipts"),
-        ProviderCacheCleanupMode::PermanentPurge,
         2,
     )
     .unwrap();
