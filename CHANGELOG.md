@@ -8,6 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a bounded, read-only exact-photo duplicate audit that records byte identity with BLAKE3 and
+  groups local PNGs only when raster dimensions and normalized decoded RGBA16 pixels share the
+  version-two domain-separated digest. Provider-managed paths, Photos libraries, dataless
+  placeholders, symlinks, oversized encoded inputs, and replacement races fail closed; incomplete
+  audits return a non-zero CLI exit after emitting structured rejection evidence. Cleanup and
+  permanent deletion remain unavailable, and active-use evidence is reserved for a fresh future
+  execution preflight.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
