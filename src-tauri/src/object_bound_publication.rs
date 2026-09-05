@@ -418,6 +418,61 @@ mod tests {
     }
 
     #[test]
+    fn temporary_name_replacement_after_sync_never_publishes_replacement_bytes() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let parent = private_parent(&root);
+        let record = parent.join("connections.json");
+        std::fs::write(&record, b"old").expect("seed record");
+        let hook_parent = parent.clone();
+        let replacement_path = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let hook_replacement_path = std::sync::Arc::clone(&replacement_path);
+
+        let error = replace_object_bound_bytes_with_hooks(
+            &record,
+            b"authorized",
+            0o600,
+            || {},
+            move || {
+                let staging_name = std::fs::read_dir(&hook_parent)
+                    .expect("read private parent")
+                    .map(|entry| entry.expect("entry").file_name())
+                    .find(|name| {
+                        let name = name.to_string_lossy();
+                        name.starts_with(".disksage-private-replace-") && name.ends_with(".tmp")
+                    })
+                    .expect("staging record");
+                let staging_path = hook_parent.join(staging_name);
+                std::fs::remove_file(&staging_path).expect("remove admitted staging name");
+                std::fs::write(&staging_path, b"attacker").expect("install replacement staging");
+                std::fs::set_permissions(
+                    &staging_path,
+                    std::fs::Permissions::from_mode(0o600),
+                )
+                .expect("set replacement staging mode");
+                *hook_replacement_path.lock().expect("replacement path lock") =
+                    Some(staging_path);
+            },
+            || {},
+        )
+        .expect_err("temporary pathname replacement must fail closed");
+
+        assert_eq!(
+            error.code(),
+            "object-bound-replace-temporary-identity-drift"
+        );
+        assert_eq!(std::fs::read(&record).expect("old record"), b"old");
+        let replacement_path = replacement_path
+            .lock()
+            .expect("replacement path lock")
+            .clone()
+            .expect("replacement path");
+        assert_eq!(
+            std::fs::read(replacement_path).expect("replacement staging"),
+            b"attacker"
+        );
+    }
+
+    #[test]
     fn post_rename_parent_replacement_reports_uncertain_path_without_touching_replacement() {
         let root = tempfile::tempdir().expect("tempdir");
         let parent = private_parent(&root);
