@@ -1,8 +1,9 @@
 //! Object-bound atomic replacement for private local records.
 //!
-//! The Unix implementation keeps temporary creation, validation, rename, cleanup, and directory
-//! durability relative to one admitted directory descriptor. Pathname revalidation is used to
-//! detect namespace drift; it is never used as the mutation authority after the directory is open.
+//! The Unix implementation keeps parent authority descriptor-relative and revalidates the named
+//! staging object against the exact opened file before `renameat`, then verifies the published name
+//! against that same opened object. Pathname revalidation detects namespace drift; it is not treated
+//! as equivalent to a source-handle-conditioned rename on platforms that do not provide one.
 
 use std::path::Path;
 
@@ -18,11 +19,13 @@ pub(crate) enum ObjectBoundReplaceError {
     TargetUnsafe,
     TargetUnavailable,
     TemporaryCreateFailed,
+    TemporaryIdentityDrift,
     ModeInvalid,
     WriteFailed,
     CleanupFailed,
     RenameFailed,
     DirectorySyncFailed,
+    PostPublishTemporaryIdentityDrift,
     PostPublishParentIdentityDrift,
     UnsupportedPlatform,
 }
@@ -40,11 +43,15 @@ impl ObjectBoundReplaceError {
             Self::TargetUnsafe => "object-bound-replace-target-unsafe",
             Self::TargetUnavailable => "object-bound-replace-target-unavailable",
             Self::TemporaryCreateFailed => "object-bound-replace-temporary-create-failed",
+            Self::TemporaryIdentityDrift => "object-bound-replace-temporary-identity-drift",
             Self::ModeInvalid => "object-bound-replace-mode-invalid",
             Self::WriteFailed => "object-bound-replace-write-failed",
             Self::CleanupFailed => "object-bound-replace-cleanup-failed",
             Self::RenameFailed => "object-bound-replace-rename-failed",
             Self::DirectorySyncFailed => "object-bound-replace-directory-sync-failed",
+            Self::PostPublishTemporaryIdentityDrift => {
+                "object-bound-replace-post-publish-temporary-identity-drift"
+            }
             Self::PostPublishParentIdentityDrift => {
                 "object-bound-replace-post-publish-parent-identity-drift"
             }
@@ -53,14 +60,18 @@ impl ObjectBoundReplaceError {
     }
 }
 
-/// Atomically replace one private record while keeping mutation authority bound to one directory
-/// object. On Unix the destination directory must already exist and must not be group/other
-/// writable. The requested mode may contain owner bits only; group/other permissions fail closed.
-/// The replacement file is created with `O_EXCL|O_NOFOLLOW`, normalized to `unix_mode`, synced,
-/// renamed with `renameat`, and followed by a directory `fsync`.
+/// Atomically replace one private record while keeping directory mutation authority bound to one
+/// opened directory object. On Unix the destination directory must already exist and must not be
+/// group/other writable. The requested mode may contain owner bits only; group/other permissions
+/// fail closed. The staging file is create-new/no-follow, synced through its opened descriptor,
+/// revalidated against its directory entry immediately before `renameat`, and checked again at the
+/// final name after publication. Error cleanup invalidates only the exact opened staging file and
+/// never unlinks a possibly replaced staging pathname.
 ///
-/// Windows currently fails closed because an equivalent handle-relative temporary-create and
-/// replace primitive has not yet been implemented. Callers must not fall back to pathname writes.
+/// POSIX `renameat` still identifies its source by directory-relative name. The pre/post identity
+/// checks therefore detect known substitution windows but do not claim a source-handle-conditioned
+/// rename primitive. Callers requiring that stronger property must remain fail closed until their
+/// platform provides an accepted primitive. Windows currently fails closed entirely.
 pub(crate) fn replace_object_bound_bytes(
     path: &Path,
     encoded: &[u8],
@@ -145,18 +156,58 @@ fn validate_target_at(
 }
 
 #[cfg(unix)]
-fn unlink_temporary_at(
+fn revalidate_opened_file_at(
     directory: &std::fs::File,
-    temporary_name: &std::ffi::CString,
+    name: &std::ffi::CString,
+    opened_file: &std::fs::File,
+    unix_mode: u32,
+    drift: ObjectBoundReplaceError,
 ) -> Result<(), ObjectBoundReplaceError> {
+    use std::mem::MaybeUninit;
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-    let result = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(ObjectBoundReplaceError::CleanupFailed)
+    let opened = opened_file.metadata().map_err(|_| drift)?;
+    if !opened.is_file()
+        || opened.file_type().is_symlink()
+        || opened.permissions().mode() & 0o777 != unix_mode
+    {
+        return Err(drift);
     }
+
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        return Err(drift);
+    }
+    let visible = unsafe { stat.assume_init() };
+    if visible.st_mode & libc::S_IFMT != libc::S_IFREG
+        || visible.st_dev as u64 != opened.dev()
+        || visible.st_ino as u64 != opened.ino()
+        || visible.st_mode as u32 & 0o777 != unix_mode
+    {
+        return Err(drift);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn invalidate_opened_temporary(
+    temporary: &std::fs::File,
+    directory: &std::fs::File,
+) -> Result<(), ObjectBoundReplaceError> {
+    temporary
+        .set_len(0)
+        .and_then(|_| temporary.sync_all())
+        .and_then(|_| directory.sync_all())
+        .map_err(|_| ObjectBoundReplaceError::CleanupFailed)
 }
 
 #[cfg(unix)]
@@ -290,18 +341,29 @@ where
 
         after_temporary_sync();
         revalidate_parent(&directory, parent, expected_dev, expected_ino)?;
+        revalidate_opened_file_at(
+            &directory,
+            &temporary_name,
+            &temporary,
+            unix_mode,
+            ObjectBoundReplaceError::TemporaryIdentityDrift,
+        )?;
         validate_target_at(&directory, &final_name)?;
         Ok(())
     })();
 
     if let Err(error) = before_publication {
-        unlink_temporary_at(&directory, &temporary_name)?;
-        directory
-            .sync_all()
-            .map_err(|_| ObjectBoundReplaceError::DirectorySyncFailed)?;
+        invalidate_opened_temporary(&temporary, &directory)?;
         return Err(error);
     }
 
+    revalidate_opened_file_at(
+        &directory,
+        &temporary_name,
+        &temporary,
+        unix_mode,
+        ObjectBoundReplaceError::TemporaryIdentityDrift,
+    )?;
     let rename_result = unsafe {
         libc::renameat(
             directory.as_raw_fd(),
@@ -311,12 +373,17 @@ where
         )
     };
     if rename_result != 0 {
-        unlink_temporary_at(&directory, &temporary_name)?;
-        directory
-            .sync_all()
-            .map_err(|_| ObjectBoundReplaceError::DirectorySyncFailed)?;
+        invalidate_opened_temporary(&temporary, &directory)?;
         return Err(ObjectBoundReplaceError::RenameFailed);
     }
+
+    revalidate_opened_file_at(
+        &directory,
+        &final_name,
+        &temporary,
+        unix_mode,
+        ObjectBoundReplaceError::PostPublishTemporaryIdentityDrift,
+    )?;
 
     after_rename_before_directory_sync();
     directory
@@ -389,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn parent_replacement_after_temporary_sync_cleans_pinned_staging_without_redirecting_bytes() {
+    fn parent_replacement_after_temporary_sync_invalidates_pinned_staging_without_redirecting_bytes() {
         let root = tempfile::tempdir().expect("tempdir");
         let parent = private_parent(&root);
         let moved = root.path().join("private-moved");
@@ -414,7 +481,71 @@ mod tests {
         assert_eq!(error, ObjectBoundReplaceError::ParentIdentityDrift);
         assert!(!parent.join("connections.json").exists());
         assert_eq!(std::fs::read(moved.join("connections.json")).expect("old record"), b"old");
-        assert_eq!(std::fs::read_dir(&moved).expect("read moved parent").count(), 1);
+        let staging = std::fs::read_dir(&moved)
+            .expect("read moved parent")
+            .map(|entry| entry.expect("entry").path())
+            .find(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().starts_with(".disksage-private-replace-"))
+                    .unwrap_or(false)
+            })
+            .expect("invalidated staging record");
+        assert_eq!(std::fs::metadata(staging).expect("staging metadata").len(), 0);
+    }
+
+    #[test]
+    fn temporary_name_replacement_after_sync_never_publishes_replacement_bytes() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let parent = private_parent(&root);
+        let record = parent.join("connections.json");
+        std::fs::write(&record, b"old").expect("seed record");
+        let hook_parent = parent.clone();
+        let replacement_path = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let hook_replacement_path = std::sync::Arc::clone(&replacement_path);
+
+        let error = replace_object_bound_bytes_with_hooks(
+            &record,
+            b"authorized",
+            0o600,
+            || {},
+            move || {
+                let staging_name = std::fs::read_dir(&hook_parent)
+                    .expect("read private parent")
+                    .map(|entry| entry.expect("entry").file_name())
+                    .find(|name| {
+                        let name = name.to_string_lossy();
+                        name.starts_with(".disksage-private-replace-") && name.ends_with(".tmp")
+                    })
+                    .expect("staging record");
+                let staging_path = hook_parent.join(staging_name);
+                std::fs::remove_file(&staging_path).expect("remove admitted staging name");
+                std::fs::write(&staging_path, b"attacker").expect("install replacement staging");
+                std::fs::set_permissions(
+                    &staging_path,
+                    std::fs::Permissions::from_mode(0o600),
+                )
+                .expect("set replacement staging mode");
+                *hook_replacement_path.lock().expect("replacement path lock") =
+                    Some(staging_path);
+            },
+            || {},
+        )
+        .expect_err("temporary pathname replacement must fail closed");
+
+        assert_eq!(
+            error.code(),
+            "object-bound-replace-temporary-identity-drift"
+        );
+        assert_eq!(std::fs::read(&record).expect("old record"), b"old");
+        let replacement_path = replacement_path
+            .lock()
+            .expect("replacement path lock")
+            .clone()
+            .expect("replacement path");
+        assert_eq!(
+            std::fs::read(replacement_path).expect("replacement staging"),
+            b"attacker"
+        );
     }
 
     #[test]
@@ -463,6 +594,14 @@ mod tests {
         assert_eq!(
             ObjectBoundReplaceError::DirectorySyncFailed.code(),
             "object-bound-replace-directory-sync-failed"
+        );
+        assert_eq!(
+            ObjectBoundReplaceError::TemporaryIdentityDrift.code(),
+            "object-bound-replace-temporary-identity-drift"
+        );
+        assert_eq!(
+            ObjectBoundReplaceError::PostPublishTemporaryIdentityDrift.code(),
+            "object-bound-replace-post-publish-temporary-identity-drift"
         );
         assert_eq!(
             ObjectBoundReplaceError::UnsupportedPlatform.code(),
