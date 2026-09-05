@@ -10,14 +10,11 @@ fn source(path: &str) -> String {
 fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
     let lib = source("src/lib.rs");
     let cli = source("src/bin/disksage-provider-cache-reclaim.rs");
-    let boundary_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/provider_cache_public_boundary.rs");
-    let boundary = fs::read_to_string(&boundary_path)
-        .expect("provider-cache public boundary must own irreversible-mode admission");
+    let boundary = source("src/provider_cache_public_boundary.rs");
 
     assert!(
         lib.contains("provider_cache_public_boundary::plan_provider_cache_reclaim"),
-        "Tauri planning must pass through the boundary that hides unavailable permanent approval"
+        "Tauri planning must pass through the boundary that omits unavailable permanent approval"
     );
     assert!(
         lib.contains("provider_cache_public_boundary::execute_provider_cache_reclaim"),
@@ -33,8 +30,16 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
     );
 
     assert!(
-        boundary.contains("plan.exact_approval_phrase = None"),
-        "shipped plans must not advertise permanent deletion while that authority is unavailable"
+        boundary.contains("use crate::provider_cache::{"),
+        "the shipped boundary must serialize the commercial provider-cache DTOs"
+    );
+    assert!(
+        boundary.contains("map(crate::provider_cache::project_plan)"),
+        "shipped plans must be projected into a schema that cannot name permanent approval"
+    );
+    assert!(
+        !boundary.contains("plan.exact_approval_phrase = None"),
+        "the product contract must omit irreversible approval by type, not serialize the field as null"
     );
 
     let command_start = boundary
@@ -46,12 +51,16 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
         .expect("Trash must continue through the existing evidence-bound command");
     let public_signature = &command_body[..delegate];
     assert!(
-        !public_signature.contains("mode: ProviderCacheCleanupMode"),
-        "the shipped Tauri command must not deserialize a caller-selected irreversible mode"
+        !public_signature.contains("mode:"),
+        "the shipped Tauri command must not deserialize a caller-selected cleanup mode"
     );
     assert!(
-        command_body[delegate..].contains("ProviderCacheCleanupMode::Trash"),
+        command_body[delegate..].contains("InternalProviderCacheCleanupMode::Trash"),
         "the shipped Tauri command must delegate with the sole commercial-safe Trash mode"
+    );
+    assert!(
+        command_body[delegate..].contains("crate::provider_cache::project_trash_result"),
+        "the shipped result must be projected back through the Trash-only commercial DTO"
     );
 
     let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
@@ -114,6 +123,10 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
         !reexport_block.contains("ProviderCacheCleanupResult"),
         "commercial Rust result types must not expose a field whose mode type still includes PermanentPurge"
     );
+    assert!(
+        !reexport_block.contains("ProviderCacheReclaimPlan"),
+        "commercial Rust callers must not receive the historical plan type that names permanent approval"
+    );
 
     let public_mode_start = public_api
         .find("pub enum ProviderCacheCleanupMode")
@@ -126,6 +139,10 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
     assert!(
         public_mode.contains("Trash") && !public_mode.contains("PermanentPurge"),
         "the externally nameable provider-cache cleanup mode must contain Trash only"
+    );
+    assert!(
+        public_api.contains("pub struct ProviderCacheReclaimPlan"),
+        "safe facade must own a commercial plan DTO that omits irreversible approval"
     );
     assert!(
         public_api.contains("pub struct ProviderCacheCleanupResult"),
