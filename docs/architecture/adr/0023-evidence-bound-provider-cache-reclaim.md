@@ -40,17 +40,26 @@ Planning is read-only. It fails closed when inventory traversal, recreation evid
 identity, or active-use evidence is incomplete. Execution re-plans and rechecks the selected
 candidate triplets (`path`, `evidence_fingerprint`, `object_id`) against the approved plan.
 
-All public product and Rust mutation surfaces expose **Trash only**. The Tauri execution command does
-not deserialize a caller-selected cleanup mode and delegates every product call as Trash. The
-headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before manifest
-or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls only
-`execute_trash`. The public Rust facade similarly exposes `execute_trash` without a mode argument,
-clears the historical `exact_approval_phrase` from public planning, and projects execution results
-through its own publicly nameable one-variant `ProviderCacheCleanupMode::Trash` DTO. The historical
-`ProviderCacheCleanupMode` and lower-level result remain internal implementation details and are not
-re-exported. `provider_cache_reclaim`, which contains the pathname-staged irreversible executor, is
-crate-private. The TypeScript wrapper exposes no cleanup-mode parameter and its result mode remains
-Trash-only.
+All public Rust and Tauri mutation surfaces expose **Trash only**. The public Rust facade owns its
+`ProviderCacheReclaimPlan` instead of re-exporting the historical lower-level plan; the commercial
+plan contains `trash_approval_phrase` and has no `exact_approval_phrase` field. The Tauri planning
+command projects the lower-level evidence into that same facade-owned DTO, so unavailable
+irreversible approval is omitted from the serialized schema rather than emitted as `null`. Tauri
+execution has no caller-selected cleanup-mode argument, delegates every product call as internal
+Trash, and projects the result through the facade-owned one-variant `ProviderCacheCleanupMode::Trash`
+DTO.
+
+The headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before
+manifest or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls
+only `execute_trash`. The historical `ProviderCacheCleanupMode`, lower-level plan/result, and
+`provider_cache_reclaim` pathname-staged irreversible executor remain crate-private implementation
+and repair evidence.
+
+The TypeScript wrapper does not accept a cleanup-mode argument and its cleanup result is typed as
+Trash-only, but its current plan interface still declares `exact_approval_phrase: string | null` and
+its invoke payload still sends `mode: "trash"` even though the Tauri command no longer accepts a mode.
+Those stale client-schema remnants are a code-current follow-up and must be removed before this ADR
+can become Accepted; they do not restore irreversible backend authority.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -92,6 +101,15 @@ those internal mode/result contracts. Production repairs
 commercial result through a Trash-only public DTO. A defensive projection check fails closed if an
 internal non-Trash result ever crosses `execute_trash`.
 
+A subsequent contract review found the same class of leakage in the read-only plan: the public facade
+still re-exported the historical `ProviderCacheReclaimPlan`, whose `exact_approval_phrase` field names
+an unavailable irreversible lifecycle. Source-contract RED
+`7db6dc77f0e57c60096cb7d20771f2eb39d0cd3c` requires a facade-owned plan with Trash approval only.
+Production repair `86d1eeb3e35616c0b95d15b67dfb3ceb26b2574d` introduces that DTO and explicit
+projection; `defac8ff38c84fa2d08efd1b9f9abdcf897a7799` routes the shipped Tauri plan/result through
+the facade-owned schemas. Contract update `e125f256f6f26972fa9a3fbb1cf9dd181f01736e` verifies that
+the Tauri boundary no longer serializes `exact_approval_phrase` as a nullable field.
+
 The RED commits above are source-contract evidence only; no hosted failing run for their intermediate
 heads is claimed. Exact-current hosted tests, review, ancestry, and protected integration remain
 required before this ADR may become Accepted.
@@ -106,15 +124,19 @@ output are not substituted for that observation.
 Operators may save selected candidate triplets as an absolute JSON manifest and invoke
 `disksage-provider-cache-reclaim execute` with both fingerprint fields, the Trash approval phrase, a
 rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible approval is not part of
-the shipped CLI or public Rust execution contract while the required deletion authority is
+the shipped CLI, Rust, or Tauri plan/execution contract while the required deletion authority is
 unavailable.
 
 The historical `PermanentPurge` variant and pathname-staged purge helpers remain crate-private repair
 evidence with unit coverage. They no longer form an external Rust capability. They must not become
 public again unless they are replaced by the canonical identity-bound deletion/recovery primitive and
 its cross-platform destructive acceptance evidence. External Rust callers can name only the
-facade-owned Trash mode/result contract; internal irreversible mode and result types are not part of
-the commercial API.
+facade-owned Trash plan/mode/result contracts; internal irreversible plan/mode/result types are not
+part of the commercial API.
+
+The TypeScript provider-cache plan and invoke payload still need a schema-cleanup follow-up so the
+client contract exactly matches the stronger Tauri/Rust boundary. Until that lands and exact-head
+checks are terminal green, this ADR remains Proposed.
 
 ## Rejected alternatives
 
@@ -128,6 +150,8 @@ the commercial API.
 - Re-exporting the historical cleanup mode/result while hiding only the executor: rejected because it
   advertises an unavailable irreversible lifecycle in the external Rust contract and leaves the
   commercial result coupled to an internal mode type.
+- Re-exporting the historical plan while clearing `exact_approval_phrase` at runtime: rejected because
+  the public type still names and serializes unsupported irreversible authority.
 - Shipping pathname-authorized permanent file deletion while UI/CLI merely warn: rejected because a
   warning does not repair the mutation authority.
 - Permanent recursive purge of provider directories: rejected because partial recursive deletion
