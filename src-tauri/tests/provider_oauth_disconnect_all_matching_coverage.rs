@@ -4,6 +4,8 @@
 //! record that identifies that same root. Leaving a legacy record behind would preserve a local
 //! connection and credential lookup path after the user was told the provider was disconnected.
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
