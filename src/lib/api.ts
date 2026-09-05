@@ -205,6 +205,60 @@ export interface PodmanReclaimPlan {
 export const inspectPodmanReclaim = () =>
   invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
 
+export interface ProviderCacheCandidate {
+  kind: "podman_machine_seed" | "edge_superseded_installed_copy" | "edge_crx_cache";
+  path: string;
+  logical_bytes: number;
+  allocated_bytes: number | null;
+  object_id: string;
+  content_manifest: string;
+  evidence_fingerprint: string;
+  active_use: ActiveUseEvidence;
+  recreation_source: string;
+}
+
+export interface ProviderCacheReclaimPlan {
+  schema_version: number;
+  platform: string;
+  observed_at_ms: number;
+  installed_edge_version: string | null;
+  podman_machine_present: boolean;
+  podman_recreation_source: string | null;
+  evidence_complete: boolean;
+  candidates: ProviderCacheCandidate[];
+  issues: string[];
+  plan_fingerprint: string;
+  trash_approval_phrase: string | null;
+}
+
+export const planProviderCacheReclaim = () =>
+  invoke<ProviderCacheReclaimPlan>("plan_provider_cache_reclaim");
+
+export interface ProviderCacheCleanupResult {
+  plan_fingerprint: string;
+  requested_count: number;
+  completed_count: number;
+  executed_at_ms: number;
+  rationale: string;
+  mode: "trash";
+  immutable_receipt_path: string;
+  items: Array<{ path: string; completed: boolean; error: string | null; audit_error: string | null }>;
+}
+
+export const executeProviderCacheReclaim = (
+  requests: Array<Pick<ProviderCacheCandidate, "path" | "evidence_fingerprint" | "object_id">>,
+  approvedPlanFingerprint: string,
+  confirmPlanFingerprint: string,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<ProviderCacheCleanupResult>("execute_provider_cache_reclaim", {
+  requests,
+  approvedPlanFingerprint,
+  confirmPlanFingerprint,
+  confirmationPhrase,
+  rationale,
+});
+
 export interface PodmanDanglingImagePruneExecution {
   schema_version: number;
   candidate_set_sha256: string;
@@ -340,7 +394,6 @@ export const downloadModel = () => invoke<void>("download_model");
 export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_verdicts", { paths });
 export const summarizeUnknownBucket = (paths: string[]) =>
   invoke<string | null>("summarize_unknown_bucket", { paths });
-
 export interface BrewCleanupPlan {
   schema_version: number;
   platform: "macos";
@@ -541,7 +594,6 @@ export interface IcloudLocalCopyEvictionOutput {
 }
 
 export type GitWorktreeDisposition = "removal-candidate" | "preserve" | "evidence-gap";
-
 export interface GitWorktreeSizeEvidence {
   method: string;
   evidence_complete: boolean;
