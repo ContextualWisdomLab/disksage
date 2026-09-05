@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
-//! Disconnecting one canonical File Provider root must remove every durable canonical/legacy
-//! record that identifies that same root. Leaving a legacy record behind would preserve a local
-//! connection and credential lookup path after the user was told the provider was disconnected.
+//! Disconnecting an existing provider requires replacing the durable connection document before
+//! credential deletion. Until the filesystem owner can bind that replacement to the exact reviewed
+//! source object, the OAuth bounded context must fail before deleting any canonical or legacy token.
 
 #[path = "../src/object_bound_publication.rs"]
 mod object_bound_publication;
@@ -50,7 +50,7 @@ fn google_connection(
 }
 
 #[test]
-fn disconnect_removes_every_canonical_and_legacy_record_for_the_same_root() {
+fn disconnect_fails_before_any_credential_delete_when_document_replacement_is_unavailable() {
     let temp = tempfile::tempdir().unwrap();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
@@ -59,15 +59,25 @@ fn disconnect_removes_every_canonical_and_legacy_record_for_the_same_root() {
     let legacy = google_connection(&saved_root, legacy_connection_id(&saved_root), 100);
     let current = google_connection(&saved_root, connection_id(&saved_root), 200);
     assert_ne!(legacy.connection_id, current.connection_id);
-    save_connections(&document, &[legacy.clone(), current.clone()]).unwrap();
+    let original = vec![legacy, current];
+    save_connections(&document, &original).unwrap();
+    let before = std::fs::read(&document).unwrap();
 
     let mut deleted = Vec::new();
-    disconnect_with_delete(&document, &requested_root, |connection_id| {
+    let error = disconnect_with_delete(&document, &requested_root, |connection_id| {
         deleted.push(connection_id.to_string());
         Ok(())
     })
-    .unwrap();
+    .unwrap_err();
 
-    assert!(load_connections(&document).unwrap().is_empty());
-    assert_eq!(deleted, vec![legacy.connection_id, current.connection_id]);
+    assert_eq!(
+        error,
+        "oauth-connection-document-object-bound-replacement-unavailable"
+    );
+    assert!(
+        deleted.is_empty(),
+        "credential deletion must not start before the durable authority update can be published"
+    );
+    assert_eq!(std::fs::read(&document).unwrap(), before);
+    assert_eq!(load_connections(&document).unwrap(), original);
 }
