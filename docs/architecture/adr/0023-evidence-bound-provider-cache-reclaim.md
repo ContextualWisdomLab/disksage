@@ -17,8 +17,8 @@ lower-level implementation in this branch stages an exact Podman seed with a sam
 rename and then removes it. Its identity/content checks, double fingerprint confirmation, private
 receipt, and terminal journal improve evidence but do not bind the irreversible mutation to the same
 validated filesystem object/directory authority across ancestor replacement, crash recovery, and all
-supported platforms. That lower-level path is retained for repair evidence; it is not shipped product
-authority.
+supported platforms. That lower-level implementation is retained inside the application crate for
+repair evidence; it is not commercial mutation authority.
 
 Earlier active DiskSage owner lineages already allocate ADR-0012 through ADR-0022. This decision uses
 ADR-0023 rather than reusing an immutable architecture identity. It remains Proposed until its
@@ -40,15 +40,14 @@ Planning is read-only. It fails closed when inventory traversal, recreation evid
 identity, or active-use evidence is incomplete. Execution re-plans and rechecks the selected
 candidate triplets (`path`, `evidence_fingerprint`, `object_id`) against the approved plan.
 
-The shipped product surfaces expose **Trash only** for provider-cache mutation. The Tauri execution
-command does not deserialize a caller-selected cleanup mode at all and delegates every product call
-to the lower-level executor as `ProviderCacheCleanupMode::Trash`. The product plan clears the
-historical `exact_approval_phrase` for irreversible deletion while leaving read-only evidence,
-evidence issues, and the Trash approval unchanged. The headless CLI likewise advertises only
-`--trash`, rejects `--permanent-purge` before manifest/executor work with
-`provider-cache-identity-bound-permanent-delete-unavailable`, and does not emit an irreversible
-approval phrase from `plan`. The TypeScript wrapper exposes no cleanup-mode parameter and its result
-mode is Trash-only.
+All public product and Rust mutation surfaces expose **Trash only**. The Tauri execution command does
+not deserialize a caller-selected cleanup mode and delegates every product call as Trash. The
+headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before manifest
+or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls only
+`execute_trash`. The public Rust facade similarly exposes `execute_trash` without a mode argument and
+clears the historical `exact_approval_phrase` from public planning. `provider_cache_reclaim`, which
+contains the historical pathname-staged irreversible executor, is crate-private. The TypeScript
+wrapper exposes no cleanup-mode parameter and its result mode remains Trash-only.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -71,12 +70,16 @@ and `system check --repair` also failed because the layer remained in use. A gue
 99.5 GiB while host APFS increased only 87,708 KiB, so guest-reported trim is not host reclaim proof.
 
 These observations are operational evidence, not release or irreversible-deletion authority.
-Source-contract RED `2207ca3121cb5fc29f2cbe56748abf50fe097fd0` requires the shipped Tauri
-execution schema to contain no caller-selected `ProviderCacheCleanupMode` and to delegate only
-`Trash`; production fix `3a7d8df30106be509cf1fc2e4ac733f34aea7dd4` implements that boundary. The
-intermediate RED is source-contract evidence only; no hosted failing run is claimed for it.
-Exact-current hosted tests, review, ancestry, and protected integration remain required before this
-ADR may become Accepted.
+Source-contract RED `2207ca3121cb5fc29f2cbe56748abf50fe097fd0` first removed caller-selected
+mode from the shipped Tauri schema. Follow-up source-contract RED
+`36850bf30e41e1fdb716ce576479ad3b3dc86e4e` requires the historical lower-level executor to be
+crate-private, requires one public Trash-only Rust facade, and requires the CLI to consume that
+facade. The first facade implementation is `febaf0ee5e58a2b647030ec4c025563b078faffb`;
+`7b3fc0c1196a36ae298603e6be1b8837727f46d0` removes public module reachability and
+`c6ed71d0e932c92cc635205436deef57d70b40c4` routes the CLI through `execute_trash`. The RED
+commits are source-contract evidence only; no hosted failing run for their intermediate heads is
+claimed. Exact-current hosted tests, review, ancestry, and protected integration remain required
+before this ADR may become Accepted.
 
 ## Consequences
 
@@ -88,13 +91,15 @@ output are not substituted for that observation.
 Operators may save selected candidate triplets as an absolute JSON manifest and invoke
 `disksage-provider-cache-reclaim execute` with both fingerprint fields, the Trash approval phrase, a
 rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible approval is not part of
-the shipped CLI contract while the required deletion authority is unavailable.
+the shipped CLI or public Rust execution contract while the required deletion authority is
+unavailable.
 
-The historical lower-level `PermanentPurge` enum, public lower-level `execute` entry point, and
-pathname-staged purge helper remain technical debt until their useful repair evidence is retained and
-the irreversible authority is either removed/narrowed or replaced by a canonical identity-bound
-deletion primitive. They are not product authority merely because direct Rust callers or unit tests
-can still reach them.
+The historical `PermanentPurge` variant and pathname-staged purge helpers remain crate-private repair
+evidence with unit coverage. They no longer form an external Rust capability. They must not become
+public again unless they are replaced by the canonical identity-bound deletion/recovery primitive and
+its cross-platform destructive acceptance evidence. The public facade still re-exports shared result
+and mode types for compatibility, but it grants no mode-selecting execution entry point; narrowing
+those DTOs further is compatibility cleanup, not deletion authority.
 
 ## Rejected alternatives
 
@@ -103,6 +108,8 @@ can still reach them.
   regeneration or current object identity.
 - Treating private object-bound publication as deletion authority: rejected because publication and
   irreversible removal have different rollback and crash-consistency invariants.
+- Keeping the historical executor public while UI/CLI merely reject permanent mode: rejected because
+  a direct Rust caller would still retain irreversible pathname-authorized capability.
 - Shipping pathname-authorized permanent file deletion while UI/CLI merely warn: rejected because a
   warning does not repair the mutation authority.
 - Permanent recursive purge of provider directories: rejected because partial recursive deletion
