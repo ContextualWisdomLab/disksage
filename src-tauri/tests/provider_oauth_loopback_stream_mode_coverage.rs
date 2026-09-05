@@ -9,6 +9,8 @@
 #![cfg(not(coverage))]
 #![allow(dead_code, unused_imports)]
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
