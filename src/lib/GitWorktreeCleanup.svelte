@@ -2,18 +2,32 @@
   import { confirm, open } from "@tauri-apps/plugin-dialog";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import {
+    GIT_WORKTREE_AUDIT_FAILURE,
+    GIT_WORKTREE_CONFIRMATION_FAILURE,
+    GIT_WORKTREE_REMOVAL_FAILURE,
+    GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE,
+    GIT_WORKTREE_RESULT_RECORD_FAILURE,
+    evidenceGapActions,
+    removalStoppedAction,
+  } from "./gitWorktreeFeedback";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let repositoryRoot = $state("");
   let retentionText = $state("");
   let planning = $state(false);
+  let choosing = $state(false);
+  let confirming = $state(false);
   let executing = $state(false);
   let error = $state("");
   let report: api.GitWorktreeAuditReport | null = $state(null);
   let confirmationPhrase = $state("");
   let rationale = $state("");
   let removal: api.StaleGitWorktreeRemovalOutput | null = $state(null);
+  let selectionSeq = 0;
+  let auditSeq = 0;
+  let removalSeq = 0;
 
   $effect(() => {
     if (!repositoryRoot && scannedRoot) repositoryRoot = scannedRoot;
@@ -45,6 +59,8 @@
   }
 
   async function chooseRepository() {
+    const seq = ++selectionSeq;
+    choosing = true;
     error = "";
     try {
       const selected = await open({
@@ -53,11 +69,13 @@
         defaultPath: repositoryRoot || scannedRoot || undefined,
         title: "Git 저장소 또는 연결된 worktree 선택",
       });
-      if (typeof selected !== "string") return;
+      if (seq !== selectionSeq || typeof selected !== "string") return;
       repositoryRoot = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      if (seq === selectionSeq) error = GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE;
+    } finally {
+      if (seq === selectionSeq) choosing = false;
     }
   }
 
@@ -67,16 +85,19 @@
     if (!root || references.length === 0) return;
     planning = true;
     resetDecision();
+    const seq = ++auditSeq;
     try {
-      report = await api.planStaleGitWorktrees(root, references);
-      repositoryRoot = report.repository_root;
-      retentionText = report.retention_references
+      const nextReport = await api.planStaleGitWorktrees(root, references);
+      if (seq !== auditSeq) return;
+      report = nextReport;
+      repositoryRoot = nextReport.repository_root;
+      retentionText = nextReport.retention_references
         .map((binding) => binding.reference_ref)
         .join("\n");
-    } catch (e) {
-      error = String(e);
+    } catch {
+      if (seq === auditSeq) error = GIT_WORKTREE_AUDIT_FAILURE;
     } finally {
-      planning = false;
+      if (seq === auditSeq) planning = false;
     }
   }
 
@@ -87,34 +108,49 @@
       && report.exact_approval_phrase !== null
       && confirmationPhrase === report.exact_approval_phrase
       && rationale.trim().length > 0
+      && !confirming
       && !executing
       && removal === null;
   }
 
   async function removeWorktrees() {
     if (!report || !executionReady()) return;
-    const approved = await confirm(
-      `${report.removal_candidate_count}개 worktree 디렉터리(최대 ${fmtBytes(report.removal_candidate_allocated_bytes)})를 제거합니다.\n\n`
-        + "각 항목은 실행 직전에 다시 검사합니다. 브랜치와 커밋은 유지하며 force·prune은 사용하지 않습니다. 제거된 디렉터리는 휴지통으로 가지 않습니다.",
-      { title: "DiskSage 오래된 Git worktree 제거", kind: "warning" },
-    );
-    if (!approved) return;
-    executing = true;
-    error = "";
+    const approvedReport = report;
+    const approvedPhrase = confirmationPhrase;
+    const approvedRationale = rationale.trim();
+    const seq = ++removalSeq;
+    confirming = true;
     try {
-      removal = await api.removeStaleGitWorktrees(
-        report.repository_root,
-        report.retention_references.map((binding) => binding.reference_ref),
-        report.removal_plan_fingerprint,
-        confirmationPhrase,
-        rationale.trim(),
+      const approved = await confirm(
+        `${approvedReport.removal_candidate_count}개 worktree 디렉터리(최대 ${fmtBytes(approvedReport.removal_candidate_allocated_bytes)})를 제거합니다.\n\n`
+          + "각 항목은 실행 직전에 다시 검사합니다. 브랜치와 커밋은 유지하며 force·prune은 사용하지 않습니다. 제거된 디렉터리는 휴지통으로 가지 않습니다.",
+        { title: "DiskSage 오래된 Git worktree 제거", kind: "warning" },
       );
-      confirmationPhrase = "";
-      rationale = "";
-    } catch (e) {
-      error = String(e);
+      if (!approved || seq !== removalSeq || report !== approvedReport) return;
+      executing = true;
+      error = "";
+      try {
+        removal = await api.removeStaleGitWorktrees(
+          approvedReport.repository_root,
+          approvedReport.retention_references.map((binding) => binding.reference_ref),
+          approvedReport.removal_plan_fingerprint,
+          approvedPhrase,
+          approvedRationale,
+        );
+        confirmationPhrase = "";
+        rationale = "";
+      } catch {
+        report = null;
+        confirmationPhrase = "";
+        rationale = "";
+        error = GIT_WORKTREE_REMOVAL_FAILURE;
+      } finally {
+        executing = false;
+      }
+    } catch {
+      error = GIT_WORKTREE_CONFIRMATION_FAILURE;
     } finally {
-      executing = false;
+      if (seq === removalSeq) confirming = false;
     }
   }
 </script>
@@ -135,10 +171,12 @@
         oninput={resetDecision}
         autocomplete="off"
         spellcheck="false"
-        disabled={planning || executing}
+        disabled={choosing || planning || confirming || executing}
       />
     </label>
-    <button onclick={chooseRepository} disabled={planning || executing}>폴더 선택</button>
+    <button onclick={chooseRepository} disabled={choosing || planning || confirming || executing}>
+      {choosing ? "폴더 선택 창 여는 중…" : "폴더 선택"}
+    </button>
   </div>
   <label>
     보존할 Git ref — 한 줄에 하나, 현재 로컬에서 해석되는 정확한 ref
@@ -149,12 +187,12 @@
       placeholder={'예: origin/main\norigin/develop'}
       autocomplete="off"
       spellcheck="false"
-      disabled={planning || executing}
+      disabled={choosing || planning || confirming || executing}
     ></textarea>
   </label>
   <button
     onclick={inspectWorktrees}
-    disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
+    disabled={choosing || planning || confirming || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
   >
     {planning ? "worktree·브랜치·활성 사용 확인 중…" : "읽기 전용 worktree 감사"}
   </button>
@@ -185,10 +223,17 @@
 
       {#if evidenceGapEntries().length > 0}
         <div class="blocked">
-          <strong>증거가 부족해 전체 실행을 차단했습니다.</strong>
+          <strong>증거가 부족해 전체 실행을 차단했습니다. 다음 항목을 확인하세요.</strong>
           <ul>
             {#each evidenceGapEntries() as entry (entry.path_fingerprint)}
-              <li><span class="path">{entry.path}</span> — {entry.blockers.join(", ")}</li>
+              <li>
+                <span class="path">{entry.path}</span>
+                <ul class="evidence-actions">
+                  {#each evidenceGapActions(entry.blockers) as action}
+                    <li>{action}</li>
+                  {/each}
+                </ul>
+              </li>
             {/each}
           </ul>
         </div>
@@ -201,18 +246,16 @@
             사전 할당량 기준 최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}입니다.
           </p>
         {:else}
-          <p class="warning">
-            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason ?? "검증 불완전"}.
+          <p class="warning" role="alert">
+            {removalStoppedAction(removal.result.stopped_reason)}
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
-        <p class="muted">승인 기록: {removal.approval_path}</p>
+        <p class="muted">승인 기록을 DiskSage 데이터 폴더에 저장했습니다.</p>
         {#if removal.result_path}
-          <p class="muted">결과 기록: {removal.result_path}</p>
+          <p class="muted">결과 기록을 DiskSage 데이터 폴더에 저장했습니다.</p>
         {:else}
-          <p class="error" role="alert">
-            실행 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {removal.result_record_error}
-          </p>
+          <p class="error" role="alert">{GIT_WORKTREE_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if report.evidence_complete && report.exact_approval_phrase}
         <div class="approval">
@@ -240,7 +283,7 @@
             ></textarea>
           </label>
           <button onclick={removeWorktrees} disabled={!executionReady()}>
-            {executing ? "재검증 후 worktree 제거 중…" : "재검증하고 worktree만 제거"}
+            {executing ? "재검증 후 worktree 제거 중…" : confirming ? "제거 확인 대기 중…" : "재검증하고 worktree만 제거"}
           </button>
         </div>
       {:else if report.removal_candidate_count === 0}
@@ -265,7 +308,8 @@
   .worktrees li { padding: 0.45rem 0; border-bottom: 1px solid #d9e0e6; }
   .path { overflow-wrap: anywhere; color: #66717d; font-size: 0.78rem; }
   .blocked { padding: 0.6rem; border: 1px solid #b74a4a; background: #fff6f6; }
-  .blocked ul { margin-bottom: 0; }
+  .blocked > ul { margin-bottom: 0; }
+  .evidence-actions { margin: 0.25rem 0 0; }
   .approval { display: grid; gap: 0.55rem; justify-items: start; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
   .approval code { max-width: min(60rem, 90vw); overflow-wrap: anywhere; user-select: all; }
   .approval textarea { width: min(60rem, 90vw); resize: vertical; }
