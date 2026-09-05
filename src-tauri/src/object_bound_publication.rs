@@ -164,7 +164,7 @@ fn revalidate_opened_file_at(
     let opened = opened_file.metadata().map_err(|_| drift)?;
     if !opened.is_file()
         || opened.file_type().is_symlink()
-        || opened.permissions().mode() & 0o777 != unix_mode
+        || opened.permissions().mode() & 0o7777 != unix_mode
     {
         return Err(drift);
     }
@@ -185,7 +185,7 @@ fn revalidate_opened_file_at(
     if visible.st_mode & libc::S_IFMT != libc::S_IFREG
         || visible.st_dev as u64 != opened.dev()
         || visible.st_ino as u64 != opened.ino()
-        || visible.st_mode as u32 & 0o777 != unix_mode
+        || visible.st_mode as u32 & 0o7777 != unix_mode
     {
         return Err(drift);
     }
@@ -328,7 +328,7 @@ where
             .map_err(|_| ObjectBoundReplaceError::WriteFailed)?;
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
-            || metadata.permissions().mode() & 0o777 != unix_mode
+            || metadata.permissions().mode() & 0o7777 != unix_mode
         {
             return Err(ObjectBoundReplaceError::ModeInvalid);
         }
