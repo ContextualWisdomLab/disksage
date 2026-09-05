@@ -1,8 +1,7 @@
 #![cfg(all(unix, not(coverage)))]
 
-use disksage_lib::provider_cache_reclaim::{
-    execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
-    ProviderCacheKind,
+use disksage_lib::provider_cache::{
+    execute_trash, plan_with_runtime, ProviderCacheCleanupRequest, ProviderCacheKind,
 };
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -53,7 +52,7 @@ fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
 }
 
 #[test]
-fn permanent_purge_preserves_same_inode_seed_changed_after_replan() {
+fn trash_preserves_same_inode_seed_changed_after_replan() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -88,6 +87,7 @@ fn permanent_purge_preserves_same_inode_seed_changed_after_replan() {
 
     let plan = plan_with_runtime(&home, &applications, &podman, 1);
     assert!(plan.evidence_complete, "{:?}", plan.issues);
+    assert!(plan.exact_approval_phrase.is_none());
     let candidate = plan
         .candidates
         .iter()
@@ -101,18 +101,17 @@ fn permanent_purge_preserves_same_inode_seed_changed_after_replan() {
     let data = temp.path().join("data");
     fs::create_dir_all(&data).unwrap();
 
-    let result = execute(
+    let result = execute_trash(
         &home,
         &applications,
         &podman,
         &[request],
         &plan.plan_fingerprint,
         &plan.plan_fingerprint,
-        plan.exact_approval_phrase.as_deref().unwrap(),
+        plan.trash_approval_phrase.as_deref().unwrap(),
         "verified regenerable provider cache",
         &data.join("journal.jsonl"),
         &data.join("receipts"),
-        ProviderCacheCleanupMode::PermanentPurge,
         2,
     )
     .unwrap();
@@ -120,7 +119,7 @@ fn permanent_purge_preserves_same_inode_seed_changed_after_replan() {
     assert_eq!(result.completed_count, 0);
     assert_eq!(
         result.items[0].error.as_deref(),
-        Some("provider-cache-staged-content-changed")
+        Some("provider-cache-content-changed")
     );
     assert_eq!(fs::read(&seed).unwrap(), changed);
 }
