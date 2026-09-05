@@ -31,7 +31,7 @@ fn private_directory(metadata: &fs::Metadata, exact_mode: Option<u32>) -> Result
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("private-directory-publication-directory-unsafe".into());
     }
-    let mode = metadata.permissions().mode() & 0o777;
+    let mode = metadata.permissions().mode() & 0o7777;
     if mode & 0o022 != 0 {
         return Err("private-directory-publication-directory-writable-by-others".into());
     }
@@ -327,7 +327,7 @@ where
             .map_err(|_| "private-directory-publication-file-metadata-failed".to_string())?;
         if !opened_metadata.is_file()
             || opened_metadata.file_type().is_symlink()
-            || opened_metadata.permissions().mode() & 0o777 != file_mode
+            || opened_metadata.permissions().mode() & 0o7777 != file_mode
         {
             return Err("private-directory-publication-file-mode-drift".into());
         }
@@ -365,6 +365,9 @@ where
             || visible_metadata.ino() != opened_metadata.ino()
         {
             return Err("private-directory-publication-file-identity-drift".into());
+        }
+        if visible_metadata.permissions().mode() & 0o7777 != file_mode {
+            return Err("private-directory-publication-file-mode-drift".into());
         }
         Ok(())
     })();
