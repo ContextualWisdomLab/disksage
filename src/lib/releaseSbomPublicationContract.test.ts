@@ -25,12 +25,12 @@ describe('release SBOM publication contract', () => {
     const sbomUploadOffset = attestJob.indexOf('name: Upload attested release SBOM');
     expect(provenanceOffset).toBeGreaterThanOrEqual(0);
     expect(sbomUploadOffset).toBeGreaterThan(provenanceOffset);
-    expect(attestJob).toContain('name: release-sbom-${{ github.run_attempt }}');
+    expect(attestJob).toContain('name: release-sbom-${{ github.run_id }}');
     expect(attestJob).toContain('path: release-artifacts/sbom/disksage.spdx.json');
     expect(attestJob).toContain('if-no-files-found: error');
 
     expect(publishJob).toContain('name: Download attested release SBOM');
-    expect(publishJob).toContain('name: release-sbom-${{ github.run_attempt }}');
+    expect(publishJob).toContain('name: release-sbom-${{ github.run_id }}');
     expect(publishJob).toContain('path: release-artifacts/sbom');
     expect(publishJob).toContain('files: release-artifacts/**/*');
   });
