@@ -33,3 +33,250 @@ dm:Code a owl:Class ;
 dm:Dataset a owl:Class ;
     rdfs:label "데이터셋"@ko , "Dataset"@en ;
     dm:targetFolder "~/Datasets" .
+
+# Reclaim classes describe semantic eligibility only. Runtime identity, active-use, provider,
+# approval, and before/after allocation evidence remain mandatory mutation gates.
+dm:StorageArtifact a owl:Class ;
+    rdfs:label "저장 자원"@ko , "Storage artifact"@en ;
+    dm:reclaimPolicy "review-required" .
+
+dm:StorageMeasurement a owl:Class ;
+    rdfs:label "저장량 계측"@ko , "Storage measurement"@en ;
+    dm:requiredEvidence "filesystem-identity-bound-observation" ;
+    dm:requiredEvidence "access-failures-reported" .
+
+dm:ParallelDirectoryMeasurement a owl:Class ;
+    rdfs:subClassOf dm:StorageMeasurement ;
+    rdfs:label "병렬 디렉터리 계측"@ko , "Parallel directory measurement"@en ;
+    dm:requiredEvidence "bounded-worker-count" ;
+    dm:requiredEvidence "partition-results-summed-exactly-once" .
+
+dm:RegenerableArtifact a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "재생성 가능 자원"@ko , "Regenerable artifact"@en ;
+    dm:reclaimPolicy "conditional-reclaim" ;
+    dm:allowedAction "trash" ;
+    dm:requiredEvidence "exact-filesystem-identity" ;
+    dm:requiredEvidence "active-use-complete-and-inactive" ;
+    dm:requiredEvidence "regenerability-proven" .
+
+dm:CacheArtifact a owl:Class ;
+    rdfs:subClassOf dm:RegenerableArtifact ;
+    rdfs:label "캐시"@ko , "Cache artifact"@en .
+
+dm:BuildArtifact a owl:Class ;
+    rdfs:subClassOf dm:RegenerableArtifact ;
+    rdfs:label "빌드 산출물"@ko , "Build artifact"@en ;
+    dm:requiredEvidence "project-manifest-adjacent" ;
+    dm:requiredEvidence "bounded-manifest-complete" .
+
+dm:RustBuildArtifact a owl:Class ;
+    rdfs:subClassOf dm:BuildArtifact ;
+    rdfs:label "Rust 빌드 산출물"@ko , "Rust build artifact"@en ;
+    dm:allowedAction "cargo-clean-or-trash" ;
+    dm:requiredEvidence "cargo-manifest-present" .
+
+dm:CodeIndexArtifact a owl:Class ;
+    rdfs:subClassOf dm:RegenerableArtifact ;
+    rdfs:label "코드 인덱스"@ko , "Code index artifact"@en ;
+    dm:requiredEvidence "index-regeneration-command-available" .
+
+dm:PackageCacheArtifact a owl:Class ;
+    rdfs:subClassOf dm:CacheArtifact ;
+    rdfs:label "패키지 캐시"@ko , "Package cache artifact"@en ;
+    dm:allowedAction "native-package-cache-prune" ;
+    dm:requiredEvidence "remote-package-attribution-complete" ;
+    dm:requiredEvidence "local-and-snapshot-artifacts-held" ;
+    dm:requiredEvidence "candidate-set-fingerprint" .
+
+dm:TemporaryArtifact a owl:Class ;
+    rdfs:subClassOf dm:RegenerableArtifact ;
+    rdfs:label "임시 자원"@ko , "Temporary artifact"@en ;
+    dm:requiredEvidence "age-and-owner-scope-proven" .
+
+dm:CloudTransferTemporaryArtifact a owl:Class ;
+    rdfs:subClassOf dm:TemporaryArtifact ;
+    rdfs:label "클라우드 전송 임시 자원"@ko , "Cloud transfer temporary artifact"@en ;
+    dm:reclaimPolicy "provider-resolution-required" ;
+    dm:allowedAction "provider-supported-reset-or-retry" ;
+    dm:requiredEvidence "transfer-direction-resolved" ;
+    dm:requiredEvidence "remote-or-local-canonical-content-proven" ;
+    dm:requiredEvidence "provider-client-quiesced" ;
+    dm:requiredEvidence "remote-metadata-insync-and-not-pending" ;
+    dm:requiredEvidence "remote-size-at-least-local-partial-size" ;
+    dm:requiredEvidence "exact-filesystem-identity" ;
+    dm:requiredEvidence "minimum-age-satisfied" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:InstallerTemporaryArtifact a owl:Class ;
+    rdfs:subClassOf dm:TemporaryArtifact ;
+    rdfs:label "설치 임시 자원"@ko , "Installer temporary artifact"@en ;
+    dm:allowedAction "remove-stale-installer-temporary" ;
+    dm:requiredEvidence "installer-owner-and-root-scope-proven" ;
+    dm:requiredEvidence "installer-process-inactive" ;
+    dm:requiredEvidence "minimum-age-satisfied" ;
+    dm:requiredEvidence "privileged-human-approval" .
+
+dm:StructuredLogArtifact a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "구조화 로그 자원"@ko , "Structured log artifact"@en ;
+    dm:reclaimPolicy "transparent-lossless-compression" ;
+    dm:allowedAction "compress-transparent" ;
+    dm:requiredEvidence "inactive-file" ;
+    dm:requiredEvidence "stable-file-identity" ;
+    dm:requiredEvidence "content-digest-before-after" ;
+    dm:requiredEvidence "atomic-replacement" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:ContainerArtifact a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "컨테이너 자원"@ko , "Container artifact"@en .
+
+dm:ContainerImage a owl:Class ;
+    rdfs:subClassOf dm:ContainerArtifact ;
+    rdfs:label "컨테이너 이미지"@ko , "Container image"@en ;
+    dm:allowedAction "prune-exact-id" ;
+    dm:requiredEvidence "untagged-and-unreferenced" ;
+    dm:requiredEvidence "candidate-set-fingerprint" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:ColimaDanglingImage a owl:Class ;
+    rdfs:subClassOf dm:ContainerImage ;
+    rdfs:label "Colima dangling 이미지"@ko , "Colima dangling image"@en ;
+    dm:allowedAction "docker-image-rm-exact-id" ;
+    dm:requiredEvidence "colima-running-docker-profile" ;
+    dm:requiredEvidence "docker-native-dangling-filter" ;
+    dm:requiredEvidence "post-removal-candidate-revalidation" .
+
+dm:ContainerVolume a owl:Class ;
+    rdfs:subClassOf dm:ContainerArtifact ;
+    rdfs:label "컨테이너 볼륨"@ko , "Container volume"@en ;
+    dm:allowedAction "remove-exact-id" ;
+    dm:requiredEvidence "native-dangling-status" ;
+    dm:requiredEvidence "mount-count-zero" ;
+    dm:requiredEvidence "privileged-empty-content-observation" ;
+    dm:requiredEvidence "candidate-set-fingerprint" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:ColimaEmptyVolume a owl:Class ;
+    rdfs:subClassOf dm:ContainerVolume ;
+    rdfs:label "Colima 빈 dangling 볼륨"@ko , "Colima empty dangling volume"@en ;
+    dm:allowedAction "docker-volume-rm-exact-name" ;
+    dm:requiredEvidence "colima-running-docker-profile" ;
+    dm:requiredEvidence "docker-native-dangling-filter" ;
+    dm:requiredEvidence "safe-inspected-mountpoint" ;
+    dm:requiredEvidence "privileged-empty-content-observation" ;
+    dm:requiredEvidence "post-removal-candidate-revalidation" .
+
+dm:VirtualDisk a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "가상 디스크"@ko , "Virtual disk"@en ;
+    dm:allowedAction "guest-trim" ;
+    dm:requiredEvidence "before-after-host-allocation" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:OfflineVirtualDiskCompaction a owl:Class ;
+    rdfs:subClassOf dm:VirtualDisk ;
+    rdfs:label "오프라인 가상 디스크 압축"@ko , "Offline virtual disk compaction"@en ;
+    dm:allowedAction "compact" ;
+    dm:requiredEvidence "virtual-machine-stopped" ;
+    dm:requiredEvidence "guest-free-space-trimmed" ;
+    dm:requiredEvidence "native-compaction-command-supported" .
+
+dm:ColimaVirtualDisk a owl:Class ;
+    rdfs:subClassOf dm:VirtualDisk ;
+    rdfs:label "Colima 가상 디스크"@ko , "Colima virtual disk"@en ;
+    dm:allowedAction "colima-runtime-prune-and-compact" ;
+    dm:requiredEvidence "colima-profile-status" ;
+    dm:requiredEvidence "runtime-native-unused-object-evidence" .
+
+dm:ColimaGuestTrim a owl:Class ;
+    rdfs:subClassOf dm:VirtualDisk ;
+    rdfs:label "Colima 게스트 TRIM"@ko , "Colima guest TRIM"@en ;
+    dm:allowedAction "guest-fstrim-all" ;
+    dm:requiredEvidence "colima-running-profile" ;
+    dm:requiredEvidence "exact-profile-fingerprint" ;
+    dm:requiredEvidence "native-host-compaction-capability-reported" .
+
+dm:ColimaDownloadCache a owl:Class ;
+    rdfs:subClassOf dm:CacheArtifact ;
+    rdfs:label "Colima 다운로드 캐시"@ko , "Colima download cache"@en ;
+    dm:allowedAction "colima-prune-force" ;
+    dm:requiredEvidence "colima-native-cache-scope" ;
+    dm:requiredEvidence "candidate-set-fingerprint" ;
+    dm:requiredEvidence "fresh-human-approval" ;
+    dm:requiredEvidence "before-after-host-allocation" .
+
+dm:GitCheckout a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "Git 체크아웃"@ko , "Git checkout"@en .
+
+dm:GitWorktree a owl:Class ;
+    rdfs:subClassOf dm:GitCheckout ;
+    rdfs:label "Git 워크트리"@ko , "Git worktree"@en ;
+    dm:allowedAction "git-worktree-remove" ;
+    dm:requiredEvidence "clean-and-inactive" ;
+    dm:requiredEvidence "retained-reference-reachable" ;
+    dm:requiredEvidence "closed-or-merged-review-state" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:GitClone a owl:Class ;
+    rdfs:subClassOf dm:GitCheckout ;
+    rdfs:label "Git 복제본"@ko , "Git clone"@en ;
+    dm:allowedAction "remove-independent-clone" ;
+    dm:requiredEvidence "clean-and-inactive" ;
+    dm:requiredEvidence "default-branch-or-review-state-resolved" ;
+    dm:requiredEvidence "unique-exact-head-or-commit-associated-pull-request" ;
+    dm:requiredEvidence "remote-reclone-recoverability" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:GitPullRequestAssociationEvidence a owl:Class ;
+    rdfs:label "Git PR 연결 증거"@ko , "Git pull-request association evidence"@en .
+
+dm:ExactPullRequestHeadEvidence a owl:Class ;
+    rdfs:subClassOf dm:GitPullRequestAssociationEvidence ;
+    rdfs:label "정확한 PR HEAD 증거"@ko , "Exact pull-request HEAD evidence"@en .
+
+dm:CommitAssociatedPullRequestEvidence a owl:Class ;
+    rdfs:subClassOf dm:GitPullRequestAssociationEvidence ;
+    rdfs:label "커밋 연계 PR 증거"@ko , "Commit-associated pull-request evidence"@en .
+
+dm:CloudBackedFile a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "클라우드 보관 파일"@ko , "Cloud-backed file"@en ;
+    dm:allowedAction "evict-local-copy" ;
+    dm:requiredEvidence "authenticated-provider" ;
+    dm:requiredEvidence "remote-content-identity" ;
+    dm:requiredEvidence "provider-sync-complete" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:ExactDuplicate a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "완전 중복"@ko , "Exact duplicate"@en ;
+    dm:allowedAction "trash-redundant-copy" ;
+    dm:requiredEvidence "full-content-digest-equality" ;
+    dm:requiredEvidence "canonical-copy-selected" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:SimilarImage a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "유사 이미지"@ko , "Similar image"@en ;
+    dm:reclaimPolicy "human-selection-required" ;
+    dm:allowedAction "trash-lower-quality-copy" ;
+    dm:requiredEvidence "decoded-image-similarity" ;
+    dm:requiredEvidence "resolution-and-quality-comparison" ;
+    dm:requiredEvidence "fresh-human-approval" .
+
+dm:DatabaseRelation a owl:Class ;
+    rdfs:subClassOf dm:StorageArtifact ;
+    rdfs:label "데이터베이스 관계"@ko , "Database relation"@en .
+
+dm:SemanticDuplicateRelation a owl:Class ;
+    rdfs:subClassOf dm:DatabaseRelation ;
+    rdfs:label "의미상 중복 관계"@ko , "Semantic duplicate relation"@en ;
+    dm:allowedAction "drop-redundant-relation" ;
+    dm:requiredEvidence "schema-normalization-explicit" ;
+    dm:requiredEvidence "bidirectional-multiset-difference-empty" ;
+    dm:requiredEvidence "dependency-and-active-use-absent" ;
+    dm:requiredEvidence "canonical-relation-selected" ;
+    dm:requiredEvidence "fresh-human-approval" .

@@ -8,11 +8,13 @@ use crate::scanner;
 // a partial observation into permission to move a recreated directory to the trash.
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
+const ARTIFACT_ACTIVE_USE_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
     pub path: String,
     pub kind: String,
+    pub ontology_class: String,
     pub project: String,
     pub bytes: u64,
     pub files: u64,
@@ -50,6 +52,37 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 fn is_regular_marker(path: &Path) -> bool {
     path.symlink_metadata()
         .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+fn ontology_class(kind: &str) -> &'static str {
+    match kind {
+        "target" => "https://disksage.app/ontology#RustBuildArtifact",
+        "node_modules" | ".venv" | "venv" | "__pycache__" => {
+            "https://disksage.app/ontology#BuildArtifact"
+        }
+        ".codegraph" => "https://disksage.app/ontology#CodeIndexArtifact",
+        _ => "https://disksage.app/ontology#RegenerableArtifact",
+    }
+}
+
+fn active_use_blocker(
+    evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
+) -> Option<&'static str> {
+    if !evidence.assessed || !evidence.evidence_complete {
+        Some("development-artifact-active-use-evidence-incomplete")
+    } else if evidence.active {
+        Some("development-artifact-active-use-detected")
+    } else {
+        None
+    }
+}
+
+fn active_use_probe_path(path: &Path) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+    }
 }
 
 fn age_days(path: &Path, now_ms: u64) -> u64 {
@@ -196,6 +229,7 @@ pub fn inspect_artifact_with_budget(
     Some(DevArtifact {
         path: path.to_string_lossy().into_owned(),
         kind: kind.to_string(),
+        ontology_class: ontology_class(kind).into(),
         project: parent.file_name()?.to_string_lossy().into_owned(),
         bytes: manifest.bytes,
         files: manifest.files,
@@ -237,6 +271,64 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+fn discover_root_candidate(root: &Path) -> Option<PathBuf> {
+    let entry = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .max_depth(0)
+        .into_iter()
+        .next()?
+        .ok()?;
+    if !entry.file_type().is_dir() || !scanner::keep_entry(&entry) {
+        return None;
+    }
+    let path = entry.path();
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let (_, markers) = artifact_kind(&name)?;
+    let parent = path.parent().unwrap_or(root);
+    (markers.is_empty()
+        || markers
+            .iter()
+            .any(|marker| is_regular_marker(&parent.join(marker))))
+    .then(|| path.to_path_buf())
+}
+
+fn discover_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
+    while let Some(entry) = walker.next() {
+        let Ok(entry) = entry else { continue };
+        if !scanner::keep_entry(&entry) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
+        let parent = path.parent().unwrap_or(root);
+        if markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker)))
+        {
+            candidates.push(path.to_path_buf());
+            walker.skip_current_dir();
+        }
+    }
+    candidates
+}
+
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
 /// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
@@ -246,35 +338,32 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    let walker = walkdir::WalkDir::new(root)
-        .follow_links(false)
+    // ponytail: generated trees are metadata-I/O bound; cap at 32 until measurements justify a
+    // device-aware scheduler.
+    let worker_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .saturating_mul(4)
+        .min(32);
+    let root_candidate = discover_root_candidate(root);
+    let children = std::fs::read_dir(root)
         .into_iter()
-        .filter_entry(|entry| {
-            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            entry.depth() == 0 || scanner::keep_entry(entry)
-        });
-
-    for entry in walker {
-        let Ok(e) = entry else { continue };
-        if !e.file_type().is_dir() {
-            continue;
-        }
-        let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        let Some((_, markers)) = artifact_kind(&name) else {
-            continue;
-        };
-        let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty()
-            || markers
-                .iter()
-                .any(|marker| is_regular_marker(&parent.join(marker)));
-        if marker_ok {
-            candidates.push(path.to_path_buf());
-        }
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            (file_type.is_dir() && !file_type.is_symlink()).then(|| entry.path())
+        })
+        .collect();
+    let mut candidates: Vec<PathBuf> =
+        crate::stale_git_clone::bounded_parallel_map(children, worker_count, |path| {
+            discover_candidates(&path)
+        })
+        .into_iter()
+        .flatten()
+        .collect();
+    if let Some(root_candidate) = root_candidate {
+        candidates.push(root_candidate);
     }
 
     // 다른 후보의 하위 경로(중첩 아티팩트)는 제거 — 방문 순서에 의존하지 않는 비교
@@ -290,24 +379,26 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .map(|(_, p)| p.as_path())
         .collect();
 
-    let mut found: Vec<DevArtifact> = top_level
-        .into_iter()
-        .filter_map(|path| {
+    let paths = top_level.into_iter().map(Path::to_path_buf).collect();
+    let root = root.to_path_buf();
+    let mut found: Vec<DevArtifact> =
+        crate::stale_git_clone::bounded_parallel_map(paths, worker_count, move |path| {
             let age = if now_ms == u64::MAX {
                 u64::MAX
             } else {
-                age_days(path, now_ms)
+                age_days(&path, now_ms)
             };
             if age < min_age_days {
                 return None;
             }
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
-            let parent = path.parent().unwrap_or(root);
-            let manifest = artifact_manifest(path);
+            let parent = path.parent().unwrap_or(&root);
+            let manifest = artifact_manifest(&path);
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
+                ontology_class: ontology_class(kind).into(),
                 project: parent
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -321,8 +412,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 age_days: if age == u64::MAX { 0 } else { age },
             })
         })
+        .into_iter()
+        .flatten()
         .collect();
-
     found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     found
 }
@@ -339,54 +431,117 @@ pub fn clean_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
-    let current = find_artifacts(root, min_age_days, now_ms);
-    requests
+    let mut seen_paths = std::collections::BTreeSet::new();
+    if requests
         .iter()
-        .map(|request| {
-            let matches = current.iter().find(|candidate| {
-                candidate.path == request.path
-                    && candidate.kind == request.kind
-                    && candidate.project == request.project
-                    && candidate.bytes == request.bytes
-                    && candidate.files == request.files
-                    && candidate.skipped == request.skipped
-                    && candidate.scan_complete
-                    && request.scan_complete
-                    && request.skipped == 0
-                    && candidate.fingerprint == request.fingerprint
-                    && !request.object_id.is_empty()
-                    && candidate.object_id == request.object_id
-                    && candidate.age_days >= request.age_days
-            });
+        .any(|request| !seen_paths.insert(request.path.as_str()))
+    {
+        return requests
+            .iter()
+            .map(|request| DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: false,
+                error: "duplicate development artifact cleanup request path; rescan before cleanup"
+                    .into(),
+            })
+            .collect();
+    }
 
-            if matches.is_none() {
-                return DevArtifactCleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
-                };
-            }
+    let current = find_artifacts(root, min_age_days, now_ms);
+    let active_use = crate::stale_git_clone::bounded_parallel_map(
+        requests
+            .iter()
+            .map(|request| PathBuf::from(&request.path))
+            .collect(),
+        8,
+        |path| {
+            let Some(probe_path) = active_use_probe_path(&path) else {
+                return (
+                    path,
+                    Some("development-artifact-active-use-evidence-incomplete"),
+                );
+            };
+            let evidence = crate::git_worktree::active_use_evidence(
+                &probe_path,
+                ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            (path, active_use_blocker(&evidence))
+        },
+    )
+    .into_iter()
+    .collect::<std::collections::BTreeMap<_, _>>();
+    let current = std::sync::Arc::new(current);
+    let active_use = std::sync::Arc::new(active_use);
+    let requests = std::sync::Arc::new(
+        requests
+            .iter()
+            .cloned()
+            .map(|request| (PathBuf::from(&request.path), request))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    );
+    let paths = requests.keys().cloned().collect();
+    let journal_path = journal_path.to_path_buf();
+    crate::stale_git_clone::bounded_parallel_map(paths, 8, move |path| {
+        let current = std::sync::Arc::clone(&current);
+        let active_use = std::sync::Arc::clone(&active_use);
+        let request = requests
+            .get(&path)
+            .expect("cleanup request path must remain indexed")
+            .clone();
+        let matches = current.iter().find(|candidate| {
+            candidate.path == request.path
+                && candidate.kind == request.kind
+                && candidate.ontology_class == request.ontology_class
+                && candidate.project == request.project
+                && candidate.bytes == request.bytes
+                && candidate.files == request.files
+                && candidate.skipped == request.skipped
+                && candidate.scan_complete
+                && request.scan_complete
+                && request.skipped == 0
+                && candidate.fingerprint == request.fingerprint
+                && !request.object_id.is_empty()
+                && candidate.object_id == request.object_id
+                && candidate.age_days >= request.age_days
+        });
 
-            match crate::safety::trash_delete_if_identity(
-                Path::new(&request.path),
-                &request.object_id,
-                request.bytes,
-                journal_path,
-                now_ms,
-            ) {
-                Ok(()) => DevArtifactCleanResult {
-                    path: request.path.clone(),
-                    ok: true,
-                    error: String::new(),
-                },
-                Err(error) => DevArtifactCleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: error.to_string(),
-                },
-            }
-        })
-        .collect()
+        if matches.is_none() {
+            return DevArtifactCleanResult {
+                path: request.path,
+                ok: false,
+                error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+            };
+        }
+
+        if let Some(blocker) = active_use.get(Path::new(&request.path)).copied().flatten() {
+            return DevArtifactCleanResult {
+                path: request.path,
+                ok: false,
+                error: blocker.into(),
+            };
+        }
+
+        match crate::safety::trash_delete_if_identity(
+            Path::new(&request.path),
+            &request.object_id,
+            request.bytes,
+            &journal_path,
+            now_ms,
+        ) {
+            Ok(()) => DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: true,
+                error: String::new(),
+            },
+            Err(error) => DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: false,
+                error: error.to_string(),
+            },
+        }
+    })
 }
 
 /// Revalidate and trash one explicitly selected artifact without scanning sibling projects.
@@ -395,10 +550,12 @@ pub fn clean_artifact_exact(
     journal_path: &Path,
     now_ms: u64,
 ) -> DevArtifactCleanResult {
-    let current = inspect_artifact(Path::new(&request.path), now_ms);
+    let path = Path::new(&request.path);
+    let current = inspect_artifact(path, now_ms);
     let unchanged = current.as_ref().is_some_and(|candidate| {
         candidate.path == request.path
             && candidate.kind == request.kind
+            && candidate.ontology_class == request.ontology_class
             && candidate.project == request.project
             && candidate.bytes == request.bytes
             && candidate.files == request.files
@@ -417,8 +574,28 @@ pub fn clean_artifact_exact(
             error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
         };
     }
+    let Some(probe_path) = active_use_probe_path(path) else {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: "development-artifact-active-use-evidence-incomplete".into(),
+        };
+    };
+    let active_use = crate::git_worktree::active_use_evidence(
+        &probe_path,
+        ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
+        crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+        true,
+    );
+    if let Some(blocker) = active_use_blocker(&active_use) {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: blocker.into(),
+        };
+    }
     match crate::safety::trash_delete_if_identity(
-        Path::new(&request.path),
+        path,
         &request.object_id,
         request.bytes,
         journal_path,
@@ -479,6 +656,18 @@ mod tests {
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+        assert_eq!(
+            nm.ontology_class,
+            "https://disksage.app/ontology#BuildArtifact"
+        );
+        assert_eq!(
+            found
+                .iter()
+                .find(|a| a.kind == "target")
+                .unwrap()
+                .ontology_class,
+            "https://disksage.app/ontology#RustBuildArtifact"
+        );
     }
 
     #[cfg(unix)]
@@ -560,5 +749,30 @@ mod tests {
             !journal.exists(),
             "stale identity must not create a journal"
         );
+    }
+
+    #[test]
+    fn active_or_incomplete_use_evidence_blocks_cleanup() {
+        let mut evidence = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            method: "test".into(),
+            assessed: true,
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-evidence-incomplete")
+        );
+        evidence.evidence_complete = true;
+        evidence.active = true;
+        assert_eq!(
+            active_use_blocker(&evidence),
+            Some("development-artifact-active-use-detected")
+        );
+        evidence.active = false;
+        assert_eq!(active_use_blocker(&evidence), None);
     }
 }

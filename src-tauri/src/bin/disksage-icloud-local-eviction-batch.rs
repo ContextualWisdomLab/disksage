@@ -70,7 +70,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--manifest") => {
                 if manifest.is_some() {
@@ -88,8 +92,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if approved_batch_fingerprint.is_some() {
                     return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                approved_batch_fingerprint =
-                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
+                approved_batch_fingerprint = Some(text_value(
+                    args,
+                    &mut index,
+                    "--approved-batch-fingerprint",
+                )?)
             }
             Some("--confirm-batch-fingerprint") => {
                 if confirm_batch_fingerprint.is_some() {
@@ -114,7 +121,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
             Some(_) => return Err("알 수 없는 인자".into()),
@@ -219,7 +230,7 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     match matches.as_slice() {
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
         [only] if only.provider == CloudProvider::Icloud => Ok(*only),
-        [_] => Err("iCloud root가 필요함".into()),
+        [_] => Err("icloud-local-eviction-root-required".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
 }
@@ -456,6 +467,9 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    if disksage_lib::cloud_local_eviction::run_native_icloud_eviction_helper_if_requested() {
+        return;
+    }
     if let Err(error) = run() {
         if error == HELP_REQUESTED {
             println!("{}", usage());

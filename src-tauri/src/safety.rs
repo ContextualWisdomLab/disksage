@@ -100,11 +100,18 @@ pub fn is_protected(path: &Path) -> bool {
         // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
         // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
         #[allow(unused_mut)]
-        let mut denied_prefixes: Vec<&str> =
-            vec!["/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev"];
+        let mut denied_prefixes: Vec<&str> = vec![
+            "/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev",
+        ];
         #[cfg(target_os = "macos")]
         denied_prefixes.extend_from_slice(&[
-            "/System", "/Library", "/Applications", "/private", "/Volumes", "/cores", "/Network",
+            "/System",
+            "/Library",
+            "/Applications",
+            "/private",
+            "/Volumes",
+            "/cores",
+            "/Network",
         ]);
         let s = path.to_string_lossy();
         if denied_prefixes
@@ -194,8 +201,13 @@ fn journal_serde_err(e: serde_json::Error) -> SafetyError {
 }
 
 /// 파괴적 작업 저널 — 실행 전 "pending"으로 먼저 기록되고 결과로 덧붙는다 (스펙 §7-4)
+static JOURNAL_APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
     use std::io::{Read, Seek, SeekFrom, Write};
+    let _guard = JOURNAL_APPEND_LOCK
+        .lock()
+        .map_err(|_| SafetyError::Journal("journal append lock poisoned".into()))?;
     let line = serde_json::to_string(entry).map_err(journal_serde_err)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -203,6 +215,11 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
         .append(true)
         .open(journal_path)
         .map_err(journal_io_err)?;
+    // The desktop process and audited CLIs intentionally share the same journal. Serialize the
+    // read-tail/heal/append sequence across processes as well as threads so two writers cannot
+    // inspect the same torn tail or interleave recovery evidence. fs4 uses flock on Unix and
+    // LockFileEx on Windows; the lock is advisory, so every DiskSage writer goes through here.
+    fs4::FileExt::lock(&f).map_err(journal_io_err)?;
     // 크래시로 개행 없이 끊긴 꼬리가 있으면 개행을 먼저 넣어 다음 엔트리와의 병합을 막는다 (자가 치유)
     let mut healing = String::new();
     let len = f.seek(SeekFrom::End(0)).map_err(journal_io_err)?;
@@ -220,7 +237,9 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
-    let Ok(content) = std::fs::read_to_string(journal_path) else { return Vec::new() };
+    let Ok(content) = std::fs::read_to_string(journal_path) else {
+        return Vec::new();
+    };
     let mut entries: Vec<JournalEntry> = content
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -236,7 +255,9 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
 fn strip_verbatim(p: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
     let mut comps = p.components();
-    let Some(Component::Prefix(pr)) = comps.next() else { return p.to_path_buf() };
+    let Some(Component::Prefix(pr)) = comps.next() else {
+        return p.to_path_buf();
+    };
     match pr.kind() {
         Prefix::VerbatimDisk(d) => {
             let mut out = PathBuf::from(format!("{}:\\", d as char));
@@ -297,12 +318,16 @@ pub fn trash_delete(
     now_ms: u64,
 ) -> Result<(), SafetyError> {
     // '..'는 lexical 가드를 우회해 보호 경로 밖으로 보이게 할 수 있음 — 컴포넌트 단위로 먼저 거부
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
     // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
-    let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     if is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -332,26 +357,18 @@ pub fn trash_delete(
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
-    let parent = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
     let pid = std::process::id();
     for _ in 0..32 {
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(
-            ".disksage-trash-{}-{}-{}",
-            pid, now_ms, serial
-        ));
+        let candidate = parent.join(format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial));
         match std::fs::create_dir(&candidate) {
             Ok(()) => {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &candidate,
-                        std::fs::Permissions::from_mode(0o700),
-                    )?;
+                    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
                 }
                 return Ok(candidate);
             }
@@ -380,12 +397,8 @@ fn restore_staged_if_source_absent(
             staged.display()
         ));
     }
-    std::fs::rename(staged, path).map_err(|error| {
-        format!(
-            "staged restore failed for {}: {error}",
-            staged.display()
-        )
-    })?;
+    std::fs::rename(staged, path)
+        .map_err(|error| format!("staged restore failed for {}: {error}", staged.display()))?;
     std::fs::remove_dir(staging_dir).map_err(|error| {
         format!(
             "staging directory cleanup failed for {}: {error}",
@@ -395,11 +408,91 @@ fn restore_staged_if_source_absent(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn rename_macos_no_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "trash source path contains an embedded NUL byte",
+        )
+    })?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "trash destination path contains an embedded NUL byte",
+        )
+    })?;
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn move_staged_with_native_volume_trash(staged: &Path) -> Result<(), String> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+    let mut context = trash::TrashContext::new();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(staged).map_err(|error| error.to_string())
+}
+
 /// Move the exact reviewed filesystem object into a private sibling staging directory before
 /// handing it to the OS trash. The initial identity check prevents a stale path from being used;
 /// the atomic rename plus a second identity check prevents a replacement that wins the race from
 /// being trashed. If either check fails, the object is restored when the original path is free;
 /// it is never silently deleted under a different identity.
+#[cfg(target_os = "macos")]
+fn move_staged_to_user_trash(staged: &Path, now_ms: u64) -> Result<(), String> {
+    static TRASH_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "home directory unavailable".to_string())?;
+    let trash_root = home.join(".Trash");
+    if !same_volume(staged, &trash_root) {
+        // NSFileManager resolves the Trash directory on the staged object's own mounted volume.
+        // Keep the identity-bound sibling staging move above this boundary; on native-trash
+        // failure the caller restores that same staged object to the reviewed pathname. This path
+        // must not depend on the home volume's .Trash directory being present.
+        return move_staged_with_native_volume_trash(staged);
+    }
+    let metadata = std::fs::symlink_metadata(&trash_root).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("user trash is unavailable".into());
+    }
+    let name = staged
+        .file_name()
+        .ok_or_else(|| "staged object has no filename".to_string())?;
+    let pid = std::process::id();
+    for _ in 0..1_000u32 {
+        let sequence = TRASH_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let destination = trash_root.join(format!(
+            "disksage-{now_ms}-{pid}-{sequence}-{}",
+            name.to_string_lossy()
+        ));
+        match rename_macos_no_replace(staged, &destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("user trash destination namespace exhausted".into())
+}
+
 pub fn trash_delete_if_identity(
     path: &Path,
     expected_object_id: &str,
@@ -407,12 +500,14 @@ pub fn trash_delete_if_identity(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    let guard_path = strip_verbatim(
-        &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
-    );
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     if is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -451,7 +546,9 @@ pub fn trash_delete_if_identity(
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
             let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
             match restore {
-                Ok(()) => SafetyError::Trash(format!("staged object identity unavailable: {error}")),
+                Ok(()) => {
+                    SafetyError::Trash(format!("staged object identity unavailable: {error}"))
+                }
                 Err(restore_error) => SafetyError::Trash(format!(
                     "staged object identity unavailable: {error}; {restore_error}"
                 )),
@@ -467,13 +564,16 @@ pub fn trash_delete_if_identity(
                 ))),
             };
         }
-        if let Err(error) = trash::delete(&staged) {
+        #[cfg(target_os = "macos")]
+        let trash_result = move_staged_to_user_trash(&staged, now_ms);
+        #[cfg(not(target_os = "macos"))]
+        let trash_result = trash::delete(&staged).map_err(|error| error.to_string());
+        if let Err(error) = trash_result {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
-                Err(restore_error) => Err(SafetyError::Trash(format!(
-                    "{}; {restore_error}",
-                    error
-                ))),
+                Err(restore_error) => {
+                    Err(SafetyError::Trash(format!("{}; {restore_error}", error)))
+                }
             };
         }
         // Keep the empty identity-staging directory after a successful OS-trash move. The trash
@@ -497,7 +597,9 @@ pub fn same_volume(src: &Path, dst: &Path) -> bool {
     {
         fn drive(p: &Path) -> Option<String> {
             p.components().next().and_then(|c| match c {
-                std::path::Component::Prefix(pr) => Some(pr.as_os_str().to_string_lossy().to_lowercase()),
+                std::path::Component::Prefix(pr) => {
+                    Some(pr.as_os_str().to_string_lossy().to_lowercase())
+                }
                 _ => None,
             })
         }
@@ -527,7 +629,10 @@ fn copy_then_hash(
 ) -> std::io::Result<(u64, u64, Result<String, String>, Result<String, String>)> {
     {
         let mut src_file = std::fs::File::open(src)?;
-        let mut dst_file = std::fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+        let mut dst_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)?;
         std::io::copy(&mut src_file, &mut dst_file)?;
         // 핸들을 여기서 닫아 이후 metadata/hash_full이 경로로 다시 읽을 때 걸리지 않게 함
     }
@@ -557,7 +662,10 @@ fn finalize_verified_copy(dst: &Path, verified: bool) -> std::io::Result<()> {
         Ok(())
     } else {
         let _ = std::fs::remove_file(dst); // 우리가 만든 목적지이므로 정리
-        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "복사 검증 실패",
+        ))
     }
 }
 
@@ -579,7 +687,10 @@ fn preserve_source_metadata(src: &Path, dst: &Path) -> std::io::Result<()> {
     if let Ok(accessed) = src_md.accessed() {
         times = times.set_accessed(accessed);
     }
-    std::fs::OpenOptions::new().write(true).open(dst)?.set_times(times)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(dst)?
+        .set_times(times)?;
     // 권한은 **마지막**에 복원한다(원본이 읽기 전용이어도 위 set_times가 이미 끝난 뒤라 안전).
     // set_permissions는 mtime이 아니라 ctime만 바꾸므로 방금 설정한 mtime을 훼손하지 않는다.
     std::fs::set_permissions(dst, src_md.permissions())?;
@@ -673,7 +784,9 @@ pub fn move_file(
 ) -> Result<(), SafetyError> {
     // 보호: src·dst 양쪽, ParentDir 거부, verbatim 정규화 — trash_delete와 동일 리거
     for p in [src, dst] {
-        if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
@@ -683,7 +796,10 @@ pub fn move_file(
     }
     // 목적지 충돌 금지 (덮어쓰기 방지)
     if dst.exists() {
-        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
+        return Err(SafetyError::Trash(format!(
+            "목적지가 이미 존재: {}",
+            dst.display()
+        )));
     }
     // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
     // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
@@ -740,9 +856,15 @@ mod tests {
 
     #[test]
     fn safety_error_display_messages() {
-        assert!(SafetyError::Protected(PathBuf::from("/x")).to_string().contains("보호"));
-        assert!(SafetyError::Trash("boom".into()).to_string().contains("휴지통"));
-        assert!(SafetyError::Journal("boom".into()).to_string().contains("저널"));
+        assert!(SafetyError::Protected(PathBuf::from("/x"))
+            .to_string()
+            .contains("보호"));
+        assert!(SafetyError::Trash("boom".into())
+            .to_string()
+            .contains("휴지통"));
+        assert!(SafetyError::Journal("boom".into())
+            .to_string()
+            .contains("저널"));
     }
 
     #[test]
@@ -754,7 +876,11 @@ mod tests {
     #[test]
     fn protects_home_root_but_not_home_children() {
         // 한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이 영구 미커버로 남는다
-        let home = if cfg!(windows) { std::env::var("USERPROFILE").unwrap() } else { std::env::var("HOME").unwrap() };
+        let home = if cfg!(windows) {
+            std::env::var("USERPROFILE").unwrap()
+        } else {
+            std::env::var("HOME").unwrap()
+        };
         assert!(is_protected(Path::new(&home)));
         assert!(!is_protected(&Path::new(&home).join("some-cache-dir")));
     }
@@ -771,7 +897,9 @@ mod tests {
         // 현재 머신의 실제 SystemRoot는 반드시 보호됨 (C:든 다른 드라이브든)
         let sysroot = std::env::var("SystemRoot").unwrap();
         assert!(is_protected(std::path::Path::new(&sysroot)));
-        assert!(is_protected(&std::path::Path::new(&sysroot).join("System32")));
+        assert!(is_protected(
+            &std::path::Path::new(&sysroot).join("System32")
+        ));
     }
 
     #[cfg(windows)]
@@ -849,7 +977,10 @@ mod tests {
         let root = if cfg!(windows) { "C:\\Windows" } else { "/usr" };
         let err = trash_delete(Path::new(root), 0, &jp, 1);
         assert!(matches!(err, Err(SafetyError::Protected(_))));
-        assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전에 일어나야 함");
+        assert!(
+            journal_recent(&jp, 10).is_empty(),
+            "보호 거부는 저널 이전에 일어나야 함"
+        );
     }
 
     #[test]
@@ -880,7 +1011,10 @@ mod tests {
         assert!(err.is_err());
         assert!(victim.exists(), "대체 객체는 삭제되지 않아야 함");
         assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
-        assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
+        assert!(
+            journal_recent(&jp, 10).is_empty(),
+            "stale identity는 저널/휴지통 전에 거부"
+        );
     }
 
     #[test]
@@ -945,7 +1079,11 @@ mod tests {
         let items: Vec<_> = trash::os_limited::list()
             .unwrap()
             .into_iter()
-            .filter(|i| i.name.to_string_lossy().contains("disksage-roundtrip-fixture"))
+            .filter(|i| {
+                i.name
+                    .to_string_lossy()
+                    .contains("disksage-roundtrip-fixture")
+            })
             .collect();
         assert!(!items.is_empty(), "휴지통에 있어야 함");
         trash::os_limited::purge_all(items).unwrap();
@@ -983,10 +1121,18 @@ mod tests {
             strip_verbatim(Path::new(r"\\?\UNC\srv\share\dir")),
             Path::new(r"\\srv\share\dir")
         );
-        assert_eq!(strip_verbatim(Path::new(r"C:\plain")), Path::new(r"C:\plain"));
-        assert_eq!(strip_verbatim(Path::new("relative/only")), Path::new("relative/only"));
+        assert_eq!(
+            strip_verbatim(Path::new(r"C:\plain")),
+            Path::new(r"C:\plain")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new("relative/only")),
+            Path::new("relative/only")
+        );
         // 재구성된 UNC 공유 루트는 parent가 없어 보호된다 (fail-closed 확인)
-        assert!(is_protected(&strip_verbatim(Path::new(r"\\?\UNC\srv\share"))));
+        assert!(is_protected(&strip_verbatim(Path::new(
+            r"\\?\UNC\srv\share"
+        ))));
     }
 
     #[test]
@@ -1017,12 +1163,26 @@ mod tests {
         let jp = tmp.path().join("j.jsonl");
         let f = tmp.path().join("f.bin");
         std::fs::write(&f, b"x").unwrap();
-        let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\x" } else { "/usr/x" });
+        let protected = std::path::PathBuf::from(if cfg!(windows) {
+            "C:\\Windows\\x"
+        } else {
+            "/usr/x"
+        });
         // 보호된 목적지
-        assert!(matches!(move_file(&f, &protected, &jp, 1), Err(SafetyError::Protected(_))));
+        assert!(matches!(
+            move_file(&f, &protected, &jp, 1),
+            Err(SafetyError::Protected(_))
+        ));
         // 보호된 출발
-        let pf = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\y" } else { "/usr/y" });
-        assert!(matches!(move_file(&pf, &tmp.path().join("z"), &jp, 1), Err(SafetyError::Protected(_))));
+        let pf = std::path::PathBuf::from(if cfg!(windows) {
+            "C:\\Windows\\y"
+        } else {
+            "/usr/y"
+        });
+        assert!(matches!(
+            move_file(&pf, &tmp.path().join("z"), &jp, 1),
+            Err(SafetyError::Protected(_))
+        ));
         assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
     }
 
@@ -1043,7 +1203,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nested").join("does-not-exist.bin");
         let expected_base = strip_verbatim(&std::fs::canonicalize(tmp.path()).unwrap());
-        assert_eq!(normalize_for_guard(&missing), expected_base.join("nested").join("does-not-exist.bin"));
+        assert_eq!(
+            normalize_for_guard(&missing),
+            expected_base.join("nested").join("does-not-exist.bin")
+        );
     }
 
     // Fix 2 회귀 테스트: 슬래시 없는 단일 상대 컴포넌트는 조상이 ""까지 내려가고 canonicalize("")도
@@ -1119,8 +1282,11 @@ mod tests {
         assert!(!src.exists(), "원본은 휴지통으로");
         assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
         // 원본이 휴지통에 있음 확인 후 테스트 픽스처만 purge
-        let items: Vec<_> = trash::os_limited::list().unwrap().into_iter()
-            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture")).collect();
+        let items: Vec<_> = trash::os_limited::list()
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture"))
+            .collect();
         trash::os_limited::purge_all(items).unwrap();
     }
 
@@ -1255,7 +1421,10 @@ mod tests {
         let err = move_file(&src, &dst, &jp, 1);
         assert!(matches!(err, Err(SafetyError::Trash(_))));
         assert!(src.exists(), "부모 생성 실패 시 원본 보존");
-        assert!(journal_recent(&jp, 10).is_empty(), "부모 생성 실패는 저널 이전에 실패");
+        assert!(
+            journal_recent(&jp, 10).is_empty(),
+            "부모 생성 실패는 저널 이전에 실패"
+        );
     }
 
     #[test]
@@ -1304,7 +1473,10 @@ mod tests {
         let err = || Err::<String, String>("read failed".into());
         assert!(!hashes_match(&err(), &ok(), 10, 10));
         assert!(!hashes_match(&ok(), &err(), 10, 10));
-        assert!(!hashes_match(&err(), &err(), 10, 10), "양쪽 다 실패해도 절대 일치로 읽히면 안 됨");
+        assert!(
+            !hashes_match(&err(), &err(), 10, 10),
+            "양쪽 다 실패해도 절대 일치로 읽히면 안 됨"
+        );
     }
 
     #[test]
