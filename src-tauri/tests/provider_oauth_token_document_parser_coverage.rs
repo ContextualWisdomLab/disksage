@@ -6,6 +6,8 @@
 //! These regressions include the production module so malformed and boundary responses exercise
 //! the shipped parser without contacting a provider, opening a browser, or touching the keyring.
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
