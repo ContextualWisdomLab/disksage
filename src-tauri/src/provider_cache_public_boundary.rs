@@ -15,17 +15,14 @@ const PERMANENT_PURGE_UNAVAILABLE: &str =
 /// Inspect provider-cache candidates without advertising an unavailable irreversible approval.
 ///
 /// The lower-level historical planner still carries a permanent-approval field for compatibility.
-/// The shipped product surface deliberately clears it until deletion authority is object-bound and
-/// recovery-complete on every supported platform where the mode is exposed.
+/// The shipped product surface deliberately clears only that authority. Read-only evidence issues
+/// and Trash approval remain unchanged so an unavailable irreversible mode cannot make reversible
+/// evidence appear incomplete.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn plan_provider_cache_reclaim() -> Result<ProviderCacheReclaimPlan, String> {
     let mut plan = crate::commands::plan_provider_cache_reclaim()?;
     plan.exact_approval_phrase = None;
-    if !plan.issues.iter().any(|issue| issue == PERMANENT_PURGE_UNAVAILABLE) {
-        plan.issues.push(PERMANENT_PURGE_UNAVAILABLE.into());
-        plan.issues.sort();
-    }
     Ok(plan)
 }
 
