@@ -228,7 +228,6 @@ export interface ProviderCacheReclaimPlan {
   candidates: ProviderCacheCandidate[];
   issues: string[];
   plan_fingerprint: string;
-  exact_approval_phrase: string | null;
   trash_approval_phrase: string | null;
 }
 
@@ -258,7 +257,6 @@ export const executeProviderCacheReclaim = (
   confirmPlanFingerprint,
   confirmationPhrase,
   rationale,
-  mode: "trash",
 });
 
 export interface PodmanDanglingImagePruneExecution {
