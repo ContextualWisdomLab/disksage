@@ -8,27 +8,37 @@ fn provider_oauth_source() -> String {
 }
 
 #[test]
-fn oauth_connection_publication_is_descriptor_bound_on_unix() {
+fn oauth_connection_publication_consumes_the_object_bound_owner() {
     let source = provider_oauth_source();
 
     assert!(
-        source.contains("libc::openat("),
-        "connection-document temporary creation must be relative to a pinned directory descriptor"
-    );
-    assert!(
-        source.contains("libc::renameat("),
-        "connection-document replacement must remain relative to the pinned directory descriptor"
-    );
-    assert!(
-        source.contains("libc::unlinkat("),
-        "failure cleanup must not be redirected through a replaced pathname ancestor"
+        source.contains("crate::object_bound_publication::replace_object_bound_bytes"),
+        "provider OAuth must consume the canonical object-bound replacement primitive"
     );
     assert!(
         source.contains("oauth-connection-directory-sync-failed"),
-        "successful replacement must distinguish file-data sync from containing-directory sync"
+        "containing-directory durability failure must remain a stable OAuth-domain error"
     );
     assert!(
-        !source.contains("std::fs::rename(&temporary, path)"),
-        "pathname rename reintroduces the ancestor-replacement publication race"
+        source.contains("oauth-connection-document-publication-uncertain"),
+        "post-publication namespace drift must not be reported as a clean rollback"
     );
+    assert!(
+        source.contains("oauth-connection-document-object-bound-publication-unavailable"),
+        "platforms without object-bound publication must fail closed without a pathname fallback"
+    );
+
+    for forbidden in [
+        "std::fs::rename(&temporary, path)",
+        "std::fs::remove_file(&temporary)",
+        "options.open(&temporary)",
+        "libc::openat(",
+        "libc::renameat(",
+        "libc::unlinkat(",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "provider OAuth must not duplicate or bypass the canonical publication owner: {forbidden}"
+        );
+    }
 }
