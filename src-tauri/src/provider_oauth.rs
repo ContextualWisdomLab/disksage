@@ -13,6 +13,14 @@ use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+mod provider_oauth_test_private_directory_publication {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/private_directory_publication.rs"
+    ));
+}
+
 #[cfg(not(coverage))]
 use std::io::Write;
 #[cfg(not(coverage))]
@@ -459,28 +467,26 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     Ok(document.connections)
 }
 
-fn map_connection_publication_error(
-    error: crate::object_bound_publication::ObjectBoundReplaceError,
-) -> String {
-    use crate::object_bound_publication::ObjectBoundReplaceError as Error;
+#[cfg(test)]
+fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    provider_oauth_test_private_directory_publication::write_private_bytes_create_new_with_parents(
+        path, encoded, 0o600, 0o700,
+    )
+}
 
-    let code = match error {
-        Error::ParentMissing | Error::ParentUnavailable => "oauth-connection-directory-unavailable",
-        Error::ParentUnsafe => "oauth-connection-directory-unsafe",
-        Error::ParentWritableByOthers => "oauth-connection-directory-writable-by-others",
-        Error::ParentIdentityDrift => "oauth-connection-directory-identity-drift",
-        Error::NameInvalid => "oauth-connection-document-path-invalid",
-        Error::TargetUnsafe => "oauth-connection-document-not-regular-file",
-        Error::TargetUnavailable | Error::RenameFailed => "oauth-connection-document-replace-failed",
-        Error::TemporaryCreateFailed => "oauth-connection-document-create-failed",
-        Error::ModeInvalid => "oauth-connection-document-permissions-unsafe",
-        Error::WriteFailed => "oauth-connection-document-write-failed",
-        Error::CleanupFailed => "oauth-connection-document-cleanup-failed",
-        Error::DirectorySyncFailed => "oauth-connection-directory-sync-failed",
-        Error::PostPublishParentIdentityDrift => "oauth-connection-document-publication-uncertain",
-        Error::UnsupportedPlatform => "oauth-connection-document-object-bound-publication-unavailable",
-    };
-    code.into()
+#[cfg(not(test))]
+fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    crate::private_directory_publication::write_private_bytes_create_new_with_parents(
+        path, encoded, 0o600, 0o700,
+    )
+}
+
+fn map_connection_create_new_error(error: String) -> String {
+    if error == "private-directory-publication-unsupported" {
+        "oauth-connection-document-object-bound-publication-unavailable".into()
+    } else {
+        format!("oauth-connection-document-create-failed:{error}")
+    }
 }
 
 fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), String> {
@@ -502,8 +508,6 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     }
     let parent = connection_document_parent(path);
     validate_connection_document_parent(parent, true)?;
-    std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
-    validate_connection_document_parent(parent, false)?;
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err("oauth-connection-document-not-regular-file".into());
@@ -514,8 +518,7 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err("oauth-connection-document-unavailable".into()),
     }
-    crate::object_bound_publication::replace_object_bound_bytes(path, &encoded, 0o600)
-        .map_err(map_connection_publication_error)
+    write_connection_document_create_new(path, &encoded).map_err(map_connection_create_new_error)
 }
 
 pub fn connection_for_root(
@@ -640,7 +643,7 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 
 fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(value.len());
+    let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
