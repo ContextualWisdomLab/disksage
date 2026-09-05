@@ -167,3 +167,31 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
         "the shipped CLI must not import the crate-private historical executor"
     );
 }
+
+#[test]
+fn lower_level_permanent_purge_fails_closed_before_receipt_or_mutation() {
+    let implementation = source("src/provider_cache_reclaim.rs");
+    let execute_start = implementation
+        .find("pub fn execute(")
+        .expect("historical lower-level execute boundary must remain inspectable");
+    let execute_body = &implementation[execute_start..];
+
+    let guard = execute_body
+        .find("if mode == ProviderCacheCleanupMode::PermanentPurge")
+        .expect("lower-level execution must reject irreversible mode explicitly");
+    let rejection = execute_body[guard..]
+        .find("provider-cache-identity-bound-permanent-delete-unavailable")
+        .map(|offset| guard + offset)
+        .expect("irreversible mode must use the stable unavailable error");
+    let receipt = execute_body
+        .find("write_immutable_receipt(")
+        .expect("Trash execution must keep immutable approval receipts");
+    let mutation = execute_body
+        .find("permanently_purge_exact(&candidate")
+        .expect("historical purge implementation remains repair evidence until safely retired");
+
+    assert!(
+        guard < rejection && rejection < receipt && rejection < mutation,
+        "irreversible mode must fail closed before receipt creation or pathname-based permanent mutation"
+    );
+}
