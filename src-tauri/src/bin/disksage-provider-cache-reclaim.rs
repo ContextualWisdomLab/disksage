@@ -1,5 +1,6 @@
 use disksage_lib::provider_cache_reclaim::{
     execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
+    ProviderCacheReclaimPlan,
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,17 @@ fn cleanup_mode(args: &[String]) -> Result<ProviderCacheCleanupMode, String> {
     } else {
         Err("--trash is required".into())
     }
+}
+
+fn public_plan(
+    home: &Path,
+    applications: &Path,
+    podman: &Path,
+    observed_at_ms: u64,
+) -> ProviderCacheReclaimPlan {
+    let mut plan = plan_with_runtime(home, applications, podman, observed_at_ms);
+    plan.exact_approval_phrase = None;
+    plan
 }
 
 fn value(args: &[String], flag: &str) -> Result<String, String> {
@@ -114,7 +126,7 @@ fn run() -> Result<serde_json::Value, String> {
     .find(|path| path.is_file())
     .unwrap_or_else(|| PathBuf::from("podman"));
     match action {
-        "plan" if args.len() == 1 => serde_json::to_value(plan_with_runtime(
+        "plan" if args.len() == 1 => serde_json::to_value(public_plan(
             &home,
             std::path::Path::new("/Applications"),
             &podman,
@@ -189,5 +201,17 @@ mod tests {
     fn trash_mode_remains_available() {
         let args = vec!["execute".to_string(), "--trash".to_string()];
         assert_eq!(cleanup_mode(&args), Ok(ProviderCacheCleanupMode::Trash));
+    }
+
+    #[test]
+    fn public_plan_does_not_advertise_irreversible_approval() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan = public_plan(
+            temp.path(),
+            temp.path(),
+            Path::new("/missing/podman"),
+            1,
+        );
+        assert!(plan.exact_approval_phrase.is_none());
     }
 }
