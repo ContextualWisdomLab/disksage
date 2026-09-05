@@ -438,7 +438,7 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        if metadata.permissions().mode() & 0o7777 != 0o600 {
             return Err("oauth-connection-document-permissions-unsafe".into());
         }
     }
