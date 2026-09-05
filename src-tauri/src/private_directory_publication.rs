@@ -165,8 +165,13 @@ fn revalidate_chain(
 }
 
 #[cfg(unix)]
-fn invalidate_exact_record(file: &fs::File, directory: &fs::File) -> Result<(), String> {
+fn invalidate_exact_record(
+    file: &fs::File,
+    directory: &fs::File,
+    file_mode: u32,
+) -> Result<(), String> {
     file.set_len(0)
+        .and_then(|_| file.set_permissions(fs::Permissions::from_mode(file_mode)))
         .and_then(|_| file.sync_all())
         .and_then(|_| directory.sync_all())
         .map_err(|_| "private-directory-publication-invalidation-failed".to_string())
@@ -176,7 +181,8 @@ fn invalidate_exact_record(file: &fs::File, directory: &fs::File) -> Result<(), 
 /// pinned directory descriptors. Existing ancestors are admission-only and are never chmodded.
 /// Missing descendants are created at mode 0700 with `mkdirat`, opened with `O_NOFOLLOW`, and fsynced
 /// before the final record is created relative to the pinned leaf directory. Namespace drift fails
-/// closed; after record creation, failure invalidates only the exact open record.
+/// closed; after record creation, failure truncates the exact open record, restores its requested
+/// private file mode through that same descriptor, and syncs the record and admitted directory.
 #[cfg(unix)]
 pub(crate) fn write_private_bytes_create_new_with_parents(
     path: &Path,
@@ -377,7 +383,7 @@ where
     })();
 
     if let Err(error) = publication {
-        invalidate_exact_record(&file, final_parent)?;
+        invalidate_exact_record(&file, final_parent, file_mode)?;
         return Err(error);
     }
     Ok(())
