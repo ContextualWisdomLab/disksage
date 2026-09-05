@@ -17,9 +17,11 @@ lower-level implementation in this branch stages an exact Podman seed with a sam
 rename and then removes it. Its identity/content checks, double fingerprint confirmation, private
 receipt, and terminal journal improve evidence but do not bind the irreversible mutation to the same
 validated filesystem object/directory authority across ancestor replacement, crash recovery, and all
-supported platforms. The historical helper is retained inside the application crate only as repair
-and test evidence. The lower-level production `execute` boundary now rejects `PermanentPurge` before
-re-planning, receipt creation, or mutation, so that helper is not production mutation authority.
+supported platforms. The pathname-staged implementation is retained only behind `#[cfg(test)]` as
+repair and fixture evidence. The lower-level production `execute` boundary rejects
+`PermanentPurge` before re-planning or receipt creation and, after that guard, contains only the Trash
+execution path. Production code therefore has no static call edge to the historical permanent-purge
+helper.
 
 Earlier active DiskSage owner lineages already allocate ADR-0012 through ADR-0022. This decision uses
 ADR-0023 rather than reusing an immutable architecture identity. It remains Proposed until its
@@ -58,11 +60,14 @@ mode assertion.
 
 The headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before
 manifest or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls
-only `execute_trash`. The historical `ProviderCacheCleanupMode`, lower-level plan/result, and
-pathname-staged irreversible helper remain crate-private repair evidence. In addition, the
-crate-private production `execute` boundary rejects `PermanentPurge` with that same stable error
-before it creates a receipt or reaches the historical pathname-staged helper. Internal call sites
-therefore cannot accidentally revive permanent deletion merely by bypassing the public facade.
+only `execute_trash`. The historical `ProviderCacheCleanupMode` and lower-level plan/result remain
+crate-private so that prior evidence can be interpreted, while pathname-staged irreversible helpers
+and rollback hooks compile only for tests. The crate-private production `execute` boundary rejects
+`PermanentPurge` with the same stable error before re-planning or receipt creation. Its remaining
+production path then uses the Trash approval phrase, writes a Trash receipt, invokes only
+`trash_delete_if_identity`, and returns the Trash mode. Internal call sites therefore cannot revive
+pathname-based permanent deletion by bypassing the public facade or by relying on an unreachable
+match arm.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -122,7 +127,7 @@ claimed unless that exact intermediate head is observed failing. Production comm
 `exact_approval_phrase` declaration and the redundant invoke `mode` payload, aligning the client with
 the already Trash-only Rust/Tauri schema.
 
-A final internal-authority review found that crate privacy alone still left the historical
+An internal-authority review then found that crate privacy alone still left the historical
 `execute(..., PermanentPurge, ...)` branch capable of reaching pathname-staged permanent deletion if
 a future in-crate caller bypassed the safe facade. Source-contract RED
 `80499b7a70ce4c1e86125fc308da7a21b6d1b9cd` requires the irreversible-mode rejection to occur before
@@ -130,8 +135,19 @@ receipt creation or the historical mutation helper. Production repair
 `717926e2a7744e3c45fadde6384aa1ac4f5e4698` enforces
 `provider-cache-identity-bound-permanent-delete-unavailable` at the lower-level execution boundary and
 updates the lower-level acceptance so even an internally well-formed permanent-purge request leaves
-the candidate intact and creates no receipt. The pathname-staged helper remains only as explicit
-repair/test evidence for the future object-bound deletion design.
+the candidate intact and creates no receipt.
+
+Fresh review of that repair found a stronger residual capability: despite the early return,
+production `execute` still contained a `PermanentPurge` match arm statically calling
+`permanently_purge_exact`, and the pathname-staged deletion helpers still compiled in normal builds.
+Source-contract RED `b3fe5adf08685a35c3bfd87fa0539a0599f83e32` requires the helper/rollback hooks to
+be `#[cfg(test)]`, requires no production call edge to `permanently_purge_exact`, and requires the
+post-guard production execution path to contain no irreversible match arm. Its hosted failure is not
+claimed unless that exact intermediate head is observed failing. Production repair
+`d1b1df14ecbbe50573716801dfd93e7356f2665d` gates the historical destructive implementation and
+its audit helper to tests, removes the permanent branch and permanent-only directory condition from
+production `execute`, fixes receipt/result mode to Trash after the fail-closed guard, and leaves the
+real replacement-race fixtures available under the unit-test configuration.
 
 The RED commits above are contract evidence; hosted status is reported only from the exact head on
 which it actually ran. Exact-current hosted tests, review, ancestry, and protected integration remain
@@ -150,12 +166,15 @@ rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible a
 the shipped CLI, Rust, Tauri, or TypeScript plan/execution contract while the required deletion
 authority is unavailable.
 
-The historical `PermanentPurge` variant and pathname-staged purge helpers remain crate-private repair
-and unit-test evidence, but the production lower-level executor now rejects that mode before any
-receipt or mutation. They must not become reachable again unless they are replaced by the canonical
-identity-bound deletion/recovery primitive and its cross-platform destructive acceptance evidence.
-External Rust callers can name only the facade-owned Trash plan/mode/result contracts; internal
-irreversible plan/mode/result types are not part of the commercial API.
+The historical `PermanentPurge` variant and lower-level planning/result evidence remain crate-private,
+but pathname-staged purge/rollback helpers are test-only and production `execute` has no call edge to
+them. The lower-level executor rejects the unavailable mode before re-planning or receipt creation;
+all code after that guard is structurally Trash-only. Historical filesystem fixtures remain useful for
+showing why pathname staging is insufficient, but they are not production capability. They must not be
+re-enabled unless replaced by the canonical identity-bound deletion/recovery primitive and its
+cross-platform destructive acceptance evidence. External Rust callers can name only the facade-owned
+Trash plan/mode/result contracts; internal irreversible plan/mode/result types are not part of the
+commercial API.
 
 Client-schema parity and internal fail-closed parity remove contract/capability leakage but do not make
 permanent deletion safe or complete. Until same-object deletion/recovery, cross-platform destructive
@@ -174,6 +193,9 @@ Proposed.
 - Treating crate privacy alone as sufficient isolation for the historical permanent-purge executor:
   rejected because a future in-crate caller could accidentally route to irreversible pathname-based
   mutation without crossing the commercial facade.
+- Leaving the pathname purge helper compiled and statically referenced behind an earlier runtime
+  rejection: rejected because an unreachable branch is weaker than removing the production call edge,
+  and future control-flow edits could silently reconnect irreversible mutation.
 - Re-exporting the historical cleanup mode/result while hiding only the executor: rejected because it
   advertises an unavailable irreversible lifecycle in the external Rust contract and leaves the
   commercial result coupled to an internal mode type.
