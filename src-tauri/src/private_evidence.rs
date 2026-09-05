@@ -250,7 +250,7 @@ where
             .map_err(|_| ObjectBoundPublicationError::MetadataFailed)?;
         if !opened_file_metadata.is_file()
             || opened_file_metadata.file_type().is_symlink()
-            || opened_file_metadata.permissions().mode() & 0o777 != unix_mode
+            || opened_file_metadata.permissions().mode() & 0o7777 != unix_mode
         {
             return Err(ObjectBoundPublicationError::ModeInvalid);
         }
@@ -275,6 +275,9 @@ where
             || final_file_metadata.ino() != opened_file_metadata.ino()
         {
             return Err(ObjectBoundPublicationError::RecordIdentityDrift);
+        }
+        if final_file_metadata.permissions().mode() & 0o7777 != unix_mode {
+            return Err(ObjectBoundPublicationError::ModeInvalid);
         }
         Ok(())
     })();
