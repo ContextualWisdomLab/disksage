@@ -1,9 +1,9 @@
 //! Commercial provider-cache reclaim facade.
 //!
 //! Planning remains read-only and reversible Trash is the only mutation lifecycle exposed to Rust
-//! callers outside the application crate. The historical irreversible executor stays crate-private
-//! repair evidence until deletion authority is object-bound and recovery-complete on every supported
-//! platform.
+//! callers outside the application crate. Historical irreversible approval and execution stay
+//! crate-private repair evidence until deletion authority is object-bound and recovery-complete on
+//! every supported platform.
 
 use serde::Serialize;
 use std::path::Path;
@@ -11,11 +11,32 @@ use std::path::Path;
 use crate::provider_cache_reclaim::{
     ProviderCacheCleanupMode as InternalProviderCacheCleanupMode,
     ProviderCacheCleanupResult as InternalProviderCacheCleanupResult,
+    ProviderCacheReclaimPlan as InternalProviderCacheReclaimPlan,
 };
 pub use crate::provider_cache_reclaim::{
     ProviderCacheCandidate, ProviderCacheCleanupItemResult, ProviderCacheCleanupRequest,
-    ProviderCacheKind, ProviderCacheReclaimPlan,
+    ProviderCacheKind,
 };
+
+/// Commercially exposed provider-cache reclaim plan.
+///
+/// The historical lower-level plan contains `exact_approval_phrase` for an irreversible lifecycle
+/// that DiskSage does not ship. This DTO deliberately omits that field so callers cannot infer or
+/// persist unsupported permanent-deletion authority from the public Rust schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderCacheReclaimPlan {
+    pub schema_version: u32,
+    pub platform: String,
+    pub observed_at_ms: u64,
+    pub installed_edge_version: Option<String>,
+    pub podman_machine_present: bool,
+    pub podman_recreation_source: Option<String>,
+    pub evidence_complete: bool,
+    pub candidates: Vec<ProviderCacheCandidate>,
+    pub issues: Vec<String>,
+    pub plan_fingerprint: String,
+    pub trash_approval_phrase: Option<String>,
+}
 
 /// Commercially exposed provider-cache cleanup lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -37,7 +58,23 @@ pub struct ProviderCacheCleanupResult {
     pub items: Vec<ProviderCacheCleanupItemResult>,
 }
 
-fn project_trash_result(
+pub(crate) fn project_plan(plan: InternalProviderCacheReclaimPlan) -> ProviderCacheReclaimPlan {
+    ProviderCacheReclaimPlan {
+        schema_version: plan.schema_version,
+        platform: plan.platform,
+        observed_at_ms: plan.observed_at_ms,
+        installed_edge_version: plan.installed_edge_version,
+        podman_machine_present: plan.podman_machine_present,
+        podman_recreation_source: plan.podman_recreation_source,
+        evidence_complete: plan.evidence_complete,
+        candidates: plan.candidates,
+        issues: plan.issues,
+        plan_fingerprint: plan.plan_fingerprint,
+        trash_approval_phrase: plan.trash_approval_phrase,
+    }
+}
+
+pub(crate) fn project_trash_result(
     result: InternalProviderCacheCleanupResult,
 ) -> Result<ProviderCacheCleanupResult, String> {
     if result.mode != InternalProviderCacheCleanupMode::Trash {
@@ -62,14 +99,12 @@ pub fn plan_with_runtime(
     podman_bin: &Path,
     observed_at_ms: u64,
 ) -> ProviderCacheReclaimPlan {
-    let mut plan = crate::provider_cache_reclaim::plan_with_runtime(
+    project_plan(crate::provider_cache_reclaim::plan_with_runtime(
         home,
         applications,
         podman_bin,
         observed_at_ms,
-    );
-    plan.exact_approval_phrase = None;
-    plan
+    ))
 }
 
 /// Re-plan and execute only reversible Trash cleanup for the explicitly approved candidate set.
