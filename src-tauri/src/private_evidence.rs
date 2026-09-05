@@ -285,6 +285,7 @@ where
     if let Err(error) = publication {
         let invalidation = file
             .set_len(0)
+            .and_then(|_| file.set_permissions(std::fs::Permissions::from_mode(unix_mode)))
             .and_then(|_| file.sync_all())
             .and_then(|_| directory.sync_all());
         if invalidation.is_err() {
@@ -301,10 +302,10 @@ where
 /// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
 /// directory object admitted before canonicalization, so a same-user pathname replacement cannot
 /// redirect either canonicalization or the later write. The file is created once with mode 0600,
-/// synced, and never overwritten. After a post-create failure, the still-open record is truncated
-/// and synced through its descriptor. The pathname is deliberately not unlinked because a same-user
-/// process may already have replaced that name; this can leave a zero-length mode-0600 create-new
-/// tombstone that requires explicit operator cleanup.
+/// synced, and never overwritten. After a post-create failure, the still-open record is truncated,
+/// restored to the requested private mode, and synced through its descriptor. The pathname is
+/// deliberately not unlinked because a same-user process may already have replaced that name; this
+/// can leave a zero-length mode-0600 create-new tombstone that requires explicit operator cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
