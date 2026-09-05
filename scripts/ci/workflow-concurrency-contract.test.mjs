@@ -10,8 +10,8 @@ test("PR validation cancels only superseded first-attempt heads from the same re
   assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' && github\.run_attempt == 1 \}\}/);
 });
 
-test("release work is never cancelled", () => {
+test("release validation cancels only superseded first-attempt PR heads", () => {
   const source = workflow("release.yml");
-  assert.match(source, /group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.repository \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/);
-  assert.match(source, /cancel-in-progress: false/);
+  assert.match(source, /group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.repository \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/);
+  assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' && github\.run_attempt == 1 \}\}/);
 });
