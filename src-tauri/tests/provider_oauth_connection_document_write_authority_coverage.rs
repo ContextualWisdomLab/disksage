@@ -7,6 +7,8 @@
 //! boundary without widening the shipped API, opening a browser, contacting a provider, or touching
 //! the credential store.
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
