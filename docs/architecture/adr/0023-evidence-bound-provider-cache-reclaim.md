@@ -10,7 +10,7 @@ DiskSage can identify provider-owned local artifacts that are regenerable, inclu
 
 OS Trash is the supported reversible product action. Permanent provider-cache deletion is materially different. The historical lower-level implementation stages a candidate through pathname rename and then removes it. Its identity/content checks, double fingerprint confirmation, receipt, and journal are useful test evidence, but they do not bind irreversible mutation to the same reviewed filesystem object across ancestor replacement, crash recovery, and Windows/Linux/macOS. Those destructive helpers therefore remain `#[cfg(test)]`; production has no static call edge to them.
 
-Receipt publication is also a security boundary. A receipt that authorizes mutation must not be redirected through parent replacement, and failure cleanup must not unlink a same-name replacement created by another same-user process. Provider-cache must consume reusable filesystem authority rather than creating or chmodding receipt directories by pathname.
+Receipt publication is also a security boundary. A receipt that authorizes mutation must not be redirected through parent replacement, permission drift, or same-name substitution, and failure cleanup must not unlink a same-name replacement created by another same-user process. Provider-cache must consume reusable filesystem authority rather than creating or chmodding receipt directories by pathname.
 
 ## Decision
 
@@ -24,17 +24,19 @@ Planning is read-only and fails closed when inventory traversal, recreation evid
 
 All shipped Rust facade, Tauri, TypeScript, and headless CLI mutation contracts expose Trash only. The external Rust plan contains `trash_approval_phrase` and no `exact_approval_phrase`; the Tauri command accepts no cleanup-mode argument; the TypeScript wrapper sends no mode field; and the CLI rejects `--permanent-purge` before manifest or executor work. The crate-private executor rejects `PermanentPurge` before re-planning or receipt creation. After that guard, production execution writes a Trash receipt, calls only `trash_delete_if_identity`, and returns the Trash mode.
 
-#303 now adopts the current #344 private-publication owner exact `8c5fde535fabe405e38d1ac3d61a2b1e0e4a8f98` through non-force second-parent ancestry at `7b3b67e74e34ca3df8f06c9358819833f02fa27b`. The inherited owner blobs remain canonical; provider-cache does not maintain a copied private-directory implementation.
+#303 now adopts the current #344 private-publication owner exact `b400437d5024504cb0e4156b2d940a905df5fdbc` through non-force second-parent ancestry at `0f92e10e8fd4facf7418ba9b5560293c067a79da`. The inherited owner source/test blobs remain canonical; provider-cache does not maintain a copied private-directory implementation.
 
-For the final receipt record, `write_immutable_receipt` continues to call the crate-private `private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)` contract. #344 now owns that contract as a publication facade: when no forbidden-root policy is requested it delegates to the canonical `private_directory_publication::write_private_bytes_create_new_with_parents(..., 0o400, 0o700)` primitive. Existing forbidden-root consumers retain the original parent-must-exist object-bound implementation because directory provisioning does not yet carry a forbidden-root policy.
+For the final receipt record, `write_immutable_receipt` continues to call the crate-private `private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)` contract. #344 owns that contract as a publication facade: when no forbidden-root policy is requested it delegates to the canonical `private_directory_publication::write_private_bytes_create_new_with_parents(..., 0o400, 0o700)` primitive. Existing forbidden-root consumers retain the original parent-must-exist object-bound implementation because directory provisioning does not yet carry a forbidden-root policy.
 
 On Unix, the private-directory primitive discovers the nearest admitted existing anchor, pins its descriptor and device/inode identity, creates each missing descendant with descriptor-relative `mkdirat`, opens it with `O_DIRECTORY|O_NOFOLLOW`, applies exact `0700` only to directories it created, fsyncs child and parent directories, revalidates the descriptor chain, and creates the final receipt with `openat(O_CREAT|O_EXCL|O_NOFOLLOW)` at `0400`. A pre-existing final parent must already be exact `0700`; DiskSage does not chmod it for convenience. Post-create namespace drift invalidates only the exact open record and never unlinks a visible replacement name.
 
+Fresh owner review found that object identity alone was not sufficient at finalization. Before #344 `b400437d...`, the exact file mode was checked before a post-write race window, but the final visible record was revalidated only for type/device/inode. A same-UID process could therefore widen the admitted `0400` or `0600` record before success. Test-only real-filesystem RED `41759c1d2531392d07263236f7eed1d58f2dce47` chmods the exact record to `0644` in that window and requires `private-directory-publication-file-mode-drift` plus exact-record invalidation. Production `b400437d...` now revalidates final visible mode after the race window and evaluates exact file/directory modes with `0o7777`, so unexpected setuid/setgid/sticky bits also fail exact private-mode admission. The RED-head hosted Test `33970599396` remained queued when the production head advanced; no hosted RED conclusion is claimed.
+
 The consumer regression `1dc3c3e259f5fb31ab4d847b9f26c2156803f1ac` requires first-use Trash cleanup to create a missing receipt hierarchy safely rather than fail only because the directory is absent. After adopting #344, the same real-filesystem path must provision the receipt parent at exact `0700`, publish the receipt without owner-write bits, and only then allow the approved cache to move to Trash. The intermediate RED was queued when the production lineage advanced, so no hosted RED conclusion is claimed for that exact commit.
 
-On non-Unix targets, provider-cache receipt publication still fails closed with `provider-cache-receipt-object-bound-publication-unsupported`; there is no Windows pathname fallback. Windows first-use parity therefore remains a release gap until the reusable owner provides native handle-relative directory creation and final-record publication with equivalent replacement-race and durability evidence.
+On non-Unix targets, provider-cache receipt publication still fails closed with `provider-cache-receipt-object-bound-publication-unsupported`; there is no Windows pathname fallback. Windows first-use parity therefore remains a release gap until the reusable owner provides native handle-relative directory creation and final-record publication with equivalent replacement-race, permission, and durability evidence.
 
-Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner provides one implementation with stable object/directory authority through final mutation, ancestor/symlink/reparse/hardlink resistance, durable pre-mutation recovery evidence, partial-failure handling, crash/power-loss recovery, and platform-specific acceptance for every platform where the mode is exposed. Publication authority is not deletion authority.
+Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner provides one implementation with stable object/directory authority through final mutation, ancestor/symlink/reparse/hardlink resistance, permission-drift resistance, durable pre-mutation recovery evidence, partial-failure handling, crash/power-loss recovery, and platform-specific acceptance for every platform where the mode is exposed. Publication authority is not deletion authority.
 
 When `podman system df` fails, the plan is repair-required and offers only the read-only `podman system check --quick` diagnostic. DiskSage does not claim `--repair` succeeds and does not automatically run repair, blanket image/volume prune, or remove a referenced container or layer.
 
@@ -58,7 +60,8 @@ The contract-repair lineage includes:
 - `21d9444701bd5c52b0e63be2377bbe957a5e2444` / `64d68db08c3109799f8fe4d7b3a7291d9e5e3025`: #344 RED/production lineage for descriptor-relative missing-parent provisioning.
 - `2ff22a9a4902c3cb87eab45f53d0466a1e1c3d9d` / `644de3439a9b5e02c591b4bf0ef305f7387074b5`: #344 RED/production lineage requiring an existing final private parent to be exact `0700` without chmod.
 - `7f71a4cf12374c9f9db3789933c9915fd0346c6d` / `8c5fde535fabe405e38d1ac3d61a2b1e0e4a8f98`: #344 compatibility facade that preserves forbidden-root behavior while routing no-policy private records through the canonical private-directory owner.
-- `1dc3c3e259f5fb31ab4d847b9f26c2156803f1ac`: consumer real-filesystem RED requiring safe first-use receipt-parent provisioning; `7b3b67e74e34ca3df8f06c9358819833f02fa27b` adopts the current owner non-force.
+- `1dc3c3e259f5fb31ab4d847b9f26c2156803f1ac`: consumer real-filesystem RED requiring safe first-use receipt-parent provisioning.
+- `41759c1d2531392d07263236f7eed1d58f2dce47` / `b400437d5024504cb0e4156b2d940a905df5fdbc`: #344 real-filesystem mode-drift RED and production repair requiring exact final-mode revalidation after the post-write race window; #303 adoption `0f92e10e8fd4facf7418ba9b5560293c067a79da` inherits the exact owner blobs non-force.
 
 Intermediate RED commits are source/test contract evidence only unless an exact-head hosted failure was actually observed.
 
@@ -66,7 +69,9 @@ Intermediate RED commits are source/test contract evidence only unless an exact-
 
 DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup without exposing unsupported irreversible authority. On Unix, first-use provider-cache receipt publication no longer requires a caller to pre-create the receipt hierarchy: the canonical filesystem owner provisions missing private ancestors and publishes the final read-only create-new receipt through one descriptor-bound chain before Trash mutation proceeds.
 
-This closes the Unix first-use availability gap without reintroducing consumer-owned pathname mutation. The cross-platform publication gap remains: Windows must gain native handle-relative parity before the same claim applies there. ADR-0023 remains Proposed until applicable platform and deletion/recovery prerequisites are satisfied.
+Final success now requires both the admitted object identity and exact private mode to survive the final race window. This closes the discovered same-UID permission-widening hole without moving filesystem implementation into the provider-cache bounded context.
+
+The cross-platform publication gap remains: Windows must gain native handle-relative parity before the same claim applies there. ADR-0023 remains Proposed until applicable platform and deletion/recovery prerequisites are satisfied.
 
 Permanent deletion remains unavailable. The historical permanent-purge variant, plan/result evidence, and filesystem fixtures remain crate-private/test-only evidence for future design; they are not a dormant commercial capability.
 
@@ -77,6 +82,8 @@ Permanent deletion remains unavailable. The historical permanent-purge variant, 
 - Keeping permanent mode in public DTOs while merely rejecting it at runtime: it advertises an unavailable lifecycle.
 - Leaving pathname-staged destructive helpers compiled or statically referenced behind an early return: future control-flow edits could reconnect the unsafe capability.
 - Removing a failed create-new receipt by pathname: the visible name can already refer to a different object.
+- Treating device/inode equality alone as sufficient final publication evidence: the same admitted object can have its permission mode widened before success.
+- Masking only `0o777` while claiming an exact private mode: unexpected setuid/setgid/sticky bits are still mode drift.
 - Maintaining a provider-cache-specific final-record writer after inheriting #344: it duplicates canonical filesystem authority and preserves avoidable replacement races.
 - Creating or chmodding the receipt hierarchy by pathname inside provider-cache: it splits authority between an unsafe parent setup step and an object-bound record writer.
 - Requiring a human or caller to pre-create the receipt hierarchy after the canonical owner can provision it safely: it leaves a buyer-visible first-use failure without adding safety.
