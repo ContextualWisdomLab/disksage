@@ -127,3 +127,28 @@ fn post_write_anchor_replacement_invalidates_only_the_admitted_record() {
     assert_eq!(fs::read(&replacement_receipt).unwrap(), b"replacement");
     assert_eq!(fs::metadata(&admitted_receipt).unwrap().len(), 0);
 }
+
+#[test]
+fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipts/receipt.json");
+    let hook_target = target.clone();
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &target,
+        b"authorized",
+        0o400,
+        0o700,
+        || {},
+        move || {
+            set_mode(&hook_target, 0o644);
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "private-directory-publication-file-mode-drift");
+    assert_eq!(fs::metadata(&target).unwrap().len(), 0);
+}
