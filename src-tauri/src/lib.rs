@@ -89,6 +89,8 @@ pub mod provider_global_sync;
 pub mod provider_sync;
 pub mod private_evidence;
 #[cfg_attr(coverage, allow(dead_code))]
+pub(crate) mod private_directory_publication;
+#[cfg_attr(coverage, allow(dead_code))]
 pub(crate) mod object_bound_publication;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
