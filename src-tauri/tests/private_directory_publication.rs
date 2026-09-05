@@ -38,6 +38,28 @@ fn missing_private_ancestors_are_created_descriptor_relative_with_exact_modes() 
 }
 
 #[test]
+fn existing_leaf_parent_must_already_be_owner_private_and_is_not_chmodded() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    let receipt_dir = root.join("receipts");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    fs::create_dir(&receipt_dir).unwrap();
+    set_mode(&receipt_dir, 0o755);
+    let target = receipt_dir.join("receipt.json");
+
+    let error = write_private_bytes_create_new_with_parents(&target, b"receipt", 0o400, 0o700)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        "private-directory-publication-directory-mode-drift"
+    );
+    assert_eq!(fs::metadata(&receipt_dir).unwrap().permissions().mode() & 0o777, 0o755);
+    assert!(!target.exists());
+}
+
+#[test]
 fn anchor_replacement_after_parent_provision_never_receives_the_record() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private-root");
