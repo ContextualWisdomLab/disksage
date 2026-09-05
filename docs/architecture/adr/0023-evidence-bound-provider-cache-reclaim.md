@@ -40,13 +40,15 @@ Planning is read-only. It fails closed when inventory traversal, recreation evid
 identity, or active-use evidence is incomplete. Execution re-plans and rechecks the selected
 candidate triplets (`path`, `evidence_fingerprint`, `object_id`) against the approved plan.
 
-The shipped Tauri and headless CLI surfaces expose **Trash only** for provider-cache mutation. The
-product plan clears the historical `exact_approval_phrase` for irreversible deletion while leaving
-read-only evidence, evidence issues, and the Trash approval unchanged. A request for
-`PermanentPurge` fails before the lower-level executor with the stable error
-`provider-cache-identity-bound-permanent-delete-unavailable`. The CLI likewise advertises only
-`--trash`, rejects `--permanent-purge` before manifest/executor work, and does not emit an
-irreversible approval phrase from `plan`.
+The shipped product surfaces expose **Trash only** for provider-cache mutation. The Tauri execution
+command does not deserialize a caller-selected cleanup mode at all and delegates every product call
+to the lower-level executor as `ProviderCacheCleanupMode::Trash`. The product plan clears the
+historical `exact_approval_phrase` for irreversible deletion while leaving read-only evidence,
+evidence issues, and the Trash approval unchanged. The headless CLI likewise advertises only
+`--trash`, rejects `--permanent-purge` before manifest/executor work with
+`provider-cache-identity-bound-permanent-delete-unavailable`, and does not emit an irreversible
+approval phrase from `plan`. The TypeScript wrapper exposes no cleanup-mode parameter and its result
+mode is Trash-only.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -68,10 +70,13 @@ a damaged layer referenced by an exited container; ordinary and forced container
 and `system check --repair` also failed because the layer remained in use. A guest TRIM reported
 99.5 GiB while host APFS increased only 87,708 KiB, so guest-reported trim is not host reclaim proof.
 
-These observations are operational evidence, not release or irreversible-deletion authority. The
-source-contract RED introduced on this PR requires shipped Tauri/CLI execution to fail permanent
-purge closed before reaching the historical lower-level executor. Exact-current hosted tests,
-review, ancestry, and protected integration remain required before this ADR may become Accepted.
+These observations are operational evidence, not release or irreversible-deletion authority.
+Source-contract RED `2207ca3121cb5fc29f2cbe56748abf50fe097fd0` requires the shipped Tauri
+execution schema to contain no caller-selected `ProviderCacheCleanupMode` and to delegate only
+`Trash`; production fix `3a7d8df30106be509cf1fc2e4ac733f34aea7dd4` implements that boundary. The
+intermediate RED is source-contract evidence only; no hosted failing run is claimed for it.
+Exact-current hosted tests, review, ancestry, and protected integration remain required before this
+ADR may become Accepted.
 
 ## Consequences
 
@@ -85,10 +90,11 @@ Operators may save selected candidate triplets as an absolute JSON manifest and 
 rationale, and `--trash`. Unknown or duplicate flags fail closed. Irreversible approval is not part of
 the shipped CLI contract while the required deletion authority is unavailable.
 
-The historical lower-level `PermanentPurge` enum/helper remains technical debt until it is removed or
-moved behind a canonical identity-bound deletion primitive. Typed frontend contracts must not present
-that historical mode as a commercially available action; this remains a follow-up before #303 can be
-considered product-complete.
+The historical lower-level `PermanentPurge` enum, public lower-level `execute` entry point, and
+pathname-staged purge helper remain technical debt until their useful repair evidence is retained and
+the irreversible authority is either removed/narrowed or replaced by a canonical identity-bound
+deletion primitive. They are not product authority merely because direct Rust callers or unit tests
+can still reach them.
 
 ## Rejected alternatives
 
