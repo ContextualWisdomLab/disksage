@@ -1,8 +1,7 @@
 #![cfg(unix)]
 
-use disksage_lib::provider_cache_reclaim::{
-    execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
-    ProviderCacheKind,
+use disksage_lib::provider_cache::{
+    execute_trash, plan_with_runtime, ProviderCacheCleanupRequest, ProviderCacheKind,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -130,7 +129,7 @@ fn cleanup_request_manifest_is_bounded_before_replanning() {
         })
         .collect::<Vec<_>>();
 
-    let error = execute(
+    let error = execute_trash(
         &temp.path().join("home"),
         &temp.path().join("Applications"),
         Path::new("/missing/podman"),
@@ -141,7 +140,6 @@ fn cleanup_request_manifest_is_bounded_before_replanning() {
         "bounded request regression",
         &temp.path().join("journal.jsonl"),
         &temp.path().join("receipts"),
-        ProviderCacheCleanupMode::Trash,
         1,
     )
     .expect_err("oversized manifest must fail closed before evidence collection");
