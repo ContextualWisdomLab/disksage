@@ -19,13 +19,11 @@ pub(crate) enum ObjectBoundReplaceError {
     TargetUnsafe,
     TargetUnavailable,
     TemporaryCreateFailed,
-    TemporaryIdentityDrift,
     ModeInvalid,
     WriteFailed,
     CleanupFailed,
     RenameFailed,
     DirectorySyncFailed,
-    PostPublishTemporaryIdentityDrift,
     PostPublishParentIdentityDrift,
     UnsupportedPlatform,
 }
@@ -43,15 +41,11 @@ impl ObjectBoundReplaceError {
             Self::TargetUnsafe => "object-bound-replace-target-unsafe",
             Self::TargetUnavailable => "object-bound-replace-target-unavailable",
             Self::TemporaryCreateFailed => "object-bound-replace-temporary-create-failed",
-            Self::TemporaryIdentityDrift => "object-bound-replace-temporary-identity-drift",
             Self::ModeInvalid => "object-bound-replace-mode-invalid",
             Self::WriteFailed => "object-bound-replace-write-failed",
             Self::CleanupFailed => "object-bound-replace-cleanup-failed",
             Self::RenameFailed => "object-bound-replace-rename-failed",
             Self::DirectorySyncFailed => "object-bound-replace-directory-sync-failed",
-            Self::PostPublishTemporaryIdentityDrift => {
-                "object-bound-replace-post-publish-temporary-identity-drift"
-            }
             Self::PostPublishParentIdentityDrift => {
                 "object-bound-replace-post-publish-parent-identity-drift"
             }
@@ -346,7 +340,7 @@ where
             &temporary_name,
             &temporary,
             unix_mode,
-            ObjectBoundReplaceError::TemporaryIdentityDrift,
+            ObjectBoundReplaceError::RenameFailed,
         )?;
         validate_target_at(&directory, &final_name)?;
         Ok(())
@@ -362,7 +356,7 @@ where
         &temporary_name,
         &temporary,
         unix_mode,
-        ObjectBoundReplaceError::TemporaryIdentityDrift,
+        ObjectBoundReplaceError::RenameFailed,
     )?;
     let rename_result = unsafe {
         libc::renameat(
@@ -382,7 +376,7 @@ where
         &final_name,
         &temporary,
         unix_mode,
-        ObjectBoundReplaceError::PostPublishTemporaryIdentityDrift,
+        ObjectBoundReplaceError::PostPublishParentIdentityDrift,
     )?;
 
     after_rename_before_directory_sync();
@@ -532,10 +526,7 @@ mod tests {
         )
         .expect_err("temporary pathname replacement must fail closed");
 
-        assert_eq!(
-            error.code(),
-            "object-bound-replace-temporary-identity-drift"
-        );
+        assert_eq!(error, ObjectBoundReplaceError::RenameFailed);
         assert_eq!(std::fs::read(&record).expect("old record"), b"old");
         let replacement_path = replacement_path
             .lock()
@@ -594,14 +585,6 @@ mod tests {
         assert_eq!(
             ObjectBoundReplaceError::DirectorySyncFailed.code(),
             "object-bound-replace-directory-sync-failed"
-        );
-        assert_eq!(
-            ObjectBoundReplaceError::TemporaryIdentityDrift.code(),
-            "object-bound-replace-temporary-identity-drift"
-        );
-        assert_eq!(
-            ObjectBoundReplaceError::PostPublishTemporaryIdentityDrift.code(),
-            "object-bound-replace-post-publish-temporary-identity-drift"
         );
         assert_eq!(
             ObjectBoundReplaceError::UnsupportedPlatform.code(),
