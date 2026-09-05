@@ -55,8 +55,9 @@ impl ObjectBoundReplaceError {
 
 /// Atomically replace one private record while keeping mutation authority bound to one directory
 /// object. On Unix the destination directory must already exist and must not be group/other
-/// writable. The replacement file is created with `O_EXCL|O_NOFOLLOW`, normalized to `unix_mode`,
-/// synced, renamed with `renameat`, and followed by a directory `fsync`.
+/// writable. The requested mode may contain owner bits only; group/other permissions fail closed.
+/// The replacement file is created with `O_EXCL|O_NOFOLLOW`, normalized to `unix_mode`, synced,
+/// renamed with `renameat`, and followed by a directory `fsync`.
 ///
 /// Windows currently fails closed because an equivalent handle-relative temporary-create and
 /// replace primitive has not yet been implemented. Callers must not fall back to pathname writes.
@@ -218,7 +219,7 @@ where
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-    if unix_mode & !0o777 != 0 {
+    if unix_mode & !0o777 != 0 || unix_mode & 0o077 != 0 {
         return Err(ObjectBoundReplaceError::ModeInvalid);
     }
 
