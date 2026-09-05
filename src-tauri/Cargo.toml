@@ -110,6 +110,10 @@ name = "disksage-dev-artifacts"
 path = "src/bin/disksage-dev-artifacts.rs"
 
 [[bin]]
+name = "disksage-temp-reclaim"
+path = "src/bin/disksage-temp-reclaim.rs"
+
+[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
