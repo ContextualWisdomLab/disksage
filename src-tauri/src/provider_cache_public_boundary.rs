@@ -9,9 +9,6 @@ use crate::provider_cache_reclaim::{
     ProviderCacheReclaimPlan,
 };
 
-const PERMANENT_PURGE_UNAVAILABLE: &str =
-    "provider-cache-identity-bound-permanent-delete-unavailable";
-
 /// Inspect provider-cache candidates without advertising an unavailable irreversible approval.
 ///
 /// The lower-level historical planner still carries a permanent-approval field for compatibility.
@@ -28,9 +25,10 @@ pub fn plan_provider_cache_reclaim() -> Result<ProviderCacheReclaimPlan, String>
 
 /// Execute provider-cache cleanup only through the currently commercial-safe reversible mode.
 ///
-/// Permanent purge fails before receipt creation or any lower-level mutation. Keeping this gate at
-/// the shipped Tauri boundary prevents a historical pathname-authorized irreversible path from
-/// becoming product authority while its useful read-only planning and Trash evidence remain usable.
+/// The shipped Tauri command intentionally has no caller-selected cleanup-mode argument. This keeps
+/// irreversible authority out of the invoke schema rather than merely rejecting one enum value at
+/// runtime. The historical lower-level executor remains repair evidence while every product call is
+/// delegated as Trash.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn execute_provider_cache_reclaim(
@@ -40,12 +38,7 @@ pub fn execute_provider_cache_reclaim(
     confirm_plan_fingerprint: String,
     confirmation_phrase: String,
     rationale: String,
-    mode: ProviderCacheCleanupMode,
 ) -> Result<ProviderCacheCleanupResult, String> {
-    if mode == ProviderCacheCleanupMode::PermanentPurge {
-        return Err(PERMANENT_PURGE_UNAVAILABLE.into());
-    }
-
     crate::commands::execute_provider_cache_reclaim(
         app,
         requests,
@@ -53,6 +46,6 @@ pub fn execute_provider_cache_reclaim(
         confirm_plan_fingerprint,
         confirmation_phrase,
         rationale,
-        mode,
+        ProviderCacheCleanupMode::Trash,
     )
 }
