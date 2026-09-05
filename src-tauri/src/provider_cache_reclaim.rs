@@ -604,17 +604,6 @@ fn valid_rationale(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn seal_receipt_file(file: &fs::File) -> Result<(), String> {
-    let mut permissions = file
-        .metadata()
-        .map_err(|_| "provider-cache-receipt-metadata-failed")?
-        .permissions();
-    permissions.set_readonly(true);
-    file.set_permissions(permissions)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| "provider-cache-receipt-permissions-failed".to_string())
-}
-
 fn write_immutable_receipt(
     receipt_dir: &Path,
     plan: &ProviderCacheReclaimPlan,
@@ -624,31 +613,6 @@ fn write_immutable_receipt(
     approval_phrase: &str,
     executed_at_ms: u64,
 ) -> Result<PathBuf, String> {
-    write_immutable_receipt_with_sealer(
-        receipt_dir,
-        plan,
-        requested,
-        rationale,
-        mode,
-        approval_phrase,
-        executed_at_ms,
-        seal_receipt_file,
-    )
-}
-
-fn write_immutable_receipt_with_sealer<F>(
-    receipt_dir: &Path,
-    plan: &ProviderCacheReclaimPlan,
-    requested: &[ProviderCacheCleanupRequest],
-    rationale: &str,
-    mode: ProviderCacheCleanupMode,
-    approval_phrase: &str,
-    executed_at_ms: u64,
-    sealer: F,
-) -> Result<PathBuf, String>
-where
-    F: FnOnce(&fs::File) -> Result<(), String>,
-{
     fs::create_dir_all(receipt_dir).map_err(|_| "provider-cache-receipt-directory-failed")?;
     #[cfg(unix)]
     {
@@ -675,38 +639,19 @@ where
         "mode": mode,
     }))
     .map_err(|_| "provider-cache-receipt-serialization-failed")?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
+
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        crate::private_evidence::write_object_bound_bytes_create_new(&path, &body, 0o400, None)
+            .map_err(|_| "provider-cache-receipt-object-bound-publication-failed".to_string())?;
+        Ok(path)
     }
-    let mut file = options
-        .open(&path)
-        .map_err(|_| "provider-cache-receipt-create-new-failed")?;
-    use std::io::Write;
-    let finalization = (|| -> Result<(), String> {
-        file.write_all(&body)
-            .and_then(|()| file.sync_all())
-            .map_err(|_| "provider-cache-receipt-write-failed".to_string())?;
-        sealer(&file)?;
-        #[cfg(unix)]
-        fs::File::open(receipt_dir)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "provider-cache-receipt-directory-sync-failed".to_string())?;
-        Ok(())
-    })();
-    if let Err(error) = finalization {
-        let invalidation = file.set_len(0).and_then(|()| file.sync_all());
-        drop(file);
-        if invalidation.is_err() {
-            return Err("provider-cache-receipt-invalidation-failed".into());
-        }
-        return Err(error);
+
+    #[cfg(not(unix))]
+    {
+        let _ = (path, body);
+        Err("provider-cache-receipt-object-bound-publication-unsupported".into())
     }
-    drop(file);
-    Ok(path)
 }
 
 #[cfg(test)]
@@ -1115,8 +1060,11 @@ mod tests {
         assert!(cache.join("changed").is_file());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn receipt_records_the_approval_for_the_selected_mode() {
+    fn receipt_records_the_approval_for_the_selected_mode_as_read_only_create_new() {
+        use std::os::unix::fs::PermissionsExt;
+
         let temp = tempfile::tempdir().unwrap();
         let plan = ProviderCacheReclaimPlan {
             schema_version: SCHEMA_VERSION,
@@ -1142,9 +1090,22 @@ mod tests {
             1,
         )
         .unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(value["approval_phrase"], "trash phrase");
         assert!(value.get("exact_approval_phrase").is_none());
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o400);
+        assert_eq!(
+            write_immutable_receipt(
+                temp.path(),
+                &plan,
+                &[],
+                "verified cache",
+                ProviderCacheCleanupMode::Trash,
+                "trash phrase",
+                1,
+            ),
+            Err("provider-cache-receipt-object-bound-publication-failed".into())
+        );
     }
 
     #[cfg(unix)]
@@ -1251,93 +1212,6 @@ mod tests {
         );
         assert!(fs::read_dir(data.join("receipts")).is_err());
         assert!(Path::new(&request.path).exists());
-    }
-
-    #[test]
-    fn receipt_sealing_failure_invalidates_unstarted_receipt_without_path_cleanup() {
-        let temp = tempfile::tempdir().unwrap();
-        let plan = ProviderCacheReclaimPlan {
-            schema_version: SCHEMA_VERSION,
-            platform: "test".into(),
-            observed_at_ms: 1,
-            installed_edge_version: None,
-            podman_machine_present: false,
-            podman_recreation_source: None,
-            evidence_complete: true,
-            candidates: Vec::new(),
-            issues: Vec::new(),
-            plan_fingerprint: "seal-failure".into(),
-            exact_approval_phrase: Some("permanent phrase".into()),
-            trash_approval_phrase: Some("trash phrase".into()),
-        };
-        let result = write_immutable_receipt_with_sealer(
-            temp.path(),
-            &plan,
-            &[],
-            "verified cache",
-            ProviderCacheCleanupMode::Trash,
-            "trash phrase",
-            7,
-            |_file| Err("provider-cache-receipt-permissions-failed".into()),
-        );
-        assert_eq!(
-            result,
-            Err("provider-cache-receipt-permissions-failed".into())
-        );
-        let path = temp
-            .path()
-            .join("provider-cache-trash-seal-failure-7.json");
-        assert_eq!(fs::metadata(path).unwrap().len(), 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn receipt_finalization_failure_preserves_replacement_record() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::tempdir().unwrap();
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let plan = ProviderCacheReclaimPlan {
-            schema_version: SCHEMA_VERSION,
-            platform: "test".into(),
-            observed_at_ms: 1,
-            installed_edge_version: None,
-            podman_machine_present: false,
-            podman_recreation_source: None,
-            evidence_complete: true,
-            candidates: Vec::new(),
-            issues: Vec::new(),
-            plan_fingerprint: "replacement".into(),
-            exact_approval_phrase: Some("permanent phrase".into()),
-            trash_approval_phrase: Some("trash phrase".into()),
-        };
-        let path = temp
-            .path()
-            .join("provider-cache-trash-replacement-11.json");
-        let path_for_hook = path.clone();
-        let replacement = b"replacement-record".to_vec();
-        let replacement_for_hook = replacement.clone();
-
-        let result = write_immutable_receipt_with_sealer(
-            temp.path(),
-            &plan,
-            &[],
-            "verified cache",
-            ProviderCacheCleanupMode::Trash,
-            "trash phrase",
-            11,
-            move |_file| {
-                fs::remove_file(&path_for_hook).unwrap();
-                fs::write(&path_for_hook, &replacement_for_hook).unwrap();
-                Err("provider-cache-receipt-permissions-failed".into())
-            },
-        );
-
-        assert_eq!(
-            result,
-            Err("provider-cache-receipt-permissions-failed".into())
-        );
-        assert_eq!(fs::read(path).unwrap(), replacement);
     }
 
     #[cfg(unix)]
