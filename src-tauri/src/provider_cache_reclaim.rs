@@ -851,6 +851,9 @@ pub fn execute(
     if requested.is_empty() || !valid_rationale(rationale) || executed_at_ms == 0 {
         return Err("provider-cache-cleanup-request-invalid".into());
     }
+    if mode == ProviderCacheCleanupMode::PermanentPurge {
+        return Err("provider-cache-identity-bound-permanent-delete-unavailable".into());
+    }
     let current = plan_with_runtime(home, applications, podman_bin, executed_at_ms);
     let expected_phrase = match mode {
         ProviderCacheCleanupMode::Trash => current.trash_approval_phrase.as_deref(),
@@ -1238,27 +1241,29 @@ mod tests {
                 2,
             )
             .unwrap_err(),
-            "provider-cache-cleanup-plan-stale-or-unapproved"
+            "provider-cache-identity-bound-permanent-delete-unavailable"
         );
         assert!(Path::new(&request.path).exists());
-        let result = execute(
-            &home,
-            &apps,
-            &podman,
-            &[request],
-            &plan.plan_fingerprint,
-            &plan.plan_fingerprint,
-            plan.exact_approval_phrase.as_deref().unwrap(),
-            "verified regenerable cache",
-            &data.join("journal.jsonl"),
-            &data.join("receipts"),
-            ProviderCacheCleanupMode::PermanentPurge,
-            3,
-        )
-        .unwrap();
-        assert_eq!(result.completed_count, 1);
-        assert!(Path::new(&result.immutable_receipt_path).is_file());
-        assert!(!Path::new(&result.items[0].path).exists());
+        assert_eq!(
+            execute(
+                &home,
+                &apps,
+                &podman,
+                &[request],
+                &plan.plan_fingerprint,
+                &plan.plan_fingerprint,
+                plan.exact_approval_phrase.as_deref().unwrap(),
+                "verified regenerable cache",
+                &data.join("journal.jsonl"),
+                &data.join("receipts"),
+                ProviderCacheCleanupMode::PermanentPurge,
+                3,
+            )
+            .unwrap_err(),
+            "provider-cache-identity-bound-permanent-delete-unavailable"
+        );
+        assert!(fs::read_dir(data.join("receipts")).is_err());
+        assert!(Path::new(&request.path).exists());
     }
 
     #[test]
