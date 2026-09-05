@@ -101,9 +101,12 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let record = root.path().join("connections.json");
 
-        for invalid_mode in [0o644, 0o660, 0o1600, 0o2600, 0o4600] {
+        for invalid_mode in [
+            0o000, 0o100, 0o200, 0o300, 0o500, 0o700, 0o644, 0o660, 0o1600, 0o2600,
+            0o4600,
+        ] {
             let error = replace_object_bound_bytes(&record, b"private", invalid_mode)
-                .expect_err("non-private or special-bit mode must fail closed");
+                .expect_err("unsupported owner mode, non-private mode, or special-bit mode must fail closed");
             assert_eq!(error, ObjectBoundReplaceError::ModeInvalid);
         }
         assert!(!record.exists());
