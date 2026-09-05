@@ -44,10 +44,13 @@ All public product and Rust mutation surfaces expose **Trash only**. The Tauri e
 not deserialize a caller-selected cleanup mode and delegates every product call as Trash. The
 headless CLI imports the public `provider_cache` facade, rejects `--permanent-purge` before manifest
 or executor work with `provider-cache-identity-bound-permanent-delete-unavailable`, and calls only
-`execute_trash`. The public Rust facade similarly exposes `execute_trash` without a mode argument and
-clears the historical `exact_approval_phrase` from public planning. `provider_cache_reclaim`, which
-contains the historical pathname-staged irreversible executor, is crate-private. The TypeScript
-wrapper exposes no cleanup-mode parameter and its result mode remains Trash-only.
+`execute_trash`. The public Rust facade similarly exposes `execute_trash` without a mode argument,
+clears the historical `exact_approval_phrase` from public planning, and projects execution results
+through its own publicly nameable one-variant `ProviderCacheCleanupMode::Trash` DTO. The historical
+`ProviderCacheCleanupMode` and lower-level result remain internal implementation details and are not
+re-exported. `provider_cache_reclaim`, which contains the pathname-staged irreversible executor, is
+crate-private. The TypeScript wrapper exposes no cleanup-mode parameter and its result mode remains
+Trash-only.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner
 provides one implementation with stable object/directory authority through staging and deletion,
@@ -76,10 +79,22 @@ mode from the shipped Tauri schema. Follow-up source-contract RED
 crate-private, requires one public Trash-only Rust facade, and requires the CLI to consume that
 facade. The first facade implementation is `febaf0ee5e58a2b647030ec4c025563b078faffb`;
 `7b3fc0c1196a36ae298603e6be1b8837727f46d0` removes public module reachability and
-`c6ed71d0e932c92cc635205436deef57d70b40c4` routes the CLI through `execute_trash`. The RED
-commits are source-contract evidence only; no hosted failing run for their intermediate heads is
-claimed. Exact-current hosted tests, review, ancestry, and protected integration remain required
-before this ADR may become Accepted.
+`c6ed71d0e932c92cc635205436deef57d70b40c4` routes the CLI through `execute_trash`.
+
+Fresh review then found that `provider_cache.rs` still publicly re-exported the historical cleanup
+mode, including the `PermanentPurge` variant, and re-exported the lower-level result whose public
+`mode` field used that historical type. Source-contract REDs
+`00b4f4f0ab6a6153f82fa17fcb128cdf985ebab6` and
+`1b877bd33ac3c757a55ce72f22fd9b36f6f202d6` require the external Rust facade to stop re-exporting
+those internal mode/result contracts. Production repairs
+`216533bda068f5ea15ce28455ed5458e03819faa` and
+`f2ac8e3157bb03721fd4b37ca393db5ab108a938` keep the historical mode internal and project the
+commercial result through a Trash-only public DTO. A defensive projection check fails closed if an
+internal non-Trash result ever crosses `execute_trash`.
+
+The RED commits above are source-contract evidence only; no hosted failing run for their intermediate
+heads is claimed. Exact-current hosted tests, review, ancestry, and protected integration remain
+required before this ADR may become Accepted.
 
 ## Consequences
 
@@ -97,9 +112,9 @@ unavailable.
 The historical `PermanentPurge` variant and pathname-staged purge helpers remain crate-private repair
 evidence with unit coverage. They no longer form an external Rust capability. They must not become
 public again unless they are replaced by the canonical identity-bound deletion/recovery primitive and
-its cross-platform destructive acceptance evidence. The public facade still re-exports shared result
-and mode types for compatibility, but it grants no mode-selecting execution entry point; narrowing
-those DTOs further is compatibility cleanup, not deletion authority.
+its cross-platform destructive acceptance evidence. External Rust callers can name only the
+facade-owned Trash mode/result contract; internal irreversible mode and result types are not part of
+the commercial API.
 
 ## Rejected alternatives
 
@@ -110,6 +125,9 @@ those DTOs further is compatibility cleanup, not deletion authority.
   irreversible removal have different rollback and crash-consistency invariants.
 - Keeping the historical executor public while UI/CLI merely reject permanent mode: rejected because
   a direct Rust caller would still retain irreversible pathname-authorized capability.
+- Re-exporting the historical cleanup mode/result while hiding only the executor: rejected because it
+  advertises an unavailable irreversible lifecycle in the external Rust contract and leaves the
+  commercial result coupled to an internal mode type.
 - Shipping pathname-authorized permanent file deletion while UI/CLI merely warn: rejected because a
   warning does not repair the mutation authority.
 - Permanent recursive purge of provider directories: rejected because partial recursive deletion
