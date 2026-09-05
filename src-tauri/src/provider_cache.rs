@@ -7,10 +7,10 @@
 
 use std::path::Path;
 
+use crate::provider_cache_reclaim::ProviderCacheCleanupMode;
 pub use crate::provider_cache_reclaim::{
-    ProviderCacheCandidate, ProviderCacheCleanupItemResult, ProviderCacheCleanupMode,
-    ProviderCacheCleanupRequest, ProviderCacheCleanupResult, ProviderCacheKind,
-    ProviderCacheReclaimPlan,
+    ProviderCacheCandidate, ProviderCacheCleanupItemResult, ProviderCacheCleanupRequest,
+    ProviderCacheCleanupResult, ProviderCacheKind, ProviderCacheReclaimPlan,
 };
 
 /// Inspect exact provider-cache candidates without publishing irreversible approval authority.
