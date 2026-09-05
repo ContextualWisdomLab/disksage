@@ -1,10 +1,9 @@
 #![allow(dead_code, unused_imports)]
 
-//! A disconnect must not destroy the canonical refresh token before every stale matching
-//! credential has been removed. The durable connection document can be restored after a delete
-//! failure, but a successfully deleted canonical credential cannot be recreated from that file.
-//! Delete stale legacy credentials first so a stale-delete failure leaves the canonical retry
-//! credential intact and the restored document remains an honest recovery handle.
+//! A disconnect must not delete any canonical or stale refresh token unless the durable connection
+//! document can first publish the corresponding state transition. With object-bound replacement
+//! unavailable, refusal at the document boundary is the recovery mechanism: credentials and the
+//! accepted document both remain unchanged.
 
 #[path = "../src/object_bound_publication.rs"]
 mod object_bound_publication;
@@ -52,7 +51,7 @@ fn google_connection(
 }
 
 #[test]
-fn stale_credential_delete_failure_preserves_canonical_retry_credential() {
+fn replacement_refusal_precedes_stale_and_canonical_credential_deletion() {
     let temp = tempfile::tempdir().unwrap();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
@@ -61,29 +60,25 @@ fn stale_credential_delete_failure_preserves_canonical_retry_credential() {
     let legacy = google_connection(&saved_root, legacy_connection_id(&saved_root), 100);
     let current = google_connection(&saved_root, connection_id(&saved_root), 200);
     assert_ne!(legacy.connection_id, current.connection_id);
-    let original = vec![legacy.clone(), current.clone()];
+    let original = vec![legacy, current];
     save_connections(&document, &original).unwrap();
+    let before = std::fs::read(&document).unwrap();
 
     let mut deleted = Vec::new();
     let error = disconnect_with_delete(&document, &requested_root, |connection_id| {
         deleted.push(connection_id.to_string());
-        if connection_id == legacy.connection_id {
-            Err("provider-oauth-keyring-delete-failed".to_string())
-        } else {
-            Ok(())
-        }
+        Err("provider-oauth-keyring-delete-failed".to_string())
     })
     .unwrap_err();
 
-    assert_eq!(error, "provider-oauth-keyring-delete-failed");
     assert_eq!(
-        deleted,
-        vec![legacy.connection_id],
-        "stale matching credentials must be removed before the canonical credential so a stale-delete failure cannot destroy the only usable retry credential"
+        error,
+        "oauth-connection-document-object-bound-replacement-unavailable"
     );
-    assert_eq!(
-        load_connections(&document).unwrap(),
-        original,
-        "a partial credential cleanup must restore durable connection state so a retry can finish deleting every matching credential"
+    assert!(
+        deleted.is_empty(),
+        "no keyring credential may be mutated before durable document replacement is authorized"
     );
+    assert_eq!(std::fs::read(&document).unwrap(), before);
+    assert_eq!(load_connections(&document).unwrap(), original);
 }
