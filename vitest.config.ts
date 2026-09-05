@@ -9,19 +9,9 @@ export default defineConfig({
     maxWorkers: process.env.CI ? 2 : undefined,
     coverage: {
       provider: "v8",
-      // ponytail: 커버리지는 헤드리스로 검증 가능한 순수 로직과 mockable Tauri API 래퍼만 측정.
-      // Svelte 컴포넌트는 GUI·통합 검증 영역 (cargo test + 수동 체크리스트)
-      include: [
-        "src/lib/api.ts",
-        "src/lib/treemap.ts",
-        "src/lib/fmt.ts",
-        "src/lib/dupeGuard.ts",
-        "src/lib/verdictBadge.ts",
-      ],
+      include: ["src/lib/**/*.ts", "src/routes/**/*.ts"],
+      exclude: ["**/*.test.ts", "**/*.d.ts"],
       reporter: ["text", "json", "json-summary"],
-      // ponytail: 위 include 5개 순수 로직 파일은 헤드리스로 완전 검증 가능하므로
-      // 네 지표 모두 100%로 고정한다. 이 게이트는 scope를 넓히지 않는다 —
-      // Svelte 컴포넌트는 여전히 cargo test + 수동 체크리스트로 검증한다.
       thresholds: {
         statements: 100,
         branches: 100,
