@@ -613,13 +613,6 @@ fn write_immutable_receipt(
     approval_phrase: &str,
     executed_at_ms: u64,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(receipt_dir).map_err(|_| "provider-cache-receipt-directory-failed")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(receipt_dir, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "provider-cache-receipt-directory-permissions-failed")?;
-    }
     let mode_label = match mode {
         ProviderCacheCleanupMode::Trash => "trash",
         ProviderCacheCleanupMode::PermanentPurge => "permanent-purge",
