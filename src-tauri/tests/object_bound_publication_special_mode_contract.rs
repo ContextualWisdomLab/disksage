@@ -1,19 +1,23 @@
-//! Source contract for exact private-record mode revalidation.
+//! Contract for requested private-record modes while replacement is fail closed.
 //!
-//! Private publication must reject special-bit drift as well as owner/group/other permission drift.
-//! Checking only `0o777` would allow setuid/setgid/sticky bits to change after the admitted staging
-//! object was synced while still satisfying the nominal `0o600` contract.
+//! Replacement currently performs no staging or publication, so post-create special-bit drift is
+//! impossible on this path. Mode admission still rejects any requested setuid/setgid/sticky bits as
+//! well as group/other permissions before returning the source-identity capability error.
 
 const SOURCE: &str = include_str!("../src/object_bound_publication.rs");
 
 #[test]
-fn opened_and_visible_publication_modes_include_special_bits() {
+fn replacement_rejects_special_bits_before_source_identity_capability_evaluation() {
     assert!(
-        SOURCE.contains("opened.permissions().mode() & 0o7777 != unix_mode"),
-        "opened staging mode must compare the complete permission/special-bit mask"
+        SOURCE.contains("unix_mode & !0o777 != 0"),
+        "requested setuid/setgid/sticky bits must remain outside the admitted private mode set"
     );
     assert!(
-        SOURCE.contains("visible.st_mode as u32 & 0o7777 != unix_mode"),
-        "visible staging/final mode must compare the complete permission/special-bit mask"
+        SOURCE.contains("unix_mode & 0o077 != 0"),
+        "group/other permissions must remain rejected before capability evaluation"
+    );
+    assert!(
+        SOURCE.contains("ObjectBoundReplaceError::SourceIdentityUnavailable"),
+        "valid private modes must still fail closed while exact-source publication is unavailable"
     );
 }
