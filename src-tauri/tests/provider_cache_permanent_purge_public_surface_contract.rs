@@ -97,6 +97,20 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
         public_api.contains("pub fn execute_trash("),
         "the public Rust facade must expose the reversible lifecycle explicitly"
     );
+
+    let reexport_start = public_api
+        .find("pub use crate::provider_cache_reclaim::{")
+        .expect("safe facade must explicitly choose the read-only and Trash result DTOs it exports");
+    let reexport_tail = &public_api[reexport_start..];
+    let reexport_end = reexport_tail
+        .find("};")
+        .expect("safe facade re-export block must terminate");
+    let reexport_block = &reexport_tail[..reexport_end];
+    assert!(
+        !reexport_block.contains("ProviderCacheCleanupMode"),
+        "commercial Rust callers must not be offered the historical enum variant that advertises PermanentPurge"
+    );
+
     let execute_start = public_api
         .find("pub fn execute_trash(")
         .expect("Trash facade must remain available");
