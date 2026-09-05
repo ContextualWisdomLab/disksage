@@ -459,6 +459,30 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     Ok(document.connections)
 }
 
+fn map_connection_publication_error(
+    error: crate::object_bound_publication::ObjectBoundReplaceError,
+) -> String {
+    use crate::object_bound_publication::ObjectBoundReplaceError as Error;
+
+    let code = match error {
+        Error::ParentMissing | Error::ParentUnavailable => "oauth-connection-directory-unavailable",
+        Error::ParentUnsafe => "oauth-connection-directory-unsafe",
+        Error::ParentWritableByOthers => "oauth-connection-directory-writable-by-others",
+        Error::ParentIdentityDrift => "oauth-connection-directory-identity-drift",
+        Error::NameInvalid => "oauth-connection-document-path-invalid",
+        Error::TargetUnsafe => "oauth-connection-document-not-regular-file",
+        Error::TargetUnavailable | Error::RenameFailed => "oauth-connection-document-replace-failed",
+        Error::TemporaryCreateFailed => "oauth-connection-document-create-failed",
+        Error::ModeInvalid => "oauth-connection-document-permissions-unsafe",
+        Error::WriteFailed => "oauth-connection-document-write-failed",
+        Error::CleanupFailed => "oauth-connection-document-cleanup-failed",
+        Error::DirectorySyncFailed => "oauth-connection-directory-sync-failed",
+        Error::PostPublishParentIdentityDrift => "oauth-connection-document-publication-uncertain",
+        Error::UnsupportedPlatform => "oauth-connection-document-object-bound-publication-unavailable",
+    };
+    code.into()
+}
+
 fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), String> {
     if connections.len() > MAX_CONNECTIONS {
         return Err("oauth-connection-count-invalid".into());
@@ -485,30 +509,8 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
             return Err("oauth-connection-document-not-regular-file".into());
         }
     }
-    let temporary = parent.join(format!(
-        ".cloud-oauth-connections.{}.tmp",
-        random_urlsafe(12)?
-    ));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|_| "oauth-connection-document-create-failed")?;
-    use std::io::Write as _;
-    if file.write_all(&encoded).is_err() || file.sync_all().is_err() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err("oauth-connection-document-write-failed".into());
-    }
-    if std::fs::rename(&temporary, path).is_err() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err("oauth-connection-document-replace-failed".into());
-    }
-    Ok(())
+    crate::object_bound_publication::replace_object_bound_bytes(path, &encoded, 0o600)
+        .map_err(map_connection_publication_error)
 }
 
 pub fn connection_for_root(
