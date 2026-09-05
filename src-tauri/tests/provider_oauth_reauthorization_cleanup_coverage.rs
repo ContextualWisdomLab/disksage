@@ -8,6 +8,8 @@
 //! connection for normal use. Already-deleted legacy entries may also remain as retry handles:
 //! keyring `NoEntry` is idempotent success on the next cleanup attempt.
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
