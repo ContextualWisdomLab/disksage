@@ -34,6 +34,10 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
 
     let unavailable = "provider-cache-identity-bound-permanent-delete-unavailable";
     assert!(
+        boundary.contains(unavailable) && cli.contains(unavailable),
+        "Tauri and CLI boundaries must share one stable permanent-purge rejection code"
+    );
+    assert!(
         boundary.contains("plan.exact_approval_phrase = None"),
         "shipped plans must not advertise permanent deletion while that authority is unavailable"
     );
@@ -41,9 +45,9 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
         .find("if mode == ProviderCacheCleanupMode::PermanentPurge")
         .expect("public boundary must explicitly branch on permanent purge");
     let rejection = boundary[guard..]
-        .find(unavailable)
+        .find("PERMANENT_PURGE_UNAVAILABLE")
         .map(|offset| guard + offset)
-        .expect("public boundary must reject permanent purge with a stable error");
+        .expect("public boundary must reject permanent purge with the stable error constant");
     let delegate = boundary
         .find("crate::commands::execute_provider_cache_reclaim")
         .expect("Trash must continue through the existing evidence-bound command");
