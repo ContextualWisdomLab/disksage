@@ -152,3 +152,32 @@ fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
     assert_eq!(error, "private-directory-publication-file-mode-drift");
     assert_eq!(fs::metadata(&target).unwrap().len(), 0);
 }
+
+#[test]
+fn post_write_existing_leaf_parent_mode_widening_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipt.json");
+    let hook_root = root.clone();
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &target,
+        b"authorized",
+        0o400,
+        0o700,
+        || {},
+        move || {
+            set_mode(&hook_root, 0o755);
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        "private-directory-publication-directory-mode-drift"
+    );
+    assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(fs::metadata(&target).unwrap().len(), 0);
+}

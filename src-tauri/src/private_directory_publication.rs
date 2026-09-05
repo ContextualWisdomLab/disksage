@@ -344,6 +344,10 @@ where
             anchor_ino,
             directory_mode,
         )?;
+        let final_parent_metadata = final_parent
+            .metadata()
+            .map_err(|_| "private-directory-publication-parent-missing".to_string())?;
+        private_directory(&final_parent_metadata, Some(directory_mode))?;
 
         let visible_fd = unsafe {
             libc::openat(
