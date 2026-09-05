@@ -169,16 +169,20 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
 }
 
 #[test]
-fn lower_level_permanent_purge_fails_closed_before_receipt_or_mutation() {
+fn irreversible_lower_level_helper_is_test_only_and_unreachable_from_production_execute() {
     let implementation = source("src/provider_cache_reclaim.rs");
     let execute_start = implementation
         .find("pub fn execute(")
         .expect("historical lower-level execute boundary must remain inspectable");
-    let execute_body = &implementation[execute_start..];
+    let tests_start = implementation[execute_start..]
+        .find("\n#[cfg(test)]\nmod tests")
+        .map(|offset| execute_start + offset)
+        .expect("production execute boundary must end before the unit-test module");
+    let execute_body = &implementation[execute_start..tests_start];
 
     let guard = execute_body
         .find("if mode == ProviderCacheCleanupMode::PermanentPurge")
-        .expect("lower-level execution must reject irreversible mode explicitly");
+        .expect("lower-level execution must retain an explicit irreversible-mode rejection");
     let rejection = execute_body[guard..]
         .find("provider-cache-identity-bound-permanent-delete-unavailable")
         .map(|offset| guard + offset)
@@ -186,12 +190,29 @@ fn lower_level_permanent_purge_fails_closed_before_receipt_or_mutation() {
     let receipt = execute_body
         .find("write_immutable_receipt(")
         .expect("Trash execution must keep immutable approval receipts");
-    let mutation = execute_body
-        .find("permanently_purge_exact(&candidate")
-        .expect("historical purge implementation remains repair evidence until safely retired");
 
     assert!(
-        guard < rejection && rejection < receipt && rejection < mutation,
-        "irreversible mode must fail closed before receipt creation or pathname-based permanent mutation"
+        guard < rejection && rejection < receipt,
+        "irreversible mode must fail closed before receipt creation"
+    );
+    assert!(
+        !execute_body.contains("permanently_purge_exact("),
+        "production execute must not retain a static call edge to the historical pathname purge helper"
+    );
+    assert!(
+        !execute_body.contains("ProviderCacheCleanupMode::PermanentPurge =>"),
+        "production execution after the fail-closed guard must be structurally Trash-only"
+    );
+    assert!(
+        implementation.contains("#[cfg(test)]\nfn restore_staged_file_without_replacement("),
+        "historical rollback helper may remain only as test/repair evidence"
+    );
+    assert!(
+        implementation.contains("#[cfg(test)]\nfn permanently_purge_exact("),
+        "historical permanent purge helper must not be compiled into production"
+    );
+    assert!(
+        implementation.contains("#[cfg(test)]\nfn permanently_purge_exact_with_after_stage"),
+        "replacement-race fixture hook must remain test-only"
     );
 }
