@@ -1,3 +1,4 @@
+use disksage_lib::provider_cache::ProviderCacheReclaimPlan;
 use std::fs;
 use std::path::PathBuf;
 
@@ -40,5 +41,32 @@ fn commercial_rust_plan_does_not_name_irreversible_approval_authority() {
     assert!(
         public_api.contains("fn project_plan("),
         "the facade must explicitly project the historical plan into the commercial plan DTO"
+    );
+}
+
+#[test]
+fn commercial_plan_wire_schema_contains_only_reversible_approval() {
+    let plan = ProviderCacheReclaimPlan {
+        schema_version: 1,
+        platform: "macos".into(),
+        observed_at_ms: 1,
+        installed_edge_version: None,
+        podman_machine_present: false,
+        podman_recreation_source: None,
+        evidence_complete: false,
+        candidates: Vec::new(),
+        issues: vec!["provider-cache-evidence-incomplete".into()],
+        plan_fingerprint: "a".repeat(64),
+        trash_approval_phrase: Some("DiskSage Trash approval".into()),
+    };
+    let value = serde_json::to_value(plan).expect("commercial plan must remain serializable");
+    let object = value
+        .as_object()
+        .expect("commercial provider-cache plan must serialize as an object");
+
+    assert!(object.contains_key("trash_approval_phrase"));
+    assert!(
+        !object.contains_key("exact_approval_phrase"),
+        "unsupported irreversible approval must be absent from the serialized public plan"
     );
 }
