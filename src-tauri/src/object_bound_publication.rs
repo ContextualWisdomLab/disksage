@@ -15,7 +15,7 @@ use std::path::Path;
 /// Stable failure classes exposed to DiskSage domain adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObjectBoundReplaceError {
-    /// Requested Unix permissions are not owner-private or contain unsupported special bits.
+    /// Requested Unix permissions are not an admitted private-record mode.
     ModeInvalid,
     /// The platform owner cannot yet prove that final publication consumes the reviewed source object.
     SourceIdentityUnavailable,
@@ -38,10 +38,11 @@ impl ObjectBoundReplaceError {
 
 /// Refuse replacement until final mutation can be conditioned on the exact reviewed source object.
 ///
-/// Unix still validates the requested private mode before returning the capability error so callers
-/// cannot accidentally normalize an invalid permission request into a future valid one. The function
-/// performs no filesystem lookup or mutation for an otherwise valid request. Create-new evidence
-/// publication remains owned by `private_directory_publication` / `private_evidence` and is unaffected.
+/// Unix admits only the same read-only/read-write private-record modes used by create-new publication
+/// (`0400` or `0600`) before returning the capability error. This prevents unsupported owner-only,
+/// executable, or special-bit modes from being normalized into future replacement authority. The
+/// function performs no filesystem lookup or mutation for an otherwise valid request. Create-new
+/// evidence publication remains owned by `private_directory_publication` / `private_evidence`.
 pub(crate) fn replace_object_bound_bytes(
     path: &Path,
     encoded: &[u8],
@@ -49,7 +50,7 @@ pub(crate) fn replace_object_bound_bytes(
 ) -> Result<(), ObjectBoundReplaceError> {
     #[cfg(unix)]
     {
-        if unix_mode & !0o777 != 0 || unix_mode & 0o077 != 0 {
+        if !matches!(unix_mode, 0o400 | 0o600) {
             return Err(ObjectBoundReplaceError::ModeInvalid);
         }
         let _ = (path, encoded);
