@@ -10,7 +10,7 @@ DiskSage can identify provider-owned local artifacts that are regenerable, inclu
 
 OS Trash is the supported reversible product action. Permanent provider-cache deletion is materially different. The historical lower-level implementation stages a candidate through pathname rename and then removes it. Its identity/content checks, double fingerprint confirmation, receipt, and journal are useful test evidence, but they do not bind irreversible mutation to the same reviewed filesystem object across ancestor replacement, crash recovery, and Windows/Linux/macOS. Those destructive helpers therefore remain `#[cfg(test)]`; production has no static call edge to them.
 
-Receipt publication is also a security boundary. A receipt that authorizes a later mutation must not be redirected through parent replacement, and failure cleanup must not unlink a same-name replacement created by another same-user process.
+Receipt publication is also a security boundary. A receipt that authorizes a later mutation must not be redirected through parent replacement, and failure cleanup must not unlink a same-name replacement created by another same-user process. Creating or chmodding the receipt hierarchy by pathname inside the provider-cache writer would reintroduce exactly that authority split before the object-bound final-record primitive runs.
 
 ## Decision
 
@@ -28,9 +28,11 @@ All shipped Rust facade, Tauri, TypeScript, and headless CLI mutation contracts 
 
 For the final receipt record, `write_immutable_receipt` serializes the receipt and delegates publication to `crate::private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)`. On Unix that owner primitive pins the admitted parent directory, creates with descriptor-relative `openat(O_CREAT|O_EXCL|O_NOFOLLOW)`, writes and syncs the exact open record, syncs the containing directory, verifies the final record identity, and invalidates the exact open record on post-create failure rather than unlinking a pathname. Successful provider-cache receipts are therefore create-new and owner-read-only. Provider-cache does not own a second `OpenOptions`/pathname-open implementation and does not reopen the containing directory by pathname for final-record durability.
 
-On non-Unix targets, provider-cache receipt publication fails closed with `provider-cache-receipt-object-bound-publication-unsupported`; there is no Windows pathname fallback. This is intentionally conservative until #344 gains native Windows handle-relative parity.
+Provider-cache also no longer provisions or permission-normalizes `receipt_dir` itself. If the private receipt parent is absent, replaced, unsafe, or writable by group/other principals, the inherited publication primitive fails before the receipt is created and therefore before cache mutation. This intentionally converts the previous pathname `create_dir_all`/`set_permissions` convenience path into a fail-closed prerequisite. A real Unix filesystem acceptance verifies that an absent receipt parent remains absent and the selected cache remains present; after the fixture provisions an owner-only `0700` parent, the same approved Trash request succeeds and the receipt is owner-read-only.
 
-This decision does **not** claim that provider-cache receipt-directory provisioning is fully object-bound. The command currently derives an application-data receipt path and `write_immutable_receipt` still provisions the parent with pathname-based `create_dir_all` and Unix permission normalization before delegating the final record to #344. Safe private-directory provisioning/ancestor authority is the next publication gap. It must be repaired in or through the canonical reusable filesystem owner rather than by forking another provider-cache-specific primitive.
+This is not the final operability design. The application still needs a canonical reusable private-directory/ancestor provisioning capability that can create the application-data receipt hierarchy without pathname-authority gaps and can preserve the same admitted-directory authority through publication. That prerequisite belongs to the reusable filesystem/private-publication owner rather than provider-cache. Until it exists, first-use Trash cleanup may correctly fail closed when its private receipt hierarchy has not already been provisioned.
+
+On non-Unix targets, provider-cache receipt publication fails closed with `provider-cache-receipt-object-bound-publication-unsupported`; there is no Windows pathname fallback. This is intentionally conservative until the reusable owner gains native Windows handle-relative parity.
 
 Permanent provider-cache deletion may be reconsidered only after the canonical deletion-safety owner provides one implementation with stable object/directory authority through final mutation, ancestor/symlink/reparse/hardlink resistance, durable pre-mutation recovery evidence, partial-failure handling, crash/power-loss recovery, and platform-specific acceptance for every platform where the mode is exposed. Publication authority is not deletion authority.
 
@@ -51,14 +53,17 @@ The contract-repair lineage includes:
 - `511f373d4282c88410663a924196d074c9f81be8`: source-contract RED forbidding pathname unlink in post-create receipt failure cleanup; `727746b08b6320d44a813dec2b183a9382809130` invalidates only the exact open receipt and adds a real Unix replacement-record fixture.
 - `e083c1224db6d531039c8a5f6bb64f10391b6be0`: source-contract RED requiring provider-cache final receipt publication to consume the inherited #344 object-bound create-new primitive and forbidding a duplicate `OpenOptions`/`File::open(receipt_dir)` implementation.
 - `a51fef56b79515b48581341f34f4018039475a9f`: production repair routing the final receipt record through #344 at mode `0400`, with non-Unix fail-closed behavior and create-new/read-only acceptance.
+- `53c1b68fc1bf1ae864a4af0f2a65dddfa0932709`: source-contract RED forbidding provider-cache-local `create_dir_all(receipt_dir)` and pathname permission normalization.
+- `eb7a52bddb8fd73bb732c32e9b9f68777c42cb25`: production repair removing those pathname parent mutations so missing/unsafe private receipt parents fail before record publication or cache mutation.
+- `76ee3482c5b2ac9ab310383e3c221c8c459be26e`: real-filesystem acceptance proving the absent parent is not created, the cache is preserved on admission failure, and an explicitly provisioned owner-only parent permits the same Trash flow to publish a read-only receipt.
 
-Intermediate RED commits are source/test contract evidence only unless an exact-head hosted failure was actually observed. No such hosted failure is claimed for `e083c122...`.
+Intermediate RED commits are source/test contract evidence only unless an exact-head hosted failure was actually observed. No hosted failure is claimed for `e083c122...` or `53c1b68f...` unless an exact intermediate run is observed failing.
 
 ## Consequences
 
-DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup without exposing unsupported irreversible authority. The final provider-cache receipt record now inherits the same Unix object-bound create-new authority used by the reusable private-publication foundation, so provider-cache no longer carries a second pathname final-record writer.
+DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup without exposing unsupported irreversible authority. The final provider-cache receipt record inherits the same Unix object-bound create-new authority used by the reusable private-publication foundation, and provider-cache no longer creates or chmods its receipt hierarchy through pathname mutation.
 
-The remaining publication risk is narrower but real: pathname-based creation/admission and permission normalization of the receipt parent directory must be replaced by or delegated to canonical private-directory provisioning authority, with Windows handle-relative parity before Windows mutation is enabled. Until then the ADR remains Proposed.
+Security and operability are now deliberately separated. An unprovisioned receipt hierarchy blocks mutation instead of being repaired ad hoc by the provider-cache bounded context. The next buyer-visible availability gap is a canonical private-directory provisioning API with Unix descriptor-relative creation and Windows native-handle parity; it must be integrated before claiming first-run cleanup availability across all supported platforms. Until then the ADR remains Proposed.
 
 Permanent deletion remains unavailable. The historical permanent-purge variant, plan/result evidence, and filesystem fixtures remain crate-private/test-only evidence for future design; they are not a dormant commercial capability.
 
@@ -70,6 +75,8 @@ Permanent deletion remains unavailable. The historical permanent-purge variant, 
 - Leaving pathname-staged destructive helpers compiled or statically referenced behind an early return: future control-flow edits could reconnect the unsafe capability.
 - Removing a failed create-new receipt by pathname: the visible name can already refer to a different object.
 - Maintaining a provider-cache-specific final-record `OpenOptions`/directory-sync writer after inheriting #344: it duplicates canonical filesystem authority and preserves avoidable replacement races.
-- Claiming the whole receipt pipeline object-bound after fixing only final-record publication: receipt-parent provisioning is still pathname-based and remains an explicit gap.
+- Creating or chmodding the receipt hierarchy by pathname inside provider-cache: it splits authority between an unsafe parent setup step and an object-bound record writer.
+- Silently creating missing parents as a convenience fallback: it converts an availability concern into a filesystem-authority vulnerability.
+- Claiming the whole receipt pipeline is first-run ready after merely failing closed on missing parents: safe canonical provisioning remains required.
 - Shipping pathname-authorized permanent deletion with warnings: a warning does not repair mutation authority.
 - Blanket Podman prune/repair: ambiguous images, volumes, damaged references, and provider state can contain or protect user data.
