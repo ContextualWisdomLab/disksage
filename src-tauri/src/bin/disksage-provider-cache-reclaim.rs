@@ -5,6 +5,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
+const PERMANENT_PURGE_UNAVAILABLE: &str =
+    "provider-cache-identity-bound-permanent-delete-unavailable";
 
 fn validate_execute_args(args: &[String]) -> Result<(), String> {
     let valued = [
@@ -37,6 +39,19 @@ fn validate_execute_args(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn cleanup_mode(args: &[String]) -> Result<ProviderCacheCleanupMode, String> {
+    let trash = args.iter().any(|arg| arg == "--trash");
+    let permanent_purge = args.iter().any(|arg| arg == "--permanent-purge");
+    if permanent_purge {
+        return Err(PERMANENT_PURGE_UNAVAILABLE.into());
+    }
+    if trash {
+        Ok(ProviderCacheCleanupMode::Trash)
+    } else {
+        Err("--trash is required".into())
+    }
 }
 
 fn value(args: &[String], flag: &str) -> Result<String, String> {
@@ -82,7 +97,8 @@ fn run() -> Result<serde_json::Value, String> {
     let action = args.first().map(String::as_str).unwrap_or("help");
     if matches!(action, "help" | "--help" | "-h") {
         return Ok(serde_json::json!({
-            "usage": "disksage-provider-cache-reclaim plan | execute --manifest FILE --approved-plan-fingerprint SHA256 --confirm-plan-fingerprint SHA256 --confirm PHRASE --rationale TEXT [--trash|--permanent-purge]"
+            "usage": "disksage-provider-cache-reclaim plan | execute --manifest FILE --approved-plan-fingerprint SHA256 --confirm-plan-fingerprint SHA256 --confirm PHRASE --rationale TEXT --trash",
+            "permanent_purge": "unavailable until identity-bound deletion and recovery authority is implemented"
         }));
     }
     let home = std::env::var("HOME")
@@ -107,14 +123,7 @@ fn run() -> Result<serde_json::Value, String> {
         .map_err(|error| error.to_string()),
         "execute" => {
             validate_execute_args(&args)?;
-            let mode = match (
-                args.iter().any(|arg| arg == "--trash"),
-                args.iter().any(|arg| arg == "--permanent-purge"),
-            ) {
-                (true, false) => ProviderCacheCleanupMode::Trash,
-                (false, true) => ProviderCacheCleanupMode::PermanentPurge,
-                _ => return Err("exactly one of --trash or --permanent-purge is required".into()),
-            };
+            let mode = cleanup_mode(&args)?;
             let manifest = PathBuf::from(value(&args, "--manifest")?);
             if !manifest.is_absolute() {
                 return Err("--manifest must be absolute".into());
@@ -168,5 +177,17 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(error, "manifest too large");
+    }
+
+    #[test]
+    fn permanent_purge_mode_fails_before_manifest_or_executor_work() {
+        let args = vec!["execute".to_string(), "--permanent-purge".to_string()];
+        assert_eq!(cleanup_mode(&args), Err(PERMANENT_PURGE_UNAVAILABLE.into()));
+    }
+
+    #[test]
+    fn trash_mode_remains_available() {
+        let args = vec!["execute".to_string(), "--trash".to_string()];
+        assert_eq!(cleanup_mode(&args), Ok(ProviderCacheCleanupMode::Trash));
     }
 }
