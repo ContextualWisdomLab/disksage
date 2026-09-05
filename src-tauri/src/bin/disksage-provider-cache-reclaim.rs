@@ -1,6 +1,5 @@
-use disksage_lib::provider_cache_reclaim::{
-    execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
-    ProviderCacheReclaimPlan,
+use disksage_lib::provider_cache::{
+    execute_trash, plan_with_runtime, ProviderCacheCleanupRequest, ProviderCacheReclaimPlan,
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -42,14 +41,14 @@ fn validate_execute_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cleanup_mode(args: &[String]) -> Result<ProviderCacheCleanupMode, String> {
+fn require_trash_mode(args: &[String]) -> Result<(), String> {
     let trash = args.iter().any(|arg| arg == "--trash");
     let permanent_purge = args.iter().any(|arg| arg == "--permanent-purge");
     if permanent_purge {
         return Err(PERMANENT_PURGE_UNAVAILABLE.into());
     }
     if trash {
-        Ok(ProviderCacheCleanupMode::Trash)
+        Ok(())
     } else {
         Err("--trash is required".into())
     }
@@ -61,9 +60,7 @@ fn public_plan(
     podman: &Path,
     observed_at_ms: u64,
 ) -> ProviderCacheReclaimPlan {
-    let mut plan = plan_with_runtime(home, applications, podman, observed_at_ms);
-    plan.exact_approval_phrase = None;
-    plan
+    plan_with_runtime(home, applications, podman, observed_at_ms)
 }
 
 fn value(args: &[String], flag: &str) -> Result<String, String> {
@@ -135,14 +132,14 @@ fn run() -> Result<serde_json::Value, String> {
         .map_err(|error| error.to_string()),
         "execute" => {
             validate_execute_args(&args)?;
-            let mode = cleanup_mode(&args)?;
+            require_trash_mode(&args)?;
             let manifest = PathBuf::from(value(&args, "--manifest")?);
             if !manifest.is_absolute() {
                 return Err("--manifest must be absolute".into());
             }
             let requests = read_manifest_requests(&manifest)?;
             let data = home.join(".local/share/disksage");
-            serde_json::to_value(execute(
+            serde_json::to_value(execute_trash(
                 &home,
                 std::path::Path::new("/Applications"),
                 &podman,
@@ -153,7 +150,6 @@ fn run() -> Result<serde_json::Value, String> {
                 &value(&args, "--rationale")?,
                 &data.join("journal.jsonl"),
                 &data.join("receipts/provider-cache"),
-                mode,
                 now_ms(),
             )?)
             .map_err(|error| error.to_string())
@@ -194,13 +190,16 @@ mod tests {
     #[test]
     fn permanent_purge_mode_fails_before_manifest_or_executor_work() {
         let args = vec!["execute".to_string(), "--permanent-purge".to_string()];
-        assert_eq!(cleanup_mode(&args), Err(PERMANENT_PURGE_UNAVAILABLE.into()));
+        assert_eq!(
+            require_trash_mode(&args),
+            Err(PERMANENT_PURGE_UNAVAILABLE.into())
+        );
     }
 
     #[test]
     fn trash_mode_remains_available() {
         let args = vec!["execute".to_string(), "--trash".to_string()];
-        assert_eq!(cleanup_mode(&args), Ok(ProviderCacheCleanupMode::Trash));
+        assert_eq!(require_trash_mode(&args), Ok(()));
     }
 
     #[test]
