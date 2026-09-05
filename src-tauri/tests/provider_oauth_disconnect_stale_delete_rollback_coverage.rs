@@ -6,6 +6,8 @@
 //! Delete stale legacy credentials first so a stale-delete failure leaves the canonical retry
 //! credential intact and the restored document remains an honest recovery handle.
 
+#[path = "../src/object_bound_publication.rs"]
+mod object_bound_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
