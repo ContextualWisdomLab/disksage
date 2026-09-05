@@ -100,7 +100,7 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
 
     let reexport_start = public_api
         .find("pub use crate::provider_cache_reclaim::{")
-        .expect("safe facade must explicitly choose the read-only and Trash result DTOs it exports");
+        .expect("safe facade must explicitly choose the read-only and Trash DTOs it exports");
     let reexport_tail = &public_api[reexport_start..];
     let reexport_end = reexport_tail
         .find("};")
@@ -108,7 +108,28 @@ fn irreversible_lower_level_executor_is_not_a_public_rust_capability() {
     let reexport_block = &reexport_tail[..reexport_end];
     assert!(
         !reexport_block.contains("ProviderCacheCleanupMode"),
-        "commercial Rust callers must not be offered the historical enum variant that advertises PermanentPurge"
+        "commercial Rust callers must not receive the historical cleanup-mode enum"
+    );
+    assert!(
+        !reexport_block.contains("ProviderCacheCleanupResult"),
+        "commercial Rust result types must not expose a field whose mode type still includes PermanentPurge"
+    );
+
+    let public_mode_start = public_api
+        .find("pub enum ProviderCacheCleanupMode")
+        .expect("safe facade must define its own Trash-only cleanup mode");
+    let public_mode_tail = &public_api[public_mode_start..];
+    let public_mode_end = public_mode_tail
+        .find('}')
+        .expect("safe facade cleanup mode must terminate");
+    let public_mode = &public_mode_tail[..public_mode_end];
+    assert!(
+        public_mode.contains("Trash") && !public_mode.contains("PermanentPurge"),
+        "the externally nameable provider-cache cleanup mode must contain Trash only"
+    );
+    assert!(
+        public_api.contains("pub struct ProviderCacheCleanupResult"),
+        "safe facade must project the internal result into a publicly nameable Trash-only DTO"
     );
 
     let execute_start = public_api
