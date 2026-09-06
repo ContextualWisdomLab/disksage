@@ -15,12 +15,8 @@ fn append_after_length_snapshot_is_bounded_to_expected_bytes_plus_one() {
     assert_eq!(admitted_len, expected.len() as u64);
 
     let appended = vec![b'x'; 4096];
-    OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(&appended)
-        .unwrap();
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(&appended).unwrap();
     assert_eq!(
         fs::metadata(&path).unwrap().len(),
         expected.len() as u64 + appended.len() as u64,
@@ -40,7 +36,11 @@ fn append_after_length_snapshot_is_bounded_to_expected_bytes_plus_one() {
         expected.len() + 1,
         "final validation must observe only the expected bytes plus one drift sentinel"
     );
-    assert_ne!(observed, expected, "the appended byte must make exact-byte validation fail closed");
+    assert_ne!(
+        observed.as_slice(),
+        expected,
+        "the appended byte must make exact-byte validation fail closed"
+    );
     assert!(
         fs::metadata(&path).unwrap().len() > observed.len() as u64,
         "the bounded read must not consume the remainder of a concurrently enlarged record"
