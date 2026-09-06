@@ -1,6 +1,5 @@
 use disksage_lib::generated_cache_reclaim::{
-    approve, audit, execute_and_record, stage_and_remove_regenerable_root,
-    MAX_APPROVAL_AGE_MS,
+    approve, audit, execute_and_record, stage_and_remove_regenerable_root, MAX_APPROVAL_AGE_MS,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -175,9 +174,7 @@ fn run() -> Result<(), String> {
                 path,
                 &home,
                 attempted_at_ms,
-                approval
-                    .approved_at_ms
-                    .saturating_add(MAX_APPROVAL_AGE_MS),
+                approval.approved_at_ms.saturating_add(MAX_APPROVAL_AGE_MS),
             )
         },
     )?;
@@ -207,8 +204,10 @@ mod tests {
     #[test]
     fn help_is_standalone_and_plan_is_default() {
         assert_eq!(parse(&strings(&["--help"])).unwrap(), None);
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("cache");
         assert!(
-            !parse(&strings(&["--root", "/Users/test/.cache/torch"]))
+            !parse(&[OsString::from("--root"), root.into_os_string()])
                 .unwrap()
                 .unwrap()
                 .execute
