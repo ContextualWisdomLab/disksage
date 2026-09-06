@@ -41,34 +41,45 @@ fn resolve_existing_parent(path: &Path) -> PathBuf {
 }
 
 /// Protect lexical and resolved roots, so a symlink cannot disguise relocated state.
-fn protects_with_roots(path: &Path, roots: &[PathBuf]) -> bool {
-    if has_state_component(path) {
-        return true;
-    }
-    let resolved = resolve_existing_parent(path);
-    if has_state_component(&resolved) {
-        return true;
-    }
-    roots.iter().any(|root| {
-        let canonical = resolve_existing_parent(root);
-        overlaps(path, root)
-            || overlaps(&resolved, root)
-            || overlaps(path, &canonical)
-            || overlaps(&resolved, &canonical)
-    })
-}
-
-/// Preserve default and explicitly relocated agent state without opening its contents.
-/// An unusable configured root is inconclusive and blocks cleanup.
-pub fn is_agent_state(path: &Path) -> bool {
+fn protects_prepared(path: &Path, roots: &[(PathBuf, PathBuf)]) -> bool {
     let Ok(path) = std::path::absolute(path) else {
         return true;
     };
+    if has_state_component(&path) {
+        return true;
+    }
+    let resolved = resolve_existing_parent(&path);
+    has_state_component(&resolved)
+        || roots.iter().any(|(root, canonical)| {
+            overlaps(&path, root)
+                || overlaps(&resolved, root)
+                || overlaps(&path, canonical)
+                || overlaps(&resolved, canonical)
+        })
+}
+
+fn prepare_roots(roots: Vec<PathBuf>) -> Vec<(PathBuf, PathBuf)> {
+    roots
+        .into_iter()
+        .map(|root| {
+            let canonical = resolve_existing_parent(&root);
+            (root, canonical)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn protects_with_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    protects_prepared(path, &prepare_roots(roots.to_vec()))
+}
+
+/// An unusable configured root is inconclusive and blocks cleanup.
+fn configured_roots() -> Option<Vec<(PathBuf, PathBuf)>> {
     let mut roots = Vec::new();
     if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
         let home = PathBuf::from(home);
         if !home.is_absolute() {
-            return true;
+            return None;
         }
         roots.extend([
             home.join(".codex"),
@@ -80,12 +91,17 @@ pub fn is_agent_state(path: &Path) -> bool {
         if let Some(root) = std::env::var_os(key) {
             let root = PathBuf::from(root);
             if !root.is_absolute() {
-                return true;
+                return None;
             }
             roots.push(root);
         }
     }
-    protects_with_roots(&path, &roots)
+    Some(prepare_roots(roots))
+}
+
+/// Preserve default and explicitly relocated agent state without opening its contents.
+pub fn is_agent_state(path: &Path) -> bool {
+    configured_roots().is_none_or(|roots| protects_prepared(path, &roots))
 }
 
 /// Refuse a directory containing nested agent state, or an incomplete metadata walk.
@@ -95,14 +111,22 @@ pub fn contains_agent_state(path: &Path) -> bool {
 }
 
 fn contains_with_limit(path: &Path, limit: usize) -> bool {
-    if is_agent_state(path) {
+    let Some(roots) = configured_roots() else {
+        return true;
+    };
+    // Scope the snapshot to one walk, and retain if its configuration or targets changed.
+    contains_with_roots(path, limit, &roots) || configured_roots().as_ref() != Some(&roots)
+}
+
+fn contains_with_roots(path: &Path, limit: usize, roots: &[(PathBuf, PathBuf)]) -> bool {
+    if protects_prepared(path, roots) {
         return true;
     }
     let mut pending = vec![path.to_path_buf()];
     let mut visited = 0;
     while let Some(path) = pending.pop() {
         visited += 1;
-        if visited > limit || is_agent_state(&path) {
+        if visited > limit || protects_prepared(&path, roots) {
             return true;
         }
         let metadata = match std::fs::symlink_metadata(&path) {
@@ -209,8 +233,41 @@ mod tests {
         symlink(&relocated, &configured).unwrap();
         assert!(protects_with_roots(
             &relocated.join("session.jsonl"),
-            &[configured]
+            &[configured.clone()]
         ));
+        let roots = vec![configured.clone()];
+        let prepared = prepare_roots(roots.clone());
+        for path in [
+            root.clone(),
+            relocated.clone(),
+            relocated.join("missing/session.jsonl"),
+            alias.clone(),
+            project.join("build.o"),
+            root.join("unrelated/missing"),
+        ] {
+            // The previous per-entry algorithm remains the equivalence oracle.
+            let resolved = resolve_existing_parent(&path);
+            let previous = has_state_component(&path)
+                || has_state_component(&resolved)
+                || roots.iter().any(|root| {
+                    let canonical = resolve_existing_parent(root);
+                    overlaps(&path, root)
+                        || overlaps(&resolved, root)
+                        || overlaps(&path, &canonical)
+                        || overlaps(&resolved, &canonical)
+                });
+            assert_eq!(
+                protects_prepared(&path, &prepared),
+                previous,
+                "{}",
+                path.display()
+            );
+        }
+        let replacement = root.join("replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        std::fs::remove_file(&configured).unwrap();
+        symlink(&replacement, &configured).unwrap();
+        assert_ne!(prepared, prepare_roots(roots));
         // Only this test's create-new fixture is removed; user session roots are never touched.
         std::fs::remove_dir_all(root).unwrap();
     }
