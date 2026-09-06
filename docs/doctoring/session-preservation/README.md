@@ -65,6 +65,25 @@ Hosted Test and Release failures at `8a828d35` reproduce existing concurrency-co
 
 The cache CLI's five tests passed at source head `f67ac14e`, including unavailable purge without journal-directory creation; the same head's hosted `windows-home-resolution` job passed. Repeated native-probe experiments did not justify a timeout workaround: numeric-output flags still took 1.80–4.97 seconds for idle files and 1.08–3.50 seconds for held files. The `-b` option missed a held file and was rejected. No timeout or evidence-completeness guard was weakened.
 
+Independent follow-up audit found two sibling cloud rollback branches still using check-then-rename. `f0c7a4e7` shares create-only restoration across verification, active-use rejection, and failed-Trash rollback. Its new regression preserves both files when another writer occupies the original path. The cloud module compiled and reported eight passed and one live-observation failure; that remaining approval test passed its standalone rerun. This does not erase the full-run failure.
+
+## Capacity phase: online free-block return
+
+After a successful native dry run, a single `colima ssh -- sudo fstrim --verbose /var/lib/docker` returned filesystem-unused blocks. This is an external supported guest operation, not a DiskSage execution receipt or a change to PR #310's unavailable stopped-VM execution contract. No files were selected for deletion. The guest reported 38,369,525,760 potential discard bytes, which is **not** the physical recovery measurement.
+
+| Observation | Before (KiB) | After (KiB) | Difference (GiB) |
+| --- | ---: | ---: | ---: |
+| Default Colima backing allocation | 72,896,548 | 56,033,764 | 16.081604 less allocated |
+| Host available space | 7,351,216 | 23,796,864 | 15.683792 net increase |
+
+All 17 previously observed container IDs remained Up afterward; this verifies process continuity, not application health. Relative to the capacity-phase initial available-space observation (9,126,100 KiB), the post-operation host gain was 13.991131 GiB. Background writes and changing swap allocation affect host deltas, so neither the guest discard number nor later unrelated free-space changes are attributed to this operation.
+
+The completed ChatGPT project inventory measured 48.857 GiB, including 22.921 GiB of build/dependency directories; these totals overlap and must not be added. Session stores, project data, initialized indexes, active builds, and unknown VM ownership are retained. The large iCloud metadata traversal remains incomplete and is not a reclaim estimate. The 300 GiB acceptance target remains unmet.
+
+A subsequent dry run and single `podman machine ssh -- sudo fstrim --verbose /` likewise returned only unused filesystem blocks. Podman storage allocation decreased from 30,559,476 to 5,495,828 KiB (23.902557 GiB), while host available space increased from 25,233,564 to 50,130,164 KiB (23.743248 GiB). The guest's 106,836,242,432 reported discard bytes are not physical recovery. Podman still reported three images, zero containers, and zero volumes afterward; no image, container, volume, or session was deleted.
+
+Combined backing-allocation reduction is 39.984161 GiB. At the second post-operation observation, host available space was 47.807850 GiB: 39.104523 GiB above the initial baseline, leaving 260.895477 GiB to the required 300 GiB increase. The operation records are measured live evidence, not proof that the incomplete candidate inventory is disposable or that the product has integrated these native execution paths.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
@@ -72,5 +91,7 @@ Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026,
 OpenAI. (n.d.). *Advanced configuration*. Retrieved September 6, 2026, from https://developers.openai.com/codex/config-advanced/
 
 Git contributors. (n.d.). *git-worktree documentation*. Retrieved September 6, 2026, from https://git-scm.com/docs/git-worktree
+
+util-linux contributors. (n.d.). *fstrim(8) manual page*. Retrieved September 6, 2026, from https://github.com/util-linux/util-linux/blob/master/sys-utils/fstrim.8.adoc
 
 Context7 lookup was attempted but returned a monthly quota error. DeepWiki had no indexed DiskSage repository. Current local source and first-party documentation were used instead.
