@@ -164,10 +164,16 @@ mod tests {
         let fixture = tempfile::tempdir().unwrap();
         let journal = fixture.path().join("not-created/journal.jsonl");
         let error = run_with_args([
-            OsString::from("--execute"), OsString::from("--purge-proven-cache-trash"),
-            OsString::from("--journal-path"), journal.into_os_string(),
-        ]).unwrap_err();
-        assert_eq!(error, "Permanent deletion is unavailable. Items remain in OS Trash.");
+            OsString::from("--execute"),
+            OsString::from("--purge-proven-cache-trash"),
+            OsString::from("--journal-path"),
+            journal.into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "Permanent deletion is unavailable. Items remain in OS Trash."
+        );
         assert!(!fixture.path().join("not-created").exists());
     }
 
@@ -178,11 +184,8 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 

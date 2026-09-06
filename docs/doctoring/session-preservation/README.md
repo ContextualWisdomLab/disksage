@@ -39,7 +39,11 @@ The focused offline harness compiled the actual `safety.rs` plus the unchanged p
 
 The shared guard protects complete `.codex`, `.claude`, and `.claude.json` components, their default home roots, and `CODEX_HOME` / `CLAUDE_CONFIG_DIR`. It compares original and canonical roots, including the nearest existing ancestor for a destination that does not yet exist. Parent selection is blocked when it would encompass configured state. A metadata-only tree walk catches nested project state; symlinks are not traversed. Incomplete evidence or more than 10,000 entries retains the tree.
 
-Ordinary and identity-bound Trash operations and moves apply the guard before mutation. Identity-bound Trash repeats the tree check after staging and restores the staged object on rejection. Native Git worktree audit and execution reuse the guard. The existing permanent-cache classifier now rejects session-bearing trees, but its broader name/signature authority remains insufficient: PR #263 owns disabling permanent cache Trash deletion and is still unmerged. This experiment does not replace that delta.
+Ordinary and identity-bound Trash operations and moves apply the guard before mutation. Identity-bound Trash repeats the tree check after staging and restores the staged object on rejection. Native Git worktree audit and execution reuse the guard. Review repairs at `6ea7992e` stage worktrees with native `git worktree move`, recheck the same filesystem object, and restore on rejection without overwriting a reappeared source. A failed restoration retains the staged tree and Git registration for recovery. The staging directory never recursively deletes its contents on drop. Native removal remains non-force and never deletes the branch.
+
+The permanent cache Trash entry point now returns an unavailable error without filesystem mutation, reusing the fail-closed policy from PR #263. The CLI reports that items remain in OS Trash and does not create journal directories for this unavailable operation. This is only a narrow policy reuse: PR #263 still owns its other snapshot, approval, and provenance deltas and remains open. Generated-artifact Trash and eligible native worktree cleanup remain available under their existing gates.
+
+Cloud source eviction checks for session state before staging. If the Trash callback fails while the verified regular file remains staged, a create-only hard link restores its original path; an occupied original path is never overwritten, and the staged file remains available if restoration fails. This closes the reviewed failure that could leave a retained source hidden after rejection.
 
 Known limits: arbitrary renamed/exported transcripts outside recognized/configured roots are not identifiable from path metadata; a custom root set only in another process is not discoverable from DiskSage's environment; filesystem path checks do not prove immunity to every concurrent namespace mutation. The 10,000-entry ceiling can retain legitimate large caches. Provider-local eviction and other applications' own retention policies need separate validation. Claude Code documents its own age-based sweep; a DiskSage guard does not disable it.
 
@@ -49,12 +53,20 @@ Next experiment: use a consented, metadata-only real candidate inventory with re
 
 `du -sk` on four explicit roots completed without opening file contents or deleting data. On this host, Codex sessions occupy 3,064,548 KiB; Claude projects 1,613,792 KiB; npm content cache 1,165,572 KiB; uv cache 16,114,516 KiB. These are filesystem allocation observations, not reclaim approvals or guaranteed physical free-space gains (shared extents, active entries, and cache ownership still matter). Protect the approximately 4.5 GiB of session/project records while evaluating native pruning for the approximately 16.5 GiB of separate package-cache allocation. No raw session names or transcript content are included in this report.
 
-The previously documented central hourly workflow path returned HTTP 404 during this run, and no matching local Codex automation was found. Its historical scheduling claim has not been revalidated; locate the canonical scheduler before creating a duplicate or claiming an hourly continuation is active.
+The previously documented central hourly workflow path returned HTTP 404 during this run, and no matching local Codex automation was found. A local hourly Codex heartbeat (`disksage`) was subsequently created successfully for this task, with notifications limited to meaningful changes. This does not validate the historical central workflow.
+
+## Integration verification and owner dependencies
+
+The full application compiled offline and the ignored-session Git audit regression passed at `8a828d35`. The first complete library run after `6ea7992e` reported 757 passed, 4 failed, and 1 ignored. The new staging regression compared a macOS temporary-path alias directly with Git's canonical registration; `95ceeb21` aligns that assertion with the existing canonical-path contract. The other failures concern live active-use evidence in cloud approval, automatic cache cleanup, and download materialization and remain under investigation. These results are not a green full-suite claim.
+
+Hosted Test and Release failures at `8a828d35` reproduce existing concurrency-contract and Windows artifact-name mismatches owned by open PR #264. That PR also has failing central review/security checks and requires independent approval. Its changes must pass the protected merge gates before this proposal can claim integrated CI success; the session fix does not duplicate its workflow implementation or bypass those gates.
 
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
 
 OpenAI. (n.d.). *Advanced configuration*. Retrieved September 6, 2026, from https://developers.openai.com/codex/config-advanced/
+
+Git contributors. (n.d.). *git-worktree documentation*. Retrieved September 6, 2026, from https://git-scm.com/docs/git-worktree
 
 Context7 lookup was attempted but returned a monthly quota error. DeepWiki had no indexed DiskSage repository. Current local source and first-party documentation were used instead.

@@ -12,7 +12,7 @@ A developer facing disk pressure needs regenerable build and package artifacts r
 
 In the context of evidence-bound disk reclamation, facing irreversible loss of resumable agent work, we will retain recognized and configured agent-state roots and any selected tree containing them, because path age, cache-like names, and completed tasks do not establish disposability, accepting that a bounded incomplete scan can retain a legitimate cache.
 
-Use a std-only shared policy before ordinary Trash, identity-bound Trash, moves, and native Git worktree removal. Preserve original and resolved path identity, recheck staged trees, and fail closed on incomplete metadata walks. The existing permanent cache deletion policy still requires its independent provenance repair in PR #263.
+Use a std-only shared policy before ordinary Trash, identity-bound Trash, moves, and native Git worktree removal. Preserve original and resolved path identity, recheck staged trees, and fail closed on incomplete metadata walks. Use native Git moves for staging so registration survives rejection and recovery; never recursively remove a retained staging directory or overwrite a reappeared source. Restore verified regular files after failed cloud eviction with create-only hard links. Disable permanent cache Trash deletion using the existing fail-closed policy proposed in PR #263; preserve that PR's remaining provenance and approval deltas.
 
 ## Alternatives considered
 

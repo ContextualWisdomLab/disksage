@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - Cleanup retains recognized Codex and Claude conversation storage, including containing folders and configured alternate locations. Folders that cannot be fully checked are retained.
+- Worktree cleanup rechecks conversations immediately before removal and retains folders when recovery cannot safely restore their original location. Failed cloud cleanup restores the original file when that location is still available.
+- Permanent cache deletion is unavailable; items already moved to OS Trash remain there.
 
 ### Changed
 

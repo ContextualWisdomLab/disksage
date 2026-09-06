@@ -1238,15 +1238,24 @@ mod tests {
         let records = temp.path().join("evictions");
         let journal = temp.path().join("journal/operations.jsonl");
         let error = evict_source_with(
-            &receipt, &permit, &receipt.receipt_id, &records, &journal, 200,
+            &receipt,
+            &permit,
+            &receipt.receipt_id,
+            &records,
+            &journal,
+            200,
             |_, _, _, _| panic!("protected source must not reach Trash"),
-        ).unwrap_err();
+        )
+        .unwrap_err();
         assert_eq!(error, "eviction-source-path-not-safe");
         assert_eq!(std::fs::read(&session).unwrap(), b"preserve session");
         assert!(!records.exists());
         assert!(!journal.parent().unwrap().exists());
-        assert!(!source.parent().unwrap()
-            .join(format!(".disksage-evict-{}", receipt.receipt_id)).exists());
+        assert!(!source
+            .parent()
+            .unwrap()
+            .join(format!(".disksage-evict-{}", receipt.receipt_id))
+            .exists());
     }
 
     #[test]
@@ -1256,20 +1265,29 @@ mod tests {
         let source = Path::new(&receipt.source);
         let records = temp.path().join("evictions");
         let error = evict_source_with(
-            &receipt, &permit, &receipt.receipt_id, &records,
-            &temp.path().join("journal/operations.jsonl"), 200,
+            &receipt,
+            &permit,
+            &receipt.receipt_id,
+            &records,
+            &temp.path().join("journal/operations.jsonl"),
+            200,
             |_, _, _, _| {
                 std::fs::write(source, b"new source must survive").unwrap();
                 Err("trash-refused".into())
             },
-        ).unwrap_err();
+        )
+        .unwrap_err();
         assert!(error.starts_with("trash-refused; eviction-staging-restore-failed:"));
         assert_eq!(std::fs::read(source).unwrap(), b"new source must survive");
-        let staged = source.parent().unwrap()
+        let staged = source
+            .parent()
+            .unwrap()
             .join(format!(".disksage-evict-{}", receipt.receipt_id))
             .join(source.file_name().unwrap());
         assert_eq!(std::fs::read(staged).unwrap(), b"verified source bytes");
-        assert!(!records.join(format!("{}.complete.json", receipt.receipt_id)).exists());
+        assert!(!records
+            .join(format!("{}.complete.json", receipt.receipt_id))
+            .exists());
     }
 
     #[test]
@@ -1288,7 +1306,10 @@ mod tests {
             |_, _, _, _| Err("simulated-crash-before-trash".into()),
         );
         assert_eq!(first.unwrap_err(), "simulated-crash-before-trash");
-        assert_eq!(std::fs::read(&receipt.source).unwrap(), b"verified source bytes");
+        assert_eq!(
+            std::fs::read(&receipt.source).unwrap(),
+            b"verified source bytes"
+        );
         let resumed = evict_source_with(
             &receipt,
             &permit,

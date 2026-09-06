@@ -115,7 +115,9 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         }
         _ => return None,
     };
-    if safety::agent_state_guard::contains_agent_state(path) { return None; }
+    if safety::agent_state_guard::contains_agent_state(path) {
+        return None;
+    }
     Some(signature)
 }
 
@@ -428,8 +430,10 @@ mod tests {
         assert_eq!(candidates[0].bytes, 5);
 
         let journal = tmp.path().join("journal.jsonl");
-        assert_eq!(purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap_err(),
-            "cache-trash-permanent-delete-unavailable");
+        assert_eq!(
+            purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap_err(),
+            "cache-trash-permanent-delete-unavailable"
+        );
         assert_eq!(fs::read(npm.join("content-v2/entry")).unwrap(), b"cache");
         assert!(!journal.exists());
     }
