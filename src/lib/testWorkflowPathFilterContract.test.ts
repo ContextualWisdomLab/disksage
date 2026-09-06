@@ -99,7 +99,7 @@ it("macOS cache job executes present owner tests, reports absent source, and pro
     const bin = resolve(fixture, "bin");
     mkdirSync(bin);
     const log = resolve(fixture, "cargo.log");
-    writeFileSync(resolve(bin, "cargo"), '#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$CARGO_LOG"\nexit "${CARGO_EXIT:-0}"\n', { mode: 0o700 });
+    writeFileSync(resolve(bin, "cargo"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$CARGO_LOG\"\nexit \"${CARGO_EXIT:-0}\"\n", { mode: 0o700 });
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_LOG: log };
     const run = (extra = {}) => spawnSync("bash", ["-e", "-c", script], { cwd: fixture, env: { ...env, ...extra }, encoding: "utf8" });
     const absent = run();
