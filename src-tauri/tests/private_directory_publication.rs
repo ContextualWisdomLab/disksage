@@ -190,3 +190,30 @@ fn post_write_existing_leaf_parent_mode_widening_fails_closed() {
     assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
     assert_eq!(fs::metadata(&target).unwrap().len(), 0);
 }
+
+#[test]
+fn post_write_same_object_content_mutation_fails_closed_and_invalidates_exact_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipt.json");
+    let hook_target = target.clone();
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &target,
+        b"authorized",
+        0o600,
+        0o700,
+        || {},
+        move || {
+            fs::write(&hook_target, b"tampered!!").expect("mutate admitted record in place");
+        },
+    )
+    .expect_err("same-object content drift must fail closed");
+
+    assert_eq!(error, "private-directory-publication-file-content-drift");
+    let metadata = fs::metadata(&target).expect("invalidated record metadata");
+    assert_eq!(metadata.len(), 0, "failure must invalidate the exact opened record");
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+}

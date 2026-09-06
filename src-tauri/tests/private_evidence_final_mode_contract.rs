@@ -50,3 +50,30 @@ fn final_private_evidence_mode_widening_or_special_bits_fail_closed() {
         assert_final_mode_drift_fails_closed(drift_mode);
     }
 }
+
+#[test]
+fn final_private_evidence_same_object_content_drift_fails_closed() {
+    let root = tempfile::tempdir().expect("tempdir");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+        .expect("set private parent mode");
+    let record = root.path().join("record-content-drift.json");
+    let hook_record = record.clone();
+
+    let error = write_object_bound_bytes_create_new_with_hooks(
+        &record,
+        b"authorized",
+        0o600,
+        None,
+        || {},
+        || {},
+        move || {
+            fs::write(&hook_record, b"tampered!!").expect("mutate admitted record in place");
+        },
+    )
+    .expect_err("same-object content drift must fail closed");
+
+    assert_eq!(error, ObjectBoundPublicationError::RecordContentDrift);
+    let metadata = fs::metadata(&record).expect("record metadata");
+    assert_eq!(metadata.len(), 0, "failure must invalidate the exact opened record");
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+}

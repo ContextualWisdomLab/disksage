@@ -1,6 +1,6 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 pub const MAX_PRIVATE_EVIDENCE_BYTES: usize = 8 * 1024 * 1024;
@@ -25,6 +25,7 @@ pub(crate) enum ObjectBoundPublicationError {
     ParentUnsafe,
     ParentWritableByOthers,
     ParentIdentityDrift,
+    ForbiddenRootInvalid,
     ForbiddenRootUnavailable,
     ForbiddenRootIdentityDrift,
     InsideForbiddenRoot,
@@ -35,6 +36,7 @@ pub(crate) enum ObjectBoundPublicationError {
     MetadataFailed,
     ParentSyncFailed,
     RecordIdentityDrift,
+    RecordContentDrift,
     InvalidationFailed,
 }
 
@@ -116,6 +118,9 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
         ObjectBoundPublicationError::ParentIdentityDrift => {
             "private-evidence-parent-identity-drift"
         }
+        ObjectBoundPublicationError::ForbiddenRootInvalid => {
+            "private-evidence-source-root-invalid"
+        }
         ObjectBoundPublicationError::ForbiddenRootUnavailable => {
             "private-evidence-source-root-unavailable"
         }
@@ -132,6 +137,9 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
         ObjectBoundPublicationError::RecordIdentityDrift => {
             "private-evidence-record-identity-drift"
         }
+        ObjectBoundPublicationError::RecordContentDrift => {
+            "private-evidence-record-content-drift"
+        }
         ObjectBoundPublicationError::InvalidationFailed => {
             "private-evidence-invalidation-failed"
         }
@@ -143,13 +151,15 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 /// directory object admitted by the caller-supplied absolute pathname.
 ///
 /// The parent must already exist and must not be writable by group or other principals. Relative
-/// destination authority is rejected before hooks or filesystem lookup so publication never depends
-/// on ambient process CWD. The pathname is opened with `O_NOFOLLOW` before canonicalization and the
-/// opened directory is bound to the device/inode observed during initial admission. Record creation
-/// is descriptor-relative and create-new. `forbidden_root`, when present, is identity-admitted before
-/// any test seam, then canonicalized and opened; the opened directory must retain that initial
-/// device/inode and is revalidated before creation and finalization so source-root alias replacement
-/// cannot silently retarget publication policy.
+/// destination or forbidden-root authority is rejected before hooks or filesystem lookup so
+/// publication never depends on ambient process CWD. The pathname is opened with `O_NOFOLLOW`
+/// before canonicalization and the opened directory is bound to the device/inode observed during
+/// initial admission. Record creation is descriptor-relative and create-new. `forbidden_root`, when
+/// present, is identity-admitted before any test seam, then canonicalized and opened; the opened
+/// directory must retain that initial device/inode and is revalidated before creation and
+/// finalization so source-root alias replacement cannot silently retarget publication policy.
+/// Finalization also reopens the visible record descriptor-relative and verifies exact identity,
+/// mode, length, and bytes before success.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -195,6 +205,9 @@ where
     }
     if !path.is_absolute() {
         return Err(ObjectBoundPublicationError::NameInvalid);
+    }
+    if forbidden_root.is_some_and(|root| !root.is_absolute()) {
+        return Err(ObjectBoundPublicationError::ForbiddenRootInvalid);
     }
 
     let parent = path
@@ -305,7 +318,6 @@ where
         .file_name()
         .filter(|name| !name.is_empty())
         .ok_or(ObjectBoundPublicationError::NameInvalid)?;
-    let final_path = canonical_parent.join(file_name);
     let file_name_c = CString::new(file_name.as_bytes())
         .map_err(|_| ObjectBoundPublicationError::NameInvalid)?;
 
@@ -381,7 +393,19 @@ where
             )?;
         }
 
-        let final_file_metadata = std::fs::symlink_metadata(&final_path)
+        let visible_fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                file_name_c.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if visible_fd < 0 {
+            return Err(ObjectBoundPublicationError::RecordIdentityDrift);
+        }
+        let mut visible = unsafe { std::fs::File::from_raw_fd(visible_fd) };
+        let final_file_metadata = visible
+            .metadata()
             .map_err(|_| ObjectBoundPublicationError::RecordIdentityDrift)?;
         if final_file_metadata.file_type().is_symlink()
             || !final_file_metadata.is_file()
@@ -392,6 +416,16 @@ where
         }
         if final_file_metadata.permissions().mode() & 0o7777 != unix_mode {
             return Err(ObjectBoundPublicationError::ModeInvalid);
+        }
+        if final_file_metadata.len() != encoded.len() as u64 {
+            return Err(ObjectBoundPublicationError::RecordContentDrift);
+        }
+        let mut final_bytes = Vec::with_capacity(encoded.len());
+        visible
+            .read_to_end(&mut final_bytes)
+            .map_err(|_| ObjectBoundPublicationError::RecordContentDrift)?;
+        if final_bytes != encoded {
+            return Err(ObjectBoundPublicationError::RecordContentDrift);
         }
         Ok(())
     })();
@@ -416,8 +450,10 @@ where
 /// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
 /// directory object admitted before canonicalization, so a same-user pathname replacement cannot
 /// redirect either canonicalization or the later write. The forbidden source root is likewise bound
-/// to an opened directory object for the publication lifetime. The file is created once with mode
-/// 0600, synced, and never overwritten. After a post-create failure, the still-open record is
+/// to an opened directory object for the publication lifetime and must be absolute so policy does
+/// not depend on ambient process CWD. The file is created once with mode 0600, synced, and never
+/// overwritten. Finalization reopens the visible record descriptor-relative and verifies exact
+/// identity, mode, length, and bytes. After a post-create failure, the still-open record is
 /// truncated, restored to the requested private mode, and synced through its descriptor. The
 /// pathname is deliberately not unlinked because a same-user process may already have replaced that
 /// name; this can leave a zero-length mode-0600 create-new tombstone that requires explicit operator
