@@ -24,8 +24,7 @@ pub enum RegenerationContract {
     HomebrewBootsnap,
     UvPackageCache,
     PlaywrightBrowserDownload,
-    /// Cargo target directory created by a DiskSage-owned test/CLI process under macOS's
-    /// per-user temporary directory. Cargo regenerates it from the source inputs.
+    /// Legacy temporary Cargo candidate shape. This is not producer or regeneration proof.
     DiskSageTemporaryCargoTarget,
     TemporaryGitWorkspace,
 }
@@ -454,6 +453,10 @@ pub fn plan_with_evidence(
     }
     let contract = regeneration_contract(path, home)
         .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
+    if matches!(contract, RegenerationContract::DiskSageTemporaryCargoTarget) {
+        // A name and empty Cargo lock do not bind retained source or identify generated contents.
+        return Err("temporary-cargo-producer-evidence-required".into());
+    }
     let immediate_parent = immediate_parent_identity(path)?;
     let (allocated_bytes, entry_count, content_fingerprint, locks) = observe_tree(path)?;
     if immediate_parent_identity(path)? != immediate_parent {
@@ -880,7 +883,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn disksage_owned_temporary_cargo_target_is_regenerable_but_neighbors_are_not() {
+    fn temporary_cargo_candidate_shape_does_not_include_neighbors() {
         let temp_root = std::env::temp_dir();
         let nonce = format!("{}-{}", std::process::id(), crate::cloud::system_now_ms());
         let root = temp_root.join(format!(
