@@ -2700,6 +2700,37 @@ mod tests {
 
     #[cfg(all(unix, not(coverage)))]
     #[test]
+    fn clean_merged_worktree_with_ignored_agent_sessions_is_retained() {
+        for marker in [".codex", ".claude"] {
+            let (_temp, repository, secondary) = temporary_repository();
+            // Ignored state remains clean to Git and would otherwise be removed with the worktree.
+            fs::write(repository.join(".git/info/exclude"), format!("{marker}/\n")).unwrap();
+            let session = secondary.join(marker).join("sessions/session.jsonl");
+            fs::create_dir_all(session.parent().unwrap()).unwrap();
+            fs::write(&session, b"synthetic session to preserve\n").unwrap();
+
+            let report = audit_git_worktrees(
+                &repository,
+                &["main".into()],
+                GitWorktreeAuditOptions::default(),
+                current_unix_ms(),
+            )
+            .unwrap();
+            let canonical = fs::canonicalize(&secondary).unwrap();
+            let entry = report.entries.iter()
+                .find(|entry| Path::new(&entry.path) == canonical)
+                .unwrap();
+            assert_eq!(entry.status_clean, Some(true));
+            assert_eq!(entry.blockers, vec!["git-worktree-agent-state-retained"]);
+            assert_eq!(report.removal_candidate_count, 0);
+            assert!(report.exact_approval_phrase.is_none());
+            assert_eq!(fs::read(&session).unwrap(), b"synthetic session to preserve\n");
+            git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+        }
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
     fn execution_fails_closed_when_candidate_becomes_dirty() {
         let (_temp, repository, secondary) = temporary_repository();
         let generated_at = current_unix_ms();
