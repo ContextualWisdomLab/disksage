@@ -902,6 +902,29 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_cargo_shape_cannot_authorize_unproven_contents() {
+        let fixture = tempfile::Builder::new()
+            .prefix("disksage-eviction-cli-duplicate-singletons-")
+            .tempdir()
+            .unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("debug")).unwrap();
+        std::fs::write(root.join("debug/.cargo-lock"), b"").unwrap();
+        std::fs::create_dir(root.join(".claude")).unwrap();
+        let session = root.join(".claude/session.jsonl");
+        let source = root.join("only-copy.txt");
+        std::fs::write(&session, b"synthetic retained session").unwrap();
+        std::fs::write(&source, b"synthetic retained source").unwrap();
+        assert_eq!(
+            plan_with_evidence(root, fixture.path(), inactive(), 1).unwrap_err(),
+            "temporary-cargo-producer-evidence-required"
+        );
+        assert_eq!(std::fs::read(session).unwrap(), b"synthetic retained session");
+        assert_eq!(std::fs::read(source).unwrap(), b"synthetic retained source");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn disksage_temporary_cargo_target_contract_is_unavailable_off_macos() {
