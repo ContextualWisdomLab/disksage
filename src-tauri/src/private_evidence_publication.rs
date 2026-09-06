@@ -1,9 +1,144 @@
-pub use crate::private_evidence_core::{
-    write_private_json_create_new, PrivateEvidenceReceipt, MAX_PRIVATE_EVIDENCE_BYTES,
-};
+pub use crate::private_evidence_core::{PrivateEvidenceReceipt, MAX_PRIVATE_EVIDENCE_BYTES};
 
 #[cfg(unix)]
 pub(crate) use crate::private_evidence_core::ObjectBoundPublicationError;
+
+#[cfg(unix)]
+use serde::Serialize;
+#[cfg(unix)]
+use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::io::Write;
+
+#[cfg(unix)]
+struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    exceeded: bool,
+}
+
+#[cfg(unix)]
+impl BoundedJsonWriter {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            exceeded: false,
+        }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+#[cfg(unix)]
+impl Write for BoundedJsonWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let remaining = MAX_PRIVATE_EVIDENCE_BYTES.saturating_sub(self.bytes.len());
+        if buf.len() > remaining {
+            self.exceeded = true;
+            return Err(std::io::Error::other(
+                "private evidence exceeds encoded-size budget",
+            ));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn serialize_private_json_bounded(value: &impl Serialize) -> Result<Vec<u8>, String> {
+    let mut writer = BoundedJsonWriter::new();
+    match serde_json::to_writer_pretty(&mut writer, value) {
+        Ok(()) => Ok(writer.into_inner()),
+        Err(_) if writer.exceeded => Err("private-evidence-too-large".into()),
+        Err(_) => Err("private-evidence-json-invalid".into()),
+    }
+}
+
+#[cfg(unix)]
+fn map_object_publication_error(error: ObjectBoundPublicationError) -> String {
+    match error {
+        ObjectBoundPublicationError::ParentMissing => "private-evidence-parent-missing",
+        ObjectBoundPublicationError::ParentUnavailable => "private-evidence-parent-unavailable",
+        ObjectBoundPublicationError::ParentUnsafe => "private-evidence-parent-unsafe",
+        ObjectBoundPublicationError::ParentWritableByOthers => {
+            "private-evidence-parent-writable-by-others"
+        }
+        ObjectBoundPublicationError::ParentIdentityDrift => {
+            "private-evidence-parent-identity-drift"
+        }
+        ObjectBoundPublicationError::ForbiddenRootInvalid => {
+            "private-evidence-source-root-invalid"
+        }
+        ObjectBoundPublicationError::ForbiddenRootUnavailable => {
+            "private-evidence-source-root-unavailable"
+        }
+        ObjectBoundPublicationError::ForbiddenRootIdentityDrift => {
+            "private-evidence-source-root-identity-drift"
+        }
+        ObjectBoundPublicationError::InsideForbiddenRoot => "private-evidence-inside-source-root",
+        ObjectBoundPublicationError::NameInvalid => "private-evidence-name-invalid",
+        ObjectBoundPublicationError::CreateFailed => "private-evidence-create-failed",
+        ObjectBoundPublicationError::ModeInvalid => "private-evidence-mode-invalid",
+        ObjectBoundPublicationError::WriteFailed => "private-evidence-write-failed",
+        ObjectBoundPublicationError::MetadataFailed => "private-evidence-metadata-failed",
+        ObjectBoundPublicationError::ParentSyncFailed => "private-evidence-parent-sync-failed",
+        ObjectBoundPublicationError::RecordIdentityDrift => {
+            "private-evidence-record-identity-drift"
+        }
+        ObjectBoundPublicationError::RecordContentDrift => {
+            "private-evidence-record-content-drift"
+        }
+        ObjectBoundPublicationError::InvalidationFailed => "private-evidence-invalidation-failed",
+    }
+    .to_string()
+}
+
+/// Persist exact local JSON evidence outside the audited source tree without materializing an
+/// unbounded encoded payload first.
+///
+/// Serialization stops as soon as the encoded JSON budget is exhausted, before filesystem lookup or
+/// mutation. Successful payloads retain the same 8 MiB maximum, pretty-JSON representation, SHA-256
+/// receipt, exact Unix 0600 mode, create-new semantics, and source-root exclusion contract as the
+/// object-bound publication core.
+#[cfg(unix)]
+pub fn write_private_json_create_new(
+    source_root: &std::path::Path,
+    path: &std::path::Path,
+    value: &impl Serialize,
+) -> Result<PrivateEvidenceReceipt, String> {
+    let encoded = serialize_private_json_bounded(value)?;
+
+    write_object_bound_bytes_create_new(path, &encoded, 0o600, Some(source_root))
+        .map_err(map_object_publication_error)?;
+
+    let sha256 = Sha256::digest(&encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(PrivateEvidenceReceipt {
+        written: true,
+        sha256,
+        bytes: encoded.len(),
+        unix_mode: "0600".into(),
+        create_new: true,
+        contains_sensitive_local_paths: true,
+        is_approval: false,
+    })
+}
+
+#[cfg(not(unix))]
+pub fn write_private_json_create_new(
+    _source_root: &std::path::Path,
+    _path: &std::path::Path,
+    _value: &impl serde::Serialize,
+) -> Result<PrivateEvidenceReceipt, String> {
+    Err("private-evidence-secure-mode-unsupported".into())
+}
 
 /// Expose the deterministic publication hooks without bypassing the private-record mode invariant.
 ///
@@ -181,6 +316,16 @@ mod tests {
                 "private-directory-publication-file-content-drift".to_string(),
             ),
             ObjectBoundPublicationError::RecordContentDrift
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_json_serializer_preserves_small_payload_representation() {
+        let encoded = serialize_private_json_bounded(&serde_json::json!({"private": true})).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::to_vec_pretty(&serde_json::json!({"private": true})).unwrap()
         );
     }
 
