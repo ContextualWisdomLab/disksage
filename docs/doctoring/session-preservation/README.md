@@ -4,6 +4,8 @@
 
 Prevent DiskSage cleanup from removing Codex and Claude conversations while retaining useful generated-artifact cleanup. Session age, size, inactivity, successful task completion, and a cache-looking ancestor are not deletion authority. No live conversation was deleted, moved, compressed, or read for this experiment.
 
+The user subsequently required at least **300 GiB of actual reclaimed capacity** with no session false positives. At the start of that capacity phase on September 6, the Data volume reported 9,126,100 KiB available (8.70 GiB), 869,260,276 KiB used, and no APFS snapshots. The acceptance target is a verified increase of at least 314,572,800 KiB, with operation evidence separating reclamation from concurrent host writes. Candidate allocation and moving items into same-volume Trash do not count toward this target. Until a non-overlapping, safely disposable inventory supports it, 300 GiB is a requirement rather than a forecast.
+
 Baseline source: `0e90f9cebadbd7f59606baaec4ca1d2f178c899a` (main). The baseline executable compiled the unchanged `is_protected` function and its two std-only helpers from `safety.rs`, then evaluated the same eight paths used by `session_preservation_metric` under the checkout. All eight passed that old protection gate. This demonstrates a missing final guard; it does **not** establish that a planner selected eight real user sessions or that eight deletions occurred.
 
 ## Reproduce
