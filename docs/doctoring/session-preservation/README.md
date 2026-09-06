@@ -130,6 +130,22 @@ Experiment `e14d1bfb` raises the complete-walk allowance to 500,000 entries afte
 
 Native BuildKit cleanup was limited to 106 freshly revalidated, reclaimable, non-shared regular cache records using an exact ID selector and explicit Colima builder/context. After cleanup and guest free-block return, backing allocation decreased by 9.008080 GiB and host available space increased by 9.970119 GiB during the operation. Every previously observed running container, image, and volume remained present. The difference between these measurements reflects other activity; neither is added to guest-reported discard bytes.
 
+## Completed native cleanup and remaining capacity target
+
+The receipt audit now contains 165 successful operations on 165 distinct real Cargo target roots: the pilot, 19 first-cohort targets, 125 remaining-cohort targets, 17 local targets, two successful retries, and this task's own completed validation target. Synthetic build-directory fixtures and unsuccessful attempts are excluded. Every included receipt records native exit zero, retained reported source files, and no restoration error. Combined pre-clean allocation was 244.085270 GiB; the sum of signed per-operation available-space changes was 237.657967 GiB. These measurements overlap with the earlier cohort totals and are not additional amounts to add to them.
+
+The local total includes the previously retained ConceptWeave target, which passed fresh complete validation before removing 7.599163 GiB of reported allocation; its observed available-space increase was 7.554836 GiB and all 41 reported source files remained. This task's completed validation target contributed 3.688370 GiB of allocation and a 3.492432 GiB observed increase; all 83 reported source files and the validation logs outside the target remained. Both receipts bind the natural build directory and staged target/build directories. These operations do not establish that historical configurations of earlier operations were unchanged.
+
+Three unused Podman base images were removed by exact image identity after their remote manifest indexes and platform digests were verified. The stored records retain immutable Rust 1.98, Rust 1.97.1, and Python image references for retrieval. Following native removal and guest free-block return, backing allocation decreased by 2.359924 GiB and host available space increased by 2.380783 GiB during the operation. No containers or volumes remained before/after this image cleanup; the guest's discard count is not added to reclaimed capacity.
+
+Native rustup removed only the installed documentation components from five exact toolchains. Each component manifest contained only its documentation directory; the production agent-state guard completed without rejection and a fresh open-file observation found no holders before removal. All native commands returned zero, all five documentation roots were absent afterward, and compiler paths, compiler versions, and every other installed component remained unchanged. Removed allocation totaled 4.384247 GiB; the batch's observed available-space increase was 4.375164 GiB.
+
+The UV cache remains retained. Native observation found 50 distinct holders, including cache-lock users and Python processes loading extension modules from its archive directories. A successful agent-state scan or an inbound-symlink inventory does not override this direct active-use evidence. No force cleanup or whole-cache removal was performed.
+
+At 2026-09-06T14:52:06.370856+00:00, `df -k` reported 309,154,404 KiB available, compared with the capacity-phase baseline of 9,126,100 KiB. The observed increase was **286.129288 GiB**, leaving **13.870712 GiB** to the required additional 300 GiB. This current host snapshot is affected by background writes and swap; it is not the sum of exclusive reclaimed extents. The acceptance target remains unmet.
+
+Local evidence for this update is stored under `/tmp/disksage-session-baseline/`: `cargo-reclaim-receipts/`, `podman-recoverable-image-cleanup.json`, the three remote manifest records, `rust-docs-cleanup.json`, `uv-cache-native-active-use.json`, `uv-cache-held-paths.json`, and `readme-capacity-snapshot.json`. These are operational records, not shipped-product or protected-merge evidence.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
