@@ -1,681 +1,96 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
-supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
-authoritative, and no merge is claimed from queued or stale status.
-**Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
-**Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
+The canonical product outcomes, supported capabilities, non-goals, and safety invariants are defined in the [DiskSage PRD](PRD.md). This file is the current implementation and ownership projection. Runtime receipts, exact filesystem evidence, released contracts, protected refs, and live GitHub governance remain more authoritative than this dated snapshot. The prior 2026-08-22 incident baseline remains preserved at [docs/archive/product-technical-gap-baseline-2026-08-22.md](archive/product-technical-gap-baseline-2026-08-22.md).
+
+**Snapshot:** 2026-09-07 (Asia/Seoul)
+
+**Protected main:** `0e90f9cebadbd7f59606baaec4ca1d2f178c899a` (`#343`, trigger-aware pull-request release lifecycle)
+
+**Product boundary:** DiskSage owns Windows/Linux/macOS local-first disk-space inventory, filesystem classification/ontology, deletion safety, recovery, and platform adapters. Optional cloud, identity, ontology, LLM, security, and architecture capabilities consume released owner contracts through ports/ACLs and do not become DiskSage mutation authority.
+
+**Evidence rule:** queued, pending, skipped-required, failed, cancelled, stale, predecessor, synthetic-only, model-only, author-only, or status-only evidence is non-passing. Read every base/head again before a readiness, merge, release, or inheritance claim.
+
+## Current dependency and ownership map
+
+| Lane | Exact head | Current owner relation | Status / next proof |
+| --- | --- | --- | --- |
+| PR #264 — release/Test foundation | `3e33229b4157a084a1985a1c7e952f98a64f25e3` | Directly on protected `main`; canonical #341/Test + release artifact namespace/rerun/verifier owner | Exact-head Test `33937972239`, Release `33937972244`, Security Scan `33937972188`, and SAST `33937972193` are terminal success. CodeQL PR `33937972182` remains terminal failure after exact-head dispatch handoff. Central `.github` dispatch `33960507340` failed while binding workflow inputs to live organization pull-request metadata after token exchange succeeded; the scan matrix was skipped. This is a canonical dispatch-metadata-binding blocker, not a DiskSage source-analysis failure. Ready-for-review is not merge authorization. |
+| PR #344 — reusable private-publication foundation | `736da6db1fb0918d998b3f4d240c63936c91b11d` | Non-force descendant of exact #264; reusable local private-record/private-directory authority owner | Existing-record replacement remains fail closed from `280a0059...`. Exact predecessor `666cedae...` Test `34047647718` exposed Rust E0034 in both Ubuntu jobs at ambiguous bounded `File::by_ref()` calls. Minimal repair `736da6db...` selects `Read::by_ref(&mut visible)` at all three affected sites without changing the `encoded.len()+1` ceiling or mutation semantics. Exact Test `34050767861` is terminal success on Ubuntu `test` `101533855512`, Windows `windows-home-resolution` `101533855641`, and Ubuntu `llm-engine-build` `101533855661`. Current inline review threads are resolved. #264's CodeQL owner blocker still prevents normal merge. |
+| PR #263 — cache-Trash fail-closed security | `d9b7fcf83bc0799fc9d53d0b739d87dfa42a54b6` | Non-force descendant of exact #264; issue #170 runtime owner | Thirteen cache/security semantic files preserved; current #264 contract-test repairs inherited through ancestry. Permanent cache deletion remains unavailable. Keep Draft until exact-head gates pass. |
+| PR #315 — canonical product/public docs | `39cd458dcc8b92d3fb6afe0a07d52be06540927b` before this docs commit | Documentation/public-surface owner downstream of #263 | This file is the canonical routing projection. Runtime authority stays with runtime owners. This update records #344 exact GREEN and ordinary non-force adoption by #339/#303, while retaining current consumer Test uncertainty, #264's canonical CodeQL blocker, and the Windows/deletion/recovery gaps. Fresh exact-head docs gates are required after this commit. |
+| PR #339 — provider-OAuth domain authority | `f8ddd5444b09496c893063dc806a95d478163cea` | Ordinary non-force two-parent adoption of current exact-GREEN #344 `736da6db...`; compare merge base is exactly the owner head | Provider-domain delta is preserved without owner source copy. Post-adoption Test `34053995024` is current and non-terminal; pre-adoption Test `34037948213` failed in Ubuntu Rust tests and does not transfer. #212 stays held until this exact consumer head earns terminal GREEN. |
+| PR #212 — provider-OAuth/iCloud operational CLI | `7f51536f22dc3605edfb8db2269c8f37a1dd4079` | Base branch is #339, but this head predates current #339 `f8ddd544...`; CLI/process/platform-adapter owner | Provider-domain and filesystem-authority source stay inherited. Restack only after post-adoption #339 earns unchanged-head terminal GREEN. The CLI lane acquires no publication or deletion authority and must not copy #344 source. |
+| PR #338 — Test path-filter/shared Test owner | `dad7832cbc20acf8b709b6ed28e06e3db6319b12` | Canonical shared `.github/workflows/test.yml` owner; Open/Draft, unmerged | Preserves ordered path filters and the conditional Windows agent-state step. Transfers the macOS cache-job setup and two existing regression targets from #295, adding conditional generated-cache staging coverage. Local workflow contract: 4/4 pass. Hosted macOS job `101516558869` succeeded with three explicit source-absent skips; no Rust cache regression ran. Protected adoption and reconciliation of #295's remaining workflow delta are pending. |
+| PR #337 — exact-head coverage owner | `7d9d5040941650bf8ed8678b15092cffc439415a` | Non-force descendant of exact #338 predecessor | Coverage/test/docs semantic boundary remains owned here. Exact 100% thresholds are unchanged; provider-OAuth coverage remains #339-owned; historical #156 evidence is adopted owner-by-owner. Re-adopt current #338 only after its exact head is GREEN, then reacquire repository-wide hosted measurement. |
+| PR #345 — agent-session preservation runtime | `4f8047da7b342cd6db569d7c6ff2a2c8e068335e` | Open/Draft on protected `main`, with exact #263 recorded as a non-force second parent earlier in the line | Runtime retains Codex/Claude state, keeps recursive native Git worktree deletion unavailable after a real late-arrival race, and has restored both canonical docs and shared Test workflow source to their owners. Earlier run references belong to predecessor heads. It must later adopt a terminal-GREEN current #338 before using canonical Windows agent-state workflow evidence. |
+| PR #195 — Inventory privacy/async owner | `d04f97c351042d185a475b519537f4da6cf153f6` | Non-force descendant of exact #264 | Exactly four Inventory semantic files remain the owner boundary; release/Test source is inherited. Fresh exact-head gates required. |
+| PR #190 — Settings persistence owner | `dc02de371d7535bee0d2730c89314c876885a12f` | Non-force descendant of exact #264 | Six Settings/Tauri files remain the semantic boundary. Existing same-directory replacement evidence does not claim containing-directory power-loss durability or same-source-object final mutation. Fresh exact-head gates required. |
+| PR #199 — Git-worktree feedback/recovery UX | `95d8ded4a61fe0903459d9cbe5cd58100c067fbe` | Non-force descendant of exact #264 | Three UI/privacy files remain isolated. Git retention, approval, mutation, journal, and filesystem authority stay outside this UI owner. Fresh exact-head gates required. |
+| PR #202 → #203 — scan/navigation → TopFiles a11y | `060229015b4b81bb1d574a6827c8fb8c69fd7cdc` → `a0b3a9a0e465c0c24748b24e26e37dc0013a30a9` | #202 non-force descendant of exact #264; #203 non-force descendant of exact #202 | Issue #340 still requires real-browser normal/empty/loading/error, Tab/focus/scroll, fragment continuity, visible focus, and responsive long-path evidence. SSR is not browser interaction proof. |
+| PR #313 — exact-photo duplicate audit | `94a07ca11815312e5fd44f7bc443cca6de09187e` | Non-force descendant of exact #264 | Exact decoded-PNG evidence grants no cleanup authority. Near-duplicate calibration, customer tie resolution, fresh execution preflight, reversible quarantine/Trash, durable journal, and undo remain buyer gaps. Fresh exact-head gates required. |
+| PR #314 → #334 — native temp foundation → ontology-backed planning | `cc9c4f7400813c913cee79c5f317c9581a41acde` → `ef9f0d3819ed765e5de6742005da09e33479c1e3` | #314 non-force descendant of exact #264; #334 non-force descendant of exact #314 | Preserve real successful mutation evidence, but require same-object recovery/undo and platform-specific destructive/recovery acceptance before commercial completion. #334's additional platform Test jobs remain a legitimate leaf semantic delta. |
+| PR #257 — Svelte 5.56.10 dependency update | `4ead53a9f4b2ff605243aef80c65314aff777325` | Non-force clean restack on exact #264 | Only `package.json` and `package-lock.json` remain semantic delta. Fresh dependency/Test/security gates required. |
+| PR #267 — container orphan reclaim | `43f2968a7175f9dee866b3d50d503a04f73c1f03` | Large mixed historical line on an old #264 base | 165 changed files / 524 commits make blind tree-preserving restack unsafe. Classify runtime, UI, docs, and release/Test overlaps by canonical owner before adopting current #264. Keep Draft; do not close or transfer predecessor checks. |
+| PR #303 — provider cache reclaim | `5164b847ed95661a4b40a69c66b520639f58d970` | Ordinary non-force two-parent adoption of current exact-GREEN #344 `736da6db...`; compare merge base is exactly the owner head | Commercial Rust/Tauri/TypeScript/CLI surfaces remain Trash-only. Post-adoption Test `34054137067` is current and non-terminal; pre-adoption Test `34037987035` does not transfer. Permanent deletion remains unavailable. All returned review threads are resolved; fresh exact consumer evidence is required. |
+| PR #318 — inconclusive provider/reclaim evidence presentation | `c3d405212b6095498b40a4b1711681938a8f0bde` | Historical mixed provider/runtime/UI/docs line on old #264 base | Sixteen semantic files span multiple owners. Classify overlaps before non-force restack rather than preserving a historical tree that could overwrite current owners. Keep Draft. |
+| PR #341 — hosted runner/Vitest predecessor | `bbe5cc2375a7f83a4a174a2f799dee904f2c9e4a` | Historical predecessor; valid post-checkpoint release edits individually classified against #264 | Returned to Draft. Valid release semantics are present or superseded on #264. Do not merge #341 around #264; close only after #264 integrates and full inheritance is reverified. |
+| PR #156 — historical coverage evidence donor | `a3803fced0bdbb4f8eb9d19d07a623b1422e5204` | Historical donor, not a direct merge candidate | Keep open until every useful unique test/fixture/contract/evidence delta has a verified current owner or a technical rejection. |
+
+A branch can be mechanically mergeable while still stale relative to its canonical owner; mergeability does not convert predecessor evidence into current proof. The intended OAuth chain remains `#264 → #344 → #339 → #212`. Current #344 `736da6db...` is exact-head GREEN. #339 `f8ddd544...` and provider-cache #303 `5164b847...` now inherit that exact owner through ordinary non-force ancestry; both require their own unchanged-head terminal Test evidence before downstream restack or merge. #212 remains held until post-adoption #339 is GREEN. The Test chain is `#264 → #338 → descendants`; the coverage chain is `#264 → #338 → #337`; the UI chain is `#264 → #202 → #203`; and the native-temp chain is `#264 → #314 → #334`. Large historical lines with mixed ownership are classified before restack rather than allowed to overwrite current owner blobs.
 
 ## Current product contract
 
-1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
-2. A cloud candidate follows `copy-verified → pending-provider-sync → provider-sync-confirmed → eviction-ready → source-evicted`. `local-current` with `is_uploaded=false` is `pending-upload`; no eviction permit is issued.
-3. Native File Provider copy is bounded, re-hashed, and source-identity rechecked. Provider-global timeout, quota/auth uncertainty, local headroom shortage, stale worktree metadata, or incomplete metadata fail closed.
-4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
-5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
+1. Scan and classification are read-only until a separately authorized reclaim boundary is reached. Logical size, allocated size, object identity, active use, materialization, provider state, ontology labels, and model advice remain distinct evidence.
+2. User-file removal is reversible and journaled. Permanent user-file deletion is not a supported general DiskSage action.
+3. The ADR-0002 regenerable-cache policy is a narrow reversible exception to repeated human approval only for fixed, evidenced cache classes. Unrelated children, active/ambiguous candidates, user files, provider data, and irreversible deletion remain outside that authority.
+4. `--purge-proven-cache-trash` remains inspection-only. An execution request must fail before journal or filesystem mutation until the proposed irreversible contract has full descendant identity, fresh approval, replacement-race resistance, durable recovery, and platform evidence. Historical #303 pathname-staged permanent-purge helpers compile only under `#[cfg(test)]`; production rejects `PermanentPurge` before re-planning or receipt creation. Current #344 authorizes create-new private records only through absolute destinations and absolute forbidden/source-root authority and, for the no-policy facade, an already existing exact-`0700` parent opened `O_NOFOLLOW`, bound by device/inode, and revalidated around record creation. Both no-policy and source-policy/object-bound create-new routes reject an absolute raw Unix destination ending in `/` before hooks, lookup, or mutation so directory-looking authority cannot normalize into file mutation. Windows remains fail closed until native handle-relative parity exists. Publication authority does not authorize irreversible deletion.
+5. Mutable local-record replacement must distinguish “parent descriptor is stable” from “final mutation is conditioned on the admitted source object.” Current #344 `736da6db...` keeps existing-record replacement unavailable before filesystem lookup/mutation. Replacement admits only `0400` or `0600` before capability evaluation. Forbidden-root create-new publication requires an absolute policy root, admits its target identity before the earliest test seam, then canonicalizes/opens it and requires the opened object to retain the admitted device/inode; it is revalidated again before create and finalization. Every core create-new destination must be absolute and must not end in a raw Unix `/`; relative or directory-looking destination pathnames fail `NameInvalid`, while a relative forbidden/source root fails `ForbiddenRootInvalid`/`private-evidence-source-root-invalid`, before filesystem lookup or hooks. No-policy create-new also requires the final parent to pre-exist; missing-parent `mkdirat()` provisioning remains unavailable. Direct create-new paths require the opened and final same object to retain the full requested `0o7777` mode and exact bytes; lower-level content drift remains distinguishable as `RecordContentDrift` through the reusable facade. Final inspection reopens the visible name descriptor-relative with `O_NOFOLLOW | O_NONBLOCK`, requires regular-file type and exact identity, checks expected metadata length, then reads at most `encoded.len()+1` bytes before exact byte comparison. The bounded reads call `Read::by_ref` explicitly so Rust 1.98's overlapping `Read`/`Write::by_ref` methods cannot make the security path fail to compile. Public private-JSON serialization stops at the 8 MiB encoded budget while serializing rather than allocating the complete oversize JSON first. On post-create failure both filesystem routes invalidate through the exact opened descriptor before restoring the requested private mode and syncing the admitted directory. A future enabled replacement or parent-provisioning path requires an accepted exact-object primitive and platform-specific race/durability evidence; another pathname recheck is not sufficient.
+6. Cloud copy, remote-sync proof, local presence, local eviction, and source removal are separate state transitions. Stale/incomplete provider evidence, quota/auth/headroom ambiguity, collisions, active use, placeholders, or identity gaps fail closed.
+7. Models and ontology may classify, explain, or recommend. They cannot override deterministic filesystem/deletion evidence or mutate DiskSage truth.
+8. Source files, open PRs, local tests, and development measurements are not immutable release evidence.
+9. Settings persistence distinguishes first-run absence from an existing unreadable or unsafe document. Failed replacement must preserve the previous complete value; stronger crash/power-loss durability requires explicit platform evidence.
 
-## Buyer-observable product gaps
+## Buyer-visible gaps
 
-| Priority | Gap / observable symptom | Evidence | Acceptance criterion |
+| Priority | Gap | Current evidence | Acceptance criterion |
 | --- | --- | --- | --- |
-| P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; `bird`/`fileproviderd` remain active during the current incident, with about 3.8 GiB available at the latest observation. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
-| P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | The `real_datasets` Finder copy remained at “준비 중” for hours; the latest bounded iCloud dump retained 125 no-progress fetch/create markers, a 95.24% upload, and a zero-progress 1.06GB download while scheduling was `running`. Bounded `/bin/cp`/`mkdir` and global probes use private process groups and headroom gates. | Preview shows required bytes + staging reserve; timeout cleans only the child-created destination and leaves a durable receipt. |
-| P1 | Personal desktop-client capacity is not the same as API quota; OAuth is unnecessarily implied for a single-user installation. | ADR-0001 permits copy-only desktop-client mode marked `capacity-unverified`; the cloud connection UI defaults to read-only OAuth consent and requires an explicit write-access opt-in. | Settings clearly distinguish local desktop client, API quota, and organization OAuth; no OAuth prompt is required for the local-only path. |
-| P1 | Users cannot yet see a full lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | The candidate UI now exposes a compact source→metadata→archive→provider lineage panel using the stable fingerprint, confidence, and blocker state; provider item/receipt/permit remain explicitly pending until their evidence exists. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
-| P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
-| P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
+| P0 | Filesystem mutation and audit publication must remain safe under ancestor replacement, CWD/path ambiguity, exact raw-path ambiguity, staging-name replacement, symlink/reparse/hardlink/FIFO substitution, permission/special-mode drift, content drift, partial failure, resource exhaustion, and crash recovery. | #344 exact `736da6db...` keeps Unix descriptor-relative create-new authority and fail-closed existing-record replacement. Real-filesystem race/mode/content/FIFO/trailing-path/serialization regressions remain in the owner. Exact predecessor `666cedae...` Test `34047647718` is a hosted RED in both Ubuntu jobs for Rust E0034; `736da6db...` repairs the ambiguous bounded reads and exact Test `34050767861` is terminal GREEN on all three jobs. #339/#303 now inherit this owner by ordinary non-force ancestry but their post-adoption exact Tests remain non-terminal. Windows remains fail closed and permanent deletion is unavailable. | Require fresh terminal consumer GREEN on #339/#303; restack #212 only after post-adoption #339 GREEN. Implement equivalent Windows native handle authority where exposed; design any future parent provisioning around an exact-created-object primitive; bind every Trash/future irreversible mutation to the exact reviewed object under replacement, mode/content drift, special-file substitution, partial failure, resource pressure, crash/power loss, durable journal/receipt, recovery, and undo. Permanent deletion remains unavailable until canonical identity-bound deletion/recovery authority is proven on every exposed platform. |
+| P0 | Release/Test roots and descendants must share one current protected lineage before any current-evidence claim. | #264 is on protected-main #343 at `3e33229...`; mapped active descendants inherit that foundation. #264 Test, Release, Security Scan, and SAST are terminal success. CodeQL PR failed closed after dispatch; central dispatch `33960507340` is terminal failure at live PR metadata binding after runner admission, so the canonical `.github` owner—not a leaf rerun—must repair the causal path. #338 owns the additional conditional Windows agent-state regression instead of #345. Mixed historical lines #267/#318 still need owner classification rather than blind restack. | #264 lands normally only after a canonical owner repair produces unchanged-head terminal CodeQL success bound to PR #264 and exact SHA `3e33229b...`, plus independent review; #338 then needs exact-head GREEN before descendants adopt it. No predecessor-evidence transfer or synthetic status. |
+| P1 | Provider-OAuth connection documents lack completed cross-platform stable filesystem mutation authority and post-replacement durability evidence. | #339 exact `f8ddd544...` now inherits exact-GREEN #344 `736da6db...` through an ordinary non-force merge; compare merge base is exactly the owner head. Existing-document replacement remains fail closed with prior bytes/namespace preserved and no pathname/delete-and-create fallback; Unix load admission requires exact durable `0600`. Post-adoption Test `34053995024` is non-terminal. Windows native-handle parity is absent. | Earn unchanged-head terminal GREEN on #339 before restacking #212. Any future enabled replacement requires exact-source-object mutation evidence; Windows uses validated native-handle authority and macOS states/tests only the persistence guarantee actually used. Preserve bounded actionable errors and no unsafe fallback while replacement authority is unavailable. |
+| P1 | Exact photo audit does not yet justify near-duplicate cleanup. | #313 separates decoded identity, dimensions, metadata, bounded allocations, and audit failure, but is audit-only. | Calibrated perceptual thresholds on documented data; provenance/quality/lineage kept separate; customer resolves evidence ties; fresh identity/materialization/active-use preflight; reversible quarantine/Trash with durable receipt and tested undo. |
+| P1 | TopFiles interaction/accessibility lacks real-browser evidence. | #202/#203 provide page/component contracts; issue #340 remains open after ancestry repair. | Current-head browser E2E covers normal/loading/empty/error/permission states where applicable, keyboard traversal and scroll, fragment continuity, focus visibility, and responsive long-path overflow. |
 
-## Technical and operational gaps
+## 2026-09-07 bounded-read compile repair
 
-| Priority | Gap | Current state | Smallest next proof |
-| --- | --- | --- | --- |
-| P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
-| P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
-| P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `6f424af` on `feat/provider-sync-dynamic-goals`; its required checks reset after the provider-dump pipe repair and the prior review decision remains stale `CHANGES_REQUESTED`. The orphan cleanup follow-up is PR #245, initially implemented at `3d2406c` and subsequently extended with provider-sync and cleanup-refresh safety fixes. Both remain protected and unmerged pending exact-head review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
-| P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
-| P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
-| P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
-| P2 | Figma design source is not part of the current change. | No visual redesign or Figma artifact was introduced in this baseline. | If a product UI redesign is approved, record the Figma File ID in a new ADR before implementation. |
+Exact #344 predecessor `666cedae424454671e601a1117c3199e1bc2aaf9` provided a realistic hosted RED rather than a runner-only symptom. Test `34047647718` assigned Ubuntu runners to `llm-engine-build` job `101525500100` and `test` job `101525500336`; both failed with Rust E0034 because `std::fs::File` implements `by_ref` through both `std::io::Read` and `std::io::Write`, which were in scope in the bounded publication modules. The same ambiguity also existed in the real-file moving-EOF regression. Commit `736da6db1fb0918d998b3f4d240c63936c91b11d` changes only those three method selections to `Read::by_ref(&mut visible)`. The `encoded.len()+1` sentinel bound, regular-file/identity/mode/content checks, tombstone invalidation, and filesystem mutation sequence are unchanged. Exact Test `34050767861` subsequently completed successfully on Ubuntu `test`, Windows `windows-home-resolution`, and Ubuntu `llm-engine-build`; the owner is exact-head GREEN. Current consumers #339 `f8ddd544...` and #303 `5164b847...` inherit this head through ordinary non-force ancestry and must still earn their own exact-head terminal evidence.
 
-## Architecture and decision linkage
+## 2026-09-07 private JSON serialization budget repair
 
-- ADR-0001 defines provider evidence, metadata precedence, native copy, headroom, and eviction gates.
-- ADR-0002 defines per-item cache cleanup and the narrow no-second-approval incident policy.
-- ADR-0003 defines the local Zotero metadata handoff and keeps cloud receipts independent.
-- ADR-0004 defines bounded fixed Homebrew maintenance execution and process-group cleanup.
-- ADR-0006 defines bounded, redacted iCloud health evidence persistence and timestamped comparison.
-- ADR-0007 defines the integrity-checked three-stream cohort at the native-copy mutation boundary.
-- ADR-0008 keeps the hourly contextual-orchestrator integration read-only at the foreign-repository and provider-secret boundaries.
-- Dynamic Goal/ADR projections are replaceable views over receipts; they cannot authorize mutation.
-- Rust remains the computation and security boundary. Noema, contextual-orchestrator, semantic-data-portal, pg-erd-cloud, fast-mlsirm, or Gemma are added only when a measured gap requires them and their boundary is documented first.
+The public `private_evidence::write_private_json_create_new` contract advertises an 8 MiB encoded evidence ceiling. Before `07e8b7b1...`, that ceiling was checked only after `serde_json::to_vec_pretty` had allocated the entire encoded value. Test-first `199d8c49...` uses a custom streaming `Serialize` implementation that continuously emits 256-byte elements and treats 50,000 consumed elements as a failure. Production `07e8b7b1...` serializes through a bounded `Write` sink and returns the existing `private-evidence-too-large` classification as soon as the next write would exceed 8 MiB. The target must not be created. Small payloads are checked against `serde_json::to_vec_pretty` to retain representation compatibility. This is a resource-boundary repair, not broader mutation authority. It does not enable existing-record replacement, parent provisioning, Windows publication, Trash, permanent deletion, or recovery.
 
-## 2026-08-21 loop evidence
+## 2026-09-07 generated-cache ownership and test-adoption gap
 
-- The exact-head hosted macOS build exposed a compile regression after the sensitive-config safety
-  boundary was added: the generated `disksage-cloud-plan` implementation omitted the new
-  `ArchiveKind::SensitiveConfig` wire label. The source was fixed in the single generated-source
-  owner (`src-tauri/cloud_plan_implementation.rs.inc`) and now has a focused label contract test;
-  the same generated test fixtures bind the new `pre_copy_evidence` field, and the targeted
-  `cargo test --locked --features cloud-cli --bin disksage-cloud-plan` passes (1 test). The hosted
-  matrix must be rerun on the resulting head before any protected merge; this correction grants
-  no copy, cloud-write, or eviction authority.
-- The local verification created only regenerable Cargo target artifacts; after all Cargo processes
-  exited, `cargo clean --manifest-path src-tauri/Cargo.toml` removed 3.8 GiB and restored about
-  8.9 GiB APFS availability. No source, Finder, iCloud/File Provider, OneDrive, or Google Drive
-  data was touched.
+The runtime lanes and Test owner #338 remain Proposed/unmerged; local checks and normal stack propagation do not grant protected-main or deletion authority.
 
-- The implementation head observed before this documentation update was `88001d8`: existing-copy
-  adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
-  an already-present cloud copy without creating local staging data.
-- Naruon cloud-copy readiness is now schema version 8 and carries the path-free pre-copy evidence
-  cohort plus `pre_copy_evidence_met`; missing or incomplete iCloud evidence remains a blocker in
-  the exported contract. Focused Rust readiness tests passed: 14 passed, 0 failed.
-- Only stale generated CodeGraph databases were removed from unrelated temporary worktrees during
-  this loop; source files and user data were not deleted. The local volume measured about 8.3 GiB
-  free after that generated-artifact cleanup; later bounded local build activity measured 6.1 GiB
-  free and was not treated as user-data cleanup authority.
-- A fresh read-only macOS observation reported iCloud `needs-sync-up`; iCloud quota still had about
-  4.3 TB remaining, so DiskSage keeps native copy and eviction blocked on provider state rather than
-  quota. A bounded Google Drive File Provider dump reported active upload/download markers and a
-  14,558-entry reconciliation backlog; the latest dump additionally reports Google Drive
-  `temporarily disconnected`, `needs-indexing`, and File Provider error `-1004`. The existing
-  `provider-global-sync-*` blockers cover this Finder "copy preparing" failure mode without
-  terminating `bird` or `fileproviderd`; provider diagnostics and bounded client recovery remain
-  available even while the destination root is unreadable.
-- The follow-up observation of the user-visible `real_datasets` Finder copy still showed “준비 중”
-  after hours while the same Google Drive domain remained temporarily disconnected; the local APFS
-  volume measured only 150 MiB available (99% full). DiskSage therefore instructs the operator to
-  cancel the Finder operation, records any new copy as failed until a fresh plan exists, preserves
-  the source, and keeps provider copy, attestation, and eviction disabled until a bounded probe
-  reports usable headroom and a readable destination.
-- A later bounded probe observed the Google Drive domain readable again but still with active upload
-  and download progress plus a 168-entry reconciliation backlog (`needs-indexing: no`). This is
-  still `provider-global-sync-transfer-active`/`provider-global-sync-reconciliation-pending`, so
-  the Finder copy remains unsafe to retry until a fresh quiet probe is authoritative.
-- A subsequent bounded probe also reported repeated File Provider `-1005 itemNotFound` entries
-  (last activity roughly 2h40m old) in the same Google Drive domain. The provider parser now emits
-  `provider-global-sync-item-not-found` and the UI labels it as a missing-provider-item error;
-  queue-count changes do not reset the same-blocker duration.
-- The current implementation head for this loop is `2a33ed5`; generated CodeGraph indexes are now
-  included in the bounded, identity-checked development-artifact cleanup, and provider evidence
-  directories now reject shared-writable authority while records are private from creation; the
-  authority regression fixture also binds the current provider `sync_state` contract.
-  Frontend tests remain 25 files / 117
-  tests and `svelte-check` remains 0 errors / 0 warnings. Hosted Rust, security, and review gates
-  remain authoritative before any protected merge.
-- The local Zotero endpoint is readable (`GET 200`, Zotero `9.0.6`, 8,312-item library), but the
-  documented Zotero 9 write route remains `zotero-local-api-write-unsupported` and no local API
-  key is present in this environment. DiskSage therefore does not duplicate or mutate references;
-  the manifest remains a bounded, explicit handoff until Zotero 10+ and an operator-provided key
-  are available.
-- PR #209 current head `0fc67a4` now bounds Homebrew and iCloud eviction error feedback and its
-  privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
-  are running and a fresh approval is still required. PR #189 is its rebased base PR at `f748769f`;
-  both branches remain protected from bypass merges. PR #235 completed its
-  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `2a33ed5`; hosted
-  release, test, security, and review checks are authoritative, and no source eviction was claimed.
-- Independent CLI/UI/dependency PRs #212, #214, #215, #217, #218, #220, #222, #230, #232,
-  #234, and #238 were rebased to current `main` `5f7c7ae`; their fresh checks are queued or in
-  progress, and no new failure is treated as resolved until the exact rebased head is green.
-- CloudArchive now routes all 15 user-visible asynchronous failure phases through bounded,
-  operation-specific messages. The exact-head frontend suite passed 25 files / 117 tests and
-  `svelte-check` passed with 0 errors and 0 warnings; raw backend exception details remain
-  diagnostic-only and are not rendered in the UI.
-- A regression fixture now proves a bare File Provider `ENOSPC` marker is classified as an error
-  with both a local-disk-full blocker and the aggregate provider-error blocker, preventing a
-  contradictory healthy `clear` envelope.
-- The provider-global-sync panel now shows the last local evidence observation and its bounded
-  one-minute automatic recheck, so a Finder “copy preparing” incident has an actionable next step
-  instead of an indefinite spinner.
-- The provider panel now fingerprints the current blocker cohort and reports how long the same
-  blocker has persisted; after 15 minutes it explicitly directs the operator to cancel Finder's
-  pending copy and wait for a quiet provider observation before retrying.
-- Provider probe failures now show the same fail-closed Finder-cancel guidance as a blocked
-  aggregate report, preventing an unavailable diagnostic from looking like a safe retry state.
-- Background reconciliation now retains at most 128 immutable provider evidence records per
-  receipt, so the one-minute UI loop cannot grow the evidence directory without bound. Active
-  iCloud File Provider upload/download progress is also accepted as a blocked Naruon readiness
-  envelope.
-- A fresh bounded macOS observation on this loop measured about 1.2 GiB available (91% used) and
-  Google Drive still reporting upload/download progress, a 168-entry reconciliation backlog,
-  `error generation: 403`, and repeated File Provider `-1005 itemNotFound` entries. The
-  `brew cleanup --prune-prefix --dry-run --verbose` probe returned no reclaimable Homebrew items;
-  no provider process, Finder operation, or user data was terminated or deleted.
-- A fresh iCloud File Provider observation reported an active upload at 95.24% (28,124,151,529 of
-  29,530,341,516 bytes) and an active download at 0% (0 of 1,066,167,994 bytes), with scheduling
-  still running and error generation 1143. The bounded probe exceeded its wall-clock limit, so the
-  evidence remains incomplete and new-copy admission stays blocked. CloudArchive now fingerprints
-  iCloud blocker/progress state, displays the same-blocker duration, and directs Finder-copy
-  cancellation after 15 minutes; the focused contract test and `svelte-check` both pass.
-- A live low-space observation reached 133 MiB free while iCloud probing was still active. The
-  current process table and Git worktree registry showed no holder for the temporary
-  `/private/tmp/disksage-pr228-current` review worktree, so it was removed with the normal
-  `git worktree remove` path; APFS headroom recovered to 4.3 GiB. Other repositories' worktrees
-  were not deleted, and provider data/processes were not touched.
-- To restore the emergency local headroom without touching user or provider data, only Podman
-  dangling (untagged and unreferenced) images were pruned; the one active container and all volumes
-  were retained. Host APFS free space rose from roughly 150 MiB to 1.8 GiB, matching the bounded
-  `prune_dangling_images` reclaim boundary.
-- Unreadable provider roots remain selectable for diagnosis/recovery while preview, copy,
-  attestation, and eviction controls stay disabled until the root is readable again.
+| Runtime owner | Exact head | Preserved boundary |
+| --- | --- | --- |
+| #295 generated-cache planning/execution | `b7fbf6f58e196ff7c4b059477af6d450c41373a1` | Original command-path activity remains associated after staging. Schema v2 binds the immediate parent directory identity; nonrecursive parent-handle vetoes do not prove exclusive ownership or exclude ancestor/sibling/later writers. Non-Unix planning remains explicitly unsupported. |
+| #320 cache-internal symlink manifest | `705c17c09e58ca28b1ee763447aac6f38eaab7a3` | Adopts current #295 while fingerprinting child symlink text without following the target; root symlinks remain rejected. |
+| #322 active-use self-PID handling | `fa1e8db4abcba6d76463f7611b52062e3fbb7dcf` | Adopts current #320 while retaining external process evidence and same-process open-handle evidence. |
+| #325 temporary Cargo candidate handling | `2069d649dbbb9222d49fc0fcaac2965653478f72` | Adopts current #322; a matching temporary-directory name and regular empty Cargo lock classify a legacy candidate but cannot authorize a plan. |
 
-## Loop update rule
+A synthetic macOS regression reproduced the #325 ownership failure: a matching name prefix and empty `debug/.cargo-lock` admitted a tree containing source and session sentinels with no blockers. The RED case returned a plan where rejection was required; it did not prove any real user-state deletion. Commit `2069d649...` now rejects this candidate before content hashing because no producer evidence binds generated output to retained source. Classification remains available, but executable planning is unavailable. The actual-module harness passes 19 tests and the CLI passes three on macOS; its controlled activity boundary is not full native concurrency or Windows runtime proof.
 
-At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
+Canonical Test owner #338 at `dad7832cbc20acf8b709b6ed28e06e3db6319b12` conditionally dispatches the existing Corepack and permanent-Gradle tests plus generated-cache staging tests. The setup and original two targets came from #295 `b7fbf6f5...`; no runtime test source was copied into the workflow owner. Its four local workflow tests cover explicit absent-source skips, present-source Cargo dispatch, and failure propagation. Hosted macOS job `101516558869` emitted three explicit skips because all three owner test files were absent. Job success therefore verifies neither execution nor correctness of those Rust tests.
 
-## 2026-08-21 lineage graph update
+Remaining acceptance requires producer/source evidence before any temporary Cargo planning can return; protected owner adoption and fresh source-present hosted tests; reconciliation of #295's remaining duplicate workflow delta after successor ancestry and coverage are verified; and the still-pending protected atomic-restoration prerequisite. No arbitrary late-writer safety or automatic deletion entitlement follows from these repairs.
 
-- Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
-  source, metadata and production evidence, archive, destination, receipt, review decision,
-  provider sync state, provider evidence, and remote object when present. The legacy `archivedTo`
-  relation remains for compatibility; missing evidence emits `unknown` and no attestation edge.
-- The preceding focused Rust export test passed 1/1; the current head adds an assertion that the
-  content and metadata nodes remain distinct. Hosted Rust checks are authoritative for this latest
-  head. This closes the export-side P1 lineage relation gap; the UI still shows provider-item/
-  receipt/permit details only when those runtime records exist.
-- Legacy provider evidence with `sync_complete=true` but `sync_state=unknown` now remains
-  unconfirmed in the Naruon export; only explicit `complete` state can support provider-sync
-  confirmation or any downstream eviction gate.
-- Organization lineage probing now remains bounded at the 200-item export limit; plans larger
-  than the bound are rejected by the existing batch-size contract rather than emitting default
-  metadata that would make an otherwise realistic export fail late.
-- The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
-  artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
-  was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
-- A subsequent low-space loop used the already-catalogued regenerable pnpm store boundary: `pnpm
-  store prune` removed 30,315 stale files / 602 packages (about 1.08 GB). No user files, provider
-  databases, CloudDocs data, active processes, or cloud objects were touched; the product's
-  `pnpm-cache` cleanup domain remains the reproducible-cache implementation boundary.
-- A stale-worktree audit found no process holding the two Naruon review worktrees; only their
-  ignored, regenerable `frontend/node_modules` directories were removed after dry-run identity
-  checks. Tracked `.Jules/palette.md` edits were preserved, and no branch, source file, provider
-  database, or cloud object was removed.
+## 2026-09-06 session-preservation owner repair
 
-## 2026-08-21 follow-up loop evidence
+PR #345 (`codex/session-preservation-autoresearch`) is the deletion-safety runtime lane for Codex/Claude conversation-state preservation. The initial branch correctly added deterministic state-root/containing-tree guards, cloud-eviction restoration, and Git-worktree staging/recheck, but it also wrote this canonical baseline and shared Test workflow directly. Commit `e053ef7757bdc14a7ba8b39e8c9ee385a23cdfc4` restored this baseline on #345 to the protected-main blob. Commit `f522ef9554505e1024b31d93c087493771c32c91` records exact #263 `d9b7fcf83bc0799fc9d53d0b739d87dfa42a54b6` as a non-force second parent without closing or superseding #263. Historical commit `cbdc760cc8fb733772d718c29b0459d324b852bf` also restored `.github/workflows/test.yml` to the protected-main blob, eliminating the remaining leaf shared-workflow writer.
 
-- Current source fix head is `b9fe4f0`; this evidence update is the next documentation revision
-  revision. The only local DiskSage worktree is `/private/tmp/disksage-current`; the temporary PR
-  #189 worktree was removed after its focused test passed, so no stale DiskSage worktree remains.
-- A bounded read-only iCloud File Provider dump captured at `2026-08-21 04:31:47 +0900` contained
-  97 `createItemBasedOnTemplate` and 46 `fetchContentsForItemWithID` requests marked `no progress`;
-  no upload/download progress marker was retained in that bounded output. This is incomplete
-  provider evidence, so Finder-copy cancellation and new-copy admission remain blocked.
-- The local APFS volume currently has about 2.3 GiB available (79% used) while `bird` and
-  `fileproviderd` remain active. DiskSage has not terminated provider processes, Finder, or user
-  data; the observed pressure is not a deletion authority.
-- PR #189 advanced to exact head `635d918` with the missing executed/non-executed Homebrew result
-  contract assertions; its focused Vitest passed 5/5 and hosted checks/review are rerunning. PR
-  #213 remains at `b7a41a4` with hosted checks pending and its old review decision not yet replaced
-  by a fresh approval. No protected merge or source eviction is claimed.
-- PR #228's latest macOS build failure was an `E0617` variadic-FFI type error in the private
-  evidence publication boundary; its current head `1eb947e` casts the mode argument to
-  `libc::c_uint`, and the failed build's source cause is now addressed. The local reproduction
-  could not complete a full target build because the disk reached `ENOSPC`; generated Cargo target
-  state was then removed with `cargo clean`, recovering about 729 MiB. Hosted exact-head checks are
-  authoritative for the final proof.
-- A newer bounded iCloud observation at `2026-08-21 04:59:17 +0900` retained 125 aggregate
-  fetch/create `no progress` markers, upload progress `28,136,385,681/29,543,186,689` (95.24%),
-  download progress `0/1,060,097,218`, scheduler `running`, and error generation `1143`; APFS
-  free space was about 3.9 GiB. The Finder “real_datasets” copy remains a File Provider stall,
-  not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
-  control is an operator action, and new copy, attestation, and eviction remain blocked until a
-  fresh complete quiet-provider observation.
-- Naruon PR #1434 at exact head `c084801` accepts DiskSage readiness schema versions 6 and 7; stacked Naruon PR #1471 adds schema 8 acceptance for the new iCloud File Provider lock/stall blockers
-  and validates the current pre-copy/iCloud-native fields in its redacted verifier summary; the
-  focused handoff contract passed 48/48. The change keeps the path-free protocol and grants no
-  cloud-write or source-eviction authority. Hosted Naruon security, review, and build checks remain
-  authoritative before merge.
-- The remote implementation branch advanced concurrently to exact head `a8e0283`, adding a
-  regression test that rejects shared-writable provider-evidence lookup authority; it was
-  fast-forwarded locally without force-push or conflict resolution. PR #213's Ubuntu/macOS/Windows
-  builds are in progress while analysis, SAST, dependency, Noema, Strix, and review checks remain
-  queued; PR #213 is still not merge-authorized. The latest local APFS observation is about 3.8 GiB
-  free, and no provider process, Finder operation, or user data was terminated or deleted.
-- The next concurrent source fix `b9fe4f0` hardens `latest_api_object_id` against shared-writable
-  provider-evidence directories; the documentation change was rebased onto it as exact PR #213
-  head `3148d71`. This preserves the remote agent's change without force-push and keeps provider
-  evidence fail-closed when directory authority drifts.
+The valid Windows agent-session regression was transferred to canonical Test owner #338. Test-first `fe2059645790f3d0a2163cbebb16fcf1763089b2` requires the workflow contract; production `29aaf64c9fea7ffde88fc9a8adcd6f0560c26466` runs the regression on Windows whenever `src-tauri/src/agent_state_guard.rs` exists. The test-only hosted run was cancelled by the immediate successor, so no hosted RED is claimed. #345 must later adopt a terminal-GREEN current #338 through normal ancestry and reacquire its own gates.
 
-## 2026-08-21 11:19 +0900 incident follow-up
+A real Git/filesystem regression on #345 confirmed that a child retaining its working directory can create ignored agent state after the final staged scan and a subsequent native recursive removal can delete it. Commit `06b55bce` keeps recursive Git worktree removal unavailable and restores the retained worktree, with late-arriving Codex and Claude cases passing in focused evidence. Re-enabling recursive removal requires a stronger final mutation boundary that is reversible or otherwise cannot delete newly arrived protected state. Historical predecessor runs do not transfer to later heads.
 
-- A read-only `fileproviderctl dump` probe was bounded at 15 seconds for diagnosis and returned
-  partial output before timing out. The system log independently recorded repeated File Provider
-  `no progress` fetch/create requests, materialization failures, and file-coordination failures;
-  `bird` and `fileproviderd` were active. This explains the Finder `real_datasets` “copy preparing”
-  dialog as a provider stall, not a successful cloud copy.
-- DiskSage issued the fixed Finder Escape cancellation request and received exit status 0. It did
-  not kill Finder, `bird`, `fileproviderd`, or any provider client, and it did not delete or rename
-  user files, provider data, cloud objects, or CloudDocs databases. A new-copy admission, attestation,
-  and source-eviction decision remains blocked until a fresh complete quiet provider observation.
-- Source head `9b1c270` now retains a bounded hourly contextual-orchestrator receipt: only schema,
-  exact event SHA, model id, status, response byte count, and response SHA-256 are uploaded for
-  seven days; the advisory response body is never persisted. `actionlint` passed, the focused loop
-  contract passed 2/2, the full frontend suite passed 26 files/118 tests, and `svelte-check`
-  reported 0 errors/0 warnings. PR #213 exact head at this capture was `6ef85e4`; its hosted
-  build/security/review checks remain authoritative and no protected merge is claimed.
-- Follow-up source head `037a9b3` removes the model identifier from the GitHub Step Summary, leaving
-  only fixed status/hash/byte fields visible in logs; the model id remains inside the short-lived,
-  bounded JSON artifact. The focused contract and `actionlint` checks still pass.
-- PR #212 exact head `7f1ac61` had one Strix attempt fail before repository analysis because the
-  runner Caido bootstrap could not connect to `127.0.0.1:48080` after ten attempts; the job log
-  contains no source finding. A rerun is queued as job `96570913837`, so the PR remains unmerged and
-  its security gate is not treated as passed until that exact job produces a terminal result.
-
-- The bounded read-only probe at `2026-08-21 05:42 +0900` retained at least 71
-  `fetchContentsForItemWithID` and 161 `createItemBasedOnTemplate` requests marked `no progress`
-  within five seconds; output was capped and no raw dump was written. `fileproviderctl help`
-  exposes no supported cancellation command, so DiskSage keeps the Finder cancel control as the
-  only operator action, never terminates `fileproviderd`/`bird`, and keeps copy, attestation, and
-  eviction blocked. APFS free space fluctuated from roughly 406 MiB to 2.5 GiB; only a clean
-  temporary Naruon worktree and regenerable package-manager caches were removed, while user files,
-  CloudDocs databases, and provider-managed data were retained.
-- At `2026-08-21 06:02 +0900`, the current source head `7be4eb3` passed the frontend suite
-  (26 files / 118 tests), `svelte-check` (0 errors / 0 warnings), and the production Vite build.
-  The loopback Zotero endpoint still reports 9.0.6 and 8,312 items; a bounded invalid POST returns
-  `400 Endpoint does not support method`, so the added DCMI and provenance references remain a
-  dry-run manifest handoff and no Zotero item or attachment was mutated. PR #213 hosted checks
-  remain queued/in progress and the protected merge gate is unchanged.
-- At `2026-08-21 06:10 +0900`, the frontend coverage gate passed at 100% statements, branches,
-  functions, and lines (26 files / 118 tests) on source head `7765a4b`; the repository-wide Rust
-  coverage percentage remains unclaimed because the local APFS headroom is below a safe full Cargo
-  target build threshold. Hosted Rust coverage and required checks remain authoritative.
-- At `2026-08-21 06:21 +0900`, the only active local Cargo cache pressure was the regenerable
-  `~/.cargo/registry/src` tree (about 1.3 GiB). With no Cargo/rustc process running, that source
-  cache was removed; the Cargo index, package archives, git checkouts, user files, CloudDocs DBs,
-  and provider-managed data were retained. The path is now an explicit manual-review catalog item,
-  not an automatic cleanup target. APFS free space recovered to about 1.6 GiB at observation.
-- At `2026-08-21 06:25:37 +0900`, APFS availability reached 289 MiB while the Finder
-  `real_datasets` copy remained in “준비 중”. A bounded read-only `fileproviderctl dump -l 20`
-  contained upload/download progress markers and old File Provider `itemNotFound` errors; its
-  temporary 317 KiB output was removed without retaining paths or item identifiers. Only
-  regenerable package/tool caches were removed (no provider process, Finder operation, CloudDocs
-  database, cloud object, user file, or active Cargo/uv runtime was touched), recovering about
-  1.6 GiB. APFS then fluctuated between 1.7 and 1.9 GiB, so the operation remains blocked and the
-  Finder cancel control is still the only supported cancellation action. Caches were not uploaded
-  to a provider because they are reproducible cleanup data, not user-file lineage. Evidence is
-  bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
-- At `2026-08-21 06:43 +0900`, DiskSage PR #213 advanced to exact head
-  `41d27dfa8bd66b5986d00ce84d20c7f7b2cdb3b0` with the observed-cache catalog and incident ADR
-  evidence. Its exact-head hosted checks restarted (no terminal failure observed yet), while the
-  protected merge state remains blocked pending fresh review/required checks. PR #244 has all
-  required build, test, security, and coverage checks terminal-successful except its OpenCode
-  review remains queued; no review or merge gate was bypassed.
-
-## 2026-08-21 current-head follow-up
-
-- The live DiskSage branch is `b091fc69799baecc360a9399677fcdd8196745a0`. The repository-local
-  hourly advisory contract test passed 2/2 and `svelte-check` reported 0 errors / 0 warnings.
-  The local workflow is manual-only by design; the central `.github` scheduler owns the hourly
-  OpenCode review/repair cadence at `37 * * * *` using workflow SHA
-  `d1868bc20d419a121d59df303428bf633f651e75` and reusable scheduler SHA
-  `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`.
-- PR #213 is at exact head `b091fc69799baecc360a9399677fcdd8196745a0`; its build checks are
-  in progress and analysis/security/review checks are queued, so no protected merge is claimed.
-  PR #244 remains exact-head `321c4518399129f5dd78f8a7bc5e68edc8c3e2b8` with all terminal
-  required checks successful except its OpenCode review, which remains queued.
-- The current APFS volume has about 6.5 GiB available. `StreamingUnzipService` has exited, the
-  `real_datasets` target remained 7.2 GiB / 14 files across a bounded 20-second observation, and
-  `fileproviderd`/`bird` remain active. No provider process, Finder operation, CloudDocs database,
-  cloud object, or user file was terminated or deleted; only the explicitly regenerable pnpm
-  cache was removed after confirming no pnpm process was running.
-- The release workflow now uploads the source-bound SPDX SBOM only after GitHub provenance
-  succeeds and downloads the same run-attempt artifact before publication. The focused SBOM and
-  hourly-workflow contracts pass 3/3, the full frontend suite passes 28 files / 122 tests,
-  `svelte-check` reports 0 errors / 0 warnings, and `actionlint` passes. The current PR head is
-  `c0ae0d8b68d72ba3b9214cb77f9bca365ccaaa00`; hosted checks have restarted and no merge gate is
-  bypassed.
-- The central `.github` DiskSage hourly workflow has repeated scheduled `startup_failure` runs,
-  including `31991358711`, before any job was created. The called scheduler requires
-  `id-token: write`, which the caller lacked; central repair PR #1180 adds only that permission,
-  passed its hourly-cadence contract check, and is awaiting the normal required checks/review.
-  Until a post-merge scheduled run completes, the hourly loop remains an identified gap rather
-  than a proven live capability.
-
-## 2026-08-21 current-head incident and authority follow-up
-
-- The live DiskSage branch is `586703e3a994b9b5ef635c33d95d2bab72a0ef64`, fast-forwarded from the
-  remote branch without force-push. Its preceding implementation head
-  `c6a1524a457e139eeebb766f405bec1858d64717` contains the maintained walker and authority fixes;
-  the provider-evidence boundary introduced at `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90` now rejects
-  `sync_complete=true` paired with `sync_state=unknown` for authorization while preserving bounded
-  compatibility reads; `src-tauri/tests/provider_sync_legacy_eviction_fail_closed.rs` proves that
-  the public eviction boundary returns `provider-sync-incomplete`. This closes the legacy-state
-  authorization gap without granting cloud-write or source-eviction authority.
-- PR #213 is open at this exact head. Required build, analysis, security, Noema, Strix, and review
-  jobs are queued or in progress; no terminal failure was observed, but the protected merge state
-  remains blocked. No unresolved, non-outdated review thread is present at this head, while the
-  prior `CHANGES_REQUESTED` decision is stale; an exact-head OpenCode review was requested and no
-  approval or merge bypass was used.
-- The bounded runtime observation at `2026-08-21 08:21 +0900` found the user-visible Finder
-  `real_datasets` target on the local volume with 14 ZIP files totalling about 7.2 GiB and only
-  2.3 GiB available. CloudDocs retained user-initiated downloads that ran for roughly 5,535
-  seconds before `cancelled`/`CKInternalError`; the default route was `utun4`, although bounded
-  HTTPS checks to iCloud, Apple, and Google endpoints completed. No DiskSage, Finder, `bird`,
-  `fileproviderd`, OneDrive, or Google Drive process was terminated, and no provider or user data
-  was deleted. The incident remains `provider-sync-incomplete`: Finder cancellation, sufficient
-  staging headroom, and a fresh quiet provider observation are required before retry.
-- At `2026-08-21 09:14 +0900`, the same 7.2 GiB target was unchanged while APFS availability
-  fell to 194 MiB (99% full). `bird` logged SQLite `No space left on device` failures and the
-  iCloud File Provider returned internal fetch errors; no provider or Finder process was killed.
-  Regenerable old user logs and two identified cache artifacts were removed, recovering about
-  0.8 GiB; the source and provider databases were retained. Cloud planning now exposes
-  `local-volume-headroom-insufficient` as a plan notice before review; native-copy controls and
-  the existing pre-mutation/provider-sync blockers remain authoritative, while the non-staging
-  provider-API fallback and existing-copy adoption stay available. The Finder cancel control is
-  still the only safe way to end the already-running operation.
-- `git diff --check` passes for the current worktree. A repository-wide `cargo fmt --check` still
-  reports pre-existing formatting differences across unrelated files, so it is not treated as
-  evidence for the new authorization behavior; hosted Rust checks remain authoritative for the
-  exact head.
-- The production filesystem traversal is now fully migrated from unmaintained `jwalk` to the
-  maintained `walkdir` backend across scanner, duplicate, development-artifact, cloud, and
-  reclaim paths. The locked Cargo metadata resolves without a direct `jwalk` dependency, and the
-  shared symlink/reparse filter plus fail-closed traversal-error accounting remain in place. The
-  migration is bound to implementation head `1d8c5caccce26b976f6324164ec74177c71b48a9`; hosted
-  Rust compilation and the dependency contract remain authoritative.
-
-## 2026-08-21 sensitive-config boundary
-
-- At implementation head `dc448af600bf35b8bbcd6a4a6ec3a14bd6bf0035`, direct credential-bearing
-  names are inventoried as `sensitive-config` candidates without opening their contents. `.env`
-  and `.env.*` (except documented examples), credential/private-key names, and key/certificate
-  extensions receive the shared `sensitive-config-file` blocker; they are excluded from metadata
-  probing and contribute zero potentially reclaimable bytes. The Rust planner regression test
-  covers synthetic `.env.api` and `credentials.json` names only. The new wire kind is represented
-  in the TypeScript API, review reason labels, and Naruon ontology mapping. This is filename-based
-  coverage, not proof that every secret-bearing file is recognizable; hosted Rust checks remain
-  authoritative for the exact branch head.
-- The follow-up test-only head `4b8c0b2463c60c15691a47fcd606c9182bb79a48` adds explicit coverage for
-  `.env` examples, credential names, private-key/certificate extensions, and the no-probe guard.
-  `git diff --check`, locked Cargo metadata, and TypeScript `tsc --noEmit` pass locally. The local
-  Cargo registry source cache was removed only after confirming no Cargo/rustc process was active;
-  hosted Rust, security, and review checks remain the authority for compilation and coverage.
-- Head `22748f8147613013966ddaa80928ae73681c60df` records `sensitive-config-file` in the dynamic
-  Goal's `blocked_source_classes`, keeping the replaceable Goal projection aligned with the Rust
-  planner and ADR rather than relying on a UI-only label.
-- Head `a15be7425aba9e80a48bb7eba8a669bd505a23d7` adds explicit wire-name and Naruon ontology
-  coverage for `sensitive-config`, preventing the new blocked class from becoming an untested
-  serialization branch.
-- Head `a4de13e65b6711f97a51eb857642da585f1d0b09` leaves the ontology coverage assertion
-  rustfmt-clean; no behavior or authority boundary changed.
-- The current source-and-documentation line is `3fc93b1358cdf29ebaa699521aa98850ace7cc76`; the
-  implementation head is `df097743eb75b9cc919d631db0ebdeffad8b7995` and the final docs-only
-  binding commit records that distinction.
-
-## 2026-08-21 current-head provider-evidence follow-up
-
-- The Finder-cancel implementation is bound to source head `df097743eb75b9cc919d631db0ebdeffad8b7995`,
-  following macOS walkdir ownership repair at `6c0347ba53185a85a3a14c4819435c98a6fe8271`. Locked Cargo
-  metadata, TypeScript compilation, and `git diff --check` pass locally; a full local Cargo build
-  remains intentionally deferred while the host is under provider-copy disk pressure.
-- PR #213 is still mergeable but protected and blocked. Its exact-head release, test, security,
-  Noema, Strix, and OpenCode checks are queued or in progress; no protected merge or approval
-  bypass is claimed. The current documentation head is `ef96322baceaa3089193a9549c47c79d94de93a3`.
-  The prior current-head Devin finding about `latest_api_object_id` was fixed
-  by filtering `{receipt_id}-*.json` before scanning, with a regression test covering 4,096
-  unrelated records; the outdated review thread was replied to and resolved.
-- Provider evidence lookup remains advisory locator recovery only. It does not grant cloud-write or
-  source-eviction authority: remote revalidation, destination binding, content hash, explicit
-  provider-sync state, and the existing approval gates still decide authorization.
-- Provider-client recovery now distinguishes `runtime_observed=false` from unavailable runtime
-  evidence. OneDrive/Google Drive quit, graceful-term, and post-restart decisions fail closed on
-  unavailable observations; the regression is bound to source head `ac299095854f4cd16f124a2b5dcb44023d8fffe5`.
-- The replaceable cloud-offload Goal now records the same runtime-evidence fail-closed policy and
-  exposes `cancel-finder-copy` as an operator action; neither projection field grants cloud-write,
-  copy, attestation, or source-eviction authority.
-- The prior manual Finder workaround is now a product action: a macOS-only, fixed-script
-  `cancel_finder_copy` command sends Escape with a five-second bound and no user-controlled input.
-  The UI exposes it only alongside concrete iCloud File Provider activity evidence; its success
-  does not clear admission and the next bounded provider observation remains authoritative. The
-  fixed script's two-statement separator is regression-tested at source head
-  `df097743eb75b9cc919d631db0ebdeffad8b7995`.
-- The UI contract now also asserts that the cancellation action is serialized through the Tauri
-  command wrapper and remains disabled while a request or health refresh is active; focused API,
-  privacy, admission, Goal projection, TypeScript, and JSON checks passed locally at head `3fc93b1`.
-- The Finder `real_datasets` incident remains provider-sync-incomplete. The 7.2 GiB target did not
-  change, diagnostic dumps totaling about 1.6 GiB were removed without touching provider state,
-  and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
-  be cancelled through the bounded `cancel_finder_copy` UI action and must not be retried until the
-  local headroom and a fresh quiet File Provider observation satisfy the plan gates.
-
-## 2026-08-21 immediate disk-pressure follow-up
-
-- A second bounded inventory found an old, unreferenced temporary `trusted.tar.gz` archive under
-  the macOS temporary directory; it was removed after the open-handle check, recovering about
-  217 MiB. The Node compile cache, active worktrees, iCloud/File Provider state, OneDrive state,
-  Google Drive support data, and all user/provider files remain untouched. APFS availability then
-  measured about 2.3 GiB, while the 7.2 GiB Finder materialization remains unsafe to retry.
-
-## 2026-08-21 central hourly-loop RCA
-
-- Central `.github` scheduled DiskSage runs `31960074438` through `31991358711` ended in
-  `startup_failure` before creating a job. The reusable scheduler requests an OIDC exchange, but
-  the DiskSage caller exposed only `contents: read`; GitHub therefore could not start the called
-  job with `id-token: write`.
-- The minimal cross-repository repair is tracked in [`.github#1188`](https://github.com/ContextualWisdomLab/.github/pull/1188)
-  at exact head `7f9f9f0`, with 24 focused contract tests passing locally. The current cadence is
-  not claimed operational until a protected merge and a new scheduled run complete; no provider
-  secret, Copilot token, or repository write permission is added to the caller.
-
-## 2026-08-21 Finder provider-stall follow-up
-
-- A bounded `fileproviderctl dump com.google.drivefs.fpext -l` at 11:41:49 KST returned complete
-  read-only evidence: Google Drive was temporarily disconnected, upload and download progress
-  were active, reconciliation contained 2,000 entries, and the extension reported File Provider
-  `-1004` (server unreachable); the local volume had about 6.9 GiB available. This is the exact
-  evidence behind the user's `real_datasets` Finder copy-preparing dialog, not proof that any
-  user file was lost or deleted.
-- CloudArchive now offers its existing fixed `cancel_finder_copy` action for these third-party
-  provider-global blockers, refreshes the same provider dump afterward, and keeps copy,
-  attestation, and source eviction blocked until a fresh clear observation. No provider daemon,
-  cloud object, or source file is terminated or mutated; focused TypeScript and contract tests
- pass after the change.
-
-## 2026-08-21 iCloud materialization-stall follow-up
-
-- At `2026-08-21 14:32:54 +0900`, the headless DiskSage iCloud probe completed its bounded
-  read-only observation with `timed_out=true`, `no_progress_fetch_count=58`, and
-  `no_progress_create_count=114`. New-copy admission remained blocked by
-  `icloud-file-provider-no-progress`; this is incomplete provider evidence, not a successful
-  copy or eviction receipt.
-- The contemporaneous system log also retained File Provider extension termination after
-  no-progress requests and `materializationFailed`/`stagedItemMissing` materialization errors.
-  DiskSage source head `0ded557893191606ff6f91d4303fb54d5112fe45` now records those aggregate
-  markers as path-free `materialization_failure_count` and `staged_item_missing_count` fields,
-  exposes the fail-closed blocker and UI warning, and never persists raw paths, item IDs, or
-  provider output.
-- Focused Rust parser/readiness tests, the active File Provider integration test, the 29-file
-  frontend suite (123 tests), `svelte-check`, and TypeScript compilation passed locally. The
-  generated Cargo target was then removed, recovering 4.1 GiB; user files, Finder, `bird`,
-  `fileproviderd`, CloudDocs databases, and provider-managed data remained untouched.
-- PR #213 is at this exact head with checks running/queued, no open non-outdated review thread,
-  and a stale `CHANGES_REQUESTED` review decision. The protected merge gate remains unchanged;
-  no approval or merge bypass is claimed.
-
-## 2026-08-21 iCloud filename/root exclusion follow-up
-
-- The current bounded iCloud File Provider dump contains active upload/download progress and 18
-  `Excluded From Sync Due To Filename` / 2 `Excluded From Sync Under Root` errors. DiskSage
-  now retains only aggregate counters and redacted notices, exposes dedicated admission blockers,
-  and keeps the Finder preparation state fail-closed. No filename, provider item ID, provider dump,
-  Finder process, or cloud object is mutated by this observation.
-
-## 2026-08-21 protected-PR and scheduler audit
-
-- PR #213 follow-up hardening keeps valid provider evidence when bounded retention pruning fails,
-  gives the headless Naruon readiness export the same three-stream iCloud pre-copy cohort as the
-  GUI path, uses non-overwriting `/bin/cp -n` for macOS native copies, and no longer deletes a
-  raced destination after a failed copy. `last-sync` is optional for native-status probe early
-  termination; it remains recorded when present.
-
-- The current DiskSage PR #213 head is `988bd24ecaeeba9bae44b38272edceccd9fbe889`, with the iCloud stall implementation, symlink-root fixes, and ADR
-  binding pushed. Its checks are running or queued; the protected merge state remains blocked
-  because the prior `CHANGES_REQUESTED` decision is stale and no fresh approval exists while the
-  current review threads are being addressed.
-- Central `.github` PR #1153 is at `035343c8a68e880a4abf27f7c947bfed9dbaafcf` and carries the
-  fail-closed Strix infrastructure-unavailable repair. Central `.github` PR #1188 is at
-  `82cd117d279a9b870f185b136984d82bb3ac5236` and carries the reusable-workflow OIDC caller
-  permission repair. Both have normal protected checks in progress; neither is claimed merged.
-- DiskSage PR #222 has a current Strix failure from the known `127.0.0.1:48080` Caido startup
-  outage. It is an infrastructure failure, not a source finding; the canonical remediation is
-  #1153. No Strix failure was reclassified as a source pass, and no check was bypassed.
-
-## 2026-08-21 fresh headless iCloud incident receipt
-
-- The exact-head `disksage-icloud-sync-health` binary completed a bounded, read-only probe at
-  `2026-08-21 17:07:34 +0900`. The report was `schema_version=5`, `evidence_complete=false`,
-  `native_status=null`, and `file_provider_activity.timed_out=true`; it retained 85 no-progress
-  fetch markers and 144 no-progress create markers. No active upload/download progress was
-  reported. New-copy admission remains `blocked` with
-  `icloud-sync-health-evidence-incomplete` and `icloud-file-provider-no-progress`.
-- The provider probe does not authorize cancellation, retry, cloud mutation, or local eviction.
-  The receipt is path-free at the public boundary; the 21.3 GB provider-managed database
-  allocation is retained only as bounded disk-pressure evidence. Finder, `bird`,
-  `fileproviderd`, CloudDocs databases, and user files were not mutated.
-- This receipt is the required fresh exact-head proof for the current materialization incident;
-  the acceptance gap remains open until a later complete, quiet provider observation and a
-  provider-specific per-item attestation are available. The protected merge state is unchanged.
-
-## 2026-08-21 central hourly scheduler repair evidence
-
-- The latest central `.github` scheduled run `31991358711` ended in `startup_failure` before a
-  job was created. Its referenced reusable scheduler requests `id-token: write`, while the
-  deployed DiskSage caller exposed only `contents: read`; therefore no OpenCode OIDC exchange or
-  review-repair dispatch occurred. This is an infrastructure/workflow admission failure, not a
-  DiskSage source result.
-- Central `.github` PR #1188 is the current minimal repair at exact head
-  `3ab34b57a7ab04eb14b5fca7994dd047df676748`. It grants only job-scoped `id-token: write` to the
-  DiskSage and Clearfolio reusable-workflow callers, keeps the workflow token read-only, and
-  updates the contract tests. Checks are still pending; hourly operation is not claimed until a
-  normal protected merge and one successful scheduled receipt are observed.
-## 2026-08-21 ontology-bound orphan cleanup follow-up
-
-- The macOS UI now provides `관계 기반 고아 정리`. A bounded Rust planner compares installed
-  application bundle IDs with cache and Application Support directory metadata, emits path-free
-  ontology relations and deterministic fingerprints, and uses active-use evidence before any
-  candidate can be considered. File contents are not opened and symlinks are not followed.
-- Application Support, incomplete inventories/manifests, skipped entries, and active-use or
-  truncated evidence are review-only. Only a complete unused cache may pass the separate exact
-  phrase/rationale approval and re-plan boundary; mutation uses the existing reversible OS Trash
-  journal. The LLM can annotate but cannot authorize cleanup, and no cloud/provider state is
-  changed. `plan_orphan_cleanup` and `clean_orphan_candidates` are now explicit dynamic Goal
-  operator actions.
-- The review hardening now joins bounded Launch Services bundle inventory with the fixed roots;
-  an unavailable, timed-out, truncated, or unreadable inventory is incomplete and keeps every
-  cache candidate review-only. Installed-app traversal shares the five-second plan deadline,
-  Info.plist reads are capped before parsing, directory active-use probes use recursive `lsof +D`,
-  and active-use errors are surfaced as explicit review reasons.
-
-## 2026-08-21 current-head live provider confirmation
-
-- A new bounded read-only Google Drive File Provider dump returned 5,159,669 bytes with the domain
-  temporarily disconnected, active upload/download progress, a 2,000-entry reconciliation queue,
-  and File Provider `-1004` server-unreachable evidence. `bird` remains CPU-active. This confirms
-  that the Finder “준비 중” dialog is provider-stall evidence, not a completed copy; copy,
-  attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
-  during the observation. The fixed Finder Escape action remains the only supported cancellation;
-  no daemon, cloud object, or source file was touched.
-- The PR #245 implementation snapshot `55a1c13ffb5cc1381aa1e86e2e6e73e055669c58` adds the ontology-bound orphan cache action and fails closed when
-  installed-app inventory or metadata manifests are truncated, too deep, or contain directory
-  iteration errors. Frontend checks passed locally (31 files, 129 tests); focused Rust orphan tests
-  pass (12/12 unit plus 2/2 lsof-warning integration tests, including deep inventory/manifest,
-  metadata-change, and object identity replacement rejection). Active-use probes share the
-  enclosing five-second plan deadline, and the pre-trash batch revalidates the metadata manifest
-  without reading cache contents or materializing provider placeholders.
-  Launch Services timeout cleanup now terminates the private mdfind process group before joining
-  stdout, preventing descendants from holding the planner past its deadline.
-  The post-Trash read-only refresh is now separate from the mutation result, so a refresh failure
-  preserves the successful cleanup receipt and clears stale UI selection.
-  Hosted full Rust,
-  security, and review checks remain authoritative and pending. PR #213's live base head is
-  `cc693e4`.
-
-## 2026-08-21 12:35 +0900 repeated provider-stall observation
-
-- A fresh bounded `fileproviderctl dump com.google.drivefs.fpext -l` returned about 5.16 MB of
-  read-only evidence. Multiple Google Drive domains remained temporarily disconnected with File
-  Provider `-1004` server-unreachable errors, active upload/download markers, and reconciliation
-  queues of 14,558, 2,000, 201, and 168 entries. `bird` and `fileproviderd` remained CPU-active.
-  The Finder “준비 중” operation therefore remains provider-sync-incomplete; DiskSage must not
-  treat it as a successful copy or authorize eviction. No provider daemon, cloud object, or source
-  file was changed.
-
-## 2026-08-21 13:38 +0900 iCloud active-transfer observation
-
-- A bounded 16 KiB head of a read-only `fileproviderctl dump com.apple.CloudDocs.iCloudDriveFileProvider -l`
-  showed Finder enumerators alive for the iCloud domain, sync scheduling `running`, upload progress
-  at 95.24% (118,950,548,354 / 124,897,444,934 bytes), and download progress at 2.78%
-  (30,311,669 / 1,091,221,225 bytes). `bird` and `fileproviderd` were still running. Because the
-  diagnostic head was intentionally capped, it is active-transfer evidence, not a complete quiet
-  provider attestation; copy, attestation, and eviction remain blocked.
-- The bounded diagnostic was terminated without touching provider daemons, cloud objects, or source
-  files. Subsequent scans must avoid raw cloud-placeholder paths because metadata inspection can
-  request File Provider materialization even when the command is read-only.
-
-## 2026-08-21 exact-head stacked PR audit
-
-- PR #245 was rebased onto provider-sync base `cc693e4` at implementation snapshot `55a1c13`; its protected
-  Release, Test, security, Noema, Strix, and review checks restarted and remain queued. The PR is
-  `REVIEW_REQUIRED`/`BLOCKED`; no force-merge or approval bypass was used.
-- PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
-  and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
-
-## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
-
-- DiskSage source head `3704dd1` closes the native-copy cleanup race identified in the P0 gap:
-  macOS now copies into a command-owned `tempfile` directory, verifies bytes and source identity,
-  and finalizes with bounded `/bin/mv -n`; timeout/helper failure drops only that owned staging
-  directory and cannot remove a provider-owned final destination. Successful copies continue to
-  write the immutable receipt. The preview and mutation-boundary 1 GiB reserve gate remains
-  authoritative.
-- The live OneDrive File Provider observation reported `temporarily disconnected`, active
-  upload/download progress, `databaseInitError`, and root reconciliation failures with `-1004`
-  `serverUnreachable`. DiskSage therefore keeps copy, attestation, and eviction blocked. The
-  OneDrive client was stopped after a restart attempt reduced available space to 340 MiB; only
-  regenerable package cache and an unreferenced temporary clone were removed, and no Finder,
-  provider daemon, cloud object, or user file was touched.
-- PR #213 now points to exact head `e6c6e34`; hosted checks/review are authoritative and a
-  protected approval is still required. The remaining gap is a fresh complete, quiet provider
-  receipt plus runtime E2E under safe headroom.
-
-## 2026-08-21 paired projection read-lock follow-up
-
-- PR #213 source head `9cf9665` now makes `read_projection_state` acquire the same receipt-scoped
-  ADR/Goal pair lock as writers. The projection files remain replaceable and non-authoritative;
-  immutable receipts/evidence still decide copy, attestation, and eviction. The focused cloud ADR
-  suite passes 20/20, including same-timestamp concurrent pair writers and late-state regression.
-
-## 2026-08-21 OneDrive post-headroom provider observation
-
-- Local APFS headroom recovered to about 39 GiB, but OneDrive still reported `needs-indexing=yes`,
-  77,393 pending indexable items, 81,524 reconciliation entries, active upload/download progress,
-  and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
-  complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
-  provider-index backlog from the earlier low-space pressure incident.
-
-## 2026-08-22 readiness verifier integration boundary
-
-- The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
-  included by the integration test that locks its `--help`/absolute-path parser boundary. This
-  repairs the exact-head Rust test failure without changing readiness, copy, or eviction authority.
-
-## 2026-08-22 current Finder/iCloud stall and exact-head repair evidence
-
-- The user-visible Finder operation still reports `real_datasets` as “복사 준비 중” after hours.
-  A bounded, read-only iCloud File Provider observation at about `02:08 +0900` found an active
-  upload of `4,170,552,115 / 5,462,125,152` bytes (76.35%), 28,694 pending indexable items,
-  `scheduling=running`, active materialization, and sync-exclusion notices for filenames and roots.
-  The dump exceeded its wall-clock bound and was truncated; these are incomplete provider-global
-  markers, not a per-item upload receipt. No retained marker binds an exclusion to `real_datasets`.
-- The data volume measured about 926 GiB total, 873 GiB used, 12 GiB available (99%). Finder,
-  `fileproviderd`, and `bird` remained alive. DiskSage did not kill a process, touch a CloudDocs
-  database, materialize a placeholder, cancel Finder, or mutate a source/cloud object. Its own
-  admission remains `provider-sync-incomplete`; only the existing operator-visible Finder Escape
-  action may request cancellation, followed by a fresh complete and quiet observation.
-- The exact-head fix `a6ec6e2` starts the bounded `lsof` active-use probe in a private process group
-  and kills that group before joining output readers on timeout. This closes the shell-descendant
-  pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
-  The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
-  and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+The capacity experiment attached to #345 is operational evidence, not product execution authority. Reported online free-block return reduced Colima/Podman backing allocation by `39.984161 GiB`, while the measured host-available increase was `39.104523 GiB` from the stated initial baseline; the declared 300 GiB objective therefore remains `260.895477 GiB` short. No real session was deliberately read or deleted, and these measurements do not authorize deletion of large temporary or iCloud trees merely because they occupy space.

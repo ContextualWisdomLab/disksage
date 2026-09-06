@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Establish `docs/PRD.md` as the canonical product contract for the 300 GB outcome target,
+  supported provider capabilities, customer states and next actions, safety invariants, realistic
+  acceptance evidence, and dynamic gap traceability without claiming recovery that has not been
+  measured.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
