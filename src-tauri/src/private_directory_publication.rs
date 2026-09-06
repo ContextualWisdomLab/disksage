@@ -160,7 +160,7 @@ where
     G: FnOnce(),
 {
     validate_modes(file_mode, directory_mode)?;
-    if !path.is_absolute() {
+    if !path.is_absolute() || path.as_os_str().as_bytes().ends_with(b"/") {
         return Err("private-directory-publication-path-invalid".into());
     }
     let parent = path
