@@ -85,6 +85,9 @@ fn map_directory_publication_error(error: String) -> ObjectBoundPublicationError
         "private-directory-publication-file-identity-drift" => {
             ObjectBoundPublicationError::RecordIdentityDrift
         }
+        "private-directory-publication-file-content-drift" => {
+            ObjectBoundPublicationError::RecordContentDrift
+        }
         "private-directory-publication-invalidation-failed" => {
             ObjectBoundPublicationError::InvalidationFailed
         }
