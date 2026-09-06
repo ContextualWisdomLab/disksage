@@ -59,12 +59,14 @@ fn existing_leaf_parent_must_already_be_owner_private_and_is_not_chmodded() {
 }
 
 #[test]
-fn anchor_replacement_after_parent_provision_never_receives_the_record() {
+fn anchor_replacement_after_parent_admission_never_receives_the_record() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private-root");
     let admitted = temp.path().join("admitted-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let replacement_receipt = root.join("receipts/receipt.json");
     let old_receipt = admitted.join("receipts/receipt.json");
@@ -99,6 +101,8 @@ fn post_write_anchor_replacement_invalidates_only_the_admitted_record() {
     let admitted = temp.path().join("admitted-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let replacement_receipt = root.join("receipts/receipt.json");
     let admitted_receipt = admitted.join("receipts/receipt.json");
@@ -133,6 +137,8 @@ fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
     let root = temp.path().join("private-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let hook_target = target.clone();
 
