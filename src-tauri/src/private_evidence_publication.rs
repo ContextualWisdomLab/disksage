@@ -172,6 +172,17 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn no_policy_content_drift_keeps_content_drift_error_class() {
+        assert_eq!(
+            map_directory_publication_error(
+                "private-directory-publication-file-content-drift".to_string(),
+            ),
+            ObjectBoundPublicationError::RecordContentDrift
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn forbidden_root_policy_rejects_non_private_file_mode_before_create() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
