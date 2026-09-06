@@ -587,6 +587,17 @@ fn unexpected_staging_entries(staging_dir: &Path, staged_source: &Path) -> Resul
     Ok(false)
 }
 
+/// Restore a regular source without replacing a path created by another writer.
+fn restore_staged_source(
+    staged_source: &Path,
+    source: &Path,
+    staging_dir: &Path,
+) -> Result<(), String> {
+    std::fs::hard_link(staged_source, source).map_err(|error| error.to_string())?;
+    std::fs::remove_file(staged_source).map_err(|error| error.to_string())?;
+    std::fs::remove_dir(staging_dir).map_err(|error| error.to_string())
+}
+
 fn evict_source_with_context<F>(
     receipt: &CloudCopyReceipt,
     permit: &LocalEvictionPermit,
@@ -732,11 +743,7 @@ where
         }
         std::fs::rename(source, &staged_source).map_err(|error| error.to_string())?;
         if let Err(error) = verify_source(&staged_source, receipt, Some(&intent.source_identity)) {
-            let restore = if !path_entry_exists(source)? {
-                std::fs::rename(&staged_source, source).map_err(|restore| restore.to_string())
-            } else {
-                Err("eviction-source-reappeared-before-restore".into())
-            };
+            let restore = restore_staged_source(&staged_source, source, &staging_dir);
             return match restore {
                 Ok(()) => Err(error),
                 Err(restore_error) => Err(format!(
@@ -750,9 +757,8 @@ where
         if human_approval.is_some()
             && !approval_active_use_is_safe(&observe_path_active_use(&staged_source))
         {
-            if !path_entry_exists(source)? {
-                std::fs::rename(&staged_source, source).map_err(|error| error.to_string())?;
-                std::fs::remove_dir(&staging_dir).map_err(|error| error.to_string())?;
+            if let Err(error) = restore_staged_source(&staged_source, source, &staging_dir) {
+                return Err(format!("source-eviction-live-active-use-blocked; eviction-staging-restore-failed:{error}"));
             }
             return Err("source-eviction-live-active-use-blocked".into());
         }
@@ -761,13 +767,7 @@ where
             if path_entry_exists(&staged_source)? {
                 let restore = (|| -> Result<(), String> {
                     verify_source(&staged_source, receipt, Some(&intent.source_identity))?;
-                    // Receipt sources are regular files. A create-only hard link cannot replace
-                    // a source that reappears between the callback and restoration.
-                    std::fs::hard_link(&staged_source, source)
-                        .map_err(|restore| restore.to_string())?;
-                    std::fs::remove_file(&staged_source).map_err(|restore| restore.to_string())?;
-                    std::fs::remove_dir(&staging_dir).map_err(|restore| restore.to_string())?;
-                    Ok(())
+                    restore_staged_source(&staged_source, source, &staging_dir)
                 })();
                 if let Err(restore_error) = restore {
                     return Err(format!(
@@ -1256,6 +1256,24 @@ mod tests {
             .unwrap()
             .join(format!(".disksage-evict-{}", receipt.receipt_id))
             .exists());
+    }
+
+    #[test]
+    fn shared_restore_retains_both_files_when_source_reappears() {
+        let temp = tempfile::tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let staged = staging.join("source");
+        let source = temp.path().join("source");
+        std::fs::write(&staged, b"retained").unwrap();
+        std::fs::write(&source, b"new writer").unwrap();
+        assert!(restore_staged_source(&staged, &source, &staging).is_err());
+        assert_eq!(std::fs::read(&staged).unwrap(), b"retained");
+        assert_eq!(std::fs::read(&source).unwrap(), b"new writer");
+        std::fs::remove_file(&source).unwrap();
+        restore_staged_source(&staged, &source, &staging).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"retained");
+        assert!(!staging.exists());
     }
 
     #[test]
