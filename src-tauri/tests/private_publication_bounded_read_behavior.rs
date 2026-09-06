@@ -25,8 +25,7 @@ fn append_after_length_snapshot_is_bounded_to_expected_bytes_plus_one() {
 
     visible.seek(SeekFrom::Start(0)).unwrap();
     let mut observed = Vec::with_capacity(expected.len());
-    visible
-        .by_ref()
+    Read::by_ref(&mut visible)
         .take((expected.len() as u64).saturating_add(1))
         .read_to_end(&mut observed)
         .unwrap();
