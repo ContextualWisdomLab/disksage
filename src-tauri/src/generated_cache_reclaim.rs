@@ -814,6 +814,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
@@ -897,6 +898,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn cache_child_symlink_is_fingerprinted_without_following_target() {
         let temp = tempfile::tempdir().unwrap();
@@ -916,6 +918,7 @@ mod tests {
         assert_eq!(before.entry_count, 2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn allowlisted_root_symlink_remains_denied() {
         let temp = tempfile::tempdir().unwrap();
