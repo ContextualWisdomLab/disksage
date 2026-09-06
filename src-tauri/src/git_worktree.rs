@@ -2770,7 +2770,7 @@ mod tests {
             }
             assert_eq!(fs::read(retained.join(".codex/sessions/late.jsonl")).unwrap(), b"late session");
             assert!(list_worktrees(&repository, GitWorktreeAuditOptions::default()).unwrap()
-                .iter().any(|entry| entry.path == retained));
+                .iter().any(|entry| entry.path == fs::canonicalize(&retained).unwrap()));
             git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
         }
     }
