@@ -3,9 +3,42 @@ pub use crate::private_evidence_core::{
 };
 
 #[cfg(unix)]
-pub(crate) use crate::private_evidence_core::{
-    write_object_bound_bytes_create_new_with_hooks, ObjectBoundPublicationError,
-};
+pub(crate) use crate::private_evidence_core::ObjectBoundPublicationError;
+
+/// Expose the deterministic publication hooks without bypassing the private-record mode invariant.
+///
+/// Dependent authority tests use these hooks to inject namespace and permission races into the same
+/// production implementation. Admission must therefore happen before any hook, filesystem lookup, or
+/// mutation; otherwise the test seam itself becomes a broader publication capability than production.
+#[cfg(unix)]
+pub(crate) fn write_object_bound_bytes_create_new_with_hooks<F, G, H>(
+    path: &std::path::Path,
+    encoded: &[u8],
+    unix_mode: u32,
+    forbidden_root: Option<&std::path::Path>,
+    before_parent_open: F,
+    before_create: G,
+    before_finalize: H,
+) -> Result<(), ObjectBoundPublicationError>
+where
+    F: FnOnce(),
+    G: FnOnce(),
+    H: FnOnce(),
+{
+    if !matches!(unix_mode, 0o400 | 0o600) {
+        return Err(ObjectBoundPublicationError::ModeInvalid);
+    }
+
+    crate::private_evidence_core::write_object_bound_bytes_create_new_with_hooks(
+        path,
+        encoded,
+        unix_mode,
+        forbidden_root,
+        before_parent_open,
+        before_create,
+        before_finalize,
+    )
+}
 
 #[cfg(unix)]
 fn map_directory_publication_error(error: String) -> ObjectBoundPublicationError {
@@ -74,11 +107,14 @@ pub(crate) fn write_object_bound_bytes_create_new(
     }
 
     if forbidden_root.is_some() {
-        return crate::private_evidence_core::write_object_bound_bytes_create_new(
+        return write_object_bound_bytes_create_new_with_hooks(
             path,
             encoded,
             unix_mode,
             forbidden_root,
+            || {},
+            || {},
+            || {},
         );
     }
 
