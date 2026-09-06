@@ -52,6 +52,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Resolve the provider OAuth descriptor's platform data-home authority before entering the domain:
+  honor absolute Linux `$XDG_DATA_HOME` and redirected Windows `%APPDATA%`, ignore invalid relative
+  environment paths, keep explicit `--connections` and `--home` authoritative, and preserve native
+  non-UTF-8 filesystem operands while leaving macOS Application Support behavior unchanged.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
@@ -118,4 +122,3 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Bind the default on-device GGUF model to an immutable upstream revision, exact byte count, and SHA-256 digest; replace whole-model buffering and named sibling staging with bounded streaming into an unnamed same-directory temporary file; ignore and preserve unrelated legacy `.part` paths; refuse destination overwrite with create-new semantics; capture destination ownership from the returned open file handle; re-read and rehash the still-open staging source while copying; flush, sync, re-read, and rehash the destination before final acceptance; reject same-file source or destination mutation; preserve foreign destination replacements through identity-bound cleanup; and keep model installation inside the Rust coverage surface with privacy-safe stable errors and deterministic race regressions.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
-- Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
