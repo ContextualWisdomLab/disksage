@@ -92,6 +92,8 @@ Applying the unchanged production session-tree guard to the 20 largest Cargo can
 
 Further owner review found check-then-rename restoration in the shared safety path. Commit `85c87879` uses native atomic no-replace rename on macOS, Linux, and Windows, failing closed on unsupported platforms. The regression set covers an occupied empty directory, dangling symlink, and successful identity-preserving directory restoration. This shared repair is a prerequisite for the generated-cache owner stack (#295, #320, #322, #325); its implementation is not copied into those branches and their remaining deltas are preserved.
 
+The actual safety-module harness passed all 50 tests at `85c87879`, including the three new exclusive-restore cases and the previous 47 tests. Linux and Windows native execution still requires CI validation. The iCloud allocation query subsequently completed without reported errors at 324 KiB; it provides no material capacity toward the target and is excluded from reclamation.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
