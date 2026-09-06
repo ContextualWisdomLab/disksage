@@ -270,6 +270,8 @@ where
         }
         let mut final_bytes = Vec::with_capacity(encoded.len());
         visible
+            .by_ref()
+            .take((encoded.len() as u64).saturating_add(1))
             .read_to_end(&mut final_bytes)
             .map_err(|_| "private-directory-publication-file-content-drift".to_string())?;
         if final_bytes != encoded {
