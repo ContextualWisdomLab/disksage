@@ -815,6 +815,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn torch_and_homebrew_metadata_are_exact_allowlisted_contracts() {
         let temp = tempfile::tempdir().unwrap();
@@ -833,6 +834,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn active_uv_playwright_and_dirty_worktree_are_retained() {
         let temp = tempfile::tempdir().unwrap();
@@ -862,6 +864,26 @@ mod tests {
             .contains(&"temporary-workspace-specialized-executor-required".into()));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn unsupported_parent_identity_prevents_planning_and_audit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("retained.bin"), b"retained").unwrap();
+        let expected = "generated-cache-parent-identity-unsupported";
+        assert_eq!(immediate_parent_identity(&root).unwrap_err(), expected);
+        assert_eq!(
+            plan_with_evidence(&root, temp.path(), inactive(), 1).unwrap_err(),
+            expected
+        );
+        assert_eq!(audit(&root, temp.path(), 1).unwrap_err(), expected);
+        assert_eq!(
+            std::fs::read(root.join("retained.bin")).unwrap(),
+            b"retained"
+        );
+    }
+
     #[test]
     fn provider_and_virtual_machine_boundaries_are_never_admitted() {
         let home = Path::new("/Users/test");
@@ -878,6 +900,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn exact_approval_executes_via_seam_and_receipt_is_create_only() {
         let temp = tempfile::tempdir().unwrap();
@@ -913,6 +936,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn invalid_execution_never_reserves_a_receipt() {
         let temp = tempfile::tempdir().unwrap();
@@ -931,6 +955,7 @@ mod tests {
         assert!(!receipt_path.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn fresh_observation_must_follow_approval() {
         let temp = tempfile::tempdir().unwrap();
@@ -951,6 +976,7 @@ mod tests {
         assert!(execute_with(&plan, &approval, &fresh, 3, |_| Ok(())).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn manifest_detects_content_rename_and_root_replacement() {
         let temp = tempfile::tempdir().unwrap();
@@ -984,6 +1010,7 @@ mod tests {
         assert_ne!(renamed.plan_fingerprint, replaced.plan_fingerprint);
     }
 
+    #[cfg(unix)]
     #[test]
     fn exact_cache_is_staged_rechecked_and_removed() {
         let temp = tempfile::tempdir().unwrap();

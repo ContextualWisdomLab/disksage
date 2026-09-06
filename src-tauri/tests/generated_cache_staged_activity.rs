@@ -97,6 +97,7 @@ mod git_worktree {
     }
 }
 
+#[cfg(unix)]
 fn assert_original_command_activity_restores_cache(activate_at: usize) {
     use generated_cache_reclaim::*;
     let temp = tempfile::tempdir().unwrap();
@@ -134,16 +135,19 @@ fn assert_original_command_activity_restores_cache(activate_at: usize) {
 
 use std::path::Path;
 
+#[cfg(unix)]
 #[test]
 fn original_command_activity_at_first_staged_probe_restores_cache() {
     assert_original_command_activity_restores_cache(3);
 }
 
+#[cfg(unix)]
 #[test]
 fn original_command_activity_after_staged_hash_restores_cache() {
     assert_original_command_activity_restores_cache(4);
 }
 
+#[cfg(unix)]
 fn fixture_plan(root: &Path, home: &Path) -> generated_cache_reclaim::GeneratedCachePlan {
     use generated_cache_reclaim::*;
     plan_with_evidence(
@@ -163,6 +167,7 @@ fn fixture_plan(root: &Path, home: &Path) -> generated_cache_reclaim::GeneratedC
     .unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn parent_holder_and_incomplete_probe_preserve_cache_at_every_boundary() {
     for incomplete in [false, true] {
@@ -198,6 +203,7 @@ fn parent_holder_and_incomplete_probe_preserve_cache_at_every_boundary() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn replaced_parent_changes_plan_and_rejects_original_approval() {
     let temp = tempfile::tempdir().unwrap();
@@ -228,6 +234,7 @@ fn replaced_parent_changes_plan_and_rejects_original_approval() {
     assert_eq!(std::fs::read(root.join("model.bin")).unwrap(), b"retained");
 }
 
+#[cfg(unix)]
 #[test]
 fn stale_schema_and_symlink_parent_are_rejected() {
     let temp = tempfile::tempdir().unwrap();
