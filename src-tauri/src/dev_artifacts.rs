@@ -61,7 +61,10 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
-    (".venv314", &["pyproject.toml", "requirements.txt", "setup.py", ".git"]),
+    (
+        ".venv314",
+        &["pyproject.toml", "requirements.txt", "setup.py", ".git"],
+    ),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
     (".mypy_cache", &[]),
@@ -86,8 +89,7 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
 
 fn is_python_314_environment(path: &Path) -> bool {
     let config = path.join("pyvenv.cfg");
-    std::fs::metadata(&config)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+    std::fs::metadata(&config).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
         && std::fs::read_to_string(config).is_ok_and(|text| {
             text.lines().any(|line| {
                 line.split_once('=').is_some_and(|(key, value)| {
@@ -850,7 +852,10 @@ mod tests {
             !results[0].ok,
             "a same-size rewrite after review validation must invalidate irreversible authority"
         );
-        assert!(artifact.exists(), "unreviewed artifact contents must remain in place");
+        assert!(
+            artifact.exists(),
+            "unreviewed artifact contents must remain in place"
+        );
         assert_eq!(
             fs::read(payload).expect("rewritten payload must survive rejected deletion"),
             vec![1u8; 256]

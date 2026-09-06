@@ -22,7 +22,8 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로");
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
-    expect(backend).toContain("trash_delete_if_identity(");
+    expect(backend).toContain("safety::trash_delete_cache_target_if_identity(");
+    expect(backend).toContain("safety::permanent_delete_dir_if_identity(");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");

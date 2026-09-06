@@ -47,6 +47,8 @@ mod generic_cleanup;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
 pub mod git_clone_reclaim;
 pub mod git_worktree;
+pub mod generated_cache_reclaim;
+pub mod gradle_daemon_logs;
 /// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
 pub mod git_worktree_github_evidence;
 pub mod icloud_sync_health;

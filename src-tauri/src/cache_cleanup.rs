@@ -10,7 +10,7 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 12] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 13] = [
     "npm-cache",
     "pip-cache",
     "pnpm-cache",
@@ -23,6 +23,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 12] = [
     "superset-http-cache",
     "superset-code-cache",
     "playwright-cache",
+    "macos-app-support-cache",
 ];
 
 const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
@@ -35,6 +36,13 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "sdists-v9",
     "builds-v0",
     "db",
+];
+const OBSERVED_UPDATER_CACHE_NAMES: [&str; 5] = [
+    "hyosungitxmessenger-updater",
+    "shure.motiv-updater",
+    "cursor-updater",
+    "reason-plus-companion-app-updater",
+    "@mendeley-internaldesktop-reference-manager-updater",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
 
@@ -72,7 +80,48 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
+fn looks_like_updater_download_cache(path: &Path) -> bool {
+    let Ok(root_entries) =
+        std::fs::read_dir(path).and_then(|entries| entries.collect::<Result<Vec<_>, _>>())
+    else {
+        return false;
+    };
+    if root_entries.len() != 1 || root_entries[0].file_name() != "pending" {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path.join("pending"))
+        .and_then(|entries| entries.collect::<Result<Vec<_>, _>>())
+    else {
+        return false;
+    };
+    let mut update_info = false;
+    let mut archives = 0usize;
+    for entry in entries {
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            return false;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return false;
+        }
+        if entry.file_name() == "update-info.json" {
+            update_info = true;
+        } else if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "zip")
+        {
+            archives += 1;
+        } else {
+            return false;
+        }
+    }
+    update_info && archives == 1
+}
+
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
+    if OBSERVED_UPDATER_CACHE_NAMES.contains(&name) {
+        return looks_like_updater_download_cache(path).then_some("updater-download-cache");
+    }
     let signature = match name {
         "_cacache"
             if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
@@ -158,7 +207,9 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str())
+            && !OBSERVED_UPDATER_CACHE_NAMES.contains(&name.as_str())
+        {
             continue;
         }
         let path = entry.path();
@@ -238,6 +289,21 @@ fn active_use_blocker(
     }
 }
 
+pub(crate) fn catalog_cache_targets(
+    cache_id: &str,
+    path: &Path,
+) -> Result<Vec<rules::CacheTarget>, String> {
+    let mut targets = if cache_id == "macos-app-support-cache" {
+        rules::named_cache_targets(path, &OBSERVED_UPDATER_CACHE_NAMES)?
+    } else {
+        rules::cache_targets(path)?
+    };
+    if cache_id == "macos-app-support-cache" {
+        targets.retain(|target| looks_like_updater_download_cache(Path::new(&target.path)));
+    }
+    Ok(targets)
+}
+
 pub(crate) fn clean_cache_contents_inner(
     bases: &rules::BaseDirs,
     dir: &Path,
@@ -246,12 +312,35 @@ pub(crate) fn clean_cache_contents_inner(
     now_ms: u64,
     permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
+    clean_cache_contents_inner_for_id(
+        bases,
+        dir,
+        requested_targets,
+        journal_path,
+        now_ms,
+        permanent_directories,
+        None,
+    )
+}
+
+fn clean_cache_contents_inner_for_id(
+    bases: &rules::BaseDirs,
+    dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    journal_path: &Path,
+    now_ms: u64,
+    permanent_directories: bool,
+    cache_id: Option<&str>,
+) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
-    let mut current = rules::cache_targets(dir)?;
+    let mut current = match cache_id {
+        Some(id) => catalog_cache_targets(id, dir)?,
+        None => rules::cache_targets(dir)?,
+    };
     sort_targets(&mut current);
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
@@ -378,19 +467,25 @@ pub(crate) fn clean_regenerable_caches_inner(
         })
         .flat_map(|candidate| {
             let path = std::path::PathBuf::from(&candidate.path);
-            match rules::cache_targets(&path) {
+            match catalog_cache_targets(&candidate.id, &path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
-                Ok(targets) => {
-                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms, false)
-                    .unwrap_or_else(|error| {
-                        vec![CleanResult {
-                            path: candidate.path,
-                            ok: false,
-                            error,
-                            warning: String::new(),
-                        }]
-                    })
-                }
+                Ok(targets) => clean_cache_contents_inner_for_id(
+                    bases,
+                    &path,
+                    &targets,
+                    journal_path,
+                    now_ms,
+                    false,
+                    Some(&candidate.id),
+                )
+                .unwrap_or_else(|error| {
+                    vec![CleanResult {
+                        path: candidate.path,
+                        ok: false,
+                        error,
+                        warning: String::new(),
+                    }]
+                }),
                 Err(error) => vec![CleanResult {
                     path: candidate.path,
                     ok: false,
@@ -422,15 +517,28 @@ pub fn clean_catalog_cache_headless(
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     if permanent
-        && !["gradle-cache", "gradle-wrapper-cache", "gradle-jdk-cache", "gradle-daemon-cache"]
-            .contains(&cache_id)
+        && ![
+            "gradle-cache",
+            "gradle-wrapper-cache",
+            "gradle-jdk-cache",
+            "gradle-daemon-cache",
+        ]
+        .contains(&cache_id)
     {
         return Err("permanent-cache-id-not-approved".into());
     }
     let path = rules::cache_catalog_path(&bases, cache_id)
         .ok_or_else(|| "cache-id-not-catalogued".to_string())?;
-    let targets = rules::cache_targets(&path)?;
-    clean_cache_contents_inner(&bases, &path, &targets, journal_path, now_ms, permanent)
+    let targets = catalog_cache_targets(cache_id, &path)?;
+    clean_cache_contents_inner_for_id(
+        &bases,
+        &path,
+        &targets,
+        journal_path,
+        now_ms,
+        permanent,
+        Some(cache_id),
+    )
 }
 
 /// Move only inactive, unchanged npx environments to OS Trash. Package downloads are regenerable
@@ -458,10 +566,9 @@ pub fn clean_inactive_npx_environments_headless(
 #[tauri::command]
 pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    if !rules::is_catalog_path(&bases, Path::new(&dir)) {
-        return Err("cache-root-not-current-or-safe".into());
-    }
-    rules::cache_targets(Path::new(&dir))
+    let path = Path::new(&dir);
+    let cache_id = rules::cache_catalog_id(&bases, path).ok_or("cache-root-not-current-or-safe")?;
+    catalog_cache_targets(cache_id, path)
 }
 
 /// Move only the reviewed cache children to the OS Trash, retaining the cache root itself.
@@ -474,13 +581,16 @@ pub fn clean_cache_contents(
 ) -> Result<Vec<CleanResult>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     let journal_path = crate::commands::journal_file_path(&app)?;
-    clean_cache_contents_inner(
+    let path = Path::new(&dir);
+    let cache_id = rules::cache_catalog_id(&bases, path).ok_or("cache-root-not-current-or-safe")?;
+    clean_cache_contents_inner_for_id(
         &bases,
-        Path::new(&dir),
+        path,
         &targets,
         &journal_path,
         crate::commands::now_ms(),
         false,
+        Some(cache_id),
     )
 }
 
@@ -488,6 +598,22 @@ pub fn clean_cache_contents(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn macos_app_support_catalog_excludes_unrelated_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let updater = tmp.path().join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let unrelated = tmp.path().join("unrelated-cache");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("cache.bin"), b"keep").unwrap();
+
+        let targets = catalog_cache_targets("macos-app-support-cache", tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("cursor-updater"));
+    }
 
     fn fake_bases(root: &Path) -> rules::BaseDirs {
         rules::BaseDirs {
@@ -500,14 +626,10 @@ mod tests {
     #[test]
     fn permanent_catalog_cleanup_is_gradle_only() {
         let tmp = tempfile::tempdir().unwrap();
-        let error = clean_catalog_cache_headless(
-            "npm-cache",
-            &tmp.path().join("journal.jsonl"),
-            1,
-            true,
-        )
-        .err()
-        .expect("non-Gradle permanent cache cleanup must fail");
+        let error =
+            clean_catalog_cache_headless("npm-cache", &tmp.path().join("journal.jsonl"), 1, true)
+                .err()
+                .expect("non-Gradle permanent cache cleanup must fail");
         assert_eq!(error, "permanent-cache-id-not-approved");
     }
 
@@ -557,7 +679,8 @@ mod tests {
         fs::write(&replacement, b"safe").unwrap();
         fs::rename(&replacement, &victim).unwrap();
         let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
-            .err().expect("same-size replacement must invalidate the reviewed manifest");
+            .err()
+            .expect("same-size replacement must invalidate the reviewed manifest");
         assert_eq!(error, "cache-cleanup-targets-stale");
         assert_eq!(fs::read(&victim).unwrap(), b"safe");
         assert!(!journal.exists());
@@ -640,6 +763,34 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn proven_updater_cache_in_trash_is_listed_and_revalidated_before_purge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        let updater = trash.join("cursor-updater");
+        fs::create_dir_all(updater.join("pending")).unwrap();
+        fs::write(updater.join("pending/update-info.json"), b"{}").unwrap();
+        fs::write(updater.join("pending/update.zip"), b"archive").unwrap();
+        let malformed = trash.join("shure.motiv-updater");
+        fs::create_dir_all(malformed.join("pending")).unwrap();
+        fs::write(malformed.join("pending/unexpected.bin"), b"retain").unwrap();
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "updater-download-cache");
+
+        let results = purge_proven_cache_trash(
+            tmp.path(),
+            &tmp.path().join("journal.jsonl"),
+            7,
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert!(!updater.exists());
+        assert!(malformed.exists());
     }
 
     #[cfg(unix)]

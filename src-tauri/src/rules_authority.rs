@@ -1,10 +1,10 @@
 use std::path::Path;
 
 pub use crate::rules_catalog::{
-    cache_candidates, cache_catalog_path, clean_targets, is_catalog_path, BaseDirs, CacheCandidate,
-    CacheTarget,
+    cache_candidates, cache_catalog_id, cache_catalog_path, clean_targets, is_catalog_path,
+    BaseDirs, CacheCandidate, CacheTarget,
 };
-pub(crate) use crate::rules_catalog::{modified_ms, shared_temp_root};
+pub(crate) use crate::rules_catalog::{modified_ms, named_cache_targets, shared_temp_root};
 
 const CACHE_MANIFEST_AUTHORITY_VERSION: &str = "v2";
 
@@ -71,9 +71,7 @@ pub(crate) fn cache_metadata_fingerprint(metadata: &std::fs::Metadata) -> String
 }
 
 /// Root metadata that is expected to remain stable across an atomic rename into DiskSage staging.
-pub(crate) fn cache_root_relocation_metadata_fingerprint(
-    metadata: &std::fs::Metadata,
-) -> String {
+pub(crate) fn cache_root_relocation_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
     cache_root_metadata_fingerprint_inner(metadata, false)
 }
 
@@ -94,10 +92,7 @@ fn stable_file_manifest(
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-fn stable_directory_manifest(
-    legacy_manifest: &str,
-    metadata: &std::fs::Metadata,
-) -> String {
+fn stable_directory_manifest(legacy_manifest: &str, metadata: &std::fs::Metadata) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-cache-directory-authority-v2\0");
     update_manifest_bytes(&mut hasher, legacy_manifest.as_bytes());
@@ -148,9 +143,8 @@ fn upgrade_cache_target(mut target: CacheTarget) -> Result<CacheTarget, String> 
     } else {
         stable_file_manifest(path, &metadata, &target.object_id)?
     };
-    target.manifest_fingerprint = format!(
-        "{CACHE_MANIFEST_AUTHORITY_VERSION}:{reviewed_root}:{stable_tree}"
-    );
+    target.manifest_fingerprint =
+        format!("{CACHE_MANIFEST_AUTHORITY_VERSION}:{reviewed_root}:{stable_tree}");
     Ok(target)
 }
 

@@ -66,7 +66,7 @@ treated as evidence that the inactive entry is safe without its own probe.
 When provider upload is blocked and local pressure is high, DiskSage may run the
 `clean_regenerable_caches` command without a second approval prompt for the observed regenerable
 macOS roots (npm, pip, Corepack/Node.js, uv, pnpm, Adobe, Microsoft Edge, Trivy, AppMap, Superset,
-and Playwright). This is a narrow policy, not a
+Playwright, and the observed Electron updater download cache). This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
@@ -101,11 +101,17 @@ untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd5
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this
 incident, DiskSage may expose them as read-only candidates and permanently remove them only when
-the operator passes `--execute --purge-proven-cache-trash`. The candidate scanner accepts only the
-known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it bounds traversal,
+ the operator passes `--execute --purge-proven-cache-trash`. The candidate scanner accepts only the
+ known direct names/signatures for npm, pnpm, Edge, uv, Trivy, and observed updater-download caches;
+ it bounds traversal,
 rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
 for both the pending and terminal outcome. This path never empties the Trash generally and never
 applies to user files or cloud-provider placeholders.
+
+Apple's media-analysis container cache is catalogued for explicit review, but is not automatic:
+DiskSage requires the same complete inactive-use and identity evidence before moving a direct
+cache child to Trash. The artwork database, application profiles, and container Application
+Support trees remain outside this cache boundary.
 
 ## References
 
