@@ -73,4 +73,12 @@ describe("test workflow path-filter contract", () => {
   it("does not put negative globs under paths-ignore", () => {
     expect(negativePathsIgnoreEntries(workflow)).toEqual([]);
   });
+
+  it("runs the Windows agent-state regression when that owner source is present", () => {
+    expect(workflow).toContain("Test-Path 'src-tauri/src/agent_state_guard.rs'");
+    expect(workflow).toContain(
+      "rustc --edition=2021 --test src-tauri/src/agent_state_guard.rs -o target/agent-state-guard.exe",
+    );
+    expect(workflow).toContain("& .\\target\\agent-state-guard.exe --nocapture");
+  });
 });
