@@ -140,13 +140,15 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 }
 
 /// Create and durably publish one immutable byte record relative to the exact private parent
-/// directory object admitted by the caller-supplied pathname.
+/// directory object admitted by the caller-supplied absolute pathname.
 ///
-/// The parent must already exist and must not be writable by group or other principals. The
-/// pathname is opened with `O_NOFOLLOW` before canonicalization and the opened directory is bound to
-/// the device/inode observed during initial admission. Record creation is descriptor-relative and
-/// create-new. `forbidden_root`, when present, is canonicalized, opened as a directory object, and
-/// revalidated before creation and finalization so source-root pathname replacement fails closed.
+/// The parent must already exist and must not be writable by group or other principals. Relative
+/// destination authority is rejected before hooks or filesystem lookup so publication never depends
+/// on ambient process CWD. The pathname is opened with `O_NOFOLLOW` before canonicalization and the
+/// opened directory is bound to the device/inode observed during initial admission. Record creation
+/// is descriptor-relative and create-new. `forbidden_root`, when present, is canonicalized, opened as
+/// a directory object, and revalidated before creation and finalization so source-root pathname
+/// replacement fails closed.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -189,6 +191,9 @@ where
 
     if !matches!(unix_mode, 0o400 | 0o600) {
         return Err(ObjectBoundPublicationError::ModeInvalid);
+    }
+    if !path.is_absolute() {
+        return Err(ObjectBoundPublicationError::NameInvalid);
     }
 
     let parent = path
