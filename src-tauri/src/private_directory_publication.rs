@@ -5,7 +5,7 @@ use std::ffi::CString;
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
@@ -251,7 +251,7 @@ where
         if visible_fd < 0 {
             return Err("private-directory-publication-file-identity-drift".into());
         }
-        let visible = unsafe { fs::File::from_raw_fd(visible_fd) };
+        let mut visible = unsafe { fs::File::from_raw_fd(visible_fd) };
         let visible_metadata = visible
             .metadata()
             .map_err(|_| "private-directory-publication-file-identity-drift".to_string())?;
@@ -264,6 +264,16 @@ where
         }
         if visible_metadata.permissions().mode() & 0o7777 != file_mode {
             return Err("private-directory-publication-file-mode-drift".into());
+        }
+        if visible_metadata.len() != encoded.len() as u64 {
+            return Err("private-directory-publication-file-content-drift".into());
+        }
+        let mut final_bytes = Vec::with_capacity(encoded.len());
+        visible
+            .read_to_end(&mut final_bytes)
+            .map_err(|_| "private-directory-publication-file-content-drift".to_string())?;
+        if final_bytes != encoded {
+            return Err("private-directory-publication-file-content-drift".into());
         }
         Ok(())
     })();
