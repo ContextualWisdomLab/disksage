@@ -160,7 +160,7 @@ where
     G: FnOnce(),
 {
     validate_modes(file_mode, directory_mode)?;
-    if !path.is_absolute() {
+    if !path.is_absolute() || path.as_os_str().as_bytes().ends_with(b"/") {
         return Err("private-directory-publication-path-invalid".into());
     }
     let parent = path
@@ -245,7 +245,7 @@ where
             libc::openat(
                 final_parent.as_raw_fd(),
                 file_name_c.as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             )
         };
         if visible_fd < 0 {
@@ -269,7 +269,8 @@ where
             return Err("private-directory-publication-file-content-drift".into());
         }
         let mut final_bytes = Vec::with_capacity(encoded.len());
-        visible
+        Read::by_ref(&mut visible)
+            .take((encoded.len() as u64).saturating_add(1))
             .read_to_end(&mut final_bytes)
             .map_err(|_| "private-directory-publication-file-content-drift".to_string())?;
         if final_bytes != encoded {
