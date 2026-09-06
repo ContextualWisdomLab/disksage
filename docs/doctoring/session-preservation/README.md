@@ -61,6 +61,8 @@ The full application compiled offline and the ignored-session Git audit regressi
 
 Hosted Test and Release failures at `8a828d35` reproduce existing concurrency-contract and Windows artifact-name mismatches owned by open PR #264. That PR also has failing central review/security checks and requires independent approval. Its changes must pass the protected merge gates before this proposal can claim integrated CI success; the session fix does not duplicate its workflow implementation or bypass those gates.
 
+The cache CLI's five tests passed at source head `f67ac14e`, including unavailable purge without journal-directory creation; the same head's hosted `windows-home-resolution` job passed. Repeated native-probe experiments did not justify a timeout workaround: numeric-output flags still took 1.80–4.97 seconds for idle files and 1.08–3.50 seconds for held files. The `-b` option missed a held file and was rejected. No timeout or evidence-completeness guard was weakened.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
