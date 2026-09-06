@@ -33,6 +33,8 @@ The eight protected cases cover active/archived Codex rollouts, state database, 
 
 This is a purposive regression set, not a probability sample. No confidence interval or population-wide zero false-positive claim is justified. Host free space was 12 GiB at the initial observation; no recovered bytes are attributed to this change.
 
+The focused offline harness compiled the actual `safety.rs` plus the unchanged production full-file hashing functions and existing cached dependencies: **47 tests passed, 0 failed** after commit `8bb7e54d`. An intermediate run found a destination-error regression (46 passed, 1 failed); restricting tree inspection to the move source fixed it. The harness does not compile the entire application or native Git/cache modules. PR [#345](https://github.com/ContextualWisdomLab/disksage/pull/345) carries the change; repository CI and independent review are pending.
+
 ## Contracts and failure analysis
 
 The shared guard protects complete `.codex`, `.claude`, and `.claude.json` components, their default home roots, and `CODEX_HOME` / `CLAUDE_CONFIG_DIR`. It compares original and canonical roots, including the nearest existing ancestor for a destination that does not yet exist. Parent selection is blocked when it would encompass configured state. A metadata-only tree walk catches nested project state; symlinks are not traversed. Incomplete evidence or more than 10,000 entries retains the tree.
