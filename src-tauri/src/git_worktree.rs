@@ -2020,8 +2020,8 @@ pub fn execute_stale_worktree_removal(
                 Ok(_) => "git-worktree-remove-command-failed".into(),
                 Err(error) => error,
             });
+            stopped_reason = item.error.clone();
             items.push(item);
-            stopped_reason = Some("git-worktree-removal-command-failed".into());
             break;
         }
 

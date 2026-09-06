@@ -208,7 +208,9 @@
           <p class="warning">
             일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason === "git-worktree-agent-state-retained"
               ? "대화 기록 보호를 위해 작업 폴더를 보관했습니다"
-              : removal.result.stopped_reason ?? "검증 불완전"}.
+              : removal.result.stopped_reason === "git-worktree-private-stage-retained-for-recovery"
+                ? "작업 폴더를 보관했습니다. 작업 폴더 목록을 다시 확인하세요"
+                : removal.result.stopped_reason ?? "검증 불완전"}.
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
