@@ -18,8 +18,10 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
-    expect(cleanup).toContain("객체 지문·크기·수정시각");
-    expect(cleanup).toContain("npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로");
+    expect(cleanup).toContain("파일 정보·크기·수정 시각");
+    expect(cleanup).toContain(
+      "npm·pnpm·Adobe·Edge·uv·Trivy·AppMap·Superset·Playwright 캐시만 대상으로",
+    );
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
     expect(backend).toContain("trash_delete_if_identity(");

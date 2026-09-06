@@ -9,7 +9,7 @@
 
 use std::process::Command;
 
-const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json]";
+const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json] [--execute --approved-private-report ABSOLUTE_FILE.json --approved-audit-fingerprint HEX64 --confirm EXACT_PHRASE --rationale TEXT]";
 const DUPLICATE_AUDIT_SOURCE: &str = include_str!("../src/bin/disksage-duplicate-audit.rs");
 
 #[test]

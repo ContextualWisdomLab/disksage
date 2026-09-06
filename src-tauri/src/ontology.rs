@@ -14,6 +14,7 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
 const DM_TARGET: &str = "https://disksage.app/ontology#targetFolder";
+const DM_DELETION_POLICY: &str = "https://disksage.app/ontology#deletionPolicy";
 const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
 const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
 
@@ -25,6 +26,7 @@ pub struct OntoClass {
     pub equivalents: Vec<String>,
     pub disjoints: Vec<String>,
     pub target_folder: Option<String>,
+    pub deletion_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -40,6 +42,7 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
     let mut disjoints: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
     let mut targets: BTreeMap<String, String> = BTreeMap::new();
+    let mut deletion_policies: BTreeMap<String, String> = BTreeMap::new();
 
     // 명명 노드 오브젝트만 채택, 순서 보존, 동일 오브젝트 중복 무시.
     let push = |map: &mut BTreeMap<String, Vec<String>>, s: String, o: &Term| {
@@ -83,6 +86,11 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
                     targets.insert(s, lit.value().to_string());
                 }
             }
+            DM_DELETION_POLICY => {
+                if let Term::Literal(lit) = &triple.object {
+                    deletion_policies.insert(s, lit.value().to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -95,6 +103,7 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
             equivalents: equivalents.get(&id).cloned().unwrap_or_default(),
             disjoints: disjoints.get(&id).cloned().unwrap_or_default(),
             target_folder: targets.get(&id).cloned(),
+            deletion_policy: deletion_policies.get(&id).cloned(),
             id,
         })
         .collect();
@@ -303,6 +312,38 @@ impl Ontology {
         }
         best.map(|(_, _, t)| t)
     }
+
+    pub fn requires_retention(&self, class_id: &str) -> Result<bool, String> {
+        let reasoner = self.reasoner();
+        if reasoner.rep_of(class_id).is_none() {
+            return Err("ontology-retention-class-unknown".into());
+        }
+        let mut retained = false;
+        for ancestor in reasoner.ancestors(class_id) {
+            let Some(policy) = self
+                .classes
+                .iter()
+                .find(|class| class.id == ancestor)
+                .and_then(|class| class.deletion_policy.as_deref())
+            else {
+                continue;
+            };
+            if policy != "retain" {
+                return Err("ontology-retention-policy-unknown".into());
+            }
+            retained = true;
+        }
+        Ok(retained)
+    }
+}
+
+pub fn bundled_class_requires_retention(class_id: &str) -> Result<bool, String> {
+    static ONTOLOGY: std::sync::OnceLock<Result<Ontology, String>> = std::sync::OnceLock::new();
+    ONTOLOGY
+        .get_or_init(|| parse_ttl(include_str!("../resources/ontology/default.ttl")))
+        .as_ref()
+        .map_err(Clone::clone)?
+        .requires_retention(class_id)
 }
 
 #[cfg(test)]
@@ -456,6 +497,27 @@ dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:B .
         // Installer는 자체 폴더
         let installer = find("Installer").unwrap();
         assert_eq!(onto.resolve_target(&installer).as_deref(), Some("~/Installers"));
+    }
+
+    #[test]
+    fn default_asset_retention_policy_is_inherited_by_crm_and_keeps_vm_packages() {
+        let namespace = "https://disksage.app/ontology#";
+        assert!(bundled_class_requires_retention(&format!(
+            "{namespace}CustomerRelationshipManagementData"
+        ))
+        .unwrap());
+        assert!(bundled_class_requires_retention(&format!("{namespace}VirtualMachinePackage"))
+            .unwrap());
+        assert!(!bundled_class_requires_retention(&format!("{namespace}Installer")).unwrap());
+        assert!(bundled_class_requires_retention(&format!("{namespace}Missing")).is_err());
+
+        let unknown = parse_ttl(&format!(
+            "{PRE}dm:Business a owl:Class ; dm:deletionPolicy \"invented\" ."
+        ))
+        .unwrap();
+        assert!(unknown
+            .requires_retention(&format!("{namespace}Business"))
+            .is_err());
     }
 
     #[test]

@@ -369,6 +369,20 @@ fn file_provider_identifier_fingerprint(output: &str) -> Result<String, String> 
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Parse only the provider facts needed to prove that local administrative bytes are current.
+/// Upload, conflict, and eviction fields are intentionally outside this non-eviction decision.
+pub fn parse_file_providerctl_local_current(
+    output: &str,
+    observed_bytes: u64,
+) -> Result<bool, String> {
+    if file_provider_status_u64(output, "documentSize")? != observed_bytes {
+        return Err("file-provider-status-document-size-mismatch".into());
+    }
+    Ok(file_provider_status_bool(output, "isDownloaded")?
+        && !file_provider_status_bool(output, "isDownloading")?
+        && file_provider_status_bool(output, "isMostRecentVersionDownloaded")?)
+}
+
 /// Parse the status needed for sync and local-cache decisions without retaining the raw item ID.
 pub fn parse_file_providerctl_item_status(
     output: &str,
@@ -1314,6 +1328,18 @@ mod tests {
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
         );
+    }
+
+    #[test]
+    fn local_current_parser_does_not_require_unrelated_sync_fields() {
+        let local_only = r#"
+            documentSize = 42;
+            isDownloaded = 1;
+            isDownloading = 0;
+            isMostRecentVersionDownloaded = 1;
+        "#;
+        assert!(parse_file_providerctl_local_current(local_only, 42).unwrap());
+        assert!(parse_file_providerctl_local_current(local_only, 41).is_err());
     }
 
     #[test]
