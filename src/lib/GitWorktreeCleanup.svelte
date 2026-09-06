@@ -183,6 +183,10 @@
         </ul>
       {/if}
 
+      {#if report.entries.some((entry) => entry.blockers.includes("git-worktree-agent-state-retained"))}
+        <p class="notice">대화 기록을 보호하기 위해 일부 작업 폴더를 보관했습니다. 다른 정리 후보를 확인하세요.</p>
+      {/if}
+
       {#if evidenceGapEntries().length > 0}
         <div class="blocked">
           <strong>증거가 부족해 전체 실행을 차단했습니다.</strong>
@@ -202,7 +206,9 @@
           </p>
         {:else}
           <p class="warning">
-            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason ?? "검증 불완전"}.
+            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason === "git-worktree-agent-state-retained"
+              ? "대화 기록 보호를 위해 작업 폴더를 보관했습니다"
+              : removal.result.stopped_reason ?? "검증 불완전"}.
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
