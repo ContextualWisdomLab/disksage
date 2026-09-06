@@ -61,3 +61,21 @@ fn oversize_streaming_json_stops_during_serialization_before_publication() {
     );
     assert!(!target.exists(), "oversize evidence must not create a record");
 }
+
+#[test]
+fn unbounded_legacy_json_serializer_is_not_a_production_crate_capability() {
+    const CORE_SOURCE: &str = include_str!("../src/private_evidence.rs");
+
+    assert!(
+        !CORE_SOURCE.contains("#[cfg(unix)]\npub fn write_private_json_create_new("),
+        "the core module must not expose the former materialize-then-check JSON writer to production crate callers"
+    );
+    assert!(
+        !CORE_SOURCE.contains("#[cfg(unix)]\nfn write_private_json_create_new_unix_with_hooks"),
+        "the former unbounded JSON test seam must not compile into the production core module"
+    );
+    assert!(
+        CORE_SOURCE.contains("#[cfg(all(test, unix))]\npub fn write_private_json_create_new("),
+        "legacy core JSON coverage may remain only as a test-only helper while the bounded public facade owns production serialization"
+    );
+}
