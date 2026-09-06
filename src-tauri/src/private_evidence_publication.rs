@@ -110,4 +110,27 @@ mod tests {
         assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o400);
         assert_eq!(fs::read(target).unwrap(), b"receipt");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn forbidden_root_policy_rejects_non_private_file_mode_before_create() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let forbidden = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::set_permissions(destination.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let target = destination.path().join("receipt.json");
+
+        let error = write_object_bound_bytes_create_new(
+            &target,
+            b"sensitive receipt",
+            0o644,
+            Some(forbidden.path()),
+        )
+        .expect_err("forbidden-root publication must reject a non-private mode before creation");
+
+        assert_eq!(error, ObjectBoundPublicationError::ModeInvalid);
+        assert!(!target.exists(), "invalid mode must not create a record");
+    }
 }
