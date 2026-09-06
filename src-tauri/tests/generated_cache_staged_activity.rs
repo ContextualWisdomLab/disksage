@@ -14,7 +14,18 @@ mod cloud {
 
 mod rules {
     pub fn shared_temp_root() -> std::path::PathBuf {
-        std::env::temp_dir()
+        #[cfg(target_os = "macos")]
+        {
+            std::path::PathBuf::from("/private/tmp")
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            std::path::PathBuf::from("/tmp")
+        }
+        #[cfg(not(unix))]
+        {
+            std::path::PathBuf::new()
+        }
     }
 }
 
