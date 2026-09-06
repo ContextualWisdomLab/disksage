@@ -679,3 +679,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-09-06 agent-session preservation experiment (Proposed)
+
+Baseline main `0e90f9cebadbd7f59606baaec4ca1d2f178c899a` does not protect Codex/Claude state in its shared path guard. Eight labeled session paths all pass the baseline gate. Branch `codex/session-preservation-autoresearch` adds state-root and containing-tree protection, including explicit environment overrides and native Git removal. The standalone regression metric improves from 8/8 admitted paths to 0/8; this is not a population false-positive-rate estimate or deployed behavior. Four non-session controls remain eligible under this additional guard. See [experiment evidence and reproducible commands](doctoring/session-preservation/README.md).
+
+P0 acceptance remains open until exact-head integration checks and protected merge succeed, the permanent deletion authority delta in PR #263 is integrated, and all native deletion/eviction routes are checked. P1 effectiveness remains open: zero live bytes were reclaimed in this experiment, and real labeled candidate inventory plus allocated-byte/free-space evidence is still required. Never obtain a zero metric by disabling every reclaim path or by excluding failed/incomplete cases. Existing PRs retain their deltas and are not closed by this experiment.

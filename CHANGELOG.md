@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- Cleanup retains recognized Codex and Claude conversation storage, including containing folders and configured alternate locations. Folders that cannot be fully checked are retained.
+
 ### Changed
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
