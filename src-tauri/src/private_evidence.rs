@@ -146,9 +146,10 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 /// destination authority is rejected before hooks or filesystem lookup so publication never depends
 /// on ambient process CWD. The pathname is opened with `O_NOFOLLOW` before canonicalization and the
 /// opened directory is bound to the device/inode observed during initial admission. Record creation
-/// is descriptor-relative and create-new. `forbidden_root`, when present, is canonicalized, opened as
-/// a directory object, and revalidated before creation and finalization so source-root pathname
-/// replacement fails closed.
+/// is descriptor-relative and create-new. `forbidden_root`, when present, is identity-admitted before
+/// any test seam, then canonicalized and opened; the opened directory must retain that initial
+/// device/inode and is revalidated before creation and finalization so source-root alias replacement
+/// cannot silently retarget publication policy.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -211,6 +212,17 @@ where
     let expected_parent_dev = parent_metadata.dev();
     let expected_parent_ino = parent_metadata.ino();
 
+    let expected_forbidden_identity = if let Some(forbidden_root) = forbidden_root {
+        let metadata = std::fs::metadata(forbidden_root)
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
+        if !metadata.is_dir() {
+            return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
+        }
+        Some((metadata.dev(), metadata.ino()))
+    } else {
+        None
+    };
+
     before_parent_open();
 
     let parent_c = CString::new(parent.as_os_str().as_bytes())
@@ -244,8 +256,10 @@ where
     )?;
 
     let forbidden_authority = if let Some(forbidden_root) = forbidden_root {
+        let (expected_forbidden_dev, expected_forbidden_ino) = expected_forbidden_identity
+            .expect("forbidden-root identity must be admitted when policy is present");
         let canonical_forbidden = std::fs::canonicalize(forbidden_root)
-            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootIdentityDrift)?;
         let forbidden_c = CString::new(canonical_forbidden.as_os_str().as_bytes())
             .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
         let forbidden_fd = unsafe {
@@ -261,16 +275,18 @@ where
         let forbidden_metadata = forbidden_directory
             .metadata()
             .map_err(|_| ObjectBoundPublicationError::ForbiddenRootIdentityDrift)?;
-        if !forbidden_metadata.is_dir() || forbidden_metadata.file_type().is_symlink() {
+        if !forbidden_metadata.is_dir()
+            || forbidden_metadata.file_type().is_symlink()
+            || forbidden_metadata.dev() != expected_forbidden_dev
+            || forbidden_metadata.ino() != expected_forbidden_ino
+        {
             return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
         }
-        let forbidden_dev = forbidden_metadata.dev();
-        let forbidden_ino = forbidden_metadata.ino();
         revalidate_forbidden_root(
             &forbidden_directory,
             &canonical_forbidden,
-            forbidden_dev,
-            forbidden_ino,
+            expected_forbidden_dev,
+            expected_forbidden_ino,
         )?;
         if canonical_parent.starts_with(&canonical_forbidden) {
             return Err(ObjectBoundPublicationError::InsideForbiddenRoot);
@@ -278,8 +294,8 @@ where
         Some((
             forbidden_directory,
             canonical_forbidden,
-            forbidden_dev,
-            forbidden_ino,
+            expected_forbidden_dev,
+            expected_forbidden_ino,
         ))
     } else {
         None
@@ -327,7 +343,6 @@ where
         return Err(ObjectBoundPublicationError::CreateFailed);
     }
     let mut file = unsafe { std::fs::File::from_raw_fd(file_fd) };
-
     let publication = (|| -> Result<(), ObjectBoundPublicationError> {
         file.set_permissions(std::fs::Permissions::from_mode(unix_mode))
             .map_err(|_| ObjectBoundPublicationError::ModeInvalid)?;
