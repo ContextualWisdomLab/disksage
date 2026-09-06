@@ -15,8 +15,8 @@ use crate::provider_cache_reclaim::ProviderCacheCleanupMode as InternalProviderC
 /// command projects that internal report into the commercial Trash-only plan DTO rather than
 /// serializing an irreversible approval field with a null value.
 #[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn plan_provider_cache_reclaim() -> Result<ProviderCacheReclaimPlan, String> {
+#[tauri::command(async, rename = "plan_provider_cache_reclaim")]
+pub fn plan_provider_cache_reclaim_public() -> Result<ProviderCacheReclaimPlan, String> {
     crate::commands::plan_provider_cache_reclaim().map(crate::provider_cache::project_plan)
 }
 
@@ -27,8 +27,8 @@ pub fn plan_provider_cache_reclaim() -> Result<ProviderCacheReclaimPlan, String>
 /// runtime. The historical lower-level executor remains repair evidence while every product call is
 /// delegated as Trash and projected back through the public Trash-only result DTO.
 #[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn execute_provider_cache_reclaim(
+#[tauri::command(async, rename = "execute_provider_cache_reclaim")]
+pub fn execute_provider_cache_reclaim_public(
     app: tauri::AppHandle,
     requests: Vec<ProviderCacheCleanupRequest>,
     approved_plan_fingerprint: String,
