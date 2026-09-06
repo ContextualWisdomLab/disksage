@@ -107,7 +107,8 @@ pub fn is_agent_state(path: &Path) -> bool {
 /// Refuse a directory containing nested agent state, or an incomplete metadata walk.
 /// Symlink entries are inspected but never traversed. No conversation contents are read.
 pub fn contains_agent_state(path: &Path) -> bool {
-    contains_with_limit(path, 10_000)
+    // Measured Cargo trees contain up to 70,344 entries; inspect every entry, never sample.
+    contains_with_limit(path, 100_000)
 }
 
 fn contains_with_limit(path: &Path, limit: usize) -> bool {
@@ -160,6 +161,25 @@ fn contains_with_roots(path: &Path, limit: usize, roots: &[(PathBuf, PathBuf)]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_large_tree_preserves_nested_state_and_incomplete_walks() {
+        let root = std::env::temp_dir()
+            .join(format!("disksage-large-guard-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        for index in 0..10_001 {
+            std::fs::File::create(root.join(format!("{index}.o"))).unwrap();
+        }
+        assert!(contains_with_limit(&root, 10_000));
+        assert!(!contains_agent_state(&root));
+        let session = root.join("nested/.claude/session.jsonl");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, b"synthetic retained session").unwrap();
+        assert!(contains_agent_state(&root));
+        assert_eq!(std::fs::read(&session).unwrap(), b"synthetic retained session");
+        // Only this create-new synthetic fixture is removed.
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn session_preservation_metric() {
