@@ -88,6 +88,10 @@ The subsequent temporary-directory allocation scan completed with 1,370 director
 
 The first bounded artifact inventory covered the 100 largest eligible temporary roots and found 112 directories: 67 Cargo targets (137.080 GiB), 32 dependency directories (32.779 GiB), and 13 Python environments (2.923 GiB), totaling 172.783 GiB reported allocation. The largest 20 Cargo targets total 54.899 GiB and have adjacent retained manifests and lockfiles. Executable-path observations positively identified running Python and build-tool environments, which are preserved. An absent executable match does not prove inactivity; complete session exclusion, source linkage, filesystem identity, and open-handle evidence remain required. No candidate was deleted. This inventory excludes recognized agent storage rather than reclassifying it as disposable temporary output.
 
+Applying the unchanged production session-tree guard to the 20 largest Cargo candidates completed 14 observations, all returning retain, before the 120-second observation limit. Six candidates remain unobserved. The boolean guard does not distinguish detected state from incomplete/over-limit walks, so none of these results proves session presence or safe disposability. No cleanup followed. The separate inventory extension continues incrementally without remeasuring the original 112 entries.
+
+Further owner review found check-then-rename restoration in the shared safety path. Commit `85c87879` uses native atomic no-replace rename on macOS, Linux, and Windows, failing closed on unsupported platforms. The regression set covers an occupied empty directory, dangling symlink, and successful identity-preserving directory restoration. This shared repair is a prerequisite for the generated-cache owner stack (#295, #320, #322, #325); its implementation is not copied into those branches and their remaining deltas are preserved.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
