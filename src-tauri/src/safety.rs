@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "agent_state_guard.rs"]
+mod agent_state_guard;
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -42,6 +45,7 @@ fn is_macos_user_temp_descendant(path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    if agent_state_guard::is_agent_state(path) { return true; }
     // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
@@ -303,7 +307,7 @@ pub fn trash_delete(
     // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
     // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
     let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    if is_protected(&guard_path) {
+    if is_protected(&guard_path) || agent_state_guard::contains_agent_state(path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let mut entry = JournalEntry {
@@ -413,7 +417,7 @@ pub fn trash_delete_if_identity(
     let guard_path = strip_verbatim(
         &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
     );
-    if is_protected(&guard_path) {
+    if is_protected(&guard_path) || agent_state_guard::contains_agent_state(path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -677,7 +681,7 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
-        if is_protected(&guard) {
+        if is_protected(&guard) || agent_state_guard::contains_agent_state(p) {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
