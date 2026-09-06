@@ -84,6 +84,8 @@ A subsequent dry run and single `podman machine ssh -- sudo fstrim --verbose /` 
 
 Combined backing-allocation reduction is 39.984161 GiB. At the second post-operation observation, host available space was 47.807850 GiB: 39.104523 GiB above the initial baseline, leaving 260.895477 GiB to the required 300 GiB increase. The operation records are measured live evidence, not proof that the incomplete candidate inventory is disposable or that the product has integrated these native execution paths.
 
+The subsequent temporary-directory allocation scan completed with 1,370 directory entries totaling 449.740082 GiB of reported allocation and no reported errors. This is not exclusive physical storage: APFS/shared extents and links can overstate recoverable blocks. It includes 29.390583 GiB under a Claude temporary root, which remains preserved, plus source checkouts and running Python environments. A bounded follow-up separates build/dependency artifacts from those retained contents before any cleanup decision. Spotlight returned no large-file results while reporting an unknown indexing state, so it supplies no absence or capacity evidence. The iCloud allocation query remains incomplete. Later host free-space increases coincide with declining swap use and are not credited as additional cleanup.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
