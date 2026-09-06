@@ -112,6 +112,12 @@ The pilot and first sequential cohort have now completed all 20 operations. Ever
 
 A separate read-only local-project inventory verified 17 Cargo target/source relationships, totaling 22.19 GiB of reported allocation. No executable match was observed, but inactivity is still unverified. These candidates are not included in the completed recovery figures. The 300 GiB actual-recovery acceptance criterion remains unmet.
 
+## Late-arrival Git session preservation
+
+An actual Git fixture reproduced a remaining destructive race: a child retained its working directory across staging, waited until the final session scan completed, created an ignored conversation file, and native non-force worktree removal deleted it. A private staging name and another metadata scan cannot exclude that existing-directory access.
+
+Commit `06b55bce` therefore makes recursive Git worktree removal unavailable and uses existing restoration to retain the worktree and its registration. All 18 actual Git worktree tests passed, including late-arrival Codex and Claude state, restoration collisions, and zero removal/zero reclaimed bytes for ordinary candidates. The UI now presents the read-only audit without asking for a deletion approval; the CLI help states the same availability limit. Re-enabling removal requires a verified contract that preserves late-arriving state, not another scan alone.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory

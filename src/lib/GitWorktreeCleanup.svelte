@@ -14,6 +14,7 @@
   let confirmationPhrase = $state("");
   let rationale = $state("");
   let removal: api.StaleGitWorktreeRemovalOutput | null = $state(null);
+  const removalAvailable = false;
 
   $effect(() => {
     if (!repositoryRoot && scannedRoot) repositoryRoot = scannedRoot;
@@ -81,7 +82,7 @@
   }
 
   function executionReady(): boolean {
-    return report !== null
+    return removalAvailable && report !== null
       && report.evidence_complete
       && report.removal_candidate_count > 0
       && report.exact_approval_phrase !== null
@@ -124,6 +125,7 @@
   <p class="muted">
     명시한 보존 ref에 이미 포함된 깨끗하고 사용 중이 아닌 보조 worktree만 찾습니다. 감사 단계는 읽기 전용입니다.
   </p>
+  <p class="muted">작업 중 새로 생기는 대화 기록을 보호하려고 폴더 삭제를 중단했습니다. 현재는 정리 후보만 확인할 수 있습니다.</p>
 
   <div class="inputs">
     <label>
@@ -222,7 +224,7 @@
             실행 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {removal.result_record_error}
           </p>
         {/if}
-      {:else if report.evidence_complete && report.exact_approval_phrase}
+      {:else if removalAvailable && report.evidence_complete && report.exact_approval_phrase}
         <div class="approval">
           <p class="warning">
             아래 승인 문구 전체를 직접 입력해야 합니다. 실행 시 전체 계획과 각 후보를 재검증하며 한 항목이라도 달라지면 중단합니다.
