@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "agent_state_guard.rs"]
+pub(crate) mod agent_state_guard;
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -42,6 +45,7 @@ fn is_macos_user_temp_descendant(path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    if agent_state_guard::is_agent_state(path) { return true; }
     // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
@@ -303,7 +307,7 @@ pub fn trash_delete(
     // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
     // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
     let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    if is_protected(&guard_path) {
+    if is_protected(&guard_path) || agent_state_guard::contains_agent_state(path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let mut entry = JournalEntry {
@@ -365,24 +369,75 @@ fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathB
     ))
 }
 
+/// Rename without replacing any destination entry, including an empty directory or symlink.
+pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        // SAFETY: both C strings remain live for the call; exclusive flags prohibit replacement.
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let mut from: Vec<u16> = from.as_os_str().encode_wide().collect();
+        let mut to: Vec<u16> = to.as_os_str().encode_wide().collect();
+        if from.contains(&0) || to.contains(&0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "path contains NUL",
+            ));
+        }
+        from.push(0);
+        to.push(0);
+        // SAFETY: live NUL-terminated strings; no replace, copy, or delayed-deletion flags.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } != 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "exclusive rename unavailable",
+        ))
+    }
+}
+
 fn restore_staged_if_source_absent(
     path: &Path,
     staged: &Path,
     staging_dir: &Path,
 ) -> Result<(), String> {
-    let source_absent = matches!(
-        std::fs::symlink_metadata(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
-    if !source_absent {
-        return Err(format!(
-            "staged object retained at {}; source path reappeared",
-            staged.display()
-        ));
-    }
-    std::fs::rename(staged, path).map_err(|error| {
+    rename_noreplace(staged, path).map_err(|error| {
         format!(
-            "staged restore failed for {}: {error}",
+            "staged object retained at {}; restore failed: {error}",
             staged.display()
         )
     })?;
@@ -413,7 +468,7 @@ pub fn trash_delete_if_identity(
     let guard_path = strip_verbatim(
         &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
     );
-    if is_protected(&guard_path) {
+    if is_protected(&guard_path) || agent_state_guard::contains_agent_state(path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -457,7 +512,7 @@ pub fn trash_delete_if_identity(
                 )),
             }
         })?;
-        if moved_id != expected_object_id {
+        if moved_id != expected_object_id || agent_state_guard::contains_agent_state(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(
                     "atomic staging move changed the filesystem object; nothing was trashed".into(),
@@ -677,7 +732,9 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
-        if is_protected(&guard) {
+        if is_protected(&guard) || agent_state_guard::is_agent_state(p)
+            || (p == src && agent_state_guard::contains_agent_state(p))
+        {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
@@ -842,6 +899,26 @@ mod tests {
         assert!(matches!(journal_serde_err(e), SafetyError::Journal(_)));
     }
 
+    /// Every public destructive entry point retains session contents and containing trees.
+    #[test]
+    fn agent_sessions_survive_all_shared_mutation_boundaries() {
+        let fixture = tempfile::tempdir().unwrap();
+        let project = fixture.path().join("project");
+        let state = project.join("nested/.codex/sessions");
+        std::fs::create_dir_all(&state).unwrap();
+        let session = state.join("rollout.jsonl");
+        std::fs::write(&session, b"preserved conversation").unwrap();
+        let journal = fixture.path().join("journal.jsonl");
+        for source in [&session, &project] {
+            assert!(matches!(trash_delete(source, 1, &journal, 1), Err(SafetyError::Protected(_))));
+            let identity = filesystem_object_id(source).unwrap();
+            assert!(matches!(trash_delete_if_identity(source, &identity, 1, &journal, 1), Err(SafetyError::Protected(_))));
+            assert!(matches!(move_file(source, &fixture.path().join("destination"), &journal, 1), Err(SafetyError::Protected(_))));
+        }
+        assert_eq!(std::fs::read(&session).unwrap(), b"preserved conversation");
+        assert!(!journal.exists());
+    }
+
     #[test]
     fn trash_delete_rejects_protected_path_without_journaling() {
         let tmp = tempfile::tempdir().unwrap();
@@ -881,6 +958,48 @@ mod tests {
         assert!(victim.exists(), "대체 객체는 삭제되지 않아야 함");
         assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
         assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
+    }
+
+    #[test]
+    fn exclusive_rename_preserves_existing_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staged = tmp.path().join("staged");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        let source_id = filesystem_object_id(&source).unwrap();
+        std::fs::write(staged.join("reviewed"), b"retained").unwrap();
+        assert!(rename_noreplace(&staged, &source).is_err());
+        assert_eq!(filesystem_object_id(&source).unwrap(), source_id);
+        assert_eq!(std::fs::read(staged.join("reviewed")).unwrap(), b"retained");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_rename_preserves_dangling_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staged = tmp.path().join("staged");
+        std::os::unix::fs::symlink("missing", &source).unwrap();
+        std::fs::write(&staged, b"retained").unwrap();
+        assert!(rename_noreplace(&staged, &source).is_err());
+        assert_eq!(std::fs::read_link(&source).unwrap(), Path::new("missing"));
+        assert_eq!(std::fs::read(&staged).unwrap(), b"retained");
+    }
+
+    #[test]
+    fn staged_directory_restores_with_identity_and_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = tmp.path().join("staging");
+        let staged = staging_dir.join("source");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("reviewed"), b"restored").unwrap();
+        let identity = filesystem_object_id(&staged).unwrap();
+        restore_staged_if_source_absent(&source, &staged, &staging_dir).unwrap();
+        assert_eq!(filesystem_object_id(&source).unwrap(), identity);
+        assert_eq!(std::fs::read(source.join("reviewed")).unwrap(), b"restored");
+        assert!(!staging_dir.exists());
     }
 
     #[test]

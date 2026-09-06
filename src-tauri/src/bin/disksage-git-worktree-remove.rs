@@ -11,7 +11,7 @@ const USAGE: &str = "usage: disksage-git-worktree-remove \
 --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] \
 --approved-removal-plan-fingerprint HEX64 \
 --confirmation-exact-approval-phrase PHRASE --reviewed-by human:ID --rationale TEXT \
---record-root ABSOLUTE_PATH";
+--record-root ABSOLUTE_PATH\n\nFolder deletion is currently unavailable to preserve conversation records created during cleanup.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
