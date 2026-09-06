@@ -681,7 +681,9 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
-        if is_protected(&guard) || agent_state_guard::contains_agent_state(p) {
+        if is_protected(&guard) || agent_state_guard::is_agent_state(p)
+            || (p == src && agent_state_guard::contains_agent_state(p))
+        {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
