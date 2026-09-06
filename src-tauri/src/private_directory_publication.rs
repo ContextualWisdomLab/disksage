@@ -245,7 +245,7 @@ where
             libc::openat(
                 final_parent.as_raw_fd(),
                 file_name_c.as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             )
         };
         if visible_fd < 0 {
