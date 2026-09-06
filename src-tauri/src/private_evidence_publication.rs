@@ -203,4 +203,33 @@ mod tests {
         assert_eq!(hook_calls.get(), 0, "invalid mode must fail before test seams run");
         assert!(!target.exists(), "invalid mode must not create a record");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn core_hook_boundary_rejects_non_private_mode_before_hooks_or_create() {
+        use std::cell::Cell;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let forbidden = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::set_permissions(destination.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let target = destination.path().join("core-hook-receipt.json");
+        let hook_calls = Cell::new(0_u8);
+
+        let error = crate::private_evidence_core::write_object_bound_bytes_create_new_with_hooks(
+            &target,
+            b"sensitive receipt",
+            0o644,
+            Some(forbidden.path()),
+            || hook_calls.set(hook_calls.get() + 1),
+            || hook_calls.set(hook_calls.get() + 1),
+            || hook_calls.set(hook_calls.get() + 1),
+        )
+        .expect_err("the core mutation boundary must preserve private-mode admission");
+
+        assert_eq!(error, ObjectBoundPublicationError::ModeInvalid);
+        assert_eq!(hook_calls.get(), 0, "invalid mode must fail before core test seams run");
+        assert!(!target.exists(), "invalid mode must not create a record");
+    }
 }
