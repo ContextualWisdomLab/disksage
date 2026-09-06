@@ -461,7 +461,7 @@ pub fn trash_delete_if_identity(
                 )),
             }
         })?;
-        if moved_id != expected_object_id {
+        if moved_id != expected_object_id || agent_state_guard::contains_agent_state(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(
                     "atomic staging move changed the filesystem object; nothing was trashed".into(),

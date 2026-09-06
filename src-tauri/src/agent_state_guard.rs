@@ -16,7 +16,7 @@ fn overlaps(path: &Path, root: &Path) -> bool {
         PathBuf::from(path.as_os_str().to_ascii_lowercase()),
         PathBuf::from(root.as_os_str().to_ascii_lowercase()),
     );
-    path.starts_with(root) || root.starts_with(path)
+    path.starts_with(&root) || root.starts_with(&path)
 }
 
 /// Resolve the existing ancestor too when a destination does not exist yet.

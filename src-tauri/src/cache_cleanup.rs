@@ -115,6 +115,7 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         }
         _ => return None,
     };
+    if safety::agent_state_guard::contains_agent_state(path) { return None; }
     Some(signature)
 }
 
