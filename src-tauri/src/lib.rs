@@ -6,6 +6,10 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg(test)]
+mod commands_public_tests;
+#[cfg(test)]
+mod commands_env_coverage_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
