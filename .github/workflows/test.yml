@@ -3,29 +3,31 @@ name: Test
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
-      - "!docs/doctoring/release-artifact-provenance.md"
-      - "!docs/doctoring/tauri-content-security-policy.md"
-      - "!docs/doctoring/model-artifact-integrity.md"
-      - "!docs/doctoring/model-load-handle-binding.md"
-      - "!docs/development/icloud-local-eviction-batch.md"
-      - "!docs/architecture/goals/cloud-offload-goal.json"
-      - "!CHANGELOG.md"
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!*.md"
+      # GitHub supports re-inclusion only with ordered positive patterns under `paths`.
+      - "docs/doctoring/release-artifact-provenance.md"
+      - "docs/doctoring/tauri-content-security-policy.md"
+      - "docs/doctoring/model-artifact-integrity.md"
+      - "docs/doctoring/model-load-handle-binding.md"
+      - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/architecture/goals/cloud-offload-goal.json"
+      - "CHANGELOG.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
-      - "!docs/doctoring/release-artifact-provenance.md"
-      - "!docs/doctoring/tauri-content-security-policy.md"
-      - "!docs/doctoring/model-artifact-integrity.md"
-      - "!docs/doctoring/model-load-handle-binding.md"
-      - "!docs/development/icloud-local-eviction-batch.md"
-      - "!docs/architecture/goals/cloud-offload-goal.json"
-      - "!CHANGELOG.md"
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!*.md"
+      # GitHub supports re-inclusion only with ordered positive patterns under `paths`.
+      - "docs/doctoring/release-artifact-provenance.md"
+      - "docs/doctoring/tauri-content-security-policy.md"
+      - "docs/doctoring/model-artifact-integrity.md"
+      - "docs/doctoring/model-load-handle-binding.md"
+      - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/architecture/goals/cloud-offload-goal.json"
+      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -71,6 +73,31 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  macos-cache-cleanup:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - name: macOS cache cleanup regressions when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          for test_name in cache_cleanup_corepack_scope cache_cleanup_cli_permanent_gradle generated_cache_staged_activity; do
+            if [[ -f "src-tauri/tests/${test_name}.rs" ]]; then
+              cargo test --manifest-path src-tauri/Cargo.toml --test "$test_name"
+            else
+              printf 'SKIP %s: owner test source absent; no runtime regression executed\n' "$test_name"
+            fi
+          done
+
   windows-home-resolution:
     runs-on: windows-latest
     timeout-minutes: 10
@@ -85,6 +112,15 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows agent-state regression when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/src/agent_state_guard.rs') {
+            rustc --edition=2021 --test src-tauri/src/agent_state_guard.rs -o target/agent-state-guard.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & .\target\agent-state-guard.exe --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   llm-engine-build:
     runs-on: ubuntu-latest
