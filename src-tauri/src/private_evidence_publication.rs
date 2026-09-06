@@ -57,10 +57,11 @@ fn map_directory_publication_error(error: String) -> ObjectBoundPublicationError
 /// Publish a private create-new record while allowing the canonical filesystem owner to provision
 /// missing owner-private ancestors when no forbidden-root policy is required.
 ///
-/// Callers with a forbidden root retain the original parent-must-exist contract because the
-/// directory-provisioning primitive does not yet carry a descriptor-bound forbidden-root policy.
-/// The no-policy path requires every existing final parent to be exactly 0700 and creates missing
-/// descendants at 0700 before publishing a 0400/0600 record through the same pinned descriptor chain.
+/// Both publication paths admit only the reusable private-record modes 0400 and 0600. Callers with
+/// a forbidden root retain the original parent-must-exist contract because the directory-provisioning
+/// primitive does not yet carry a descriptor-bound forbidden-root policy. The no-policy path requires
+/// every existing final parent to be exactly 0700 and creates missing descendants at 0700 before
+/// publishing through the same pinned descriptor chain.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &std::path::Path,
@@ -68,6 +69,10 @@ pub(crate) fn write_object_bound_bytes_create_new(
     unix_mode: u32,
     forbidden_root: Option<&std::path::Path>,
 ) -> Result<(), ObjectBoundPublicationError> {
+    if !matches!(unix_mode, 0o400 | 0o600) {
+        return Err(ObjectBoundPublicationError::ModeInvalid);
+    }
+
     if forbidden_root.is_some() {
         return crate::private_evidence_core::write_object_bound_bytes_create_new(
             path,
