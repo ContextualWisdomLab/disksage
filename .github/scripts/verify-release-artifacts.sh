@@ -128,3 +128,10 @@ if [[ $regular_file_count -ne 17 ]]; then
   printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
   exit 1
 fi
+
+# Nonempty content is necessary for publication, but does not establish binary validity.
+empty_artifact="$(find "$artifact_root" -type f -size 0 -print -quit)"
+if [[ -n "$empty_artifact" ]]; then
+  printf 'Empty release artifact is not publishable: %s\n' "$empty_artifact" >&2
+  exit 1
+fi
