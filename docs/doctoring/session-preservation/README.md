@@ -162,6 +162,12 @@ Canonical generated-cache PR #295 at `a4a897e3` has the same structural parent-h
 
 At 2026-09-06T15:20:09.211Z, available space was 310,653,924 KiB (296.262669 GiB), 287.559341 GiB above the 9,126,100 KiB baseline. The required additional 300 GiB remained 12.440659 GiB short. No native-cleanup runner remained active. Background changes remain separate from operation attribution.
 
+## Original command-path association in the generated-cache owner
+
+Canonical PR #295 subsequently advanced to `0b30fa20d31051745506994043186a331c2821a2`. Both staged probes now reuse `active_use_evidence_with_command_path` with the original cache path. Controlled-boundary tests include the actual generated-cache module: the two new cases fail against the previous source, while all 12 focused module tests pass after the change. They verify rejection and restoration at the first staged probe and after hashing, rather than asserting only which helper name appears in source.
+
+A separate live-process experiment included the unchanged production `git_worktree.rs` (blob `cf08607ee859bb4d98184a1bbff275d4f8d32c7f`) and used native `/usr/sbin/lsof` and `/bin/ps`. A live shell carried the original path in its arguments, had its working directory outside the cache, and opened no cache files. Following a synthetic rename, the staged-path-only helper returned complete inactive evidence; the split object/command-path helper returned complete active evidence with that exact live child PID. Both results had no error or truncation. The child was reaped and the empty fixture removed. This verifies native command-path association, not arbitrary concurrent-writer exclusion or the whole destructive execution path. Parent-scope binding and atomic no-replace restoration remain separate owner requirements.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
