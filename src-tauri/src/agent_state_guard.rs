@@ -108,7 +108,7 @@ pub fn is_agent_state(path: &Path) -> bool {
 /// Symlink entries are inspected but never traversed. No conversation contents are read.
 pub fn contains_agent_state(path: &Path) -> bool {
     // Measured Cargo trees contain up to 70,344 entries; inspect every entry, never sample.
-    contains_with_limit(path, 100_000)
+    contains_with_limit(path, 500_000)
 }
 
 fn contains_with_limit(path: &Path, limit: usize) -> bool {
