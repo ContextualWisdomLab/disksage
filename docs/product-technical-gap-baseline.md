@@ -1194,6 +1194,15 @@ runner's private workspace temp root instead of weakening the shared production 
 - Focused regression tests prove that changing content outside the cache through a child link does
   not alter the cache manifest and that a root link cannot enter the reclaim contract.
 
+## 2026-08-30 generated-cache active-use self-exclusion
+
+- Live auditing showed that the generated-cache CLI's own `--root` argument was matched by its
+  process-command evidence, producing a new transient PID and `process-active` blocker on every
+  run even when no external process used the cache.
+- The shared probe now excludes the current DiskSage PID as well as its bounded `lsof` and `ps`
+  child PIDs. External handle and command-path matches remain fail-closed. Focused regression proof
+  covers all three PID relationships.
+
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
 - Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
