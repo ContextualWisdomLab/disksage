@@ -59,7 +59,8 @@ fn map_directory_publication_error(error: String) -> ObjectBoundPublicationError
         | "private-directory-publication-directory-identity-drift" => {
             ObjectBoundPublicationError::ParentIdentityDrift
         }
-        "private-directory-publication-file-name-invalid"
+        "private-directory-publication-path-invalid"
+        | "private-directory-publication-file-name-invalid"
         | "private-directory-publication-directory-name-invalid" => {
             ObjectBoundPublicationError::NameInvalid
         }
