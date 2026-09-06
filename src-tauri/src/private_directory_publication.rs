@@ -1,7 +1,7 @@
 use std::path::Path;
 
 #[cfg(unix)]
-use std::ffi::{CString, OsString};
+use std::ffi::CString;
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
@@ -44,29 +44,15 @@ fn private_directory(metadata: &fs::Metadata, exact_mode: Option<u32>) -> Result
 }
 
 #[cfg(unix)]
-fn discover_anchor(parent: &Path) -> Result<(PathBuf, Vec<OsString>, fs::Metadata), String> {
-    let mut cursor = parent.to_path_buf();
-    let mut missing = Vec::new();
-    loop {
-        match fs::symlink_metadata(&cursor) {
-            Ok(metadata) => {
-                private_directory(&metadata, None)?;
-                missing.reverse();
-                return Ok((cursor, missing, metadata));
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                let name = cursor
-                    .file_name()
-                    .filter(|name| !name.is_empty())
-                    .ok_or_else(|| "private-directory-publication-anchor-missing".to_string())?;
-                missing.push(name.to_os_string());
-                cursor = cursor
-                    .parent()
-                    .filter(|path| !path.as_os_str().is_empty())
-                    .ok_or_else(|| "private-directory-publication-anchor-missing".to_string())?
-                    .to_path_buf();
-            }
-            Err(_) => return Err("private-directory-publication-anchor-unavailable".into()),
+fn discover_existing_parent(parent: &Path) -> Result<(PathBuf, fs::Metadata), String> {
+    match fs::symlink_metadata(parent) {
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Err("private-directory-publication-parent-provisioning-unavailable".into())
+        }
+        Err(_) => Err("private-directory-publication-anchor-unavailable".into()),
+        Ok(metadata) => {
+            private_directory(&metadata, None)?;
+            Ok((parent.to_path_buf(), metadata))
         }
     }
 }
@@ -119,64 +105,26 @@ fn revalidate_anchor(
 }
 
 #[cfg(unix)]
-fn open_child_directory(parent: &fs::File, name: &CString) -> Result<fs::File, String> {
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-        )
-    };
-    if fd < 0 {
-        return Err("private-directory-publication-directory-identity-drift".into());
-    }
-    Ok(unsafe { fs::File::from_raw_fd(fd) })
-}
-
-#[cfg(unix)]
-fn revalidate_chain(
-    anchor: &Path,
-    directories: &[fs::File],
-    names: &[CString],
-    anchor_dev: u64,
-    anchor_ino: u64,
-    directory_mode: u32,
+fn invalidate_exact_record(
+    file: &fs::File,
+    directory: &fs::File,
+    file_mode: u32,
 ) -> Result<(), String> {
-    let root = directories
-        .first()
-        .ok_or_else(|| "private-directory-publication-anchor-unavailable".to_string())?;
-    revalidate_anchor(anchor, root, anchor_dev, anchor_ino)?;
-    for (index, name) in names.iter().enumerate() {
-        let visible = open_child_directory(&directories[index], name)?;
-        let visible_metadata = visible
-            .metadata()
-            .map_err(|_| "private-directory-publication-directory-identity-drift".to_string())?;
-        let admitted_metadata = directories[index + 1]
-            .metadata()
-            .map_err(|_| "private-directory-publication-directory-identity-drift".to_string())?;
-        private_directory(&visible_metadata, Some(directory_mode))?;
-        if visible_metadata.dev() != admitted_metadata.dev()
-            || visible_metadata.ino() != admitted_metadata.ino()
-        {
-            return Err("private-directory-publication-directory-identity-drift".into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn invalidate_exact_record(file: &fs::File, directory: &fs::File) -> Result<(), String> {
     file.set_len(0)
+        .and_then(|_| file.set_permissions(fs::Permissions::from_mode(file_mode)))
         .and_then(|_| file.sync_all())
         .and_then(|_| directory.sync_all())
         .map_err(|_| "private-directory-publication-invalidation-failed".to_string())
 }
 
-/// Publish one owner-private create-new record while provisioning missing private ancestors through
-/// pinned directory descriptors. Existing ancestors are admission-only and are never chmodded.
-/// Missing descendants are created at mode 0700 with `mkdirat`, opened with `O_NOFOLLOW`, and fsynced
-/// before the final record is created relative to the pinned leaf directory. Namespace drift fails
-/// closed; after record creation, failure invalidates only the exact open record.
+/// Publish one owner-private create-new record relative to an existing exact private parent.
+///
+/// The final parent must already exist and be exact mode 0700. DiskSage deliberately does not create
+/// missing ancestors here: POSIX `mkdirat()` returns only status, not an opened handle for the newly
+/// created directory, so a same-UID pathname replacement can occur before a later `openat()` binds
+/// that name. Until a platform primitive can return or otherwise atomically bind the created object,
+/// missing-parent provisioning fails before mutation. The existing parent is opened with
+/// `O_NOFOLLOW`, bound by device/inode, and revalidated before and after record publication.
 #[cfg(unix)]
 pub(crate) fn write_private_bytes_create_new_with_parents(
     path: &Path,
@@ -194,6 +142,10 @@ pub(crate) fn write_private_bytes_create_new_with_parents(
     )
 }
 
+/// Deterministic test seam around the same existing-parent authority used in production.
+///
+/// `after_parent_provision` is retained as the historical hook name for dependent tests; no parent
+/// provisioning occurs. The hook runs after the existing parent has been admitted and opened.
 #[cfg(unix)]
 pub(crate) fn write_private_bytes_create_new_with_parents_with_hooks<F, G>(
     path: &Path,
@@ -222,82 +174,27 @@ where
     let file_name_c = CString::new(file_name.as_bytes())
         .map_err(|_| "private-directory-publication-file-name-invalid".to_string())?;
 
-    let (anchor, missing, anchor_metadata) = discover_anchor(parent)?;
+    let (anchor, anchor_metadata) = discover_existing_parent(parent)?;
     let anchor_dev = anchor_metadata.dev();
     let anchor_ino = anchor_metadata.ino();
-    let anchor_file = open_anchor(&anchor, &anchor_metadata)?;
-    let mut directories = vec![anchor_file];
-    let mut names = Vec::with_capacity(missing.len());
+    let final_parent = open_anchor(&anchor, &anchor_metadata)?;
 
-    revalidate_chain(
-        &anchor,
-        &directories,
-        &names,
-        anchor_dev,
-        anchor_ino,
-        directory_mode,
-    )?;
-
-    for component in missing {
-        let name = CString::new(component.as_bytes())
-            .map_err(|_| "private-directory-publication-directory-name-invalid".to_string())?;
-        let current = directories
-            .last()
-            .ok_or_else(|| "private-directory-publication-anchor-unavailable".to_string())?;
-        let created = unsafe {
-            libc::mkdirat(
-                current.as_raw_fd(),
-                name.as_ptr(),
-                directory_mode as libc::mode_t,
-            )
-        };
-        if created != 0 {
-            return Err("private-directory-publication-directory-create-failed".into());
-        }
-        let child = open_child_directory(current, &name)
-            .map_err(|_| "private-directory-publication-directory-open-failed".to_string())?;
-        child
-            .set_permissions(fs::Permissions::from_mode(directory_mode))
-            .map_err(|_| "private-directory-publication-directory-mode-failed".to_string())?;
-        child
-            .sync_all()
-            .map_err(|_| "private-directory-publication-directory-sync-failed".to_string())?;
-        current
-            .sync_all()
-            .map_err(|_| "private-directory-publication-directory-sync-failed".to_string())?;
-        let metadata = child
+    revalidate_anchor(&anchor, &final_parent, anchor_dev, anchor_ino)?;
+    private_directory(
+        &final_parent
             .metadata()
-            .map_err(|_| "private-directory-publication-directory-open-failed".to_string())?;
-        private_directory(&metadata, Some(directory_mode))?;
-        names.push(name);
-        directories.push(child);
-        revalidate_chain(
-            &anchor,
-            &directories,
-            &names,
-            anchor_dev,
-            anchor_ino,
-            directory_mode,
-        )?;
-    }
+            .map_err(|_| "private-directory-publication-parent-missing".to_string())?,
+        Some(directory_mode),
+    )?;
 
     after_parent_provision();
-    revalidate_chain(
-        &anchor,
-        &directories,
-        &names,
-        anchor_dev,
-        anchor_ino,
-        directory_mode,
+    revalidate_anchor(&anchor, &final_parent, anchor_dev, anchor_ino)?;
+    private_directory(
+        &final_parent
+            .metadata()
+            .map_err(|_| "private-directory-publication-parent-missing".to_string())?,
+        Some(directory_mode),
     )?;
-
-    let final_parent = directories
-        .last()
-        .ok_or_else(|| "private-directory-publication-parent-missing".to_string())?;
-    let final_parent_metadata = final_parent
-        .metadata()
-        .map_err(|_| "private-directory-publication-parent-missing".to_string())?;
-    private_directory(&final_parent_metadata, Some(directory_mode))?;
 
     let file_fd = unsafe {
         libc::openat(
@@ -336,18 +233,13 @@ where
             .map_err(|_| "private-directory-publication-directory-sync-failed".to_string())?;
 
         before_finalize();
-        revalidate_chain(
-            &anchor,
-            &directories,
-            &names,
-            anchor_dev,
-            anchor_ino,
-            directory_mode,
+        revalidate_anchor(&anchor, &final_parent, anchor_dev, anchor_ino)?;
+        private_directory(
+            &final_parent
+                .metadata()
+                .map_err(|_| "private-directory-publication-parent-missing".to_string())?,
+            Some(directory_mode),
         )?;
-        let final_parent_metadata = final_parent
-            .metadata()
-            .map_err(|_| "private-directory-publication-parent-missing".to_string())?;
-        private_directory(&final_parent_metadata, Some(directory_mode))?;
 
         let visible_fd = unsafe {
             libc::openat(
@@ -377,7 +269,7 @@ where
     })();
 
     if let Err(error) = publication {
-        invalidate_exact_record(&file, final_parent)?;
+        invalidate_exact_record(&file, &final_parent, file_mode)?;
         return Err(error);
     }
     Ok(())
