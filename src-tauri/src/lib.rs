@@ -91,7 +91,7 @@ pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
 pub mod provider_sync;
-#[path = "private_evidence.rs"]
+#[path = "private_evidence_core.rs"]
 mod private_evidence_core;
 #[path = "private_evidence_publication.rs"]
 pub mod private_evidence;

@@ -217,3 +217,31 @@ fn post_write_same_object_content_mutation_fails_closed_and_invalidates_exact_re
     assert_eq!(metadata.len(), 0, "failure must invalidate the exact opened record");
     assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
 }
+
+#[test]
+fn trailing_separator_destination_is_rejected_before_hooks_or_create() {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipt.json");
+    let trailing = PathBuf::from(format!("{}/", target.display()));
+    let hook_calls = Cell::new(0_u8);
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &trailing,
+        b"authorized",
+        0o600,
+        0o700,
+        || hook_calls.set(hook_calls.get() + 1),
+        || hook_calls.set(hook_calls.get() + 1),
+    )
+    .expect_err("directory-looking destination authority must fail closed");
+
+    assert_eq!(error, "private-directory-publication-path-invalid");
+    assert_eq!(hook_calls.get(), 0, "invalid path authority must fail before hooks");
+    assert!(!target.exists(), "trailing separator must not normalize into a file mutation");
+}
