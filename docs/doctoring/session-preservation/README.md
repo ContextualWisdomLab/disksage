@@ -108,6 +108,10 @@ One source-linked temporary Cargo target was revalidated, previewed with `cargo 
 
 The pilot removed 4,164,724 KiB (3.971790 GiB) of reported target allocation. Host available space changed from 60,895,088 to 64,857,912 KiB, a net 3.779243 GiB increase during the operation; concurrent writes still limit causal attribution. The operation journal is separate from a product execution receipt, and does not claim PR #295 or #345 has merged or shipped. Remaining source-linked targets use the same per-operation revalidation, private staging, and no-overwrite failure restoration. An unknown, active, changed, oversized, or unreadable candidate is retained.
 
+The pilot and first sequential cohort have now completed all 20 operations. Every receipt records successful native cleanup, retained Cargo-reported source files, and no restore error. Their combined pre-clean allocation was 55.547333 GiB; the sum of signed per-operation available-space changes was 53.826694 GiB. These are separate measurements and must not be added together or interpreted as an exclusive APFS extent measurement. Later background free-space changes remain excluded. The remaining 147 source-linked temporary candidates are being revalidated individually; active-use rejection and incomplete observations retain the original directories.
+
+A separate read-only local-project inventory verified 17 Cargo target/source relationships, totaling 22.19 GiB of reported allocation. No executable match was observed, but inactivity is still unverified. These candidates are not included in the completed recovery figures. The 300 GiB actual-recovery acceptance criterion remains unmet.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
