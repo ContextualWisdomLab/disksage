@@ -1122,7 +1122,9 @@ mod tests {
         fs::write(
             &podman,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podman version test'; else printf '[{{\"Name\":\"podman-machine-default\",\"ConfigDir\":{{\"Path\":\"{}\"}}}}]'; fi\n",
+                "#!/bin/sh\
+if [ \"$1\" = \"--version\" ]; then echo 'podman version test'; else printf '[{{\"Name\":\"podman-machine-default\",\"ConfigDir\":{{\"Path\":\"{}\"}}}}]'; fi\
+",
                 config.display()
             ),
         )
@@ -1190,7 +1192,7 @@ mod tests {
                 &home,
                 &apps,
                 &podman,
-                &[request],
+                std::slice::from_ref(&request),
                 &plan.plan_fingerprint,
                 &plan.plan_fingerprint,
                 plan.exact_approval_phrase.as_deref().unwrap(),
