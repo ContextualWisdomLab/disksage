@@ -171,6 +171,9 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservation, String> {
+    if crate::safety::agent_state_guard::is_agent_state(path) {
+        return Err("icloud-local-eviction-agent-state-protected".into());
+    }
     if root.provider != CloudProvider::Icloud {
         return Err("icloud-local-eviction-requires-icloud-root".into());
     }
@@ -1380,13 +1383,23 @@ mod tests {
     fn session_state_is_retained_before_provider_observation() {
         let temporary = tempfile::tempdir().unwrap();
         let cloud_root = root(temporary.path());
-        for relative in [".codex/sessions/example.jsonl", ".claude/projects/example.jsonl", ".claude.json"] {
+        for relative in [
+            ".codex/sessions/example.jsonl",
+            ".claude/projects/example.jsonl",
+            ".claude.json",
+        ] {
             let path = temporary.path().join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, b"synthetic session sentinel").unwrap();
-            assert_eq!(observe_local_file(&cloud_root, &path).unwrap_err(), "icloud-local-eviction-agent-state-protected");
+            assert_eq!(
+                observe_local_file(&cloud_root, &path).unwrap_err(),
+                "icloud-local-eviction-agent-state-protected"
+            );
             #[cfg(not(coverage))]
-            assert_eq!(plan_icloud_local_eviction(&cloud_root, &path, 1).unwrap_err(), "icloud-local-eviction-agent-state-protected");
+            assert_eq!(
+                plan_icloud_local_eviction(&cloud_root, &path, 1).unwrap_err(),
+                "icloud-local-eviction-agent-state-protected"
+            );
             assert_eq!(std::fs::read(&path).unwrap(), b"synthetic session sentinel");
         }
         let ordinary = temporary.path().join("ordinary.jsonl");
