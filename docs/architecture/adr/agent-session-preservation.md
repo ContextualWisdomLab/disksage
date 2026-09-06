@@ -23,6 +23,6 @@ Use a std-only shared policy before ordinary Trash, identity-bound Trash, moves,
 
 ## Consequences and verification
 
-Positive: recognized session state survives broad folder selection, custom roots, and aliases without reading its contents. Negative: larger-than-10,000-entry or unreadable trees are retained, and arbitrary exported/renamed transcripts remain outside the recognized-root contract. Environment overrides must be visible to DiskSage. Concurrent namespace mutation remains a separate hardening concern.
+Positive: recognized session state survives broad folder selection, custom roots, and aliases without reading its contents. Negative: larger-than-100,000-entry or unreadable trees are retained, and arbitrary exported/renamed transcripts remain outside the recognized-root contract. Environment overrides must be visible to DiskSage. Concurrent namespace mutation remains a separate hardening concern.
 
 Acceptance requires unit and mutation-boundary regressions, exact-head CI, review, and protected merge. Effectiveness additionally requires real candidate and physical-space evidence; a passing regression corpus is not universal proof. [Experiment record](../../doctoring/session-preservation/README.md) contains baseline SHA, results, commands, sources, and follow-up criteria. This proposal does not supersede existing ADRs or allocate an overlapping numeric identifier.
