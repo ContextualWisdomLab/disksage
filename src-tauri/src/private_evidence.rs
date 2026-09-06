@@ -152,14 +152,15 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 ///
 /// The parent must already exist and must not be writable by group or other principals. Relative
 /// destination or forbidden-root authority is rejected before hooks or filesystem lookup so
-/// publication never depends on ambient process CWD. The pathname is opened with `O_NOFOLLOW`
-/// before canonicalization and the opened directory is bound to the device/inode observed during
-/// initial admission. Record creation is descriptor-relative and create-new. `forbidden_root`, when
-/// present, is identity-admitted before any test seam, then canonicalized and opened; the opened
-/// directory must retain that initial device/inode and is revalidated before creation and
-/// finalization so source-root alias replacement cannot silently retarget publication policy.
-/// Finalization also reopens the visible record descriptor-relative and verifies exact identity,
-/// mode, length, and bytes before success.
+/// publication never depends on ambient process CWD. Directory-looking Unix destinations ending in
+/// a raw `/` are rejected before hooks or lookup instead of being normalized into file authority.
+/// The pathname is opened with `O_NOFOLLOW` before canonicalization and the opened directory is bound
+/// to the device/inode observed during initial admission. Record creation is descriptor-relative and
+/// create-new. `forbidden_root`, when present, is identity-admitted before any test seam, then
+/// canonicalized and opened; the opened directory must retain that initial device/inode and is
+/// revalidated before creation and finalization so source-root alias replacement cannot silently
+/// retarget publication policy. Finalization also reopens the visible record descriptor-relative and
+/// verifies exact identity, mode, length, and bytes before success.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -203,7 +204,7 @@ where
     if !matches!(unix_mode, 0o400 | 0o600) {
         return Err(ObjectBoundPublicationError::ModeInvalid);
     }
-    if !path.is_absolute() {
+    if !path.is_absolute() || path.as_os_str().as_bytes().ends_with(b"/") {
         return Err(ObjectBoundPublicationError::NameInvalid);
     }
     if forbidden_root.is_some_and(|root| !root.is_absolute()) {
