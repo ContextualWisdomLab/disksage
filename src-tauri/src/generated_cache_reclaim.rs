@@ -546,18 +546,6 @@ fn validate_execution(
     Ok(())
 }
 
-pub fn remove_regenerable_root(path: &Path, home: &Path) -> Result<(), String> {
-    if deny_boundary(path)
-        || matches!(
-            regeneration_contract(path, home),
-            None | Some(RegenerationContract::TemporaryGitWorkspace)
-        )
-    {
-        return Err("generated-cache-removal-boundary-denied".into());
-    }
-    std::fs::remove_dir_all(path).map_err(|_| "generated-cache-remove-failed".into())
-}
-
 /// Atomically stage and permanently remove the exact approved cache object.
 pub fn stage_and_remove_regenerable_root(
     plan: &GeneratedCachePlan,
