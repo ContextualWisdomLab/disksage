@@ -1920,22 +1920,9 @@ fn remove_worktree_from_private_stage(
         if inspect_staged(&staged) {
             return Err("git-worktree-agent-state-retained".into());
         }
-        let removed = run_git(
-            repository,
-            &[
-                OsString::from("worktree"),
-                OsString::from("remove"),
-                OsString::from("--"),
-                staged.as_os_str().to_owned(),
-            ],
-            timeout_ms,
-            "git-worktree-remove",
-        )?;
-        if removed.status_code == Some(0) {
-            Ok(())
-        } else {
-            Err("git-worktree-remove-command-failed".into())
-        }
+        // A writer can retain a directory handle across staging and create ignored sessions
+        // after inspection. Git's recursive removal cannot atomically enforce this guard.
+        Err("git-worktree-recursive-removal-unavailable".into())
     })();
     if result.is_err() && fs::symlink_metadata(&staged).is_ok() {
         let source_absent = matches!(fs::symlink_metadata(source),
@@ -1952,8 +1939,8 @@ fn remove_worktree_from_private_stage(
     result
 }
 
-/// Re-audit the full plan and each individual candidate before invoking non-force Git worktree
-/// removal. No prune or branch-deletion command is reachable from this function.
+/// Re-audit candidates and restore any staged worktree while recursive removal is unavailable.
+/// No removal, prune, or branch-deletion command is reachable from this function.
 pub fn execute_stale_worktree_removal(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2131,7 +2118,7 @@ pub fn execute_stale_worktree_removal(
         filesystem_mutation_executed: attempted_count > 0,
         verification_complete,
         notices: vec![
-            "non-force-git-worktree-move-then-remove".into(),
+            "git-worktree-recursive-removal-unavailable".into(),
             "no-git-worktree-prune".into(),
             "no-branch-delete".into(),
             "allocated-bytes-is-pre-removal-upper-bound".into(),
@@ -2735,7 +2722,7 @@ mod tests {
 
     #[cfg(all(unix, not(coverage)))]
     #[test]
-    fn execution_removes_only_clean_merged_worktree_and_retains_branch() {
+    fn execution_retains_clean_merged_worktree_while_recursive_removal_is_unavailable() {
         let (_temp, repository, secondary) = temporary_repository();
         let generated_at = current_unix_ms();
         let report = audit_git_worktrees(
@@ -2771,12 +2758,71 @@ mod tests {
             generated_at + 2,
         )
         .unwrap();
-        assert!(result.verification_complete);
-        assert_eq!(result.removed_count, 1);
+        assert!(!result.verification_complete);
+        assert_eq!(result.removed_count, 0);
+        assert_eq!(result.removed_allocated_bytes_upper_bound, 0);
+        assert_eq!(
+            result.stopped_reason.as_deref(),
+            Some("git-worktree-recursive-removal-unavailable")
+        );
         assert!(!result.branch_delete_executed);
         assert!(!result.git_prune_executed);
-        assert!(!secondary.exists());
+        assert!(secondary.exists());
+        assert!(
+            list_worktrees(&repository, GitWorktreeAuditOptions::default())
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == fs::canonicalize(&secondary).unwrap())
+        );
         git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn session_created_through_held_directory_after_final_scan_survives() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::Stdio;
+        for marker in [".codex", ".claude"] {
+            let (_temp, repository, secondary) = temporary_repository();
+            fs::write(repository.join(".git/info/exclude"), format!("{marker}/\n")).unwrap();
+            // The child acquires its cwd before Git moves the directory into a private stage.
+            let mut writer = Command::new("sh")
+                .args(["-c", r#"printf 'ready\n'; read signal; mkdir -p "$1/sessions" && printf 'late session' > "$1/sessions/late.jsonl""#, "writer", marker])
+                .current_dir(&secondary)
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+                .spawn().unwrap();
+            let mut ready = String::new();
+            BufReader::new(writer.stdout.take().unwrap())
+                .read_line(&mut ready)
+                .unwrap();
+            assert_eq!(ready, "ready\n");
+            let result =
+                remove_worktree_from_private_stage(&repository, &secondary, 10_000, |staged| {
+                    let observed_state =
+                        crate::safety::agent_state_guard::contains_agent_state(staged);
+                    assert!(!observed_state);
+                    writer.stdin.take().unwrap().write_all(b"write\n").unwrap();
+                    assert!(writer.wait_with_output().unwrap().status.success());
+                    assert!(staged.join(marker).join("sessions/late.jsonl").exists());
+                    // Return the actual earlier scan result, without a second scan hiding the race.
+                    observed_state
+                });
+            assert_eq!(
+                result.unwrap_err(),
+                "git-worktree-recursive-removal-unavailable"
+            );
+            assert_eq!(
+                fs::read(secondary.join(marker).join("sessions/late.jsonl")).unwrap(),
+                b"late session"
+            );
+            assert!(
+                list_worktrees(&repository, GitWorktreeAuditOptions::default())
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry.path == fs::canonicalize(&secondary).unwrap())
+            );
+            git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+        }
     }
 
     /// State that arrives between the original audit and staging must survive, including Git registration.
