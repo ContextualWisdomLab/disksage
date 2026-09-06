@@ -3,9 +3,29 @@
 #[path = "../src/generated_cache_reclaim.rs"]
 mod generated_cache_reclaim;
 
+mod cloud {
+    pub fn system_now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
+}
+
 mod rules {
     pub fn shared_temp_root() -> std::path::PathBuf {
-        std::env::temp_dir()
+        #[cfg(target_os = "macos")]
+        {
+            std::path::PathBuf::from("/private/tmp")
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            std::path::PathBuf::from("/tmp")
+        }
+        #[cfg(not(unix))]
+        {
+            std::path::PathBuf::new()
+        }
     }
 }
 

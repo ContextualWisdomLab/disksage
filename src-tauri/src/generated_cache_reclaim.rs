@@ -24,6 +24,8 @@ pub enum RegenerationContract {
     HomebrewBootsnap,
     UvPackageCache,
     PlaywrightBrowserDownload,
+    /// Legacy temporary Cargo candidate shape. This is not producer or regeneration proof.
+    DiskSageTemporaryCargoTarget,
     TemporaryGitWorkspace,
 }
 
@@ -229,6 +231,7 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
     pairs
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
+        .or_else(|| disksage_temporary_cargo_target(path))
         .or_else(|| {
             #[cfg(unix)]
             {
@@ -240,6 +243,32 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
                 None
             }
         })
+}
+
+fn disksage_temporary_cargo_target(path: &Path) -> Option<RegenerationContract> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let temp_root = std::env::temp_dir();
+        let name = path.file_name()?.to_str()?;
+        if path.parent() != Some(temp_root.as_path())
+            || !name.starts_with("disksage-eviction-cli-duplicate-singletons-")
+            || name
+                .strip_prefix("disksage-eviction-cli-duplicate-singletons-")?
+                .is_empty()
+        {
+            return None;
+        }
+        let lock_metadata = std::fs::symlink_metadata(path.join("debug/.cargo-lock")).ok()?;
+        if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
+            return None;
+        }
+        Some(RegenerationContract::DiskSageTemporaryCargoTarget)
+    }
 }
 
 type TreeObservation = (u64, u64, String, Vec<String>);
@@ -424,6 +453,10 @@ pub fn plan_with_evidence(
     }
     let contract = regeneration_contract(path, home)
         .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
+    if matches!(contract, RegenerationContract::DiskSageTemporaryCargoTarget) {
+        // A name and empty Cargo lock do not bind retained source or identify generated contents.
+        return Err("temporary-cargo-producer-evidence-required".into());
+    }
     let immediate_parent = immediate_parent_identity(path)?;
     let (allocated_bytes, entry_count, content_fingerprint, locks) = observe_tree(path)?;
     if immediate_parent_identity(path)? != immediate_parent {
@@ -846,6 +879,64 @@ mod tests {
             assert!(plan.blockers.is_empty());
             assert!(plan.dry_run);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_cargo_candidate_shape_does_not_include_neighbors() {
+        let temp_root = std::env::temp_dir();
+        let nonce = format!("{}-{}", std::process::id(), crate::cloud::system_now_ms());
+        let root = temp_root.join(format!(
+            "disksage-eviction-cli-duplicate-singletons-{nonce}"
+        ));
+        std::fs::create_dir_all(root.join("debug")).unwrap();
+        std::fs::write(root.join("debug/.cargo-lock"), b"").unwrap();
+        assert_eq!(
+            regeneration_contract(&root, Path::new("/Users/test")),
+            Some(RegenerationContract::DiskSageTemporaryCargoTarget)
+        );
+        assert_eq!(
+            regeneration_contract(
+                &temp_root.join(format!("customer-data-{nonce}")),
+                Path::new("/Users/test")
+            ),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_cargo_shape_cannot_authorize_unproven_contents() {
+        let fixture = tempfile::Builder::new()
+            .prefix("disksage-eviction-cli-duplicate-singletons-")
+            .tempdir()
+            .unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("debug")).unwrap();
+        std::fs::write(root.join("debug/.cargo-lock"), b"").unwrap();
+        std::fs::create_dir(root.join(".claude")).unwrap();
+        let session = root.join(".claude/session.jsonl");
+        let source = root.join("only-copy.txt");
+        std::fs::write(&session, b"synthetic retained session").unwrap();
+        std::fs::write(&source, b"synthetic retained source").unwrap();
+        assert_eq!(
+            plan_with_evidence(root, fixture.path(), inactive(), 1).unwrap_err(),
+            "temporary-cargo-producer-evidence-required"
+        );
+        assert_eq!(std::fs::read(session).unwrap(), b"synthetic retained session");
+        assert_eq!(std::fs::read(source).unwrap(), b"synthetic retained source");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn disksage_temporary_cargo_target_contract_is_unavailable_off_macos() {
+        assert_eq!(
+            disksage_temporary_cargo_target(Path::new(
+                "/tmp/disksage-eviction-cli-duplicate-singletons-test"
+            )),
+            None
+        );
     }
 
     #[cfg(unix)]
