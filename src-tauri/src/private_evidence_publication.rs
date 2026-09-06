@@ -85,6 +85,9 @@ fn map_directory_publication_error(error: String) -> ObjectBoundPublicationError
         "private-directory-publication-file-identity-drift" => {
             ObjectBoundPublicationError::RecordIdentityDrift
         }
+        "private-directory-publication-file-content-drift" => {
+            ObjectBoundPublicationError::RecordContentDrift
+        }
         "private-directory-publication-invalidation-failed" => {
             ObjectBoundPublicationError::InvalidationFailed
         }
@@ -168,6 +171,17 @@ mod tests {
 
         assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o400);
         assert_eq!(fs::read(target).unwrap(), b"receipt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_policy_content_drift_keeps_content_drift_error_class() {
+        assert_eq!(
+            map_directory_publication_error(
+                "private-directory-publication-file-content-drift".to_string(),
+            ),
+            ObjectBoundPublicationError::RecordContentDrift
+        );
     }
 
     #[cfg(unix)]
