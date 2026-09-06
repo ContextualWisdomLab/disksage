@@ -25,6 +25,7 @@ pub(crate) enum ObjectBoundPublicationError {
     ParentUnsafe,
     ParentWritableByOthers,
     ParentIdentityDrift,
+    ForbiddenRootInvalid,
     ForbiddenRootUnavailable,
     ForbiddenRootIdentityDrift,
     InsideForbiddenRoot,
@@ -117,6 +118,9 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
         ObjectBoundPublicationError::ParentIdentityDrift => {
             "private-evidence-parent-identity-drift"
         }
+        ObjectBoundPublicationError::ForbiddenRootInvalid => {
+            "private-evidence-source-root-invalid"
+        }
         ObjectBoundPublicationError::ForbiddenRootUnavailable => {
             "private-evidence-source-root-unavailable"
         }
@@ -147,14 +151,15 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 /// directory object admitted by the caller-supplied absolute pathname.
 ///
 /// The parent must already exist and must not be writable by group or other principals. Relative
-/// destination authority is rejected before hooks or filesystem lookup so publication never depends
-/// on ambient process CWD. The pathname is opened with `O_NOFOLLOW` before canonicalization and the
-/// opened directory is bound to the device/inode observed during initial admission. Record creation
-/// is descriptor-relative and create-new. `forbidden_root`, when present, is identity-admitted before
-/// any test seam, then canonicalized and opened; the opened directory must retain that initial
-/// device/inode and is revalidated before creation and finalization so source-root alias replacement
-/// cannot silently retarget publication policy. Finalization also reopens the visible record
-/// descriptor-relative and verifies exact identity, mode, length, and bytes before success.
+/// destination or forbidden-root authority is rejected before hooks or filesystem lookup so
+/// publication never depends on ambient process CWD. The pathname is opened with `O_NOFOLLOW`
+/// before canonicalization and the opened directory is bound to the device/inode observed during
+/// initial admission. Record creation is descriptor-relative and create-new. `forbidden_root`, when
+/// present, is identity-admitted before any test seam, then canonicalized and opened; the opened
+/// directory must retain that initial device/inode and is revalidated before creation and
+/// finalization so source-root alias replacement cannot silently retarget publication policy.
+/// Finalization also reopens the visible record descriptor-relative and verifies exact identity,
+/// mode, length, and bytes before success.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -200,6 +205,9 @@ where
     }
     if !path.is_absolute() {
         return Err(ObjectBoundPublicationError::NameInvalid);
+    }
+    if forbidden_root.is_some_and(|root| !root.is_absolute()) {
+        return Err(ObjectBoundPublicationError::ForbiddenRootInvalid);
     }
 
     let parent = path
@@ -442,13 +450,14 @@ where
 /// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
 /// directory object admitted before canonicalization, so a same-user pathname replacement cannot
 /// redirect either canonicalization or the later write. The forbidden source root is likewise bound
-/// to an opened directory object for the publication lifetime. The file is created once with mode
-/// 0600, synced, and never overwritten. Finalization reopens the visible record descriptor-relative
-/// and verifies exact identity, mode, length, and bytes. After a post-create failure, the still-open
-/// record is truncated, restored to the requested private mode, and synced through its descriptor.
-/// The pathname is deliberately not unlinked because a same-user process may already have replaced
-/// that name; this can leave a zero-length mode-0600 create-new tombstone that requires explicit
-/// operator cleanup.
+/// to an opened directory object for the publication lifetime and must be absolute so policy does
+/// not depend on ambient process CWD. The file is created once with mode 0600, synced, and never
+/// overwritten. Finalization reopens the visible record descriptor-relative and verifies exact
+/// identity, mode, length, and bytes. After a post-create failure, the still-open record is
+/// truncated, restored to the requested private mode, and synced through its descriptor. The
+/// pathname is deliberately not unlinked because a same-user process may already have replaced that
+/// name; this can leave a zero-length mode-0600 create-new tombstone that requires explicit operator
+/// cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
