@@ -1947,6 +1947,12 @@ pub fn execute_stale_worktree_removal(
         }
 
         let mut item = pending_item(candidate);
+        if crate::safety::agent_state_guard::contains_agent_state(Path::new(&candidate.path)) {
+            item.error = Some("git-worktree-agent-state-retained".into());
+            items.push(item);
+            stopped_reason = Some("git-worktree-agent-state-retained".into());
+            break;
+        }
         item.removal_attempted = true;
         let removal = run_git(
             &repository_root,

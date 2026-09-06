@@ -19,17 +19,38 @@ fn overlaps(path: &Path, root: &Path) -> bool {
     path.starts_with(root) || root.starts_with(path)
 }
 
+/// Resolve the existing ancestor too when a destination does not exist yet.
+fn resolve_existing_parent(path: &Path) -> PathBuf {
+    let mut probe = path;
+    let mut suffix = Vec::new();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(probe) {
+            for name in suffix.iter().rev() {
+                resolved.push(name);
+            }
+            return resolved;
+        }
+        match (probe.file_name(), probe.parent()) {
+            (Some(name), Some(parent)) => {
+                suffix.push(name);
+                probe = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// Protect lexical and resolved roots, so a symlink cannot disguise relocated state.
 fn protects_with_roots(path: &Path, roots: &[PathBuf]) -> bool {
     if has_state_component(path) {
         return true;
     }
-    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let resolved = resolve_existing_parent(path);
     if has_state_component(&resolved) {
         return true;
     }
     roots.iter().any(|root| {
-        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        let canonical = resolve_existing_parent(root);
         overlaps(path, root)
             || overlaps(&resolved, root)
             || overlaps(path, &canonical)

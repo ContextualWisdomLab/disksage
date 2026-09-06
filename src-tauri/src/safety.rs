@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "agent_state_guard.rs"]
-mod agent_state_guard;
+pub(crate) mod agent_state_guard;
 
 #[derive(Debug)]
 pub enum SafetyError {
