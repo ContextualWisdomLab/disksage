@@ -180,6 +180,18 @@ A fresh read-only APFS audit found no Data-volume snapshots. The three system sn
 
 Local evidence remains under `/tmp/disksage-session-baseline/`, including `generated-cache-parent-native.json`, `generated-cache-platform-contract-tests.log`, `generated-cache-platform-cli-tests.log`, `pr320-restack-module-tests.log`, `pr320-restack-cli-tests.log`, `pr295-macos-cache-job.log`, and `parent-veto-capacity-snapshot.json`.
 
+## Local cloud-copy admission and hosted verification
+
+A follow-up call-path audit found that iCloud local-copy eviction did not apply the shared session guard. This operation retains the cloud object and path, so the finding concerns local session availability rather than demonstrated permanent deletion. The implementation is already on main; its single-file planner is reused by batch planning and by execution before the native eviction request.
+
+Regression commit `dac63e22` failed against the actual local-file observation function: a synthetic `.codex` session returned an admitted observation. No provider or real user file was involved. Fix `dd03c9c7` adds the existing shared guard at that common admission boundary. The table regression retains `.codex`, `.claude`, and `.claude.json` contents and keeps an ordinary sibling eligible for the existing checks. The checked-in test also asserts early rejection through the public planner when compiled without `coverage`.
+
+The isolated harness compiles the actual local-eviction and shared-guard modules with plain supporting data contracts. Its 21 unit tests passed. Its first broader command subsequently failed doctest compilation because the harness's `coverage` configuration was not passed to rustdoc; this is not a successful full application test. The explicit unit-only run is recorded separately. Native provider behavior, the public planner assertion excluded by the local harness configuration, and the new head's hosted integration remain pending. This guard does not establish protection for arbitrary renamed transcripts or all concurrent namespace mutations.
+
+Before this follow-up, hosted Test job `101569719964` passed at `bdb42f90219fc4fc75b6ac18d36c2e7b526384bd`, including all 156 frontend tests. Canonical release owner PR #264 at `fea9144a15234035fbdf37e9fa914e5fd51efdec` passed Test job `101570194502` (164 frontend tests), all three platform builds, and artifact-download job `101572552331`. Those successes do not cover the subsequent local-copy guard change or establish protected merge. Independent approval and required review/security workflows remain necessary.
+
+At `2026-09-06T22:53:19.257Z`, available space was 284,746,056 KiB, an increase of 262.851673 GiB over the fixed baseline and 37.148327 GiB short of the target. Fresh native observations found 30 UV lock holders and zero reclaimable, nonshared regular BuildKit records. Two bounded VM observations showed swap allocation falling by 1 GiB while available capacity rose about 0.77 GiB; other writes therefore affect the net measurement. No additional cleanup was performed. Logs and receipts are under `/tmp/disksage-session-baseline/`, including `cloud-local-guard-red.log`, `cloud-local-guard-green.log`, `pr345-hosted-green-capacity.json`, and `capacity-native-refresh-summary.json`.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
