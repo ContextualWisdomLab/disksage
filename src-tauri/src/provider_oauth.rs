@@ -1,19 +1,28 @@
-//! Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
-//!
-//! DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
-//! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
-//! access tokens live only long enough to perform one bounded provider operation.
+// Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
+//
+// DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
+// hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
+// access tokens live only long enough to perform one bounded provider operation.
 
 use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+mod provider_oauth_test_private_directory_publication {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/private_directory_publication.rs"
+    ));
+}
+
 #[cfg(not(coverage))]
-use std::io::{Read, Write};
+use std::io::Write;
 #[cfg(not(coverage))]
 use std::net::{TcpListener, TcpStream};
 #[cfg(not(coverage))]
@@ -25,6 +34,13 @@ const MAX_CONNECTIONS: usize = 32;
 const MAX_CLIENT_ID_BYTES: usize = 512;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const KEYRING_SERVICE: &str = "org.contextualwisdomlab.disksage.cloud-oauth";
+
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 #[cfg(not(coverage))]
 const MAX_CALLBACK_REQUEST_BYTES: usize = 16 * 1024;
@@ -47,6 +63,7 @@ const GOOGLE_READ_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.
 const GOOGLE_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuthConnection {
     pub connection_id: String,
     pub provider: CloudProvider,
@@ -58,6 +75,7 @@ pub struct OAuthConnection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConnectionDocument {
     version: u32,
     connections: Vec<OAuthConnection>,
@@ -313,6 +331,16 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_unique_connection_ids(connections: &[OAuthConnection]) -> Result<(), String> {
+    let mut connection_ids = std::collections::BTreeSet::new();
+    for connection in connections {
+        if !connection_ids.insert(connection.connection_id.as_str()) {
+            return Err("oauth-connection-document-duplicate-id".into());
+        }
+    }
+    Ok(())
+}
+
 fn connection_matches_root(connection: &OAuthConnection, root: &CloudRoot) -> bool {
     validate_connection(connection).is_ok()
         && connection.provider == root.provider
@@ -327,19 +355,104 @@ pub fn connections_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("cloud-oauth-connections.json")
 }
 
+fn connection_document_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Result<(), String> {
+    for ancestor in parent
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Ok(metadata) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    let shared_writable = mode & 0o022 != 0;
+                    let sticky = mode & 0o1000 != 0;
+                    if shared_writable && (ancestor == parent || !sticky) {
+                        return Err("oauth-connection-directory-writable-by-others".into());
+                    }
+                }
+            }
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Err(_) => return Err("oauth-connection-directory-unavailable".into()),
+        }
+    }
+    Ok(())
+}
+
+fn open_connection_document(path: &Path) -> Result<Option<std::fs::File>, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    match options.open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            Err("oauth-connection-document-not-regular-file".into())
+        }
+        Err(_) => Err("oauth-connection-document-unavailable".into()),
+    }
+}
+
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("oauth-connection-document-unavailable".into()),
+    validate_connection_document_parent(connection_document_parent(path), true)?;
+    let file = match open_connection_document(path)? {
+        Some(file) => file,
+        None => return Ok(Vec::new()),
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = file
+        .metadata()
+        .map_err(|_| "oauth-connection-document-unavailable")?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("oauth-connection-document-not-regular-file".into());
+        }
+    }
+    if !metadata.is_file() {
         return Err("oauth-connection-document-not-regular-file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o7777 != 0o600 {
+            return Err("oauth-connection-document-permissions-unsafe".into());
+        }
     }
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
     }
-    let bytes = std::fs::read(path).map_err(|_| "oauth-connection-document-unreadable")?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut reader = file.take(MAX_CONNECTION_DOCUMENT_BYTES + 1);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| "oauth-connection-document-unreadable")?;
+    if bytes.len() as u64 > MAX_CONNECTION_DOCUMENT_BYTES {
+        return Err("oauth-connection-document-too-large".into());
+    }
     let document: ConnectionDocument =
         serde_json::from_slice(&bytes).map_err(|_| "oauth-connection-document-invalid")?;
     if document.version != CONNECTION_DOCUMENT_VERSION
@@ -350,7 +463,30 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     for connection in &document.connections {
         validate_connection(connection)?;
     }
+    validate_unique_connection_ids(&document.connections)?;
     Ok(document.connections)
+}
+
+#[cfg(test)]
+fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    provider_oauth_test_private_directory_publication::write_private_bytes_create_new_with_parents(
+        path, encoded, 0o600, 0o700,
+    )
+}
+
+#[cfg(not(test))]
+fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    crate::private_directory_publication::write_private_bytes_create_new_with_parents(
+        path, encoded, 0o600, 0o700,
+    )
+}
+
+fn map_connection_create_new_error(error: String) -> String {
+    if error == "private-directory-publication-unsupported" {
+        "oauth-connection-document-object-bound-publication-unavailable".into()
+    } else {
+        format!("oauth-connection-document-create-failed:{error}")
+    }
 }
 
 fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), String> {
@@ -360,49 +496,29 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     for connection in connections {
         validate_connection(connection)?;
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| "oauth-connection-directory-invalid".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("oauth-connection-document-not-regular-file".into());
-        }
-    }
+    validate_unique_connection_ids(connections)?;
     let document = ConnectionDocument {
         version: CONNECTION_DOCUMENT_VERSION,
         connections: connections.to_vec(),
     };
     let encoded = serde_json::to_vec_pretty(&document)
         .map_err(|_| "oauth-connection-document-encode-failed")?;
-    let temporary = parent.join(format!(
-        ".cloud-oauth-connections.{}.tmp",
-        random_urlsafe(12)?
-    ));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+    if encoded.len() as u64 > MAX_CONNECTION_DOCUMENT_BYTES {
+        return Err("oauth-connection-document-too-large".into());
     }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|_| "oauth-connection-document-create-failed")?;
-    use std::io::Write as _;
-    if file.write_all(&encoded).is_err() || file.sync_all().is_err() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err("oauth-connection-document-write-failed".into());
+    let parent = connection_document_parent(path);
+    validate_connection_document_parent(parent, true)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("oauth-connection-document-not-regular-file".into());
+        }
+        Ok(_) => {
+            return Err("oauth-connection-document-object-bound-replacement-unavailable".into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("oauth-connection-document-unavailable".into()),
     }
-    #[cfg(windows)]
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|_| "oauth-connection-document-replace-failed")?;
-    }
-    if std::fs::rename(&temporary, path).is_err() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err("oauth-connection-document-replace-failed".into());
-    }
-    Ok(())
+    write_connection_document_create_new(path, &encoded).map_err(map_connection_create_new_error)
 }
 
 pub fn connection_for_root(
@@ -611,7 +727,10 @@ fn callback_code(target: &str, expected_state: &str) -> Result<String, String> {
 }
 
 #[cfg(not(coverage))]
-fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
+fn read_callback_target(stream: &mut TcpStream, expected_host: &str) -> Result<String, String> {
+    stream
+        .set_nonblocking(false)
+        .map_err(|_| "oauth-callback-read-config-failed".to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|_| "oauth-callback-read-config-failed".to_string())?;
@@ -632,9 +751,12 @@ fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
     if request.len() >= MAX_CALLBACK_REQUEST_BYTES {
         return Err("oauth-callback-request-too-large".into());
     }
+    if !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        return Err("oauth-callback-request-invalid".into());
+    }
     let request = std::str::from_utf8(&request).map_err(|_| "oauth-callback-request-invalid")?;
-    let first_line = request
-        .split("\r\n")
+    let mut lines = request.split("\r\n");
+    let first_line = lines
         .next()
         .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
     let mut fields = first_line.split_whitespace();
@@ -646,6 +768,31 @@ fn read_callback_target(stream: &mut TcpStream) -> Result<String, String> {
         .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
     if fields.next() != Some("HTTP/1.1") || fields.next().is_some() {
         return Err("oauth-callback-request-invalid".into());
+    }
+    let mut host = None;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        let (name, raw_value) = line
+            .split_once(':')
+            .ok_or_else(|| "oauth-callback-request-invalid".to_string())?;
+        if name.is_empty() || name.trim() != name {
+            return Err("oauth-callback-request-invalid".into());
+        }
+        if name.eq_ignore_ascii_case("host") {
+            if host.is_some() {
+                return Err("oauth-callback-host-invalid".into());
+            }
+            let value = raw_value.trim_matches(|character| character == ' ' || character == '\t');
+            if value.is_empty() {
+                return Err("oauth-callback-host-invalid".into());
+            }
+            host = Some(value);
+        }
+    }
+    if !host.is_some_and(|value| value.eq_ignore_ascii_case(expected_host)) {
+        return Err("oauth-callback-host-invalid".into());
     }
     Ok(target.to_owned())
 }
@@ -677,7 +824,11 @@ fn send_callback_response(stream: &mut TcpStream, accepted: bool) {
 }
 
 #[cfg(not(coverage))]
-fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<String, String> {
+fn wait_for_callback(
+    listeners: &[TcpListener],
+    expected_state: &str,
+    expected_host: &str,
+) -> Result<String, String> {
     let deadline = Instant::now() + CALLBACK_TIMEOUT;
     while Instant::now() < deadline {
         for listener in listeners {
@@ -687,7 +838,7 @@ fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<
                         send_callback_response(&mut stream, false);
                         continue;
                     }
-                    let result = read_callback_target(&mut stream)
+                    let result = read_callback_target(&mut stream, expected_host)
                         .and_then(|target| callback_code(&target, expected_state));
                     match result {
                         Ok(code) => {
@@ -768,7 +919,7 @@ fn parse_token_document(
             .expect("provider scope is non-empty");
         if !scope
             .split_whitespace()
-            .any(|granted| granted.eq_ignore_ascii_case(required_resource_scope))
+            .any(|granted| granted == required_resource_scope)
         {
             return Err("oauth-required-scope-missing".into());
         }
@@ -914,6 +1065,60 @@ fn delete_refresh_token(connection_id: &str) -> Result<(), String> {
     }
 }
 
+/// Reserve one durable identity slot when a legacy-only migration may need to keep both the new
+/// canonical record and a failed stale credential as a retry handle.
+fn ensure_reauthorization_cleanup_capacity(
+    original: &[OAuthConnection],
+    root: &CloudRoot,
+    connection: &OAuthConnection,
+) -> Result<(), String> {
+    let has_stale = original.iter().any(|entry| {
+        entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
+    });
+    let has_canonical = original
+        .iter()
+        .any(|entry| entry.connection_id == connection.connection_id);
+    if has_stale && !has_canonical && original.len() >= MAX_CONNECTIONS {
+        return Err("provider-oauth-reauthorization-recovery-capacity-exhausted".into());
+    }
+    Ok(())
+}
+
+/// Delete legacy credentials after canonical authorization without making a failed cleanup secret
+/// invisible. On failure the canonical replacement and every original stale identity are persisted
+/// together so a later authorization or disconnect has durable identifiers to retry cleanup.
+fn cleanup_stale_authorization_credentials<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    original: &[OAuthConnection],
+    connection: &OAuthConnection,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
+    let stale_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| {
+            entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
+        })
+        .map(|entry| entry.connection_id.clone())
+        .collect();
+    for stale_id in stale_ids {
+        if let Err(error) = delete_token(&stale_id) {
+            let mut retry_visible = original.to_vec();
+            retry_visible.retain(|entry| entry.connection_id != connection.connection_id);
+            retry_visible.push(connection.clone());
+            retry_visible.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
+            if save_connections(connection_document_path, &retry_visible).is_err() {
+                return Err("provider-oauth-keyring-delete-and-config-recovery-failed".into());
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(coverage))]
 pub fn finish_authorization(
     pending: PendingOAuth,
@@ -924,7 +1129,15 @@ pub fn finish_authorization(
     if pending.provider != root.provider {
         return Err("provider-oauth-root-mismatch".into());
     }
-    let code = Zeroizing::new(wait_for_callback(&pending.listeners, &pending.state)?);
+    let expected_host = pending
+        .redirect_uri
+        .strip_prefix("http://")
+        .ok_or_else(|| "oauth-redirect-uri-invalid".to_string())?;
+    let code = Zeroizing::new(wait_for_callback(
+        &pending.listeners,
+        &pending.state,
+        expected_host,
+    )?);
     let grant = exchange_authorization_code(&pending, code.as_str())?;
     let refresh_token = grant
         .refresh_token
@@ -941,6 +1154,7 @@ pub fn finish_authorization(
     };
     validate_connection(&connection)?;
     let original = load_connections(connection_document_path)?;
+    ensure_reauthorization_cleanup_capacity(&original, root, &connection)?;
     let mut updated = original.clone();
     updated.retain(|entry| !connection_matches_root(entry, root));
     updated.push(connection.clone());
@@ -952,11 +1166,13 @@ pub fn finish_authorization(
         }
         return Err(error);
     }
-    for stale in original.iter().filter(|entry| {
-        entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
-    }) {
-        let _ = delete_refresh_token(&stale.connection_id);
-    }
+    cleanup_stale_authorization_credentials(
+        connection_document_path,
+        root,
+        &original,
+        &connection,
+        delete_refresh_token,
+    )?;
     Ok(connection)
 }
 
@@ -975,23 +1191,50 @@ pub fn refreshed_access_token(
     Ok(grant.access_token)
 }
 
-#[cfg(not(coverage))]
-pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+fn disconnect_with_delete<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
     let original = load_connections(connection_document_path)?;
     let connection = connection_for_root(&original, root)?;
+    let matching_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| connection_matches_root(entry, root))
+        .map(|entry| entry.connection_id.clone())
+        .collect();
     let updated: Vec<_> = original
         .iter()
-        .filter(|entry| entry.connection_id != connection.connection_id)
+        .filter(|entry| !connection_matches_root(entry, root))
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
-    if let Err(error) = delete_refresh_token(&connection.connection_id) {
+    for stale_id in matching_ids
+        .iter()
+        .filter(|connection_id| **connection_id != connection.connection_id)
+    {
+        if let Err(error) = delete_token(stale_id) {
+            if save_connections(connection_document_path, &original).is_err() {
+                return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
+            }
+            return Err(error);
+        }
+    }
+    if let Err(error) = delete_token(&connection.connection_id) {
         if save_connections(connection_document_path, &original).is_err() {
             return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
         }
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+    disconnect_with_delete(connection_document_path, root, delete_refresh_token)
 }
 
 #[cfg(test)]
@@ -1273,6 +1516,69 @@ mod tests {
         symlink(&target, &link).unwrap();
         assert!(load_connections(&link).is_err());
         assert!(save_connections(&link, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_symlinked_directory_ancestors_for_read_and_write() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside-ancestor");
+        let outside_parent = outside.join("nested");
+        std::fs::create_dir_all(&outside_parent).unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&outside_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let outside_document = outside_parent.join("connections.json");
+        let original = b"{\"version\":1,\"connections\":[]}";
+        std::fs::write(&outside_document, original).unwrap();
+        std::fs::set_permissions(&outside_document, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let alias = temp.path().join("app-data-alias");
+        symlink(&outside, &alias).unwrap();
+        let path = alias.join("nested").join("connections.json");
+
+        assert_eq!(
+            load_connections(&path).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(
+            save_connections(&path, &[]).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(std::fs::read(&outside_document).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_shared_writable_parent_for_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for writable_bit in [0o020, 0o002] {
+            let temp = tempfile::tempdir().unwrap();
+            let parent = temp
+                .path()
+                .join(format!("oauth-write-parent-{writable_bit:o}"));
+            std::fs::create_dir(&parent).unwrap();
+            let path = parent.join("connections.json");
+            let original = b"{\"version\":1,\"connections\":[]}";
+            std::fs::write(&path, original).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(
+                &parent,
+                std::fs::Permissions::from_mode(0o700 | writable_bit),
+            )
+            .unwrap();
+
+            let result = save_connections(&path, &[]);
+
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "oauth-connection-directory-writable-by-others"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
     }
 
     #[test]
