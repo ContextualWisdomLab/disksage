@@ -26,6 +26,7 @@ pub(crate) enum ObjectBoundPublicationError {
     ParentWritableByOthers,
     ParentIdentityDrift,
     ForbiddenRootUnavailable,
+    ForbiddenRootIdentityDrift,
     InsideForbiddenRoot,
     NameInvalid,
     CreateFailed,
@@ -72,6 +73,38 @@ fn revalidate_private_parent(
 }
 
 #[cfg(unix)]
+fn revalidate_forbidden_root(
+    directory: &std::fs::File,
+    canonical_root: &Path,
+    expected_dev: u64,
+    expected_ino: u64,
+) -> Result<(), ObjectBoundPublicationError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let opened = directory
+        .metadata()
+        .map_err(|_| ObjectBoundPublicationError::ForbiddenRootIdentityDrift)?;
+    if !opened.is_dir()
+        || opened.file_type().is_symlink()
+        || opened.dev() != expected_dev
+        || opened.ino() != expected_ino
+    {
+        return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
+    }
+
+    let named = std::fs::symlink_metadata(canonical_root)
+        .map_err(|_| ObjectBoundPublicationError::ForbiddenRootIdentityDrift)?;
+    if named.file_type().is_symlink()
+        || !named.is_dir()
+        || named.dev() != expected_dev
+        || named.ino() != expected_ino
+    {
+        return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn publication_error_string(error: ObjectBoundPublicationError) -> String {
     match error {
         ObjectBoundPublicationError::ParentMissing => "private-evidence-parent-missing",
@@ -85,6 +118,9 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
         }
         ObjectBoundPublicationError::ForbiddenRootUnavailable => {
             "private-evidence-source-root-unavailable"
+        }
+        ObjectBoundPublicationError::ForbiddenRootIdentityDrift => {
+            "private-evidence-source-root-identity-drift"
         }
         ObjectBoundPublicationError::InsideForbiddenRoot => "private-evidence-inside-source-root",
         ObjectBoundPublicationError::NameInvalid => "private-evidence-name-invalid",
@@ -109,8 +145,8 @@ fn publication_error_string(error: ObjectBoundPublicationError) -> String {
 /// The parent must already exist and must not be writable by group or other principals. The
 /// pathname is opened with `O_NOFOLLOW` before canonicalization and the opened directory is bound to
 /// the device/inode observed during initial admission. Record creation is descriptor-relative and
-/// create-new. `forbidden_root`, when present, is checked only after the opened parent has been bound
-/// and revalidated, so a pathname replacement cannot redirect publication into that root.
+/// create-new. `forbidden_root`, when present, is canonicalized, opened as a directory object, and
+/// revalidated before creation and finalization so source-root pathname replacement fails closed.
 #[cfg(unix)]
 pub(crate) fn write_object_bound_bytes_create_new(
     path: &Path,
@@ -202,13 +238,47 @@ where
         expected_parent_ino,
     )?;
 
-    if let Some(forbidden_root) = forbidden_root {
+    let forbidden_authority = if let Some(forbidden_root) = forbidden_root {
         let canonical_forbidden = std::fs::canonicalize(forbidden_root)
             .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
-        if canonical_parent.starts_with(canonical_forbidden) {
+        let forbidden_c = CString::new(canonical_forbidden.as_os_str().as_bytes())
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
+        let forbidden_fd = unsafe {
+            libc::open(
+                forbidden_c.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if forbidden_fd < 0 {
+            return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
+        }
+        let forbidden_directory = unsafe { std::fs::File::from_raw_fd(forbidden_fd) };
+        let forbidden_metadata = forbidden_directory
+            .metadata()
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootIdentityDrift)?;
+        if !forbidden_metadata.is_dir() || forbidden_metadata.file_type().is_symlink() {
+            return Err(ObjectBoundPublicationError::ForbiddenRootIdentityDrift);
+        }
+        let forbidden_dev = forbidden_metadata.dev();
+        let forbidden_ino = forbidden_metadata.ino();
+        revalidate_forbidden_root(
+            &forbidden_directory,
+            &canonical_forbidden,
+            forbidden_dev,
+            forbidden_ino,
+        )?;
+        if canonical_parent.starts_with(&canonical_forbidden) {
             return Err(ObjectBoundPublicationError::InsideForbiddenRoot);
         }
-    }
+        Some((
+            forbidden_directory,
+            canonical_forbidden,
+            forbidden_dev,
+            forbidden_ino,
+        ))
+    } else {
+        None
+    };
 
     let file_name = path
         .file_name()
@@ -225,6 +295,16 @@ where
         expected_parent_dev,
         expected_parent_ino,
     )?;
+    if let Some((forbidden_directory, canonical_forbidden, forbidden_dev, forbidden_ino)) =
+        forbidden_authority.as_ref()
+    {
+        revalidate_forbidden_root(
+            forbidden_directory,
+            canonical_forbidden,
+            *forbidden_dev,
+            *forbidden_ino,
+        )?;
+    }
 
     let file_fd = unsafe {
         libc::openat(
@@ -270,6 +350,16 @@ where
             expected_parent_dev,
             expected_parent_ino,
         )?;
+        if let Some((forbidden_directory, canonical_forbidden, forbidden_dev, forbidden_ino)) =
+            forbidden_authority.as_ref()
+        {
+            revalidate_forbidden_root(
+                forbidden_directory,
+                canonical_forbidden,
+                *forbidden_dev,
+                *forbidden_ino,
+            )?;
+        }
 
         let final_file_metadata = std::fs::symlink_metadata(&final_path)
             .map_err(|_| ObjectBoundPublicationError::RecordIdentityDrift)?;
@@ -305,11 +395,13 @@ where
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
 /// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
 /// directory object admitted before canonicalization, so a same-user pathname replacement cannot
-/// redirect either canonicalization or the later write. The file is created once with mode 0600,
-/// synced, and never overwritten. After a post-create failure, the still-open record is truncated,
-/// restored to the requested private mode, and synced through its descriptor. The pathname is
-/// deliberately not unlinked because a same-user process may already have replaced that name; this
-/// can leave a zero-length mode-0600 create-new tombstone that requires explicit operator cleanup.
+/// redirect either canonicalization or the later write. The forbidden source root is likewise bound
+/// to an opened directory object for the publication lifetime. The file is created once with mode
+/// 0600, synced, and never overwritten. After a post-create failure, the still-open record is
+/// truncated, restored to the requested private mode, and synced through its descriptor. The
+/// pathname is deliberately not unlinked because a same-user process may already have replaced that
+/// name; this can leave a zero-length mode-0600 create-new tombstone that requires explicit operator
+/// cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
