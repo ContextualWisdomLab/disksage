@@ -45,6 +45,12 @@ Known limits: arbitrary renamed/exported transcripts outside recognized/configur
 
 Next experiment: use a consented, metadata-only real candidate inventory with retained-session labels, report both false-positive count and eligible allocated bytes, then validate restoration and physical free-space change on an explicitly approved generated-artifact cohort. Do not lower session protection merely to increase byte counts.
 
+## Read-only host allocation observation
+
+`du -sk` on four explicit roots completed without opening file contents or deleting data. On this host, Codex sessions occupy 3,064,548 KiB; Claude projects 1,613,792 KiB; npm content cache 1,165,572 KiB; uv cache 16,114,516 KiB. These are filesystem allocation observations, not reclaim approvals or guaranteed physical free-space gains (shared extents, active entries, and cache ownership still matter). Protect the approximately 4.5 GiB of session/project records while evaluating native pruning for the approximately 16.5 GiB of separate package-cache allocation. No raw session names or transcript content are included in this report.
+
+The previously documented central hourly workflow path returned HTTP 404 during this run, and no matching local Codex automation was found. Its historical scheduling claim has not been revalidated; locate the canonical scheduler before creating a duplicate or claiming an hourly continuation is active.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
