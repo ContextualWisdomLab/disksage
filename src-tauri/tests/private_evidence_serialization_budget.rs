@@ -63,19 +63,24 @@ fn oversize_streaming_json_stops_during_serialization_before_publication() {
 }
 
 #[test]
-fn unbounded_legacy_json_serializer_is_not_a_production_crate_capability() {
-    const CORE_SOURCE: &str = include_str!("../src/private_evidence.rs");
+fn production_core_surface_cannot_bypass_bounded_json_serialization() {
+    const LIB_SOURCE: &str = include_str!("../src/lib.rs");
+    const CORE_SHIM_SOURCE: &str = include_str!("../src/private_evidence_core.rs");
 
     assert!(
-        !CORE_SOURCE.contains("#[cfg(unix)]\npub fn write_private_json_create_new("),
-        "the core module must not expose the former materialize-then-check JSON writer to production crate callers"
+        LIB_SOURCE.contains("#[path = \"private_evidence_core.rs\"]\nmod private_evidence_core;"),
+        "the crate root must compile the narrow private-evidence core shim instead of exposing the legacy implementation module directly"
     );
     assert!(
-        !CORE_SOURCE.contains("#[cfg(unix)]\nfn write_private_json_create_new_unix_with_hooks"),
-        "the former unbounded JSON test seam must not compile into the production core module"
+        !LIB_SOURCE.contains("#[path = \"private_evidence.rs\"]\nmod private_evidence_core;"),
+        "the legacy materialize-then-check JSON writer must not remain reachable as a crate-level production capability"
     );
     assert!(
-        CORE_SOURCE.contains("#[cfg(all(test, unix))]\npub fn write_private_json_create_new("),
-        "legacy core JSON coverage may remain only as a test-only helper while the bounded public facade owns production serialization"
+        !CORE_SHIM_SOURCE.contains("write_private_json_create_new"),
+        "the production core shim must not re-export the legacy unbounded JSON writer"
+    );
+    assert!(
+        CORE_SHIM_SOURCE.contains("write_object_bound_bytes_create_new_with_hooks"),
+        "the bounded public facade still needs the descriptor-bound byte publication primitive"
     );
 }
