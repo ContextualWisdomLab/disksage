@@ -846,6 +846,26 @@ mod tests {
         assert!(matches!(journal_serde_err(e), SafetyError::Journal(_)));
     }
 
+    /// Every public destructive entry point retains session contents and containing trees.
+    #[test]
+    fn agent_sessions_survive_all_shared_mutation_boundaries() {
+        let fixture = tempfile::tempdir().unwrap();
+        let project = fixture.path().join("project");
+        let state = project.join("nested/.codex/sessions");
+        std::fs::create_dir_all(&state).unwrap();
+        let session = state.join("rollout.jsonl");
+        std::fs::write(&session, b"preserved conversation").unwrap();
+        let journal = fixture.path().join("journal.jsonl");
+        for source in [&session, &project] {
+            assert!(matches!(trash_delete(source, 1, &journal, 1), Err(SafetyError::Protected(_))));
+            let identity = filesystem_object_id(source).unwrap();
+            assert!(matches!(trash_delete_if_identity(source, &identity, 1, &journal, 1), Err(SafetyError::Protected(_))));
+            assert!(matches!(move_file(source, &fixture.path().join("destination"), &journal, 1), Err(SafetyError::Protected(_))));
+        }
+        assert_eq!(std::fs::read(&session).unwrap(), b"preserved conversation");
+        assert!(!journal.exists());
+    }
+
     #[test]
     fn trash_delete_rejects_protected_path_without_journaling() {
         let tmp = tempfile::tempdir().unwrap();

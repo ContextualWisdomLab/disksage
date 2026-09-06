@@ -1439,6 +1439,11 @@ pub fn audit_git_worktrees(
             ..preliminary
         };
         let mut blockers = candidate_blockers(&classification);
+        if blockers.is_empty()
+            && crate::safety::agent_state_guard::contains_agent_state(canonical_path)
+        {
+            blockers.push("git-worktree-agent-state-retained".into());
+        }
         if raw.fallback_evidence_incomplete {
             blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
         }
