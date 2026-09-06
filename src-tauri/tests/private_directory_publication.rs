@@ -15,26 +15,25 @@ fn set_mode(path: &std::path::Path, mode: u32) {
 }
 
 #[test]
-fn missing_private_ancestors_are_created_descriptor_relative_with_exact_modes() {
+fn missing_private_ancestors_fail_closed_until_creation_returns_object_authority() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
     let target = root.join("receipts/provider-cache/receipt.json");
 
-    write_private_bytes_create_new_with_parents(&target, b"receipt", 0o400, 0o700).unwrap();
+    let error = write_private_bytes_create_new_with_parents(&target, b"receipt", 0o400, 0o700)
+        .expect_err("pathname-only mkdirat provisioning must not grant publication authority");
 
-    assert_eq!(fs::read(&target).unwrap(), b"receipt");
-    assert_eq!(fs::metadata(root.join("receipts")).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(
-        fs::metadata(root.join("receipts/provider-cache"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
+        error,
+        "private-directory-publication-parent-provisioning-unavailable"
     );
-    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o400);
+    assert!(
+        !root.join("receipts").exists(),
+        "fail-closed provisioning must not leave a pathname-created ancestor"
+    );
+    assert!(!target.exists());
 }
 
 #[test]
