@@ -114,9 +114,21 @@ A separate read-only local-project inventory verified 17 Cargo target/source rel
 
 ## Late-arrival Git session preservation
 
+During operational review, Cargo 1.97.1 was shown to clean an independently configured `build.build-dir` even when `--target-dir` selected a private stage. The running cohort was paused; its current pre-mutation guard was cancelled, leaving that candidate untouched. A fresh metadata audit of all 69 completed operations reported coincident target/build directories. This is current configuration evidence, not a historical configuration snapshot.
+
+The operational scripts now reject an independent natural build directory, explicitly bind `build.build-dir` during preview and cleanup, and verify both configured directories against staging before native cleanup. A real Cargo fixture verified rejection of an independent directory and successful scoped cleanup with sources and the unrelated directory retained. Cargo's own missing-cache-tag rejection also remained intact; no marker was fabricated to bypass it. The sequential cohort then resumed. These scripts are operational evidence, not a shipped implementation or authorization to broaden the generated-cache owner's allowlist.
+
 An actual Git fixture reproduced a remaining destructive race: a child retained its working directory across staging, waited until the final session scan completed, created an ignored conversation file, and native non-force worktree removal deleted it. A private staging name and another metadata scan cannot exclude that existing-directory access.
 
 Commit `06b55bce` therefore makes recursive Git worktree removal unavailable and uses existing restoration to retain the worktree and its registration. All 18 actual Git worktree tests passed, including late-arrival Codex and Claude state, restoration collisions, and zero removal/zero reclaimed bytes for ordinary candidates. The UI now presents the read-only audit without asking for a deletion approval; the CLI help states the same availability limit. Re-enabling removal requires a verified contract that preserves late-arriving state, not another scan alone.
+
+## Larger observed trees and native cache capacity
+
+The temporary cohort completed 147 observations: 125 native cleanups and 22 retained candidates. The local cohort completed 17 observations: 16 cleanups and one retained large tree. Two temporary candidates previously interrupted by observation timeout or the scope audit subsequently passed fresh complete validation and cleanup. These counts exclude synthetic fixtures; per-operation records remain authoritative for bytes and retained sources.
+
+Experiment `e14d1bfb` raises the complete-walk allowance to 500,000 entries after metadata-only measurements found 460,192 entries in the UV cache and 186,178 in a retained local build tree. Four standalone and 51 actual safety tests passed. The production UV guard completed without rejection in 34.82 seconds, using 5,193,728 bytes maximum RSS. No scan was sampled and no canonical-path, symlink, error, or pending-work check was relaxed. Cache pruning was not authorized by that result alone: external environments may refer to cache files using symlinks, which requires separate consumer evidence.
+
+Native BuildKit cleanup was limited to 106 freshly revalidated, reclaimable, non-shared regular cache records using an exact ID selector and explicit Colima builder/context. After cleanup and guest free-block return, backing allocation decreased by 9.008080 GiB and host available space increased by 9.970119 GiB during the operation. Every previously observed running container, image, and volume remained present. The difference between these measurements reflects other activity; neither is added to guest-reported discard bytes.
 
 ## References
 
