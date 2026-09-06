@@ -22,3 +22,23 @@ fn no_policy_relative_destination_is_rejected_as_invalid_name_authority() {
 
     assert_eq!(error, ObjectBoundPublicationError::NameInvalid);
 }
+
+#[test]
+fn forbidden_root_relative_destination_is_rejected_before_hooks_or_lookup() {
+    use std::cell::Cell;
+
+    let hook_calls = Cell::new(0_u8);
+    let error = private_evidence_core::write_object_bound_bytes_create_new_with_hooks(
+        Path::new("relative/private-evidence.json"),
+        b"private evidence",
+        0o600,
+        Some(Path::new("relative/source-root")),
+        || hook_calls.set(hook_calls.get() + 1),
+        || hook_calls.set(hook_calls.get() + 1),
+        || hook_calls.set(hook_calls.get() + 1),
+    )
+    .expect_err("relative destination authority must fail before hooks or filesystem lookup");
+
+    assert_eq!(error, ObjectBoundPublicationError::NameInvalid);
+    assert_eq!(hook_calls.get(), 0);
+}
