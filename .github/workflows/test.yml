@@ -87,6 +87,15 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows agent-state regression when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/src/agent_state_guard.rs') {
+            rustc --edition=2021 --test src-tauri/src/agent_state_guard.rs -o target/agent-state-guard.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & .\target\agent-state-guard.exe --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   llm-engine-build:
     runs-on: ubuntu-latest
