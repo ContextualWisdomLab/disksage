@@ -422,6 +422,8 @@ where
         }
         let mut final_bytes = Vec::with_capacity(encoded.len());
         visible
+            .by_ref()
+            .take((encoded.len() as u64).saturating_add(1))
             .read_to_end(&mut final_bytes)
             .map_err(|_| ObjectBoundPublicationError::RecordContentDrift)?;
         if final_bytes != encoded {
