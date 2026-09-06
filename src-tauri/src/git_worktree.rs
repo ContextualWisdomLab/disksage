@@ -1868,6 +1868,56 @@ fn pending_item(candidate: &GitWorktreeAuditEntry) -> GitWorktreeRemovalItemResu
     }
 }
 
+/// Move only through Git's registration-aware operation, without force or pruning.
+fn move_worktree(repository: &Path, source: &Path, destination: &Path, timeout_ms: u64) -> Result<(), String> {
+    let result = run_git(repository, &[
+        OsString::from("worktree"), OsString::from("move"), OsString::from("--"),
+        source.as_os_str().to_owned(), destination.as_os_str().to_owned(),
+    ], timeout_ms, "git-worktree-stage-move")?;
+    if result.status_code == Some(0) { Ok(()) } else { Err("git-worktree-stage-move-failed".into()) }
+}
+
+/// A private stage is deliberately retained on failure; dropping it must never delete user data.
+fn remove_worktree_from_private_stage(
+    repository: &Path,
+    source: &Path,
+    timeout_ms: u64,
+    inspect_staged: impl FnOnce(&Path) -> bool,
+) -> Result<(), String> {
+    let expected = crate::safety::filesystem_object_id(source)
+        .map_err(|_| "git-worktree-stage-identity-unavailable".to_string())?;
+    let parent = source.parent().ok_or("git-worktree-stage-parent-unavailable")?;
+    let staging = tempfile::Builder::new().prefix(".disksage-worktree-").tempdir_in(parent)
+        .map_err(|_| "git-worktree-private-stage-unavailable".to_string())?.keep();
+    let staged = staging.join("worktree");
+    let result = (|| {
+        move_worktree(repository, source, &staged, timeout_ms)?;
+        if crate::safety::filesystem_object_id(&staged).ok().as_ref() != Some(&expected) {
+            return Err("git-worktree-stage-identity-changed".into());
+        }
+        if inspect_staged(&staged) {
+            return Err("git-worktree-agent-state-retained".into());
+        }
+        let removed = run_git(repository, &[
+            OsString::from("worktree"), OsString::from("remove"), OsString::from("--"),
+            staged.as_os_str().to_owned(),
+        ], timeout_ms, "git-worktree-remove")?;
+        if removed.status_code == Some(0) { Ok(()) } else { Err("git-worktree-remove-command-failed".into()) }
+    })();
+    if result.is_err() && fs::symlink_metadata(&staged).is_ok() {
+        let source_absent = matches!(fs::symlink_metadata(source),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+        if !source_absent || crate::safety::filesystem_object_id(&staged).ok().as_ref() != Some(&expected)
+            || move_worktree(repository, &staged, source, timeout_ms).is_err()
+        {
+            return Err("git-worktree-private-stage-retained-for-recovery".into());
+        }
+    }
+    // Only remove an empty private parent; never recursively clean a failed stage.
+    let _ = fs::remove_dir(&staging);
+    result
+}
+
 /// Re-audit the full plan and each individual candidate before invoking non-force Git worktree
 /// removal. No prune or branch-deletion command is reachable from this function.
 pub fn execute_stale_worktree_removal(
@@ -1959,20 +2009,11 @@ pub fn execute_stale_worktree_removal(
             break;
         }
         item.removal_attempted = true;
-        let removal = run_git(
-            &repository_root,
-            &[
-                OsString::from("worktree"),
-                OsString::from("remove"),
-                OsString::from("--"),
-                OsString::from(&candidate.path),
-            ],
-            options.command_timeout_ms,
-            "git-worktree-remove",
+        let removal = remove_worktree_from_private_stage(
+            &repository_root, Path::new(&candidate.path), options.command_timeout_ms,
+            crate::safety::agent_state_guard::contains_agent_state,
         );
-        let command_succeeded = removal
-            .as_ref()
-            .is_ok_and(|result| result.status_code == Some(0));
+        let command_succeeded = removal.is_ok();
         item.removal_command_succeeded = command_succeeded;
         if !command_succeeded {
             item.error = Some(match removal {
@@ -2054,7 +2095,7 @@ pub fn execute_stale_worktree_removal(
         filesystem_mutation_executed: attempted_count > 0,
         verification_complete,
         notices: vec![
-            "non-force-git-worktree-remove-only".into(),
+            "non-force-git-worktree-move-then-remove".into(),
             "no-git-worktree-prune".into(),
             "no-branch-delete".into(),
             "allocated-bytes-is-pre-removal-upper-bound".into(),
@@ -2696,6 +2737,42 @@ mod tests {
         assert!(!result.git_prune_executed);
         assert!(!secondary.exists());
         git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+    }
+
+    /// State that arrives between the original audit and staging must survive, including Git registration.
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn staged_worktree_rechecks_late_sessions_and_restores_without_overwrite() {
+        for reappear in [false, true] {
+            let (_temp, repository, secondary) = temporary_repository();
+            let mut retained = PathBuf::new();
+            let result = remove_worktree_from_private_stage(&repository, &secondary, 10_000, |staged| {
+                let session = staged.join(".codex/sessions/late.jsonl");
+                fs::create_dir_all(session.parent().unwrap()).unwrap();
+                fs::write(session, b"late session").unwrap();
+                if reappear {
+                    fs::create_dir(&secondary).unwrap();
+                    fs::write(secondary.join("new-user-file"), b"do not overwrite").unwrap();
+                }
+                crate::safety::agent_state_guard::contains_agent_state(staged)
+            });
+            if reappear {
+                assert_eq!(result.unwrap_err(), "git-worktree-private-stage-retained-for-recovery");
+                assert_eq!(fs::read(secondary.join("new-user-file")).unwrap(), b"do not overwrite");
+                for entry in fs::read_dir(secondary.parent().unwrap()).unwrap().flatten() {
+                    if entry.file_name().to_string_lossy().starts_with(".disksage-worktree-") {
+                        retained = entry.path().join("worktree");
+                    }
+                }
+            } else {
+                assert_eq!(result.unwrap_err(), "git-worktree-agent-state-retained");
+                retained = secondary.clone();
+            }
+            assert_eq!(fs::read(retained.join(".codex/sessions/late.jsonl")).unwrap(), b"late session");
+            assert!(list_worktrees(&repository, GitWorktreeAuditOptions::default()).unwrap()
+                .iter().any(|entry| entry.path == retained));
+            git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+        }
     }
 
     #[cfg(all(unix, not(coverage)))]

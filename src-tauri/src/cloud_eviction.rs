@@ -608,7 +608,10 @@ where
         return Err("eviction-confirmation-receipt-id-mismatch".into());
     }
     let source = Path::new(&receipt.source);
-    if !absolute_without_parent(source) || safety::is_protected(source) {
+    if !absolute_without_parent(source)
+        || safety::is_protected(source)
+        || safety::agent_state_guard::contains_agent_state(source)
+    {
         return Err("eviction-source-path-not-safe".into());
     }
     let source_name = source
@@ -710,6 +713,9 @@ where
     let reconciled_after_interruption = !source_exists && !staged_exists;
     if source_exists {
         verify_source(source, receipt, Some(&intent.source_identity))?;
+        if safety::agent_state_guard::contains_agent_state(source) {
+            return Err("eviction-source-path-not-safe".into());
+        }
         if human_approval.is_some()
             && !approval_active_use_is_safe(&observe_path_active_use(source))
         {
@@ -750,7 +756,27 @@ where
             }
             return Err("source-eviction-live-active-use-blocked".into());
         }
-        trash_move(&staging_dir, receipt.bytes, journal_path, now_ms)?;
+        if let Err(error) = trash_move(&staging_dir, receipt.bytes, journal_path, now_ms) {
+            // A provider may report failure after moving the item; leave that case reconcilable.
+            if path_entry_exists(&staged_source)? {
+                let restore = (|| -> Result<(), String> {
+                    verify_source(&staged_source, receipt, Some(&intent.source_identity))?;
+                    // Receipt sources are regular files. A create-only hard link cannot replace
+                    // a source that reappears between the callback and restoration.
+                    std::fs::hard_link(&staged_source, source)
+                        .map_err(|restore| restore.to_string())?;
+                    std::fs::remove_file(&staged_source).map_err(|restore| restore.to_string())?;
+                    std::fs::remove_dir(&staging_dir).map_err(|restore| restore.to_string())?;
+                    Ok(())
+                })();
+                if let Err(restore_error) = restore {
+                    return Err(format!(
+                        "{error}; eviction-staging-restore-failed:{restore_error}"
+                    ));
+                }
+            }
+            return Err(error);
+        }
         if path_entry_exists(source)? || path_entry_exists(&staging_dir)? {
             return Err("eviction-trash-did-not-remove-staging".into());
         }
@@ -1201,7 +1227,53 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_staging_resumes_and_missing_source_reconciles() {
+    fn nested_agent_state_is_rejected_before_eviction_records_or_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let (receipt, permit) = valid_receipt(&temp);
+        let source = Path::new(&receipt.source);
+        std::fs::remove_file(source).unwrap();
+        let session = source.join(".codex/sessions/synthetic.jsonl");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, b"preserve session").unwrap();
+        let records = temp.path().join("evictions");
+        let journal = temp.path().join("journal/operations.jsonl");
+        let error = evict_source_with(
+            &receipt, &permit, &receipt.receipt_id, &records, &journal, 200,
+            |_, _, _, _| panic!("protected source must not reach Trash"),
+        ).unwrap_err();
+        assert_eq!(error, "eviction-source-path-not-safe");
+        assert_eq!(std::fs::read(&session).unwrap(), b"preserve session");
+        assert!(!records.exists());
+        assert!(!journal.parent().unwrap().exists());
+        assert!(!source.parent().unwrap()
+            .join(format!(".disksage-evict-{}", receipt.receipt_id)).exists());
+    }
+
+    #[test]
+    fn failed_trash_never_overwrites_a_reappeared_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let (receipt, permit) = valid_receipt(&temp);
+        let source = Path::new(&receipt.source);
+        let records = temp.path().join("evictions");
+        let error = evict_source_with(
+            &receipt, &permit, &receipt.receipt_id, &records,
+            &temp.path().join("journal/operations.jsonl"), 200,
+            |_, _, _, _| {
+                std::fs::write(source, b"new source must survive").unwrap();
+                Err("trash-refused".into())
+            },
+        ).unwrap_err();
+        assert!(error.starts_with("trash-refused; eviction-staging-restore-failed:"));
+        assert_eq!(std::fs::read(source).unwrap(), b"new source must survive");
+        let staged = source.parent().unwrap()
+            .join(format!(".disksage-evict-{}", receipt.receipt_id))
+            .join(source.file_name().unwrap());
+        assert_eq!(std::fs::read(staged).unwrap(), b"verified source bytes");
+        assert!(!records.join(format!("{}.complete.json", receipt.receipt_id)).exists());
+    }
+
+    #[test]
+    fn failed_trash_restores_source_and_missing_source_reconciles() {
         let temp = tempfile::tempdir().unwrap();
         let (receipt, permit) = valid_receipt(&temp);
         let records = temp.path().join("evictions");
@@ -1216,7 +1288,7 @@ mod tests {
             |_, _, _, _| Err("simulated-crash-before-trash".into()),
         );
         assert_eq!(first.unwrap_err(), "simulated-crash-before-trash");
-        assert!(!Path::new(&receipt.source).exists());
+        assert_eq!(std::fs::read(&receipt.source).unwrap(), b"verified source bytes");
         let resumed = evict_source_with(
             &receipt,
             &permit,
