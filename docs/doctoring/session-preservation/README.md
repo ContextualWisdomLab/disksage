@@ -94,6 +94,12 @@ Further owner review found check-then-rename restoration in the shared safety pa
 
 The actual safety-module harness passed all 50 tests at `85c87879`, including the three new exclusive-restore cases and the previous 47 tests. Linux and Windows native execution still requires CI validation. The iCloud allocation query subsequently completed without reported errors at 324 KiB; it provides no material capacity toward the target and is excluded from reclamation.
 
+The completed extension produces 444 unique artifact paths totaling 321.083229 GiB reported allocation: Cargo targets 234.879414 GiB, dependency directories 53.094307 GiB, and Python environments 33.109509 GiB. Three candidates have positively observed active executables and remain preserved. All remaining entries still lack complete inactivity and retained-source evidence; nominal allocation plus prior VM recovery is not proof of the 300 GiB physical target.
+
+An independent metadata count found all 20 largest Cargo targets exceed 10,000 entries, with no observed metadata errors before reaching 10,001. Their earlier retain decisions therefore cannot be treated as session-positive labels or converted to deletion approval. Larger generated-tree evidence needs an explicit complete-scan contract; bypassing the incomplete-walk gate is not a remedy.
+
+Performance experiment `aa756124` prepares configured root identities once per tree walk and compares a fresh root snapshot before allowing cleanup. It retains live candidate canonicalization and the existing entry/error limits. The same private 8,001-entry fixture measured median 423,248 microseconds before and 211,097 after (approximately 2.00 times faster), with identical allow decisions for the six synthetic runs. The standalone three-test suite and the actual 50-test safety harness passed after the change. Snapshot comparison does not prove immunity to transient root retargeting that returns to the original state.
+
 ## References
 
 Anthropic. (n.d.). *Explore the .claude directory*. Retrieved September 6, 2026, from https://code.claude.com/docs/en/claude-directory
