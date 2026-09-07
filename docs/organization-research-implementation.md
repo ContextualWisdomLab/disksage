@@ -35,3 +35,5 @@ The accessor must use the URLs supplied by Foundation, revalidate the approved c
 Context7 documentation lookup returned a quota error. These findings come from the installed version's generated bindings and existing product source; they do not constitute a native runtime test.
 
 Destination follow-up: package destinations are excluded during planning; execution also resolves the nearest existing destination ancestor to reject aliases into packages. The updated organization suite passed 28 tests, including the destination-plan regression and native symlink fixture. This remains a pre-execution check, not an atomic filesystem guarantee.
+
+Probe-budget regression: a 201-item fixture with a 200-probe budget reproduced 201 executable plans (RED, expected 200). The exhausted-budget branch now withholds a plan instead of substituting empty metadata. The omitted item remains visible in the retained preview. Post-fix organization tests passed 28/28; this change does not claim semantic classification for the first 200 items.

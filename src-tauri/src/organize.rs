@@ -204,7 +204,7 @@ fn plan_moves_impl(
                 lineage_probe_count += 1;
                 probe(&f.path)
             }
-            Some(_) => Some(LineageMetadata::default()),
+            Some(_) => None,
             None => Some(LineageMetadata::default()),
         };
         let Some(lineage) = lineage else { continue };
@@ -499,10 +499,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
             },
         );
         assert_eq!(probes.get(), MAX_LINEAGE_PROBES);
-        assert_eq!(plans.len(), MAX_LINEAGE_PROBES + 1);
-        assert_eq!(plans[MAX_LINEAGE_PROBES].src, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
-        assert_eq!(plans[MAX_LINEAGE_PROBES].source_size, Some(1));
-        assert!(plans[MAX_LINEAGE_PROBES].lineage.lineage_fingerprint.is_empty());
+        assert_eq!(plans.len(), MAX_LINEAGE_PROBES);
+        let preview = organization_preview(&files, plans);
+        assert_eq!(preview.retained.len(), 1);
+        assert_eq!(preview.retained[0].path, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
     }
 
     #[test]
