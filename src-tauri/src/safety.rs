@@ -182,6 +182,8 @@ pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
 pub struct MovePaths {
     pub source: PathBuf,
     pub destination: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<crate::organize::organization_bundle::BundleManifest>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -686,6 +688,7 @@ fn do_move(
     journal_path: &Path,
     now_ms: u64,
     validate: &dyn Fn() -> Result<(), SafetyError>,
+    bundle: Option<&crate::organize::organization_bundle::BundleManifest>,
 ) -> Result<(), SafetyError> {
     let mut entry = JournalEntry {
         ts_ms: now_ms,
@@ -693,7 +696,7 @@ fn do_move(
         path: format!("{} -> {}", src.display(), dst.display()),
         bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
         outcome: "pending".into(),
-        move_paths: Some(MovePaths { source: src.to_path_buf(), destination: dst.to_path_buf() }),
+        move_paths: Some(MovePaths { source: src.to_path_buf(), destination: dst.to_path_buf(), bundle: bundle.cloned() }),
     };
     journal_append(journal_path, &entry)?;
 
@@ -725,13 +728,14 @@ fn do_move(
 pub fn move_file(
     src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
 ) -> Result<(), SafetyError> {
-    move_file_checked(src, dst, journal_path, now_ms, &|| Ok(()))
+    move_file_checked(src, dst, journal_path, now_ms, &|| Ok(()), None)
 }
 
 /// Validate before preparation and again inside the native move accessor.
 pub(crate) fn move_file_checked(
     src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
     validate: &dyn Fn() -> Result<(), SafetyError>,
+    bundle: Option<&crate::organize::organization_bundle::BundleManifest>,
 ) -> Result<(), SafetyError> {
     validate_move_paths(src, dst)?;
     validate()?;
@@ -740,7 +744,10 @@ pub(crate) fn move_file_checked(
     }
     let dst_parent = dst.parent().unwrap_or(dst);
     std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
-    do_move(src, dst, same_volume(src, dst), journal_path, now_ms, validate)
+    if bundle.is_some() && !same_volume(src, dst) {
+        return Err(SafetyError::Validation("묶음은 같은 볼륨 안에서만 옮길 수 있습니다.".into()));
+    }
+    do_move(src, dst, same_volume(src, dst), journal_path, now_ms, validate, bundle)
 }
 
 fn validate_move_paths(src: &Path, dst: &Path) -> Result<(), SafetyError> {
@@ -1272,7 +1279,7 @@ mod tests {
         let src = tmp.path().join("a.bin");
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, vec![7u8; 30]).unwrap();
-        do_move(&src, &dst, true, &jp, 1, &|| Ok(())).unwrap();
+        do_move(&src, &dst, true, &jp, 1, &|| Ok(()), None).unwrap();
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
     }
@@ -1286,7 +1293,7 @@ mod tests {
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, b"original").unwrap();
         std::fs::write(&dst, b"pre-existing").unwrap(); // TOCTOU 경합에서 먼저 생긴 것처럼 시뮬레이션
-        let err = do_move(&src, &dst, true, &jp, 1, &|| Ok(()));
+        let err = do_move(&src, &dst, true, &jp, 1, &|| Ok(()), None);
         assert!(matches!(err, Err(SafetyError::Trash(_))));
         assert!(src.exists(), "원본은 실패 시 보존");
         assert_eq!(
@@ -1305,7 +1312,7 @@ mod tests {
         let dst = tmp.path().join("moved-disksage-xvol-fixture.bin");
         std::fs::write(&src, vec![9u8; 40]).unwrap();
         // same_vol=false 강제 → 실제 같은 볼륨이어도 copy+verify+trash 경로 실행
-        do_move(&src, &dst, false, &jp, 2, &|| Ok(())).unwrap();
+        do_move(&src, &dst, false, &jp, 2, &|| Ok(()), None).unwrap();
         assert!(!src.exists(), "원본은 휴지통으로");
         assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
         // 원본이 휴지통에 있음 확인 후 테스트 픽스처만 purge

@@ -159,6 +159,7 @@ mod tests {
             class_id: "https://disksage.app/ontology#Media".into(),
             source_size: Some(42),
             source_mtime_ms: Some(123),
+            bundle: None,
             lineage: LineageMetadata {
                 production_time_ms: Some(456),
                 production_time_source: Some("embedded:exiftool:MediaCreateDate".into()),

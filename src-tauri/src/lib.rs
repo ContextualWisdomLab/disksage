@@ -125,6 +125,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::plan_bundle_organize,
             commands::export_organization_lineage,
             commands::user_rules,
             commands::execute_moves,

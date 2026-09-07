@@ -205,7 +205,7 @@ pub fn execute_moves_inner(
         .map(|p| {
             match safety::move_file_checked(
                 Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms,
-                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation),
+                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation), p.bundle.as_ref(),
             ) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
@@ -233,11 +233,20 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .filter(|e| e.op == "move" && e.outcome == "ok")
         .take(limit)
         .filter_map(|e| {
-            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone()))
-                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into())))
+            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone(), paths.bundle.clone()))
+                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into(), None)))
         })
-        .map(|(src, dst)| {
-            match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
+        .map(|(src, dst, bundle)| {
+            let inverse = organize::MovePlan { src: dst.to_string_lossy().into_owned(),
+                dst: src.to_string_lossy().into_owned(), bundle, ..Default::default() };
+            let moved = if inverse.bundle.is_some() {
+                safety::move_file_checked(&dst, &src, journal_path, now_ms,
+                    &|| organize::validate_move_source(&inverse).map_err(safety::SafetyError::Validation),
+                    inverse.bundle.as_ref())
+            } else {
+                safety::move_file(&dst, &src, journal_path, now_ms)
+            };
+            match moved {
                 Ok(()) => CleanResult {
                     path: src.to_string_lossy().into_owned(),
                     ok: true,
@@ -2994,6 +3003,12 @@ pub fn plan_organize(
 }
 
 #[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_bundle_organize(root: String, target_parent: String) -> Result<organize::MovePlan, String> {
+    organize::organization_bundle::plan(Path::new(&root), Path::new(&target_parent))
+}
+
+#[cfg(not(coverage))]
 #[tauri::command]
 pub fn export_organization_lineage(
     plans: Vec<organize::MovePlan>,
@@ -3624,7 +3639,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
         assert_eq!(results.len(), 6);
-        assert!(results.iter().all(|result| result.ok));
+        assert!(results.iter().all(|result| result.ok), "{:?}",
+            results.iter().map(|result| (&result.path, &result.error)).collect::<Vec<_>>());
     }
 
     #[test]
@@ -3681,6 +3697,64 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     }
 
     #[test]
+    fn bundle_move_and_undo_preserve_members_and_reject_new_members() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("\u{1106}\u{116e}\u{11ab}\u{1109}\u{1165} bundle");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("recording.wav"), b"original audio").unwrap();
+        std::fs::write(source.join("recording.json"), b"original metadata").unwrap();
+        let target = tmp.path().join("organized");
+        let journal = tmp.path().join("journal.jsonl");
+        let plan = organize::organization_bundle::plan(&source, &target).unwrap();
+        let destination = Path::new(&plan.dst);
+        assert_eq!(plan.bundle.as_ref().unwrap().files.len(), 2);
+        assert!(execute_moves_inner(std::slice::from_ref(&plan), &journal, 1)[0].ok);
+        assert!(!source.exists());
+        assert!(undo_last_moves_inner(1, &journal, 2)[0].ok);
+        assert_eq!(std::fs::read(source.join("recording.wav")).unwrap(), b"original audio");
+        assert_eq!(std::fs::read(source.join("recording.json")).unwrap(), b"original metadata");
+        assert!(!destination.exists());
+        assert!(execute_moves_inner(std::slice::from_ref(&plan), &journal, 3)[0].ok);
+        std::fs::write(destination.join("new note.txt"), b"keep this too").unwrap();
+        assert!(!undo_last_moves_inner(1, &journal, 4)[0].ok);
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(destination.join("new note.txt")).unwrap(), b"keep this too");
+    }
+
+    #[test]
+    fn bundle_preview_retains_nested_folders_and_project_ancestors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("notes");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("draft.txt"), b"keep").unwrap();
+        let target = tmp.path().join("organized");
+        std::fs::create_dir(source.join("nested")).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        std::fs::remove_dir(source.join("nested")).unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        assert_eq!(std::fs::read(source.join("draft.txt")).unwrap(), b"keep");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn bundle_move_rejects_same_size_content_drift_before_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("notes");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("draft.txt"), b"first").unwrap();
+        let plan = organize::organization_bundle::plan(&source, &tmp.path().join("organized")).unwrap();
+        let modified = std::fs::metadata(source.join("draft.txt")).unwrap().modified().unwrap();
+        std::fs::write(source.join("draft.txt"), b"other").unwrap();
+        std::fs::OpenOptions::new().write(true).open(source.join("draft.txt")).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        assert!(!execute_moves_inner(&[plan], &journal, 1)[0].ok);
+        assert_eq!(std::fs::read(source.join("draft.txt")).unwrap(), b"other");
+        assert!(!journal.exists());
+    }
+
+    #[test]
     fn checked_move_retains_companion_arriving_after_preflight() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("recording.wav");
@@ -3700,7 +3774,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 std::fs::write(&companion, b"metadata").unwrap();
             }
             organize::validate_move_source(&plan).map_err(safety::SafetyError::Validation)
-        });
+        }, None);
         assert_eq!(checks.get(), 2);
         assert!(result.is_err());
         assert_eq!(std::fs::read(&source).unwrap(), b"original");

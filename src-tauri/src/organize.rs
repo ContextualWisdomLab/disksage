@@ -1,5 +1,7 @@
 #[path = "organization_boundary.rs"]
 mod organization_boundary;
+#[path = "organization_bundle.rs"]
+pub mod organization_bundle;
 
 use std::path::{Component, Path, PathBuf};
 
@@ -30,6 +32,8 @@ pub struct MovePlan {
     pub source_mtime_ms: Option<u64>,
     #[serde(default)]
     pub lineage: LineageMetadata,
+    #[serde(default)]
+    pub bundle: Option<organization_bundle::BundleManifest>,
 }
 
 /// Preview preserves unplanned items explicitly; omission is not a deletion recommendation.
@@ -219,6 +223,7 @@ fn plan_moves_impl(
             source_size: lineage_probe.map(|_| f.size),
             source_mtime_ms: lineage_probe.map(|_| f.mtime_ms),
             lineage,
+            bundle: None,
         });
     }
     plans
@@ -306,6 +311,13 @@ pub fn plan_moves_with_metadata(
 
 pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
     let path = Path::new(&plan.src);
+    if let Some(expected) = &plan.bundle {
+        organization_boundary::validate_destination(Path::new(&plan.dst))?;
+        if organization_bundle::observe(path)? != *expected {
+            return Err("폴더 구성이나 내용이 바뀌어 묶음 이동을 보류합니다.".into());
+        }
+        return Ok(());
+    }
     organization_boundary::validate_individual_move(path)?;
     organization_boundary::validate_destination(Path::new(&plan.dst))?;
     let metadata = std::fs::symlink_metadata(path)

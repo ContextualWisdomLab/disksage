@@ -11,10 +11,18 @@
   let observedFileCount = $state(0);
   let retained: api.OrganizationPreview["retained"] = $state([]);
   let busy = $state(false);
+  let bundleParent = $state("");
+  let bundlePlan: api.MovePlan | null = $state(null);
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
   let verdicts: Record<string, api.Verdict> = $state({});
   let exportStatus = $state("");
+
+  $effect(() => {
+    scannedRoot;
+    bundleParent;
+    bundlePlan = null;
+  });
 
   async function loadVerdicts(paths: string[]) {
     try {
@@ -47,6 +55,23 @@
     }
   }
 
+  async function loadBundlePlan() {
+    if (!scannedRoot) return;
+    busy = true;
+    loadError = "";
+    bundlePlan = null;
+    const root = scannedRoot;
+    const parent = bundleParent;
+    try {
+      const planned = await api.planBundleOrganize(root, parent);
+      if (root === scannedRoot && parent === bundleParent) bundlePlan = planned;
+    } catch (error) {
+      loadError = String(error);
+    } finally {
+      busy = false;
+    }
+  }
+
   // Group plans by class_id for display
   let grouped = $derived.by(() => {
     const g = new Map<string, api.MovePlan[]>();
@@ -57,19 +82,20 @@
     return Array.from(g.entries());
   });
 
-  async function executeSelected() {
-    if (plans.length === 0) return;
+  async function executeSelected(selected: api.MovePlan[]) {
+    if (selected.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 미리보기에 표시된 폴더로 옮깁니다.\n` +
-        `되돌리기 버튼으로 복원할 수 있습니다.`,
+      `${selected.length}개 항목을 미리보기에 표시된 폴더로 옮깁니다.\n` +
+        `이동 기록을 남깁니다. 변경이나 경로 충돌이 있으면 되돌리기를 보류합니다.`,
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
     busy = true;
     try {
-      const r = await api.executeMoves(plans);
+      const r = await api.executeMoves(selected);
       results = r;
       plans = [];
+      bundlePlan = null;
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -113,6 +139,19 @@
          미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
     <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
   </h2>
+  <details>
+    <summary>선택한 폴더를 기존 묶음 그대로 이동</summary>
+    <p class="muted">주제를 자동 분류하지 않고 현재 폴더 이름과 구성원을 함께 보존합니다. 현재는 하위 폴더 없이 로컬 파일 32개, 합계 512KiB 이하인 문서 묶음을 지원합니다.</p>
+    <label>대상 상위 폴더
+      <input bind:value={bundleParent} placeholder="대상 폴더의 절대 경로" disabled={busy} />
+    </label>
+    <button onclick={loadBundlePlan} disabled={busy || !scannedRoot || !bundleParent}>묶음 미리보기</button>
+    {#if bundlePlan?.bundle}
+      <p>{bundlePlan.src} → {bundlePlan.dst}</p>
+      <ul>{#each bundlePlan.bundle.files as file (file.name)}<li>{file.name} · {fmtBytes(file.bytes)}</li>{/each}</ul>
+      <button onclick={() => bundlePlan && executeSelected([bundlePlan])} disabled={busy}>이 묶음 이동</button>
+    {/if}
+  </details>
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
   {#if plans.length === 0 && !busy}
@@ -167,7 +206,7 @@
 
   {#if plans.length > 0}
     <div class="actions">
-      <button onclick={executeSelected} disabled={busy}>
+      <button onclick={() => executeSelected(plans)} disabled={busy}>
         {plans.length}개 파일 정리
       </button>
       <button onclick={copyLineageHandoff} disabled={busy}>

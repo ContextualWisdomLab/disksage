@@ -278,6 +278,7 @@ export interface MovePlan {
     production_time_confidence?: string | null;
     lineage_fingerprint: string;
   };
+  bundle?: { root_object_id: string; files: { name: string; object_id: string; bytes: number; modified_ns: string; content_blake3: string }[] } | null;
 }
 
 export interface OrganizationPreview {
@@ -286,6 +287,9 @@ export interface OrganizationPreview {
   moves: MovePlan[];
   retained: { path: string; reason: "agent_state" | "package_boundary" | "companion_bundle" | "not_planned" }[];
 }
+
+export const planBundleOrganize = (root: string, targetParent: string) =>
+  invoke<MovePlan>("plan_bundle_organize", { root, targetParent });
 
 export const planOrganize = (root: string) =>
   invoke<OrganizationPreview>("plan_organize", { root });
