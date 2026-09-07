@@ -3,10 +3,36 @@ name: Test
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
+      - "!docs/doctoring/release-artifact-provenance.md"
+      - "!docs/doctoring/tauri-content-security-policy.md"
+      - "!docs/doctoring/model-artifact-integrity.md"
+      - "!docs/doctoring/model-load-handle-binding.md"
+      - "!docs/development/icloud-local-eviction-batch.md"
+      - "!docs/architecture/goals/cloud-offload-goal.json"
+      - "!CHANGELOG.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
+      - "!docs/doctoring/release-artifact-provenance.md"
+      - "!docs/doctoring/tauri-content-security-policy.md"
+      - "!docs/doctoring/model-artifact-integrity.md"
+      - "!docs/doctoring/model-load-handle-binding.md"
+      - "!docs/development/icloud-local-eviction-batch.md"
+      - "!docs/architecture/goals/cloud-offload-goal.json"
+      - "!CHANGELOG.md"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 jobs:
   test:
