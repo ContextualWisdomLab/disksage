@@ -87,7 +87,8 @@ fn trash_preserves_same_inode_seed_changed_after_replan() {
 
     let plan = plan_with_runtime(&home, &applications, &podman, 1);
     assert!(plan.evidence_complete, "{:?}", plan.issues);
-    assert!(plan.exact_approval_phrase.is_none());
+    let serialized = serde_json::to_value(&plan).expect("public plan must serialize");
+    assert!(serialized.get("exact_approval_phrase").is_none());
     let candidate = plan
         .candidates
         .iter()
