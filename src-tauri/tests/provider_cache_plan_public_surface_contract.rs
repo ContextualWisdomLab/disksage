@@ -1,5 +1,7 @@
-use disksage_lib::provider_cache::ProviderCacheReclaimPlan;
+use disksage_lib::provider_cache::{project_trash_readiness, ProviderCacheReclaimPlan};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 fn source(path: &str) -> String {
@@ -44,22 +46,25 @@ fn commercial_rust_plan_does_not_name_irreversible_approval_authority() {
     );
 }
 
-#[test]
-fn commercial_plan_wire_schema_contains_only_reversible_approval() {
-    let plan = ProviderCacheReclaimPlan {
+fn commercial_plan() -> ProviderCacheReclaimPlan {
+    ProviderCacheReclaimPlan {
         schema_version: 1,
         platform: "macos".into(),
         observed_at_ms: 1,
         installed_edge_version: None,
         podman_machine_present: false,
         podman_recreation_source: None,
-        evidence_complete: false,
+        evidence_complete: true,
         candidates: Vec::new(),
-        issues: vec!["provider-cache-evidence-incomplete".into()],
+        issues: Vec::new(),
         plan_fingerprint: "a".repeat(64),
         trash_approval_phrase: Some("DiskSage Trash approval".into()),
-    };
-    let value = serde_json::to_value(plan).expect("commercial plan must remain serializable");
+    }
+}
+
+#[test]
+fn commercial_plan_wire_schema_contains_only_reversible_approval() {
+    let value = serde_json::to_value(commercial_plan()).expect("commercial plan must remain serializable");
     let object = value
         .as_object()
         .expect("commercial provider-cache plan must serialize as an object");
@@ -69,4 +74,30 @@ fn commercial_plan_wire_schema_contains_only_reversible_approval() {
         !object.contains_key("exact_approval_phrase"),
         "unsupported irreversible approval must be absent from the serialized public plan"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn trash_approval_is_withheld_until_receipt_parent_is_exact_private() {
+    let temp = tempfile::tempdir().unwrap();
+    let receipt_dir = temp.path().join("receipts");
+
+    let missing = project_trash_readiness(commercial_plan(), &receipt_dir);
+    assert!(missing.trash_approval_phrase.is_none());
+
+    fs::create_dir(&receipt_dir).unwrap();
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let shared_readable = project_trash_readiness(commercial_plan(), &receipt_dir);
+    assert!(shared_readable.trash_approval_phrase.is_none());
+
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let ready = project_trash_readiness(commercial_plan(), &receipt_dir);
+    assert_eq!(ready.trash_approval_phrase.as_deref(), Some("DiskSage Trash approval"));
+}
+
+#[cfg(not(unix))]
+#[test]
+fn trash_approval_is_withheld_where_private_receipt_publication_is_unsupported() {
+    let projected = project_trash_readiness(commercial_plan(), std::path::Path::new("unused"));
+    assert!(projected.trash_approval_phrase.is_none());
 }
