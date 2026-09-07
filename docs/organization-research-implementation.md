@@ -37,3 +37,9 @@ Context7 documentation lookup returned a quota error. These findings come from t
 Destination follow-up: package destinations are excluded during planning; execution also resolves the nearest existing destination ancestor to reject aliases into packages. The updated organization suite passed 28 tests, including the destination-plan regression and native symlink fixture. This remains a pre-execution check, not an atomic filesystem guarantee.
 
 Probe-budget regression: a 201-item fixture with a 200-probe budget reproduced 201 executable plans (RED, expected 200). The exhausted-budget branch now withholds a plan instead of substituting empty metadata. The omitted item remains visible in the retained preview. Post-fix organization tests passed 28/28; this change does not claim semantic classification for the first 200 items.
+
+## Session preservation during preview
+
+The planner now reuses the shared agent-state guard before classification and rejects destinations in protected state. The preview explains retained session files. Execution continues to use the same protected move path supplied by PR #345; PR #346 is stacked on that branch until its protected merge. A regression case checks both source preservation before the picker and protected destination rejection.
+
+Validation after shared-guard integration: 29 organization tests passed with `cargo test --manifest-path src-tauri/Cargo.toml --lib organize:: --no-default-features --offline`; `npm run check` reported zero errors and warnings. The metadata-budget fixture took over 60 seconds after path resolution was added; this is a latency observation requiring investigation, not a failed test or a throughput guarantee.

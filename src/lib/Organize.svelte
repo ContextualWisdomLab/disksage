@@ -128,7 +128,9 @@
       <summary>현재 위치에 유지할 파일 {retained.length}개</summary>
       <ul>
         {#each retained as item (item.path)}
-          <li>{item.path} — {item.reason === "package_boundary"
+          <li>{item.path} — {item.reason === "agent_state"
+            ? "대화와 작업 상태를 보존하기 위해 현재 위치에 유지합니다."
+            : item.reason === "package_boundary"
             ? "앱이나 프로젝트 묶음 내부 파일이므로 따로 옮기지 않습니다."
             : item.reason === "companion_bundle"
               ? "함께 보존할 파일이 있어 한 파일만 따로 옮기지 않습니다."

@@ -283,7 +283,7 @@ export interface OrganizationPreview {
   whole_tree_verified: boolean;
   observed_file_count: number;
   moves: MovePlan[];
-  retained: { path: string; reason: "package_boundary" | "companion_bundle" | "not_planned" }[];
+  retained: { path: string; reason: "agent_state" | "package_boundary" | "companion_bundle" | "not_planned" }[];
 }
 
 export const planOrganize = (root: string) =>

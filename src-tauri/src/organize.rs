@@ -71,7 +71,9 @@ pub fn organization_preview(files: &[FileEntry], moves: Vec<MovePlan>) -> Organi
     let retained = files.iter().filter(|f| !planned.contains(f.path.to_string_lossy().as_ref()))
         .map(|f| RetainedItem {
             path: f.path.to_string_lossy().into_owned(),
-            reason: if organization_boundary::package_ancestor(&f.path) {
+            reason: if crate::safety::agent_state_guard::is_agent_state(&f.path) {
+                "agent_state"
+            } else if organization_boundary::package_ancestor(&f.path) {
                 "package_boundary"
             } else if companions.contains(&f.path) {
                 "companion_bundle"
@@ -171,7 +173,8 @@ fn plan_moves_impl(
     let mut lineage_probe_count = 0;
     for f in files {
         let Some(name) = f.path.file_name() else { continue };
-        if organization_boundary::package_ancestor(&f.path)
+        if crate::safety::agent_state_guard::is_agent_state(&f.path)
+            || organization_boundary::package_ancestor(&f.path)
             || companions.contains(&f.path)
         {
             continue;
@@ -193,7 +196,8 @@ fn plan_moves_impl(
             continue;
         };
         let dst = folder_path.join(name);
-        if organization_boundary::package_ancestor(&dst) {
+        if crate::safety::agent_state_guard::is_agent_state(&dst)
+            || organization_boundary::package_ancestor(&dst) {
             continue;
         }
         if f.path.parent() == Some(folder_path.as_path()) {
@@ -401,6 +405,21 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         });
         assert!(plans.is_empty());
         assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn planner_retains_agent_sessions_before_classification_and_rejects_state_destinations() {
+        let files = vec![fe("/project/.codex/sessions/session.png", 10),
+            fe("/project/.claude/projects/conversation.png", 20)];
+        let plans = plan_moves_with(&files, &parse_ttl(ONTO).unwrap(), Path::new("/home/u"),
+            0, &[], &|_, _| panic!("session must not reach classification"));
+        let preview = organization_preview(&files, plans);
+        assert!(preview.moves.is_empty());
+        assert_eq!(preview.retained.len(), 2);
+        assert!(preview.retained.iter().all(|item| item.reason == "agent_state"));
+        let ontology = onto_with_target("/project/.claude/archive");
+        assert!(plan_moves(&[fe("/downloads/photo.png", 1)], &ontology,
+            Path::new("/home/u")).is_empty());
     }
 
     #[test]
