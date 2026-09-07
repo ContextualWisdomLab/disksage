@@ -13,14 +13,6 @@ use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
-#[cfg(test)]
-mod provider_oauth_test_private_directory_publication {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/private_directory_publication.rs"
-    ));
-}
-
 #[cfg(not(coverage))]
 use std::io::Write;
 #[cfg(not(coverage))]
@@ -467,14 +459,6 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     Ok(document.connections)
 }
 
-#[cfg(test)]
-fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
-    provider_oauth_test_private_directory_publication::write_private_bytes_create_new_with_parents(
-        path, encoded, 0o600, 0o700,
-    )
-}
-
-#[cfg(not(test))]
 fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
     crate::private_directory_publication::write_private_bytes_create_new_with_parents(
         path, encoded, 0o600, 0o700,
