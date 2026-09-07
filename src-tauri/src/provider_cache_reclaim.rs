@@ -1059,6 +1059,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let plan = ProviderCacheReclaimPlan {
             schema_version: SCHEMA_VERSION,
             platform: "test".into(),
