@@ -676,16 +676,6 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
-/// 같은 볼륨 이동 io — hard_link(create-only) 후 원본 링크 제거. 두 io 에러 모두 `?`로
-/// 전파(커버리지 규율: happy path에서 map_err 클로저가 미실행 라인으로 남지 않도록).
-/// dst가 이미 있으면 hard_link가 AlreadyExists로 실패해 덮어쓰지 않는다.
-fn hardlink_move_io(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::hard_link(src, dst)?;
-    std::fs::remove_file(src)?;
-    Ok(())
-}
-
 /// move_file이 same_volume()로 실제 결정을 주입한다.
 fn do_move(
     src: &Path,
@@ -705,13 +695,8 @@ fn do_move(
     journal_append(journal_path, &entry)?;
 
     let result = if same_vol {
-        // rename은 dst를 원자적으로 덮어쓴다(REPLACE) → dst.exists() 체크 이후 경합으로 생긴
-        // 파일이 휴지통도 안 거치고 영구 소실될 수 있다. hard_link는 create-only라 dst가 이미
-        // 있으면 AlreadyExists로 실패(덮어쓰지 않음) — 링크 성공 후 원본 링크만 제거한다.
-        // 두 단계 사이 크래시 시엔 양쪽이 같은 inode를 가리키는 무해한 중복이 남는다(손실 아님).
-        // io는 헬퍼가 `?`로 전파 → happy path에서 map_err 클로저가 미실행 라인으로 남지 않는다.
-        // 단일 경계 map_err은 hard_link 실패 테스트(dest-exists)가 커버한다.
-        hardlink_move_io(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+        // One exclusive rename avoids the intermediate two-name state of link/unlink.
+        rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
         copy_verified_io(src, dst)
@@ -1218,11 +1203,9 @@ mod tests {
         assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
     }
 
-    // Fix 1 회귀 테스트: hard_link는 create-only라 dst가 이미 있으면(TOCTOU 경합으로 그 사이
-    // 생긴 파일 시뮬레이션) AlreadyExists로 실패해야 하며, 그 경합 상대의 dst도 원본 src도
-    // 절대 건드리면 안 된다 — rename의 REPLACE 시맨틱이었다면 여기서 dst가 파괴됐을 것.
+    // A destination created after admission must survive the exclusive move unchanged.
     #[test]
-    fn do_move_same_volume_hard_link_fails_when_dest_exists() {
+    fn do_move_same_volume_fails_when_dest_exists() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
         let src = tmp.path().join("a.bin");
