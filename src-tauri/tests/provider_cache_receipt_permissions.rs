@@ -75,7 +75,8 @@ fn trash_receipt_provisions_private_parent_and_is_not_owner_writable() {
 
     let plan = plan_with_runtime(&home, &applications, &podman, 1);
     assert!(plan.evidence_complete, "{:?}", plan.issues);
-    assert!(plan.exact_approval_phrase.is_none());
+    let serialized = serde_json::to_value(&plan).expect("public plan must serialize");
+    assert!(serialized.get("exact_approval_phrase").is_none());
     let candidate = plan
         .candidates
         .iter()
