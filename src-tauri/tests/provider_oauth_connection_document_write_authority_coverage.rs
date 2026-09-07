@@ -48,7 +48,14 @@ fn connection(id: &str, connected_at_ms: u64) -> OAuthConnection {
 #[test]
 fn valid_first_publication_is_private_and_existing_replacement_fails_closed() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("first-use-app-data").join("connections.json");
+    let parent = temp.path().join("first-use-app-data");
+    std::fs::create_dir(&parent).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = parent.join("connections.json");
     let first = connection("account-a", 123);
 
     save_connections(&path, std::slice::from_ref(&first)).unwrap();
