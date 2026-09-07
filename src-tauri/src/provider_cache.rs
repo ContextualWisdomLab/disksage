@@ -74,6 +74,41 @@ pub(crate) fn project_plan(plan: InternalProviderCacheReclaimPlan) -> ProviderCa
     }
 }
 
+/// Suppress reversible-cleanup approval when the immutable-receipt destination is not presently
+/// compatible with the canonical private-publication contract.
+///
+/// This is a read-only product-readiness projection, not filesystem authority: execution still
+/// revalidates and binds the exact parent object immediately before receipt creation. A later path or
+/// mode change therefore fails closed even after this projection reported readiness. On Unix the
+/// receipt parent must already exist as an absolute, non-symlink directory with exact mode 0700; on
+/// platforms where that private publication primitive is unavailable, approval is withheld.
+pub fn project_trash_readiness(
+    mut plan: ProviderCacheReclaimPlan,
+    receipt_dir: &Path,
+) -> ProviderCacheReclaimPlan {
+    #[cfg(unix)]
+    let ready = {
+        use std::os::unix::fs::PermissionsExt;
+
+        receipt_dir.is_absolute()
+            && std::fs::symlink_metadata(receipt_dir).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.permissions().mode() & 0o7777 == 0o700
+            })
+    };
+    #[cfg(not(unix))]
+    let ready = {
+        let _ = receipt_dir;
+        false
+    };
+
+    if !ready {
+        plan.trash_approval_phrase = None;
+    }
+    plan
+}
+
 pub(crate) fn project_trash_result(
     result: InternalProviderCacheCleanupResult,
 ) -> Result<ProviderCacheCleanupResult, String> {
