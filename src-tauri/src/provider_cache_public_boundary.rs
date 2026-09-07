@@ -13,11 +13,26 @@ use crate::provider_cache_reclaim::ProviderCacheCleanupMode as InternalProviderC
 ///
 /// The lower-level historical planner still carries permanent-approval repair evidence. The shipped
 /// command projects that internal report into the commercial Trash-only plan DTO rather than
-/// serializing an irreversible approval field with a null value.
+/// serializing an irreversible approval field with a null value. Trash approval is withheld until
+/// the app's immutable-receipt parent is presently compatible with the exact-private publication
+/// contract; execution still revalidates the parent object and remains the mutation authority.
 #[cfg(not(coverage))]
 #[tauri::command(async, rename = "plan_provider_cache_reclaim")]
-pub fn plan_provider_cache_reclaim_public() -> Result<ProviderCacheReclaimPlan, String> {
-    crate::commands::plan_provider_cache_reclaim().map(crate::provider_cache::project_plan)
+pub fn plan_provider_cache_reclaim_public(
+    app: tauri::AppHandle,
+) -> Result<ProviderCacheReclaimPlan, String> {
+    use tauri::Manager;
+
+    let receipt_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?
+        .join("receipts/provider-cache");
+    let plan = crate::commands::plan_provider_cache_reclaim().map(crate::provider_cache::project_plan)?;
+    Ok(crate::provider_cache::project_trash_readiness(
+        plan,
+        &receipt_dir,
+    ))
 }
 
 /// Execute provider-cache cleanup only through the currently commercial-safe reversible mode.
