@@ -2935,7 +2935,7 @@ pub fn plan_organize(
     root: String,
     app: AppHandle,
     state: State<AppState>,
-) -> Result<Vec<organize::MovePlan>, String> {
+) -> Result<organize::OrganizationPreview, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let rules = crate::userrules::parse_rules(&user_rules_json(&app))?;
     let files = dupes::collect_files_bounded(Path::new(&root), 10_000, Duration::from_secs(10))?;
@@ -2965,7 +2965,7 @@ pub fn plan_organize(
                     }
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with_metadata(
+                return Ok(organize::organization_preview(&files, organize::plan_moves_with_metadata(
                     &files,
                     &onto,
                     &home,
@@ -2973,11 +2973,11 @@ pub fn plan_organize(
                     &rules,
                     &pick,
                     &organize::lineage_metadata_for_path,
-                ));
+                )));
             }
         }
     }
-    Ok(organize::plan_moves_with_metadata(
+    Ok(organize::organization_preview(&files, organize::plan_moves_with_metadata(
         &files,
         &onto,
         &home,
@@ -2985,7 +2985,7 @@ pub fn plan_organize(
         &rules,
         &|_, _| None,
         &organize::lineage_metadata_for_path,
-    ))
+    )))
 }
 
 #[cfg(not(coverage))]
@@ -3642,6 +3642,31 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         assert!(!results[0].ok);
         assert!(results[0].error.contains("다시 스캔"));
         assert!(artifact.join("payload.bin").exists());
+    }
+
+    #[test]
+    fn execute_moves_preserves_unlisted_companion_and_creates_no_move_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("recording.wav");
+        let companion = tmp.path().join("recording.tmk");
+        let destination = tmp.path().join("organized/recording.wav");
+        let journal = tmp.path().join("operations.jsonl");
+        std::fs::write(&source, b"audio").unwrap();
+        let plans = vec![organize::MovePlan {
+            src: source.to_string_lossy().into_owned(),
+            dst: destination.to_string_lossy().into_owned(),
+            ..Default::default()
+        }];
+        // The frontend plan contains only the audio; a later companion must still protect it.
+        std::fs::write(&companion, b"markers").unwrap();
+        let results = execute_moves_inner(&plans, &journal, 1);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert_eq!(results[0].error, "organize-companion-bundle-required");
+        assert_eq!(std::fs::read(source).unwrap(), b"audio");
+        assert_eq!(std::fs::read(companion).unwrap(), b"markers");
+        assert!(!destination.exists());
+        assert!(!journal.exists());
     }
 
     #[test]

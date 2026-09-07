@@ -1,3 +1,6 @@
+#[path = "organization_boundary.rs"]
+mod organization_boundary;
+
 use std::path::{Component, Path, PathBuf};
 
 use crate::dupes::FileEntry;
@@ -27,6 +30,56 @@ pub struct MovePlan {
     pub source_mtime_ms: Option<u64>,
     #[serde(default)]
     pub lineage: LineageMetadata,
+}
+
+/// Preview preserves unplanned items explicitly; omission is not a deletion recommendation.
+#[derive(Debug, serde::Serialize)]
+pub struct OrganizationPreview {
+    /// The bounded collector cannot attest that it visited the entire requested tree.
+    pub whole_tree_verified: bool,
+    pub observed_file_count: usize,
+    pub moves: Vec<MovePlan>,
+    pub retained: Vec<RetainedItem>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RetainedItem {
+    pub path: String,
+    pub reason: &'static str,
+}
+
+fn companion_sources(files: &[FileEntry]) -> std::collections::HashSet<PathBuf> {
+    let mut companion_extensions = std::collections::HashMap::new();
+    for file in files {
+        if let (Some(parent), Some(stem)) = (file.path.parent(), file.path.file_stem()) {
+            companion_extensions
+                .entry((parent, stem))
+                .or_insert_with(std::collections::HashSet::new)
+                .insert(file.path.extension());
+        }
+    }
+    files.iter().filter(|file| {
+        file.path.parent().zip(file.path.file_stem()).is_some_and(|key| {
+            companion_extensions.get(&key).is_some_and(|extensions| extensions.len() > 1)
+        })
+    }).map(|file| file.path.clone()).collect()
+}
+
+pub fn organization_preview(files: &[FileEntry], moves: Vec<MovePlan>) -> OrganizationPreview {
+    let companions = companion_sources(files);
+    let planned: std::collections::HashSet<&str> = moves.iter().map(|p| p.src.as_str()).collect();
+    let retained = files.iter().filter(|f| !planned.contains(f.path.to_string_lossy().as_ref()))
+        .map(|f| RetainedItem {
+            path: f.path.to_string_lossy().into_owned(),
+            reason: if organization_boundary::package_ancestor(&f.path) {
+                "package_boundary"
+            } else if companions.contains(&f.path) {
+                "companion_bundle"
+            } else {
+                "not_planned"
+            },
+        }).collect();
+    OrganizationPreview { whole_tree_verified: false, observed_file_count: files.len(), moves, retained }
 }
 
 #[cfg(not(coverage))]
@@ -113,10 +166,16 @@ fn plan_moves_impl(
 ) -> Vec<MovePlan> {
     let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
     let reasoner = crate::ontology::Reasoner::build(onto);
+    let companions = companion_sources(files);
     let mut plans = Vec::new();
     let mut lineage_probe_count = 0;
     for f in files {
         let Some(name) = f.path.file_name() else { continue };
+        if organization_boundary::package_ancestor(&f.path)
+            || companions.contains(&f.path)
+        {
+            continue;
+        }
         let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
         let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
             Some(c) => c,
@@ -240,6 +299,7 @@ pub fn plan_moves_with_metadata(
 
 pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
     let path = Path::new(&plan.src);
+    organization_boundary::validate_individual_move(path)?;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "organize-source-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -308,6 +368,51 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 "#;
         parse_ttl(&ttl.replace("TARGET", target)).unwrap()
+    }
+
+    #[test]
+    fn preview_explains_preserved_relationships_without_making_move_plans() {
+        let files = vec![fe("/a/recording.wav", 1), fe("/a/recording.tmk", 2),
+            fe("/a/Editor.app/Contents/readme.txt", 3), fe("/a/unknown.bin", 4)];
+        let preview = organization_preview(&files, Vec::new());
+        assert!(preview.moves.is_empty());
+        assert!(!preview.whole_tree_verified);
+        assert_eq!(preview.observed_file_count, 4);
+        assert_eq!(preview.retained.iter().map(|item| item.reason).collect::<Vec<_>>(),
+            vec!["companion_bundle", "companion_bundle", "package_boundary", "not_planned"]);
+    }
+
+    #[test]
+    fn planner_preserves_companions_and_package_descendants_before_picking() {
+        let onto = parse_ttl(ONTO).unwrap();
+        let files = vec![
+            fe("/downloads/recording.png", 10),
+            fe("/downloads/recording.json", 20),
+            fe("/downloads/Editor.app/Contents/image.png", 30),
+        ];
+        let calls = Cell::new(0);
+        let plans = plan_moves_with(&files, &onto, Path::new("/home/u"), 0, &[], &|_, _| {
+            calls.set(calls.get() + 1);
+            Some("Image".into())
+        });
+        assert!(plans.is_empty());
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn execution_rejects_companion_created_after_planning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("recording.png");
+        std::fs::write(&source, b"original").unwrap();
+        let files = vec![FileEntry { path: source.clone(), size: 8, mtime_ms: 0 }];
+        let plans = plan_moves(&files, &parse_ttl(ONTO).unwrap(), tmp.path());
+        assert_eq!(plans.len(), 1);
+        assert!(validate_move_source(&plans[0]).is_ok());
+        let companion = tmp.path().join("recording.json");
+        std::fs::write(&companion, b"metadata").unwrap();
+        assert_eq!(validate_move_source(&plans[0]).unwrap_err(), "organize-companion-bundle-required");
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+        assert_eq!(std::fs::read(companion).unwrap(), b"metadata");
     }
 
     #[test]

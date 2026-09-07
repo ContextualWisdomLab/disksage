@@ -7,6 +7,9 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let plans: api.MovePlan[] = $state([]);
+  let previewLoaded = $state(false);
+  let observedFileCount = $state(0);
+  let retained: api.OrganizationPreview["retained"] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
@@ -27,8 +30,15 @@
     busy = true;
     loadError = "";
     results = [];
+    plans = [];
+    retained = [];
+    previewLoaded = false;
     try {
-      plans = await api.planOrganize(scannedRoot);
+      const preview = await api.planOrganize(scannedRoot);
+      plans = preview.moves;
+      observedFileCount = preview.observed_file_count;
+      retained = preview.retained;
+      previewLoaded = true;
       loadVerdicts(plans.map((p) => p.src));
     } catch (e) {
       loadError = String(e);
@@ -50,7 +60,7 @@
   async function executeSelected() {
     if (plans.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
+      `${plans.length}개 파일을 미리보기에 표시된 폴더로 옮깁니다.\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
@@ -106,7 +116,26 @@
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
   {#if plans.length === 0 && !busy}
-    <p class="muted">미리보기를 눌러 정리 계획을 확인하세요.</p>
+    <p class="muted" role="status">{previewLoaded ? "이번 미리보기에서 이동할 파일은 없습니다." : "미리보기를 눌러 정리 계획을 확인하세요."}</p>
+  {/if}
+
+  {#if previewLoaded}
+    <p class="muted">확인한 파일 {observedFileCount}개를 바탕으로 한 미리보기입니다. 전체 폴더 조사가 완료됐다는 뜻은 아닙니다.</p>
+  {/if}
+
+  {#if retained.length > 0}
+    <details>
+      <summary>현재 위치에 유지할 파일 {retained.length}개</summary>
+      <ul>
+        {#each retained as item (item.path)}
+          <li>{item.path} — {item.reason === "package_boundary"
+            ? "앱이나 프로젝트 묶음 내부 파일이므로 따로 옮기지 않습니다."
+            : item.reason === "companion_bundle"
+              ? "함께 보존할 파일이 있어 한 파일만 따로 옮기지 않습니다."
+              : "이번 미리보기에는 이동 계획이 없습니다. 현재 위치에 보존합니다."}</li>
+        {/each}
+      </ul>
+    </details>
   {/if}
 
   {#each grouped as [classId, group] (classId)}

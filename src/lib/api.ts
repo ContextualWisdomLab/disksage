@@ -279,8 +279,15 @@ export interface MovePlan {
   };
 }
 
+export interface OrganizationPreview {
+  whole_tree_verified: boolean;
+  observed_file_count: number;
+  moves: MovePlan[];
+  retained: { path: string; reason: "package_boundary" | "companion_bundle" | "not_planned" }[];
+}
+
 export const planOrganize = (root: string) =>
-  invoke<MovePlan[]>("plan_organize", { root });
+  invoke<OrganizationPreview>("plan_organize", { root });
 
 export interface OrganizationLineageItem {
   lineage_fingerprint: string;
