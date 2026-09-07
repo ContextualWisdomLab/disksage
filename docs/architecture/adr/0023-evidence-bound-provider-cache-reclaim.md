@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-08-29
-- Last reviewed: 2026-09-06
+- Last reviewed: 2026-09-08
 
 ## Context
 
@@ -22,22 +22,22 @@ The external Rust plan contains `trash_approval_phrase` and no irreversible appr
 
 ### Reusable filesystem owner
 
-#303 now adopts exact filesystem owner #344 `280a0059e14374d6bbee667fb899de511c5bb311` by non-force second-parent merge `0c2587570eed5c029104f2ce55961d193462083a`. Compare ancestry must keep #344 as merge base with `behind_by=0`; predecessor owner heads are historical evidence only. The inherited filesystem source and tests remain canonical; provider-cache does not copy them.
+#303 consumes the reusable private-publication owner from #344 through ordinary non-force ancestry. The current owner head is `736da6db1fb0918d998b3f4d240c63936c91b11d`; predecessor owner heads remain historical evidence only. Provider-cache does not copy the filesystem implementation or widen it locally.
 
 #344 separates two authorities that must not be conflated:
 
-- **Create-new private publication** remains available on Unix through descriptor-relative private-directory/private-evidence primitives. Missing private descendants are created with `mkdirat`, opened with `O_DIRECTORY|O_NOFOLLOW`, set to exact private modes, fsynced, and revalidated by descriptor identity. The final receipt is created with `openat(O_CREAT|O_EXCL|O_NOFOLLOW)` and exact mode checks include the full `0o7777` permission/special-bit mask. Post-create failure invalidates only the admitted opened record rather than unlinking an untrusted replacement name.
-- **Existing-record replacement** is unavailable. The final POSIX replacement primitive formerly used `renameat` with a directory-relative source name after revalidation. That syscall still re-resolves the source name, leaving a check-to-mutation interval in which another same-UID process could substitute a different object. Another pathname check does not remove that semantic gap. Current #344 therefore returns `object-bound-replace-source-identity-unavailable` before filesystem lookup or mutation for otherwise valid Unix replacement requests. Non-Unix replacement remains unsupported until a native owner proves equivalent same-object semantics.
+- **Create-new private publication** is available on Unix only when the no-policy final parent already exists as an exact owner-private `0700` directory. The final record is opened descriptor-relatively with create-new/no-follow semantics, checked at the full `0o7777` permission/special-bit mask, and failure cleanup invalidates only the admitted opened record. The owner intentionally does not claim missing-directory provisioning: POSIX `mkdirat()` reports status but does not return an opened handle for the object it created, so a later `openat()` cannot prove that a same-UID replacement did not win the name between creation and authority acquisition.
+- **Existing-record replacement** is unavailable. A pathname-source `renameat()` still re-resolves the source name and cannot prove that final mutation consumes the exact reviewed source object. Current #344 therefore returns `object-bound-replace-source-identity-unavailable` before filesystem lookup or mutation for otherwise valid Unix replacement requests. Non-Unix replacement remains unsupported until a native owner proves equivalent same-object semantics.
 
-This distinction is material to provider-cache. Final Trash receipts are create-new evidence and continue to use the proven create-new path. Provider-cache does not infer mutable-record replacement or irreversible deletion authority from that create-new capability.
+This distinction is material to provider-cache. Final Trash receipts are create-new evidence, but create-new authority exists only under a pre-existing exact-private parent. Provider-cache does not infer directory provisioning, mutable-record replacement, or irreversible deletion authority from that capability.
 
-The owner repair lineage includes real-filesystem and source-contract tests for missing-parent provisioning, existing-parent exact `0700`, record mode drift, setuid/setgid/sticky drift through full `0o7777`, staging-name substitution, and exact-record invalidation. The final source-object replacement finding is represented by `src-tauri/tests/object_bound_publication_source_identity_contract.rs`; production #344 `280a0059...` resolves it by failing closed rather than by claiming `renameat` is source-handle-conditioned.
-
-Exact-head Test run `33983161163` completed successfully for #344 `280a0059...`. The Draft Release run is skipped and is not release evidence. This Test result permits consumer adoption of that exact owner head; it does not by itself authorize #344 or its consumers to merge to protected `main` or publish a release.
+The owner lineage contains real-filesystem contracts for missing-parent fail-closed behavior, existing-parent exact `0700`, record mode drift, setuid/setgid/sticky drift through full `0o7777`, staging-name substitution, bounded byte verification, and exact-record invalidation. Current #344 Test `34050767861` is terminal success on exact `736da6db...`; that evidence establishes the owner behavior on that head but does not transfer as #303 merge or release evidence.
 
 ### Provider-cache receipt and deletion boundary
 
-`write_immutable_receipt` uses `private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)`. On Unix, the no-forbidden-root path delegates to canonical private-directory create-new publication with a `0700` parent chain and `0400` final receipt. Existing forbidden-root consumers retain their stricter parent-must-exist contract until directory provisioning carries the same forbidden-root policy. On non-Unix targets provider-cache receipt publication remains fail closed; there is no Windows pathname fallback.
+`write_immutable_receipt` uses `private_evidence::write_object_bound_bytes_create_new(..., 0o400, None)`. On Unix, the no-policy path therefore requires the receipt directory itself to pre-exist at exact `0700`; it does not create missing `receipts/provider-cache` descendants and does not chmod an existing wider directory. Missing or mode-drifted parent authority fails receipt publication before provider-cache mutation. On non-Unix targets provider-cache receipt publication remains fail closed; there is no Windows pathname fallback.
+
+The shipped Tauri path currently derives `app_data_dir()/receipts/provider-cache` but has no accepted object-bound bootstrap authority for that nested directory. This is a buyer-visible prerequisite gap, not permission to reintroduce pathname provisioning in #303. Until the canonical filesystem owner supplies a cross-platform accepted bootstrap/handle authority or installation lifecycle pre-provisions and proves the exact-private parent, first-use cleanup must fail closed rather than mutate without a receipt.
 
 Permanent provider-cache deletion remains unavailable. Publication authority is not deletion authority. Reconsidering irreversible deletion requires the canonical deletion-safety owner to prove stable object/directory authority through final mutation, ancestor/symlink/reparse/hardlink resistance, permission drift resistance, durable pre-mutation journal/receipt evidence, partial-failure handling, crash or power-loss recovery, undo/recovery semantics, and platform-specific acceptance for Windows, Linux, and macOS wherever the capability is exposed.
 
@@ -54,17 +54,19 @@ Historical RED/repair pairs remain useful evidence but do not supersede the curr
 - `80499b7a70ce4c1e86125fc308da7a21b6d1b9cd`, `717926e2a7744e3c45fadde6384aa1ac4f5e4698`, `b3fe5adf08685a35c3bfd87fa0539a0599f83e32`, `d1b1df14ecbbe50573716801dfd93e7356f2665d`: internal permanent-mode admission and production-call-edge removal.
 - `511f373d4282c88410663a924196d074c9f81be8`, `727746b08b6320d44a813dec2b183a9382809130`: exact-record cleanup instead of pathname unlink.
 - `e083c1224db6d531039c8a5f6bb64f10391b6be0`, `a51fef56b79515b48581341f34f4018039475a9f`, `53c1b68fc1bf1ae864a4af0f2a65dddfa0932709`, `eb7a52bddb8fd73bb732c32e9b9f68777c42cb25`: provider-cache consumption of reusable create-new receipt authority and removal of local pathname directory mutation.
-- `21d9444701bd5c52b0e63be2377bbe957a5e2444`, `64d68db08c3109799f8fe4d7b3a7291d9e5e3025`, `2ff22a9a4902c3cb87eab45f53d0466a1e1c3d9d`, `644de3439a9b5e02c591b4bf0ef305f7387074b5`: descriptor-relative missing-parent and exact-existing-parent create-new owner lineage.
+- `21d9444701bd5c52b0e63be2377bbe957a5e2444`, `64d68db08c3109799f8fe4d7b3a7291d9e5e3025`, `2ff22a9a4902c3cb87eab45f53d0466a1e1c3d9d`, `644de3439a9b5e02c591b4bf0ef305f7387074b5`: historical directory-publication exploration; current owner supersedes the earlier missing-parent provisioning claim and requires a pre-existing exact-private parent.
 - `41759c1d2531392d07263236f7eed1d58f2dce47`, `b400437d5024504cb0e4156b2d940a905df5fdbc`, `abbf1d2fe7758bfb6d51f23ea87a3c8c165fe5da`, `457515961fa1abaabc768061ce78d38c47dba911`: final-record and final-parent mode-drift fixtures/repairs.
 - `471b1525511f47f5529c8e3a30ac8d3198452bf6`, `4d8f6cc5cbe8bba2c51a46b925ea41abf24dd909`, `f192567dc6f25d1c9ba921346efa18c3c3287dba`, `8c9c2f4793f20d8ca01662d8c53239a415108b04`, `431b192f1630aaf34b4c09dd72c3ff4897fd5789`: staging substitution and full special-bit revalidation lineage before the remaining source-name semantic gap was made explicit.
 - `182cbdc4430757676737d7e804059203da4a201a`: executable contract that rejects raw pathname-source replacement as same-object authority.
-- `280a0059e14374d6bbee667fb899de511c5bb311`: current #344 production owner head; existing-record replacement fails before filesystem mutation while proven create-new publication remains available.
-- `0c2587570eed5c029104f2ce55961d193462083a`: #303 non-force adoption of exact current #344.
+- `280a0059e14374d6bbee667fb899de511c5bb311`: historical #344 production head that removed existing-record replacement authority.
+- `736da6db1fb0918d998b3f4d240c63936c91b11d`: current #344 owner head; create-new publication requires the pre-existing exact-private parent and existing-record replacement remains unavailable.
+- `073408eb870d760bb5846a45e9fb692492bdd5bc`: #303 regression that proves missing receipt-parent authority fails before cache mutation, then succeeds only after an exact `0700` parent is explicitly present.
+- `cd8ad472f94650162f070cf04868b969ee7c09e3`: #303 unit-fixture repair binding receipt publication to the same exact-private parent contract rather than relying on runner umask.
 
 Intermediate RED commits are source/test contract evidence only unless a hosted failing result was actually observed.
 
 ## Consequences
 
-DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup only where the receipt/publication and Trash mutation boundaries are actually supported. On Unix, first-use create-new receipt publication remains available. Existing-record replacement is deliberately unavailable rather than simulated with a pathname rename. Windows native-handle publication/replacement parity remains a release gap.
+DiskSage can surface exact regenerable provider caches and perform reversible Trash cleanup only where receipt/publication and Trash mutation boundaries are actually supported. On Unix, create-new receipt publication is available under a pre-existing exact `0700` parent; first-use creation of that parent is not currently authorized by the reusable owner. Existing-record replacement is deliberately unavailable rather than simulated with a pathname rename. Windows native-handle publication/replacement parity remains a release gap.
 
 ADR-0023 stays Proposed until the applicable exact head has terminal passing required checks and the deletion/recovery prerequisites in Issue #170 are satisfied. No predecessor check, Draft Release skip, or mechanically mergeable state is release evidence.
