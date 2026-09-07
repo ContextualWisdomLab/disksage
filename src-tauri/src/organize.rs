@@ -193,6 +193,9 @@ fn plan_moves_impl(
             continue;
         };
         let dst = folder_path.join(name);
+        if organization_boundary::package_ancestor(&dst) {
+            continue;
+        }
         if f.path.parent() == Some(folder_path.as_path()) {
             continue;
         }
@@ -300,6 +303,7 @@ pub fn plan_moves_with_metadata(
 pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
     let path = Path::new(&plan.src);
     organization_boundary::validate_individual_move(path)?;
+    organization_boundary::validate_destination(Path::new(&plan.dst))?;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "organize-source-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -413,6 +417,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         assert_eq!(validate_move_source(&plans[0]).unwrap_err(), "organize-companion-bundle-required");
         assert_eq!(std::fs::read(source).unwrap(), b"original");
         assert_eq!(std::fs::read(companion).unwrap(), b"metadata");
+    }
+
+    #[test]
+    fn planner_rejects_destination_inside_package() {
+        let ontology = onto_with_target("/Applications/Editor.app/Contents/Documents");
+        assert!(plan_moves(&[fe("/downloads/photo.png", 1)], &ontology, Path::new("/home/u")).is_empty());
     }
 
     #[test]

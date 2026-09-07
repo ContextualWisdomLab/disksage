@@ -30,6 +30,28 @@ pub fn companion_paths(left: &Path, right: &Path) -> bool {
         && left.extension() != right.extension()
 }
 
+/// Reject destinations inside packages, including aliases through an existing ancestor.
+pub fn validate_destination(path: &Path) -> Result<(), String> {
+    if package_ancestor(path) {
+        return Err("organize-destination-package-boundary".into());
+    }
+    for ancestor in path.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                let resolved = std::fs::canonicalize(ancestor)
+                    .map_err(|_| "organize-destination-unavailable")?;
+                if package_ancestor(&resolved) {
+                    return Err("organize-destination-package-boundary".into());
+                }
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("organize-destination-unavailable".into()),
+        }
+    }
+    Err("organize-destination-unavailable".into())
+}
+
 /// Recheck siblings at execution: a bounded scan snapshot may omit a companion.
 /// An unreadable directory cannot establish that moving one member is safe.
 pub fn validate_individual_move(path: &Path) -> Result<(), String> {
@@ -74,6 +96,11 @@ mod tests {
             validate_individual_move(&alias.join("document.txt")).unwrap_err(),
             "organize-package-boundary"
         );
+        assert_eq!(
+            validate_destination(&alias.join("new/sub/document.txt")).unwrap_err(),
+            "organize-destination-package-boundary"
+        );
+        assert!(validate_destination(&root.join("ordinary/new/document.txt")).is_ok());
         assert_eq!(std::fs::read(&file).unwrap(), b"retain");
         std::fs::remove_file(alias).unwrap();
         std::fs::remove_file(file).unwrap();
