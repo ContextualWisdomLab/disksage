@@ -9,6 +9,7 @@ pub enum SafetyError {
     Protected(PathBuf),
     Trash(String),
     Journal(String),
+    Validation(String),
 }
 
 impl std::fmt::Display for SafetyError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for SafetyError {
             SafetyError::Protected(p) => write!(f, "보호된 경로: {}", p.display()),
             SafetyError::Trash(e) => write!(f, "휴지통 이동 실패: {e}"),
             SafetyError::Journal(e) => write!(f, "저널 기록 실패: {e}"),
+            SafetyError::Validation(e) => f.write_str(e),
         }
     }
 }
@@ -683,6 +685,7 @@ fn do_move(
     same_vol: bool,
     journal_path: &Path,
     now_ms: u64,
+    validate: &dyn Fn() -> Result<(), SafetyError>,
 ) -> Result<(), SafetyError> {
     let mut entry = JournalEntry {
         ts_ms: now_ms,
@@ -697,13 +700,13 @@ fn do_move(
     let result = if same_vol {
         // One exclusive rename avoids the intermediate two-name state of link/unlink.
         #[cfg(target_os = "macos")]
-        { coordinated_rename(src, dst) }
+        { coordinated_rename(src, dst, validate) }
         #[cfg(not(target_os = "macos"))]
-        { rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string())) }
+        { validate().and_then(|()| rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))) }
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
-        copy_verified_io(src, dst)
-            .map_err(|e| SafetyError::Trash(e.to_string()))
+        validate().and_then(|()| copy_verified_io(src, dst)
+            .map_err(|e| SafetyError::Trash(e.to_string())))
             .and_then(|()| {
                 let bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
                 trash_delete(src, bytes, journal_path, now_ms)
@@ -720,23 +723,24 @@ fn do_move(
 
 /// 앱 유일의 이동 경로 (스펙 §7-2). 영구 삭제 없음 — 원본 제거는 trash_delete 경유.
 pub fn move_file(
-    src: &Path,
-    dst: &Path,
-    journal_path: &Path,
-    now_ms: u64,
+    src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
+) -> Result<(), SafetyError> {
+    move_file_checked(src, dst, journal_path, now_ms, &|| Ok(()))
+}
+
+/// Validate before preparation and again inside the native move accessor.
+pub(crate) fn move_file_checked(
+    src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
+    validate: &dyn Fn() -> Result<(), SafetyError>,
 ) -> Result<(), SafetyError> {
     validate_move_paths(src, dst)?;
-    // 목적지 충돌 금지 (덮어쓰기 방지)
+    validate()?;
     if dst.exists() {
         return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
     }
-    // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
-    // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
-    // unwrap_or로 두어 라인 커버리지를 유지하면서 방어한다(도달 시 create_dir_all이 에러로 귀결).
     let dst_parent = dst.parent().unwrap_or(dst);
     std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
-
-    do_move(src, dst, same_volume(src, dst), journal_path, now_ms)
+    do_move(src, dst, same_volume(src, dst), journal_path, now_ms, validate)
 }
 
 fn validate_move_paths(src: &Path, dst: &Path) -> Result<(), SafetyError> {
@@ -756,7 +760,9 @@ fn validate_move_paths(src: &Path, dst: &Path) -> Result<(), SafetyError> {
 }
 
 #[cfg(target_os = "macos")]
-fn coordinated_rename(src: &Path, dst: &Path) -> Result<(), SafetyError> {
+fn coordinated_rename(
+    src: &Path, dst: &Path, validate: &dyn Fn() -> Result<(), SafetyError>,
+) -> Result<(), SafetyError> {
     use std::{cell::Cell, ptr::NonNull};
     use block2::StackBlock;
     use objc2::rc::autoreleasepool;
@@ -794,6 +800,7 @@ fn coordinated_rename(src: &Path, dst: &Path) -> Result<(), SafetyError> {
                     || filesystem_object_id(&std::fs::canonicalize(parent).map_err(io_error)?).map_err(io_error)? != parent_id {
                     return Err(SafetyError::Trash("file identity changed while waiting for coordination".into()));
                 }
+                validate()?;
                 coordinator.itemAtURL_willMoveToURL(from, to);
                 rename_noreplace(&source, &destination).map_err(io_error)?;
                 coordinator.itemAtURL_didMoveToURL(from, to);
@@ -862,6 +869,7 @@ mod tests {
         assert!(SafetyError::Protected(PathBuf::from("/x")).to_string().contains("보호"));
         assert!(SafetyError::Trash("boom".into()).to_string().contains("휴지통"));
         assert!(SafetyError::Journal("boom".into()).to_string().contains("저널"));
+        assert_eq!(SafetyError::Validation("source changed".into()).to_string(), "source changed");
     }
 
     #[test]
@@ -1264,7 +1272,7 @@ mod tests {
         let src = tmp.path().join("a.bin");
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, vec![7u8; 30]).unwrap();
-        do_move(&src, &dst, true, &jp, 1).unwrap();
+        do_move(&src, &dst, true, &jp, 1, &|| Ok(())).unwrap();
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
     }
@@ -1278,7 +1286,7 @@ mod tests {
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, b"original").unwrap();
         std::fs::write(&dst, b"pre-existing").unwrap(); // TOCTOU 경합에서 먼저 생긴 것처럼 시뮬레이션
-        let err = do_move(&src, &dst, true, &jp, 1);
+        let err = do_move(&src, &dst, true, &jp, 1, &|| Ok(()));
         assert!(matches!(err, Err(SafetyError::Trash(_))));
         assert!(src.exists(), "원본은 실패 시 보존");
         assert_eq!(
@@ -1297,7 +1305,7 @@ mod tests {
         let dst = tmp.path().join("moved-disksage-xvol-fixture.bin");
         std::fs::write(&src, vec![9u8; 40]).unwrap();
         // same_vol=false 강제 → 실제 같은 볼륨이어도 copy+verify+trash 경로 실행
-        do_move(&src, &dst, false, &jp, 2).unwrap();
+        do_move(&src, &dst, false, &jp, 2, &|| Ok(())).unwrap();
         assert!(!src.exists(), "원본은 휴지통으로");
         assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
         // 원본이 휴지통에 있음 확인 후 테스트 픽스처만 purge

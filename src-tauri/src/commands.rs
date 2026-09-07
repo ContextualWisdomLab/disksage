@@ -203,10 +203,10 @@ pub fn execute_moves_inner(
     plans
         .iter()
         .map(|p| {
-            match organize::validate_move_source(p).and_then(|_| {
-                safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms)
-                    .map_err(|error| error.to_string())
-            }) {
+            match safety::move_file_checked(
+                Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms,
+                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation),
+            ) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
                     ok: true,
@@ -3678,6 +3678,34 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         assert_eq!(std::fs::read(companion).unwrap(), b"markers");
         assert!(!destination.exists());
         assert!(!journal.exists());
+    }
+
+    #[test]
+    fn checked_move_retains_companion_arriving_after_preflight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("recording.wav");
+        let companion = tmp.path().join("recording.json");
+        let destination = tmp.path().join("dest/recording.wav");
+        let journal = tmp.path().join("journal.jsonl");
+        std::fs::write(&source, b"original").unwrap();
+        let plan = organize::MovePlan {
+            src: source.to_string_lossy().into_owned(),
+            dst: destination.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let checks = std::cell::Cell::new(0);
+        let result = safety::move_file_checked(&source, &destination, &journal, 1, &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 2 {
+                std::fs::write(&companion, b"metadata").unwrap();
+            }
+            organize::validate_move_source(&plan).map_err(safety::SafetyError::Validation)
+        });
+        assert_eq!(checks.get(), 2);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert_eq!(std::fs::read(&companion).unwrap(), b"metadata");
+        assert!(!destination.exists());
     }
 
     #[test]
