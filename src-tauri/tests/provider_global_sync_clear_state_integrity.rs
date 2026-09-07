@@ -22,6 +22,7 @@ fn clear_report() -> ProviderGlobalSyncReport {
         pending_indexable_count: Some(0),
         blockers: Vec::new(),
         notices: Vec::new(),
+        probe_receipt: None,
     }
 }
 
