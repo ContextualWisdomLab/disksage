@@ -81,6 +81,10 @@ pub fn organization_preview(files: &[FileEntry], moves: Vec<MovePlan>) -> Organi
                 "package_boundary"
             } else if companions.contains(&f.path) {
                 "companion_bundle"
+            } else if f.path.parent().is_none_or(|parent| {
+                organization_boundary::validate_project_ancestors(parent).is_err()
+            }) {
+                "project_boundary_unverified"
             } else {
                 "not_planned"
             },
@@ -180,6 +184,9 @@ fn plan_moves_impl(
         if crate::safety::agent_state_guard::is_agent_state(&f.path)
             || organization_boundary::package_ancestor(&f.path)
             || companions.contains(&f.path)
+            || f.path.parent().is_none_or(|parent| {
+                organization_boundary::validate_project_ancestors(parent).is_err()
+            })
         {
             continue;
         }
@@ -376,8 +383,15 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
     }
 
-    fn fe_at(p: &str, size: u64, mtime_ms: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms }
+    fn fixture_file(root: &Path, relative: &str, size: u64) -> FileEntry {
+        fixture_file_at(root, relative, size, 0)
+    }
+
+    fn fixture_file_at(root: &Path, relative: &str, size: u64, mtime_ms: u64) -> FileEntry {
+        let path = root.join(relative.trim_start_matches('/'));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+        FileEntry { path, size, mtime_ms }
     }
 
     fn onto_with_target(target: &str) -> Ontology {
@@ -392,8 +406,9 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn preview_explains_preserved_relationships_without_making_move_plans() {
-        let files = vec![fe("/a/recording.wav", 1), fe("/a/recording.tmk", 2),
-            fe("/a/Editor.app/Contents/readme.txt", 3), fe("/a/unknown.bin", 4)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = vec![fixture_file(fixture.path(), "/a/recording.wav", 1), fixture_file(fixture.path(), "/a/recording.tmk", 2),
+            fixture_file(fixture.path(), "/a/Editor.app/Contents/readme.txt", 3), fixture_file(fixture.path(), "/a/unknown.bin", 4)];
         let preview = organization_preview(&files, Vec::new());
         assert!(preview.moves.is_empty());
         assert!(!preview.whole_tree_verified);
@@ -404,11 +419,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn planner_preserves_companions_and_package_descendants_before_picking() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let files = vec![
-            fe("/downloads/recording.png", 10),
-            fe("/downloads/recording.json", 20),
-            fe("/downloads/Editor.app/Contents/image.png", 30),
+            fixture_file(fixture.path(), "/downloads/recording.png", 10),
+            fixture_file(fixture.path(), "/downloads/recording.json", 20),
+            fixture_file(fixture.path(), "/downloads/Editor.app/Contents/image.png", 30),
         ];
         let calls = Cell::new(0);
         let plans = plan_moves_with(&files, &onto, Path::new("/home/u"), 0, &[], &|_, _| {
@@ -420,9 +436,27 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
     }
 
     #[test]
+    fn planner_retains_project_documents_before_content_classification() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = root.path().join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        let image = docs.join("photo.png");
+        std::fs::write(&image, b"project image").unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), b"[package]").unwrap();
+        let files = vec![fe(image.to_str().unwrap(), 13)];
+        let plans = plan_moves_with(&files, &parse_ttl(ONTO).unwrap(), root.path(),
+            0, &[], &|_, _| panic!("project content must not reach individual classification"));
+        assert!(plans.is_empty());
+        let preview = organization_preview(&files, plans);
+        assert_eq!(preview.retained[0].reason, "project_boundary_unverified");
+        assert_eq!(std::fs::read(image).unwrap(), b"project image");
+    }
+
+    #[test]
     fn planner_retains_agent_sessions_before_classification_and_rejects_state_destinations() {
-        let files = vec![fe("/project/.codex/sessions/session.png", 10),
-            fe("/project/.claude/projects/conversation.png", 20)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = vec![fixture_file(fixture.path(), "/project/.codex/sessions/session.png", 10),
+            fixture_file(fixture.path(), "/project/.claude/projects/conversation.png", 20)];
         let plans = plan_moves_with(&files, &parse_ttl(ONTO).unwrap(), Path::new("/home/u"),
             0, &[], &|_, _| panic!("session must not reach classification"));
         let preview = organization_preview(&files, plans);
@@ -430,7 +464,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         assert_eq!(preview.retained.len(), 2);
         assert!(preview.retained.iter().all(|item| item.reason == "agent_state"));
         let ontology = onto_with_target("/project/.claude/archive");
-        assert!(plan_moves(&[fe("/downloads/photo.png", 1)], &ontology,
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/downloads/photo.png", 1)], &ontology,
             Path::new("/home/u")).is_empty());
     }
 
@@ -452,15 +486,17 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn planner_rejects_destination_inside_package() {
+        let fixture = tempfile::tempdir().unwrap();
         let ontology = onto_with_target("/Applications/Editor.app/Contents/Documents");
-        assert!(plan_moves(&[fe("/downloads/photo.png", 1)], &ontology, Path::new("/home/u")).is_empty());
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/downloads/photo.png", 1)], &ontology, Path::new("/home/u")).is_empty());
     }
 
     #[test]
     fn plans_move_to_resolved_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         // ~ → home, {class} → Image
@@ -512,10 +548,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn metadata_probe_is_bounded_per_plan() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let home = tempfile::tempdir().unwrap();
         let files = (0..MAX_LINEAGE_PROBES + 1)
-            .map(|i| fe(&format!("/downloads/{i}.png"), 1))
+            .map(|i| fixture_file(fixture.path(), &format!("/downloads/{i}.png"), 1))
             .collect::<Vec<_>>();
         let probes = Cell::new(0);
         let plans = plan_moves_with_metadata(
@@ -534,35 +571,39 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         assert_eq!(plans.len(), MAX_LINEAGE_PROBES);
         let preview = organization_preview(&files, plans);
         assert_eq!(preview.retained.len(), 1);
-        assert_eq!(preview.retained[0].path, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
+        assert_eq!(preview.retained[0].path, fixture.path().join(format!("downloads/{}.png", MAX_LINEAGE_PROBES)).to_string_lossy());
     }
 
     #[test]
     fn skips_unclassified_and_targetless() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
         let files = vec![
-            fe("/x/unknown.xyz", 10),   // 미분류 → 제외
-            fe("/x/main.rs", 20),       // Code: targetFolder 없음 → 제외
+            fixture_file(fixture.path(), "/x/unknown.xyz", 10),   // 미분류 → 제외
+            fixture_file(fixture.path(), "/x/main.rs", 20),       // Code: targetFolder 없음 → 제외
         ];
         assert!(plan_moves(&files, &onto, home).is_empty());
     }
 
     #[test]
     fn skips_file_already_in_destination() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
-        let home = Path::new("/home/u");
+        let home_path = fixture.path().join("home/u");
+        let home = home_path.as_path();
         // 이미 목적지 폴더에 있는 파일
-        let files = vec![fe("/home/u/Media/Image/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/home/u/Media/Image/pic.png", 100)];
         assert!(plan_moves(&files, &onto, home).is_empty());
     }
 
     #[test]
     fn skips_classified_file_whose_class_absent_from_ontology() {
+        let fixture = tempfile::tempdir().unwrap();
         // mp4 → classify "Video"지만 ONTO엔 Video 클래스가 없음 → 클래스 조회 else(continue) 커버
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        assert!(plan_moves(&[fe("/x/movie.mp4", 100)], &onto, home).is_empty());
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/x/movie.mp4", 100)], &onto, home).is_empty());
     }
 
     #[test]
@@ -575,10 +616,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn target_folder_without_class_placeholder_is_used_verbatim() {
+        let fixture = tempfile::tempdir().unwrap();
         // ~/Installers 처럼 {class} 없는 targetFolder — 치환 없이 그대로, filename만 붙는다
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/setup.exe", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/setup.exe", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/home/u/Installers").join("setup.exe");
@@ -587,6 +629,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn target_folder_without_tilde_is_absolute() {
+        let fixture = tempfile::tempdir().unwrap();
         // ~ 없는 절대경로 targetFolder — home 치환 없이 그대로
         let ttl = r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -596,7 +639,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 "#;
         let onto = parse_ttl(ttl).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/opt/media/Image").join("pic.png");
@@ -605,44 +648,50 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn rejects_relative_target_folder_that_depends_on_process_cwd() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("relative/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_parent_traversal_in_home_relative_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("~/Media/../escape/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_parent_traversal_in_absolute_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("/opt/media/../escape/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_named_tilde_target_that_is_not_home_token() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("~other/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn preserves_literal_tilde_inside_absolute_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("/opt/~archive/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].dst, "/opt/~archive/Image/pic.png");
     }
 
     #[test]
     fn rejects_home_relative_target_when_home_is_relative() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("."));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("."));
         assert!(plans.is_empty());
     }
 
@@ -650,7 +699,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     #[test]
     fn windows_home_relative_target_uses_native_absolute_path() {
         let home = PathBuf::from(r"C:\Users\u");
-        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = [fixture_file(fixture.path(), "downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto_with_target("~/Media/{class}"), &home);
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].dst, r"C:\Users\u\Media\Image\pic.png");
@@ -660,7 +710,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     #[test]
     fn windows_relative_target_fails_closed() {
         let home = PathBuf::from(r"C:\Users\u");
-        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = [fixture_file(fixture.path(), "downloads/pic.png", 100)];
         assert!(plan_moves(&files, &onto_with_target("relative/{class}"), &home).is_empty());
     }
 
@@ -676,11 +727,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn picker_choice_overrides_extension_classify() {
+        let fixture = tempfile::tempdir().unwrap();
         // main.rs는 확장자로 "Code"(targetFolder 없음 → 평소 제외)로 분류되지만,
         // picker가 "Image"(targetFolder 있음)를 고르면 Image 목적지로 계획된다.
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/src/main.rs", 20)];
+        let files = vec![fixture_file(fixture.path(), "/src/main.rs", 20)];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
@@ -689,10 +741,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn picker_none_falls_back_to_extension_classify() {
+        let fixture = tempfile::tempdir().unwrap();
         // picker가 None이면 기존 확장자 분류(pic.png → Image)로 폴백 — plan_moves와 동일
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let pick = |_p: &Path, _c: &[&str]| None;
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
@@ -701,10 +754,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn picker_candidates_include_ontology_class_names() {
+        let fixture = tempfile::tempdir().unwrap();
         // picker에 넘어오는 후보 목록이 온톨로지 클래스 로컬명을 포함하는지 확인
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let seen = std::cell::RefCell::new(Vec::<String>::new());
         let pick = |_p: &Path, cands: &[&str]| {
             *seen.borrow_mut() = cands.iter().map(|s| s.to_string()).collect();
@@ -718,6 +772,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn user_rule_overrides_picker_and_extension() {
+        let fixture = tempfile::tempdir().unwrap();
         // pic.png는 확장자로 Image지만, 사용자 규칙(ext png → Installer)이 우선 → Installer 목적지
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -726,7 +781,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string()); // picker가 Image를 골라도
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file(fixture.path(), "/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Installer")); // 규칙이 picker를 이긴다
         // 규칙이 우선하므로 plan_moves_with 내부에서 pick은 호출되지 않는다(설계상 의도).
@@ -736,6 +791,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn no_user_rule_match_falls_through_to_picker() {
+        let fixture = tempfile::tempdir().unwrap();
         // 규칙이 있으나 매칭 안 되면(ext iso) 기존 precedence(picker→classify)로
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -744,13 +800,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file(fixture.path(), "/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image")); // 확장자 폴백
     }
 
     #[test]
     fn user_rule_age_predicate_matches_old_file_only() {
+        let fixture = tempfile::tempdir().unwrap();
         // now = 100 days in ms; rule: min_age_days 30 → Installer. Old file (mtime 0 → age 100d) matches; fresh (mtime≈now → age 0) doesn't.
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -761,17 +818,18 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
         // old file → age 100d ≥ 30 → rule matches → Installer target
-        let old = plan_moves_with(&[fe_at("/d/pic.png", 10, 0)], &onto, home, now, &rules, &pick);
+        let old = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, 0)], &onto, home, now, &rules, &pick);
         assert_eq!(old.len(), 1);
         assert!(old[0].class_id.ends_with("Installer"));
         // fresh file → age 0 < 30 → rule skips → extension classify (png→Image)
-        let fresh = plan_moves_with(&[fe_at("/d/pic.png", 10, now)], &onto, home, now, &rules, &pick);
+        let fresh = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, now)], &onto, home, now, &rules, &pick);
         assert_eq!(fresh.len(), 1);
         assert!(fresh[0].class_id.ends_with("Image"));
     }
 
     #[test]
     fn future_dated_file_saturates_to_age_zero() {
+        let fixture = tempfile::tempdir().unwrap();
         // mtime > now (future-dated / clock skew): saturating_sub → age 0, no panic/underflow.
         // rule min_age_days: 1 → age 0 < 1 → no match → extension classify (png → Image).
         let onto = parse_ttl(ONTO).unwrap();
@@ -783,7 +841,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe_at("/d/pic.png", 10, future)], &onto, home, now, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, future)], &onto, home, now, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image")); // age saturated to 0 → rule skipped → ext classify
     }
