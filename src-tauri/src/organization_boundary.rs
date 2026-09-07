@@ -21,6 +21,39 @@ pub fn package_ancestor(path: &Path) -> bool {
     })
 }
 
+/// Retain descendants of recognized projects, including worktree marker files.
+pub fn validate_project_ancestors(directory: &Path) -> Result<(), String> {
+    let resolved = std::fs::canonicalize(directory)
+        .map_err(|_| "프로젝트 경계를 확인할 수 없어 이동을 보류합니다.")?;
+    for ancestor in resolved.ancestors() {
+        for marker in [
+            ".git",
+            ".hg",
+            ".svn",
+            "Cargo.toml",
+            "package.json",
+            "pyproject.toml",
+            "go.mod",
+            "CMakeLists.txt",
+            "wscript",
+            "SConstruct",
+            "configure.ac",
+        ] {
+            match std::fs::symlink_metadata(ancestor.join(marker)) {
+                Ok(_) => {
+                    return Err(
+                        "프로젝트 내부 자료는 기존 관계를 보존하기 위해 따로 옮기지 않습니다."
+                            .into(),
+                    )
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("프로젝트 경계를 확인할 수 없어 이동을 보류합니다.".into()),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Shared basename is only a preservation hint, never evidence of duplicate content.
 pub fn companion_paths(left: &Path, right: &Path) -> bool {
     left != right
@@ -63,6 +96,7 @@ pub fn validate_individual_move(path: &Path) -> Result<(), String> {
         return Err("organize-package-boundary".into());
     }
     let parent = path.parent().ok_or("organize-parent-unavailable")?;
+    validate_project_ancestors(resolved.parent().ok_or("organize-parent-unavailable")?)?;
     let siblings = std::fs::read_dir(parent).map_err(|_| "organize-parent-unavailable")?;
     for (index, sibling) in siblings.enumerate() {
         // ponytail: refuse oversized sibling sets; a bundle-aware planner can handle them later.
@@ -80,6 +114,37 @@ pub fn validate_individual_move(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn late_project_marker_retains_individual_document() {
+        let root = std::env::temp_dir().join(format!("disksage-project-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let nested = root.join("documents");
+        std::fs::create_dir(&nested).unwrap();
+        let file = nested.join("note.txt");
+        std::fs::write(&file, b"keep project relationships").unwrap();
+        assert!(validate_individual_move(&file).is_ok());
+        let marker = root.join(".git");
+        std::fs::write(&marker, b"gitdir: elsewhere").unwrap();
+        let result = validate_individual_move(&file);
+        #[cfg(unix)]
+        {
+            let alias =
+                std::env::temp_dir().join(format!("disksage-project-alias-{}", std::process::id()));
+            std::os::unix::fs::symlink(&nested, &alias).unwrap();
+            let aliased = validate_individual_move(&alias.join("note.txt"));
+            std::fs::remove_file(&alias).unwrap();
+            assert!(aliased.is_err());
+        }
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&nested).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        assert!(
+            result.is_err(),
+            "a late project marker must retain the document"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn package_alias_cannot_bypass_preservation() {

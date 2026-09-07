@@ -39,29 +39,7 @@ pub fn observe(source: &Path) -> Result<BundleManifest, String> {
     {
         return Err("보호 대상이나 일반 폴더가 아닌 항목은 묶음으로 옮기지 않습니다.".into());
     }
-    for ancestor in fs::canonicalize(source).map_err(unavailable)?.ancestors() {
-        for marker in [
-            ".git",
-            ".hg",
-            ".svn",
-            "Cargo.toml",
-            "package.json",
-            "pyproject.toml",
-            "go.mod",
-            "CMakeLists.txt",
-        ] {
-            match fs::symlink_metadata(ancestor.join(marker)) {
-                Ok(_) => {
-                    return Err(
-                        "프로젝트 내부 폴더는 기존 관계를 보존하기 위해 따로 옮기지 않습니다."
-                            .into(),
-                    )
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(unavailable(error)),
-            }
-        }
-    }
+    organization_boundary::validate_project_ancestors(source)?;
     let root_object_id = crate::safety::filesystem_object_id(source).map_err(unavailable)?;
     let mut files = Vec::new();
     let mut total = 0u64;
