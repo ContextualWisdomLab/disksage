@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+inactive regenerable cache children to OS Trash. Permanent cache-Trash deletion is unavailable.\n\
+--purge-proven-cache-trash without --execute only reports retained review candidates.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -121,26 +121,20 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
-                "notice": "pass --execute to perform the guarded OS-Trash operation"
+                "notice": if args.purge_proven_cache_trash {
+                    "Permanent deletion is unavailable. Items remain in OS Trash."
+                } else { "pass --execute to perform the guarded OS-Trash operation" }
             })
         );
         return Ok(());
+    }
+    if args.purge_proven_cache_trash {
+        return purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())
+            .map(|_| ())
+            .map_err(|_| "Permanent deletion is unavailable. Items remain in OS Trash.".into());
     }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
-        println!(
-            "{}",
-            serde_json::json!({
-                "executed": true,
-                "purge_proven_cache_trash": true,
-                "journal_path": args.journal_path,
-                "results": results
-            })
-        );
-        return Ok(());
     }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
@@ -166,17 +160,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unavailable_purge_does_not_create_journal_directories() {
+        let fixture = tempfile::tempdir().unwrap();
+        let journal = fixture.path().join("not-created/journal.jsonl");
+        let error = run_with_args([
+            OsString::from("--execute"),
+            OsString::from("--purge-proven-cache-trash"),
+            OsString::from("--journal-path"),
+            journal.into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "Permanent deletion is unavailable. Items remain in OS Trash."
+        );
+        assert!(!fixture.path().join("not-created").exists());
+    }
+
+    #[test]
     fn help_is_non_mutating() {
         assert!(parse_args([OsString::from("--help")]).unwrap().is_none());
     }
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{commands::CleanResult, rules, safety};
 
@@ -115,6 +115,9 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         }
         _ => return None,
     };
+    if safety::agent_state_guard::contains_agent_state(path) {
+        return None;
+    }
     Some(signature)
 }
 
@@ -174,50 +177,14 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     candidates
 }
 
-/// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
-/// approval boundary; each object is rechecked immediately before removal and journaled.
+/// Permanent deletion remains unavailable until the final operation binds reviewed object identity.
+/// Reuse the fail-closed policy from PR #263; cache-looking names are not deletion authority.
 pub fn purge_proven_cache_trash(
-    home: &Path,
-    journal_path: &Path,
-    now_ms: u64,
+    _home: &Path,
+    _journal_path: &Path,
+    _now_ms: u64,
 ) -> Result<Vec<CacheTrashPurgeResult>, String> {
-    let planned = proven_cache_trash_candidates(home);
-    let mut results = Vec::with_capacity(planned.len());
-    for candidate in planned {
-        let path = PathBuf::from(&candidate.path);
-        let mut entry = crate::safety::JournalEntry {
-            ts_ms: now_ms,
-            op: "permanent_cache_trash_delete".into(),
-            path: candidate.path.clone(),
-            bytes: candidate.bytes,
-            outcome: "pending".into(),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
-        let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
-            .is_some_and(|signature| signature == candidate.signature)
-        {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            }
-        } else {
-            Err("cache-trash-signature-changed".into())
-        };
-        entry.outcome = match &outcome {
-            Ok(()) => "ok".into(),
-            Err(error) => format!("error:{error}"),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
-        results.push(CacheTrashPurgeResult {
-            name: candidate.name,
-            path: candidate.path,
-            bytes: candidate.bytes,
-            signature: candidate.signature,
-            purged: outcome.is_ok(),
-            error: outcome.err().unwrap_or_default(),
-        });
-    }
-    Ok(results)
+    Err("cache-trash-permanent-delete-unavailable".into())
 }
 
 fn active_use_blocker(
@@ -445,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn proven_cache_trash_requires_signature_and_journals_purge() {
+    fn proven_cache_trash_never_authorizes_permanent_deletion() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = tmp.path().join(".Trash");
         fs::create_dir(&trash).unwrap();
@@ -463,13 +430,12 @@ mod tests {
         assert_eq!(candidates[0].bytes, 5);
 
         let journal = tmp.path().join("journal.jsonl");
-        let results = purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert!(!npm.exists());
-        let journal_text = fs::read_to_string(journal).unwrap();
-        assert!(journal_text.contains("permanent_cache_trash_delete"));
-        assert!(journal_text.contains("\"outcome\":\"ok\""));
+        assert_eq!(
+            purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap_err(),
+            "cache-trash-permanent-delete-unavailable"
+        );
+        assert_eq!(fs::read(npm.join("content-v2/entry")).unwrap(), b"cache");
+        assert!(!journal.exists());
     }
 
     #[cfg(unix)]
