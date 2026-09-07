@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 #[path = "podman_reclaim.rs"]
 mod implementation;
 
+pub(crate) use implementation::command_text;
 pub use implementation::{
     probe_podman_reclaim, GuestFilesystemEvidence, PodmanDanglingImagePruneExecution,
     PodmanMachineEvidence, PodmanReclaimAssessment, PodmanReclaimPlan, PodmanRecommendedAction,

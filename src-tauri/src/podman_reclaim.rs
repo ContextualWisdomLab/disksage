@@ -86,6 +86,7 @@ pub struct PodmanUnusedImageEvidence {
 pub enum PodmanRecommendedActionKind {
     RestoreGuestHeadroom,
     InvestigateApi,
+    InspectStoreIntegrity,
     ReviewGuestTrim,
     ReviewStoppedContainers,
     ReviewUnusedImages,
@@ -582,7 +583,7 @@ fn command_capture(
     })
 }
 
-fn command_text(
+pub(crate) fn command_text(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
@@ -607,6 +608,17 @@ fn assess(
 ) -> PodmanReclaimAssessment {
     let mut reason_codes = vec!["host-physical-reclaim-unverified".to_string()];
     let mut recommended_actions = Vec::new();
+    let system_df_broken = issues
+        .iter()
+        .any(|issue| issue.starts_with("podman-system-df-failed:"));
+    if system_df_broken {
+        reason_codes.push("podman-system-df-repair-required".into());
+        recommended_actions.push(PodmanRecommendedAction {
+            kind: PodmanRecommendedActionKind::InspectStoreIntegrity,
+            requires_human_approval: false,
+            rationale: "실행 중인 컨테이너를 보존한 채 `podman system check --quick`으로 저장소 참조 손상을 확인하세요. DiskSage는 자동 repair나 blanket prune을 실행하지 않습니다.".into(),
+        });
+    }
     let gap = raw_image
         .and_then(|raw| raw.allocated_bytes)
         .zip(guest.map(|value| value.used_bytes))
@@ -715,7 +727,12 @@ fn assess(
         physically_reclaimable_bytes: None,
         podman_reported_reclaimable_bytes,
         raw_allocated_minus_guest_used_bytes: gap,
-        status: "unverified".to_string(),
+        status: if system_df_broken {
+            "repair-required"
+        } else {
+            "unverified"
+        }
+        .to_string(),
         reason_codes,
         recommended_actions,
     }
@@ -1211,6 +1228,27 @@ mod tests {
             value["assessment"]["recommended_actions"][0]["requires_human_approval"],
             true
         );
+    }
+
+    #[test]
+    fn broken_system_df_surfaces_fail_closed_repair_state() {
+        let assessment = assess(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &["podman-system-df-failed:broken-overlay-lowerdir".into()],
+        );
+        assert_eq!(assessment.status, "repair-required");
+        assert!(assessment
+            .reason_codes
+            .contains(&"podman-system-df-repair-required".into()));
+        assert!(assessment
+            .recommended_actions
+            .iter()
+            .any(|action| action.kind == PodmanRecommendedActionKind::InspectStoreIntegrity));
     }
 
     #[cfg(unix)]
