@@ -3672,28 +3672,33 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     }
 
     #[test]
-    fn execute_moves_preserves_unlisted_companion_and_creates_no_move_journal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("recording.wav");
-        let companion = tmp.path().join("recording.tmk");
-        let destination = tmp.path().join("organized/recording.wav");
-        let journal = tmp.path().join("operations.jsonl");
-        std::fs::write(&source, b"audio").unwrap();
-        let plans = vec![organize::MovePlan {
-            src: source.to_string_lossy().into_owned(),
-            dst: destination.to_string_lossy().into_owned(),
-            ..Default::default()
-        }];
-        // The frontend plan contains only the audio; a later companion must still protect it.
-        std::fs::write(&companion, b"markers").unwrap();
-        let results = execute_moves_inner(&plans, &journal, 1);
-        assert_eq!(results.len(), 1);
-        assert!(!results[0].ok);
-        assert_eq!(results[0].error, "organize-companion-bundle-required");
-        assert_eq!(std::fs::read(source).unwrap(), b"audio");
-        assert_eq!(std::fs::read(companion).unwrap(), b"markers");
-        assert!(!destination.exists());
-        assert!(!journal.exists());
+    fn execute_moves_preserves_late_relationship_markers_without_journal() {
+        for (marker, expected_error) in [
+            ("recording.tmk", "organize-companion-bundle-required"),
+            (".git", "프로젝트 내부 자료는 기존 관계를 보존하기 위해 따로 옮기지 않습니다."),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let source = tmp.path().join("recording.wav");
+            let companion = tmp.path().join(marker);
+            let destination = tmp.path().join("organized/recording.wav");
+            let journal = tmp.path().join("operations.jsonl");
+            std::fs::write(&source, b"audio").unwrap();
+            let plans = vec![organize::MovePlan {
+                src: source.to_string_lossy().into_owned(),
+                dst: destination.to_string_lossy().into_owned(),
+                ..Default::default()
+            }];
+            // A relationship marker arriving after the plan must retain the original.
+            std::fs::write(&companion, b"markers").unwrap();
+            let results = execute_moves_inner(&plans, &journal, 1);
+            assert_eq!(results.len(), 1);
+            assert!(!results[0].ok);
+            assert_eq!(results[0].error, expected_error);
+            assert_eq!(std::fs::read(source).unwrap(), b"audio");
+            assert_eq!(std::fs::read(companion).unwrap(), b"markers");
+            assert!(!destination.exists());
+            assert!(!journal.exists());
+        }
     }
 
     #[test]
