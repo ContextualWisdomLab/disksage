@@ -73,7 +73,7 @@ jobs:
 
   windows-home-resolution:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,6 +85,9 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows photo open-handle identity regression
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml photo_duplicate::tests:: --lib
 
   llm-engine-build:
     runs-on: ubuntu-latest
