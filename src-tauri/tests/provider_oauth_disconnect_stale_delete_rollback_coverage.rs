@@ -5,8 +5,8 @@
 //! unavailable, refusal at the document boundary is the recovery mechanism: credentials and the
 //! accepted document both remain unchanged.
 
-#[path = "../src/object_bound_publication.rs"]
-mod object_bound_publication;
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {

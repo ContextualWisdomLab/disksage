@@ -2,8 +2,8 @@
 
 // Compile the production OAuth module into this integration-test crate so the regression can
 // exercise its private persistence boundary without widening the shipped API surface.
-#[path = "../src/object_bound_publication.rs"]
-mod object_bound_publication;
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 // The included production module resolves crate-local production dependencies; re-export the

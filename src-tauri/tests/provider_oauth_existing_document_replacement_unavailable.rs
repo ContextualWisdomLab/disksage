@@ -7,8 +7,8 @@
 //! owner can bind final publication to the exact reviewed source object, an update must fail
 //! closed, preserve the accepted document byte-for-byte, and create no staging pathname.
 
-#[path = "../src/object_bound_publication.rs"]
-mod object_bound_publication;
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {

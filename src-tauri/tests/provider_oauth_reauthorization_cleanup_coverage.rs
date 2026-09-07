@@ -8,8 +8,8 @@
 //! replacement is unavailable, that recovery publication itself must fail closed rather than
 //! overwrite the accepted canonical document through a pathname fallback.
 
-#[path = "../src/object_bound_publication.rs"]
-mod object_bound_publication;
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {

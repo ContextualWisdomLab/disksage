@@ -4,8 +4,8 @@
 //! credential deletion. Until the filesystem owner can bind that replacement to the exact reviewed
 //! source object, the OAuth bounded context must fail before deleting any canonical or legacy token.
 
-#[path = "../src/object_bound_publication.rs"]
-mod object_bound_publication;
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
