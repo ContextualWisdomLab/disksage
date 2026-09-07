@@ -114,6 +114,28 @@ fn trash_receipt_requires_existing_exact_private_parent_before_mutation() {
     );
 
     fs::create_dir(&receipt_dir).unwrap();
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let error = execute_trash(
+        &home,
+        &applications,
+        &podman,
+        std::slice::from_ref(&request),
+        &plan.plan_fingerprint,
+        &plan.plan_fingerprint,
+        plan.trash_approval_phrase.as_deref().unwrap(),
+        "verified regenerable provider cache",
+        &data.join("journal.jsonl"),
+        &receipt_dir,
+        3,
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "provider-cache-receipt-object-bound-publication-failed");
+    assert!(
+        Path::new(&request.path).exists(),
+        "cache mutation must not start when receipt parent mode is not exact private"
+    );
+
     fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o700)).unwrap();
     let result = execute_trash(
         &home,
@@ -126,7 +148,7 @@ fn trash_receipt_requires_existing_exact_private_parent_before_mutation() {
         "verified regenerable provider cache",
         &data.join("journal.jsonl"),
         &receipt_dir,
-        3,
+        4,
     )
     .unwrap();
 
