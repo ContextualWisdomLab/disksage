@@ -37,8 +37,9 @@ fn public_plan_never_advertises_permanent_directory_purge() {
         .candidates
         .iter()
         .any(|candidate| candidate.kind == ProviderCacheKind::EdgeSupersededInstalledCopy));
+    let serialized = serde_json::to_value(&plan).expect("public plan must serialize");
     assert!(
-        plan.exact_approval_phrase.is_none(),
+        serialized.get("exact_approval_phrase").is_none(),
         "public Rust planning must not mint irreversible provider-cache approval"
     );
     assert!(stale_cache.is_dir());
