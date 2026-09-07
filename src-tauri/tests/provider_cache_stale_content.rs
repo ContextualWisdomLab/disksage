@@ -101,6 +101,9 @@ fn trash_preserves_same_inode_seed_changed_after_replan() {
     };
     let data = temp.path().join("data");
     fs::create_dir_all(&data).unwrap();
+    let receipt_dir = data.join("receipts");
+    fs::create_dir(&receipt_dir).unwrap();
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o700)).unwrap();
 
     let result = execute_trash(
         &home,
@@ -112,7 +115,7 @@ fn trash_preserves_same_inode_seed_changed_after_replan() {
         plan.trash_approval_phrase.as_deref().unwrap(),
         "verified regenerable provider cache",
         &data.join("journal.jsonl"),
-        &data.join("receipts"),
+        &receipt_dir,
         2,
     )
     .unwrap();
