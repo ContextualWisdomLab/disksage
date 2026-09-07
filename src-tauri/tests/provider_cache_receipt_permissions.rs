@@ -50,7 +50,7 @@ fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
 }
 
 #[test]
-fn trash_receipt_provisions_private_parent_and_is_not_owner_writable() {
+fn trash_receipt_requires_existing_exact_private_parent_before_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -91,7 +91,7 @@ fn trash_receipt_provisions_private_parent_and_is_not_owner_writable() {
     fs::create_dir_all(&data).unwrap();
     let receipt_dir = data.join("receipts");
 
-    let result = execute_trash(
+    let error = execute_trash(
         &home,
         &applications,
         &podman,
@@ -104,13 +104,36 @@ fn trash_receipt_provisions_private_parent_and_is_not_owner_writable() {
         &receipt_dir,
         2,
     )
+    .unwrap_err();
+
+    assert_eq!(error, "provider-cache-receipt-object-bound-publication-failed");
+    assert!(!receipt_dir.exists(), "receipt publication must not provision an unbound parent");
+    assert!(
+        Path::new(&request.path).exists(),
+        "cache mutation must not start when receipt authority is unavailable"
+    );
+
+    fs::create_dir(&receipt_dir).unwrap();
+    fs::set_permissions(&receipt_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let result = execute_trash(
+        &home,
+        &applications,
+        &podman,
+        std::slice::from_ref(&request),
+        &plan.plan_fingerprint,
+        &plan.plan_fingerprint,
+        plan.trash_approval_phrase.as_deref().unwrap(),
+        "verified regenerable provider cache",
+        &data.join("journal.jsonl"),
+        &receipt_dir,
+        3,
+    )
     .unwrap();
 
-    assert!(receipt_dir.is_dir(), "first-use cleanup must provision its private receipt parent");
     assert_eq!(
         fs::metadata(&receipt_dir).unwrap().permissions().mode() & 0o777,
         0o700,
-        "provisioned receipt parent must be owner-only"
+        "receipt parent authority must remain exact owner-private"
     );
     assert!(
         !Path::new(&request.path).exists(),
