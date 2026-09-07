@@ -211,6 +211,7 @@ mod tests {
             Path::new("/missing/podman"),
             1,
         );
-        assert!(plan.exact_approval_phrase.is_none());
+        let serialized = serde_json::to_value(plan).expect("public plan must serialize");
+        assert!(serialized.get("exact_approval_phrase").is_none());
     }
 }
