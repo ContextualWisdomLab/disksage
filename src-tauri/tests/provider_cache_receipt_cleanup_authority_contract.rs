@@ -16,7 +16,7 @@ fn reclaim_source() -> String {
 fn receipt_failure_cleanup_never_unlinks_the_visible_path() {
     let source = reclaim_source();
     let start = source
-        .find("fn write_immutable_receipt_with_sealer")
+        .find("fn write_immutable_receipt(")
         .expect("receipt writer must exist");
     let end = source[start..]
         .find("\n#[cfg(test)]\nfn restore_staged_file_without_replacement")
