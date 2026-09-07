@@ -501,6 +501,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
     #[test]
     fn metadata_probe_is_bounded_per_plan() {
         let onto = parse_ttl(ONTO).unwrap();
+        let home = tempfile::tempdir().unwrap();
         let files = (0..MAX_LINEAGE_PROBES + 1)
             .map(|i| fe(&format!("/downloads/{i}.png"), 1))
             .collect::<Vec<_>>();
@@ -508,7 +509,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         let plans = plan_moves_with_metadata(
             &files,
             &onto,
-            Path::new("/home/u"),
+            home.path(),
             1_800_000_000_000,
             &[],
             &|_, _| None,

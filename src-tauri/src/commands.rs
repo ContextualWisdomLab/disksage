@@ -185,11 +185,13 @@ pub fn clean_dev_artifacts_inner(
         .collect()
 }
 
-/// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
+/// Read unambiguous legacy move paths. New entries use structured paths.
 pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
-    path_field
-        .split_once(" -> ")
-        .map(|(s, d)| (s.to_string(), d.to_string()))
+    let (source, destination) = path_field.split_once(" -> ")?;
+    if source.is_empty() || destination.is_empty() || destination.contains(" -> ") {
+        return None;
+    }
+    Some((source.to_owned(), destination.to_owned()))
 }
 
 /// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
@@ -230,16 +232,19 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .iter()
         .filter(|e| e.op == "move" && e.outcome == "ok")
         .take(limit)
-        .filter_map(|e| parse_move_entry(&e.path))
+        .filter_map(|e| {
+            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone()))
+                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into())))
+        })
         .map(|(src, dst)| {
             match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
                 Ok(()) => CleanResult {
-                    path: src,
+                    path: src.to_string_lossy().into_owned(),
                     ok: true,
                     error: String::new(),
                 },
                 Err(e) => CleanResult {
-                    path: src,
+                    path: src.to_string_lossy().into_owned(),
                     ok: false,
                     error: e.to_string(),
                 },
@@ -3503,6 +3508,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
 
     #[test]
     fn parse_move_entry_splits_valid_entry() {
+        let legacy: safety::JournalEntry = serde_json::from_str(
+            r#"{"ts_ms":1,"op":"move","path":"/a/b -> /c/d","bytes":1,"outcome":"ok"}"#,
+        ).unwrap();
+        assert!(legacy.move_paths.is_none());
         assert_eq!(
             parse_move_entry("/a/b -> /c/d"),
             Some(("/a/b".to_string(), "/c/d".to_string()))
@@ -3512,6 +3521,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn parse_move_entry_malformed_is_none() {
         assert_eq!(parse_move_entry("no arrow here"), None);
+        assert_eq!(parse_move_entry("/a/draft -> revised.bin -> /b/draft -> revised.bin"), None);
+        assert_eq!(parse_move_entry(" -> /b"), None);
     }
 
     #[test]
@@ -3702,9 +3713,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn undo_last_moves_inner_reverses_recent_moves_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
-        let a = tmp.path().join("a.bin");
+        // Windows forbids > in filenames; the legacy parser regression runs on every OS.
+        let name = if cfg!(unix) { "draft -> revised.bin" } else { "draft revised.bin" };
+        let a = tmp.path().join(name);
         std::fs::write(&a, vec![2u8; 8]).unwrap();
-        let a_moved = tmp.path().join("dest").join("a.bin");
+        let a_moved = tmp.path().join("dest").join(name);
         let plans = vec![organize::MovePlan {
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
@@ -3717,7 +3730,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let undone = undo_last_moves_inner(10, &jp, 6);
         assert_eq!(undone.len(), 1);
         assert!(undone[0].ok);
-        assert!(a.exists());
+        assert_eq!(std::fs::read(&a).unwrap(), vec![2u8; 8]);
         assert!(!a_moved.exists());
     }
 

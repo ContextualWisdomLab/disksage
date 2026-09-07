@@ -177,12 +177,20 @@ pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MovePaths {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JournalEntry {
     pub ts_ms: u64,
     pub op: String,
     pub path: String,
     pub bytes: u64,
     pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_paths: Option<MovePaths>,
 }
 
 /// std::io 오류를 SafetyError::Journal로 감싸는 공용 매퍼.
@@ -316,6 +324,7 @@ pub fn trash_delete(
         path: path.to_string_lossy().into_owned(),
         bytes,
         outcome: "pending".into(),
+        move_paths: None,
     };
     journal_append(journal_path, &entry)?;
     // fsync 없음(의식적 선택): 삭제는 휴지통 경유라 전원 단절로 pending 기록을 잃어도 복구 가능
@@ -490,6 +499,7 @@ pub fn trash_delete_if_identity(
         path: path.to_string_lossy().into_owned(),
         bytes,
         outcome: "pending".into(),
+        move_paths: None,
     };
     if let Err(error) = journal_append(journal_path, &entry) {
         let _ = std::fs::remove_dir(&staging_dir);
@@ -690,6 +700,7 @@ fn do_move(
         path: format!("{} -> {}", src.display(), dst.display()),
         bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
         outcome: "pending".into(),
+        move_paths: Some(MovePaths { source: src.to_path_buf(), destination: dst.to_path_buf() }),
     };
     journal_append(journal_path, &entry)?;
 
@@ -854,6 +865,7 @@ mod tests {
                     path: format!("/x/{i}"),
                     bytes: i * 10,
                     outcome: "ok".into(),
+                    move_paths: None,
                 },
             )
             .unwrap();
@@ -882,6 +894,7 @@ mod tests {
                 path: "/x".into(),
                 bytes: 0,
                 outcome: "ok".into(),
+                move_paths: None,
             },
         );
         assert!(matches!(err, Err(SafetyError::Journal(_))));
@@ -1122,6 +1135,7 @@ mod tests {
                 path: "/x".into(),
                 bytes: 0,
                 outcome: "ok".into(),
+                move_paths: None,
             },
         )
         .unwrap();

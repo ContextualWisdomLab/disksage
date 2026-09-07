@@ -126,6 +126,7 @@ export interface JournalEntry {
   path: string;
   bytes: number;
   outcome: string;
+  move_paths?: { source: string; destination: string };
 }
 export interface DupeGroup {
   hash: string;

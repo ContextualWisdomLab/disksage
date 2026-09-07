@@ -43,3 +43,9 @@ Probe-budget regression: a 201-item fixture with a 200-probe budget reproduced 2
 The planner now reuses the shared agent-state guard before classification and rejects destinations in protected state. The preview explains retained session files. Execution continues to use the same protected move path supplied by PR #345; PR #346 is stacked on that branch until its protected merge. A regression case checks both source preservation before the picker and protected destination rejection.
 
 Validation after shared-guard integration: 29 organization tests passed with `cargo test --manifest-path src-tauri/Cargo.toml --lib organize:: --no-default-features --offline`; `npm run check` reported zero errors and warnings. The metadata-budget fixture took over 60 seconds after path resolution was added; this is a latency observation requiring investigation, not a failed test or a throughput guarantee.
+
+## Exact undo paths
+
+A Unix filename containing ` -> ` reproduced a failed undo in the public command core. New move receipts now contain separate source and destination fields; the display string is no longer parsed for new receipts. Legacy receipts remain readable, but ambiguous legacy path strings are skipped instead of guessed. The focused command regression failed before this fix; all 29 command tests passed after the fix. This change alone does not provide coordinated iCloud transactions, crash-durable receipts, or protection against replacement of a moved file before undo.
+
+The exact shared guard measured 458 ms for the synthetic `/home/u/Media/Image/0.png` path, versus less than 1 ms for `/downloads/0.png` and a `/tmp` path in the same process. The metadata-budget fixture now supplies an actual temporary home directory. Production protection remains unchanged; this observation does not establish production throughput.
