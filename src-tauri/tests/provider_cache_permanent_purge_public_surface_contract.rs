@@ -13,11 +13,11 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
     let boundary = source("src/provider_cache_public_boundary.rs");
 
     assert!(
-        lib.contains("provider_cache_public_boundary::plan_provider_cache_reclaim"),
+        lib.contains("provider_cache_public_boundary::plan_provider_cache_reclaim_public,"),
         "Tauri planning must pass through the boundary that omits unavailable permanent approval"
     );
     assert!(
-        lib.contains("provider_cache_public_boundary::execute_provider_cache_reclaim"),
+        lib.contains("provider_cache_public_boundary::execute_provider_cache_reclaim_public,"),
         "Tauri must route provider-cache execution through the fail-closed public boundary"
     );
     assert!(
@@ -43,7 +43,7 @@ fn permanent_provider_cache_purge_is_not_shipped_through_tauri_or_cli() {
     );
 
     let command_start = boundary
-        .find("pub fn execute_provider_cache_reclaim(")
+        .find("pub fn execute_provider_cache_reclaim_public(")
         .expect("Tauri provider-cache execution command must remain registered");
     let command_body = &boundary[command_start..];
     let delegate = command_body
