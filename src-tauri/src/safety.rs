@@ -696,7 +696,10 @@ fn do_move(
 
     let result = if same_vol {
         // One exclusive rename avoids the intermediate two-name state of link/unlink.
-        rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+        #[cfg(target_os = "macos")]
+        { coordinated_rename(src, dst) }
+        #[cfg(not(target_os = "macos"))]
+        { rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string())) }
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
         copy_verified_io(src, dst)
@@ -722,6 +725,21 @@ pub fn move_file(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
+    validate_move_paths(src, dst)?;
+    // 목적지 충돌 금지 (덮어쓰기 방지)
+    if dst.exists() {
+        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
+    }
+    // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
+    // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
+    // unwrap_or로 두어 라인 커버리지를 유지하면서 방어한다(도달 시 create_dir_all이 에러로 귀결).
+    let dst_parent = dst.parent().unwrap_or(dst);
+    std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
+
+    do_move(src, dst, same_volume(src, dst), journal_path, now_ms)
+}
+
+fn validate_move_paths(src: &Path, dst: &Path) -> Result<(), SafetyError> {
     // 보호: src·dst 양쪽, ParentDir 거부, verbatim 정규화 — trash_delete와 동일 리거
     for p in [src, dst] {
         if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -734,17 +752,65 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
-    // 목적지 충돌 금지 (덮어쓰기 방지)
-    if dst.exists() {
-        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
-    }
-    // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
-    // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
-    // unwrap_or로 두어 라인 커버리지를 유지하면서 방어한다(도달 시 create_dir_all이 에러로 귀결).
-    let dst_parent = dst.parent().unwrap_or(dst);
-    std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
+    Ok(())
+}
 
-    do_move(src, dst, same_volume(src, dst), journal_path, now_ms)
+#[cfg(target_os = "macos")]
+fn coordinated_rename(src: &Path, dst: &Path) -> Result<(), SafetyError> {
+    use std::{cell::Cell, ptr::NonNull};
+    use block2::StackBlock;
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSFileCoordinator, NSFileCoordinatorWritingOptions, NSString, NSURL};
+
+    let io_error = |e: std::io::Error| SafetyError::Trash(e.to_string());
+    let source = std::path::absolute(src).map_err(io_error)?;
+    let destination = std::path::absolute(dst).map_err(io_error)?;
+    let source_id = filesystem_object_id(&source).map_err(io_error)?;
+    let parent = destination.parent().ok_or_else(|| SafetyError::Protected(destination.clone()))?;
+    let parent_id = filesystem_object_id(&std::fs::canonicalize(parent).map_err(io_error)?).map_err(io_error)?;
+    let source_text = source.to_str().ok_or_else(|| SafetyError::Protected(source.clone()))?;
+    let destination_text = destination.to_str().ok_or_else(|| SafetyError::Protected(destination.clone()))?;
+    autoreleasepool(|_| {
+        let source_url = NSURL::fileURLWithPath(&NSString::from_str(source_text));
+        let destination_url = NSURL::fileURLWithPath(&NSString::from_str(destination_text));
+        let coordinator = NSFileCoordinator::new();
+        let outcome = Cell::new(None);
+        let invoked = Cell::new(false);
+        let accessor = StackBlock::new(|from: NonNull<NSURL>, to: NonNull<NSURL>| {
+            if invoked.replace(true) {
+                outcome.set(Some(Err(SafetyError::Trash("file coordination invoked twice".into()))));
+                return;
+            }
+            // SAFETY: Foundation lends these non-null URLs for the synchronous accessor call.
+            let (from, to) = unsafe { (from.as_ref(), to.as_ref()) };
+            let result = (|| {
+                let actual_source = from.path().map(|p| PathBuf::from(p.to_string()));
+                let actual_destination = to.path().map(|p| PathBuf::from(p.to_string()));
+                if actual_source.as_ref() != Some(&source) || actual_destination.as_ref() != Some(&destination) {
+                    return Err(SafetyError::Trash("file coordination changed the planned paths".into()));
+                }
+                validate_move_paths(&source, &destination)?;
+                if filesystem_object_id(&source).map_err(io_error)? != source_id
+                    || filesystem_object_id(&std::fs::canonicalize(parent).map_err(io_error)?).map_err(io_error)? != parent_id {
+                    return Err(SafetyError::Trash("file identity changed while waiting for coordination".into()));
+                }
+                coordinator.itemAtURL_willMoveToURL(from, to);
+                rename_noreplace(&source, &destination).map_err(io_error)?;
+                coordinator.itemAtURL_didMoveToURL(from, to);
+                Ok(())
+            })();
+            outcome.set(Some(result));
+        });
+        let mut error = None;
+        coordinator.coordinateWritingItemAtURL_options_writingItemAtURL_options_error_byAccessor(
+            &source_url, NSFileCoordinatorWritingOptions::ForMoving,
+            &destination_url, NSFileCoordinatorWritingOptions::empty(), Some(&mut error), &accessor,
+        );
+        if let Some(error) = error {
+            return Err(SafetyError::Trash(error.localizedDescription().to_string()));
+        }
+        outcome.take().unwrap_or_else(|| Err(SafetyError::Trash("file coordination did not run".into())))
+    })
 }
 
 #[cfg(test)]
