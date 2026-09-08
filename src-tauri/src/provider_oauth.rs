@@ -1416,6 +1416,15 @@ mod tests {
 
     #[test]
     fn connection_document_round_trips_and_rejects_tampering() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        #[cfg(unix)]
+        let temp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        #[cfg(not(unix))]
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("connections.json");
         let connections = vec![
