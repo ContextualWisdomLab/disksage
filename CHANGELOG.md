@@ -52,6 +52,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Keep the release provenance contract pinned to the same immutable
+  `softprops/action-gh-release` 3.0.3 commit used by the publication job.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
