@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
+    // GitHub-hosted Ubuntu runners can expose enough logical CPUs for Vitest's
+    // default forks pool to exceed the job's memory budget. Keep file isolation
+    // and the complete test set; only bound concurrent worker processes in CI.
+    maxWorkers: process.env.CI ? 2 : undefined,
     coverage: {
       provider: "v8",
       // ponytail: 커버리지는 헤드리스로 검증 가능한 순수 로직과 mockable Tauri API 래퍼만 측정.
