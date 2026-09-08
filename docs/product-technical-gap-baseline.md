@@ -1,5 +1,19 @@
 # DiskSage product and technical gap baseline
 
+## 2026-09-08 targeted cache-plan scope repair
+
+- A live plan for `edge-code-sign-clones` was stopped before mutation after the process opened an
+  unrelated UV cache tree. `plan_catalog_cache_headless` and its targeted execution path selected
+  one result only after `cache_candidates` had measured every catalog root. This made a narrow
+  request perform broad I/O and could delay evidence refresh while active environments changed.
+- The fixed lookup selects the requested fixed catalog ID before measuring its root. Full catalog
+  display and explicitly requested all-cache cleanup keep their existing behavior. The same narrow
+  lookup is used for the native UV prune preparation, Edge planning, and identity-bound single-cache
+  execution. Unknown IDs still fail closed.
+- Acceptance evidence requires a focused catalog lookup regression and a live Edge-only plan that
+  does not open UV cache paths. Each clone still needs exact object identity and a fresh active-use
+  probe before Trash movement; an aggregate cache size is not deletion authority.
+
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
 `3630e1eefacbeb996e6176373e6010da93bfa16c`, PR #263

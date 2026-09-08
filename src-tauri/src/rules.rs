@@ -542,33 +542,43 @@ impl CatalogRoot {
     }
 }
 
+fn measure_cache_candidate(id: &str, label: &str, path: PathBuf) -> CacheCandidate {
+    let root = CatalogRoot::open(&path);
+    let exists = root.is_some();
+    let bytes = if id == "shared-temp" {
+        cache_targets(&path)
+            .ok()
+            .map(|targets| {
+                targets
+                    .into_iter()
+                    .fold(0u64, |total, target| total.saturating_add(target.bytes))
+            })
+            .unwrap_or(0)
+    } else {
+        root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0)
+    };
+    CacheCandidate {
+        id: id.into(),
+        label: label.into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        exists,
+    }
+}
+
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
     catalog(bases)
         .into_iter()
-        .map(|(id, label, path)| {
-            let root = CatalogRoot::open(&path);
-            let exists = root.is_some();
-            let bytes = if id == "shared-temp" {
-                cache_targets(&path)
-                    .ok()
-                    .map(|targets| {
-                        targets
-                            .into_iter()
-                            .fold(0u64, |total, target| total.saturating_add(target.bytes))
-                    })
-                    .unwrap_or(0)
-            } else {
-                root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0)
-            };
-            CacheCandidate {
-                id: id.into(),
-                label: label.into(),
-                path: path.to_string_lossy().into_owned(),
-                bytes,
-                exists,
-            }
-        })
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
         .collect()
+}
+
+/// Measure one fixed catalog root without traversing unrelated caches.
+pub fn cache_candidate(bases: &BaseDirs, requested_id: &str) -> Option<CacheCandidate> {
+    catalog(bases)
+        .into_iter()
+        .find(|(id, _, _)| *id == requested_id)
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
 }
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
@@ -667,6 +677,10 @@ mod tests {
         let npm_c = cands.iter().find(|c| c.id == "npm-cache").unwrap();
         assert!(npm_c.exists);
         assert_eq!(npm_c.bytes, 128);
+        let targeted = cache_candidate(&bases, "npm-cache").unwrap();
+        assert_eq!(targeted.path, npm_c.path);
+        assert_eq!(targeted.bytes, 128);
+        assert!(cache_candidate(&bases, "not-in-catalog").is_none());
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);

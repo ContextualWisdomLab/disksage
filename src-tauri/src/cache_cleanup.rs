@@ -219,9 +219,8 @@ pub fn prune_uv_cache_headless(
     #[cfg(target_os = "macos")]
     {
         let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-        let cache = rules::cache_candidates(&bases)
-            .into_iter()
-            .find(|candidate| candidate.id == "uv-cache" && candidate.exists)
+        let cache = rules::cache_candidate(&bases, "uv-cache")
+            .filter(|candidate| candidate.exists)
             .map(|candidate| PathBuf::from(candidate.path))
             .ok_or("uv-cache-prune-cache-unavailable")?;
         let mut entries = 0;
@@ -733,9 +732,7 @@ pub fn clean_regenerable_caches_headless(
 /// Return a fresh exact-child snapshot for one fixed catalog cache ID.
 pub fn plan_catalog_cache_headless(cache_id: &str) -> Result<serde_json::Value, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let candidate = rules::cache_candidates(&bases)
-        .into_iter()
-        .find(|candidate| candidate.id == cache_id)
+    let candidate = rules::cache_candidate(&bases, cache_id)
         .ok_or("cache-catalog-id-unknown")?;
     let targets = if candidate.exists {
         rules::cache_targets(Path::new(&candidate.path))?
@@ -753,9 +750,8 @@ pub fn clean_catalog_cache_headless(
     now_ms: u64,
 ) -> Result<serde_json::Value, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let candidate = rules::cache_candidates(&bases)
-        .into_iter()
-        .find(|candidate| candidate.id == cache_id && candidate.exists)
+    let candidate = rules::cache_candidate(&bases, cache_id)
+        .filter(|candidate| candidate.exists)
         .ok_or("cache-catalog-target-unavailable")?;
     let path = PathBuf::from(&candidate.path);
     let mut targets = rules::cache_targets(&path)?;
