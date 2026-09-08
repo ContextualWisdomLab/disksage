@@ -1271,3 +1271,11 @@ runner's private workspace temp root instead of weakening the shared production 
   independently confirms the storage inconsistency. DiskSage therefore records no prune or
   physical gain until an explicit native storage-repair plan preserves running-container and
   data-volume dependencies, rechecks integrity, and regenerates the orphan fingerprint.
+## 2026-09-08 content-evidence gate for organization plans
+
+- Metadata-aware organization planning now refuses the extension/name-only fallback when no
+  explicit rule or content-aware picker decision exists. The legacy metadata-free planner keeps
+  its prior extension fallback for compatibility.
+- `organize::tests` passes 23/23, including `metadata_aware_plan_skips_name_only_fallback`.
+  This closes the specific authority gap for the iCloud organization path; it does not establish
+  semantic classification accuracy or authorize moving shared/app-managed content.
