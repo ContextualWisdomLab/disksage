@@ -40,10 +40,11 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    SHA-256 fingerprint of the exact sorted candidate identity set. A stale phrase, empty
    candidate set, incomplete evidence, duplicate identity, or candidate set above the bounded
    exact-delete limit aborts before any mutation.
-   A direct Docker host is passed explicitly with `--host`. A named Docker context is instead
-   passed explicitly with `--context` so its TLS material remains available, while a fingerprint
-   of the complete inspected context definition is bound into the approval without disclosure.
-   A context/config change therefore invalidates approval before deletion.
+   A direct Docker host is passed explicitly with `--host` and is the only Docker target that can
+   acquire mutation authority. Named/default Docker contexts and the fixed Colima context remain
+   read-only: their effective context may be inspected, but no approval phrase or prune command is
+   issued because a later context resolution could redirect deletion. A fingerprint of the
+   inspected context definition is retained as read-only evidence without disclosure.
 5. Mutation uses only exact identities produced by that fresh audit (`container rm`, `image rm`,
    `volume rm`, or `network rm`). Category-wide `prune --force` is forbidden because a resource
    that becomes orphaned after the audit is not part of the approved fingerprinted set. Candidate
@@ -58,6 +59,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
 
 - Positive: one mental model and one UI surface cover Docker, Colima, and Podman; evidence
   and receipts are schema-compatible with the existing Podman plan.
+- Negative: default/named Docker contexts and Colima are currently audit-only. Their resources
+  remain visible for evidence, but cannot be reclaimed until an immutable context/TLS binding is
+  implemented and reviewed.
 - Positive: approval and deletion authority now refer to the same exact resource identities;
   resources that become orphaned after the fresh audit cannot be swept into the mutation.
 - Negative: exact deletion is capped at 64 candidates per category per execution so command
@@ -79,6 +83,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
   eliminates via mandatory re-audit.
 - Auto-detecting Colima by spawning the `colima` binary: rejected to keep the runtime
   surface to two binaries (`docker`, `podman`) with explicit contexts.
+- Allowing mutation through a mutable named/default context: rejected because the approved
+  identity could resolve to a different daemon at execution time. The current product keeps
+  these contexts read-only until immutable context binding exists.
 
 ## Evidence
 
