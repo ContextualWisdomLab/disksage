@@ -88,3 +88,16 @@ cross-volume restrictions remain in force. The regression covers the observed gr
 size, digest equivalence, execution/undo, exact-budget acceptance and one-byte excess.
 Performance and iCloud behavior for this wider budget remain unverified until measured;
 local test success alone is not permission to move a private group or claim deployment.
+
+## Read-only bundle preview
+
+`cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-organization-plan -- ABSOLUTE_SOURCE ABSOLUTE_TARGET_PARENT`
+prints the same bounded plan used by the desktop preview. It does not create the
+target or move files, and has no execution option. Keep its output private: it
+contains original paths, filenames and content fingerprints. Cloud-only members
+are refused by the shared planner; the command does not request downloads.
+
+This preview proves neither the proposed grouping's meaning nor cloud synchronization.
+Those observations remain separate prerequisites for an actual move. The command's
+regression checks source preservation, absent destination creation, collision refusal,
+and the absence of an execution option.
