@@ -46,7 +46,9 @@ fn one_timeout_bounds_the_complete_github_evidence_phase() {
         r#"#!/bin/sh
 set -eu
 case "$*" in
-  "api --paginate repos/{owner}/{repo}/pulls?state=all&per_page=100 --jq "*) sleep 1; printf '' ;;
+  "api --paginate repos/{owner}/{repo}/pulls?state=all&per_page=100 --jq "*)
+    if [ -e "$PWD/.gh-pull-list-called" ]; then sleep 1; else touch "$PWD/.gh-pull-list-called"; sleep 0.1; fi
+    printf '' ;;
   "api repos/{owner}/{repo} --jq .full_name"*) sleep 1; printf 'ContextualWisdomLab/disksage\n' ;;
   "api -X GET search/issues "*) printf '{"total_count":0,"items":[]}\n' ;;
   *) printf 'unexpected fake gh invocation\n' >&2; exit 9 ;;
@@ -74,7 +76,7 @@ esac
             "HEAD",
             "--include-closed-pull-requests",
             "--command-timeout-ms",
-            "1500",
+            "800",
         ])
         .output()
         .expect("Git worktree audit binary should start");
