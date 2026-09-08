@@ -637,7 +637,7 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 
 fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(value.len());
+    let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
