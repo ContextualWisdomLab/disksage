@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add bounded native temporary-root planning that admits only marker-bound generated artifacts,
+  requires complete active-use and identity evidence plus fresh per-candidate approval, and moves
+  approved candidates through the existing Trash journal while leaving unknown temp data and
+  permanent deletion unavailable.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

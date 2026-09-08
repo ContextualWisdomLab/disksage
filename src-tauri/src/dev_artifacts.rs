@@ -40,17 +40,24 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
+    (".codegraph", &[]),  // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
 }
 
+fn is_regular_marker(path: &Path) -> bool {
+    path.symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
-    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
+    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else {
+        return 0;
+    };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
 }
@@ -66,12 +73,12 @@ struct ArtifactManifest {
     object_id: String,
 }
 
-/// Build a bounded, deterministic metadata-only manifest for one generated directory.
+/// Build a deterministic metadata-only manifest within a caller-supplied wall-clock budget.
 ///
-/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
-/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
-/// unusually large trees instead of blocking the UI indefinitely.
-fn artifact_manifest(root: &Path) -> ArtifactManifest {
+/// The budget is deliberately supplied by the owning operation so a higher-level discovery
+/// deadline cannot be extended by starting a fresh three-second manifest for every candidate.
+/// Exhaustion fails the manifest closed and therefore cannot create deletion authority.
+fn artifact_manifest_with_budget(root: &Path, budget: Duration) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
@@ -81,14 +88,14 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         manifest.scan_complete = false;
     }
     manifest.object_id = root_object_id.unwrap_or_default();
-    let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let started = Instant::now();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
 
     for entry in walker {
-        if Instant::now() >= deadline || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
+        if started.elapsed() >= budget || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
             manifest.scan_complete = false;
             break;
         }
@@ -142,23 +149,83 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
             manifest.files = manifest.files.saturating_add(1);
-            manifest
-                .records
-                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
+            manifest.records.push(format!(
+                "F\0{relative}\0{identity}\0{}\0{modified}",
+                metadata.len()
+            ));
         }
     }
 
     if !manifest.scan_complete {
-        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
+        manifest
+            .records
+            .push("!incomplete\0bounded-artifact-manifest".into());
     }
     manifest.records.sort_unstable();
     manifest.fingerprint = metadata_fingerprint(&manifest.records);
     manifest
 }
 
+/// Build a bounded manifest for ordinary development-artifact scans.
+fn artifact_manifest(root: &Path) -> ArtifactManifest {
+    artifact_manifest_with_budget(root, ARTIFACT_MANIFEST_BUDGET)
+}
+
+/// Inspect one explicitly selected generated directory using a caller-owned manifest budget.
+///
+/// Higher-level operations with a stricter global deadline must pass only their remaining budget.
+/// A zero or exhausted budget still recognizes the artifact identity but returns an incomplete
+/// manifest, preserving fail-closed cleanup semantics.
+pub fn inspect_artifact_with_budget(
+    path: &Path,
+    now_ms: u64,
+    manifest_budget: Duration,
+) -> Option<DevArtifact> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let (kind, markers) = artifact_kind(&name)?;
+    let parent = path.parent()?;
+    if !path.is_dir()
+        || (!markers.is_empty()
+            && !markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker))))
+    {
+        return None;
+    }
+    let manifest = artifact_manifest_with_budget(path, manifest_budget);
+    Some(DevArtifact {
+        path: path.to_string_lossy().into_owned(),
+        kind: kind.to_string(),
+        project: parent.file_name()?.to_string_lossy().into_owned(),
+        bytes: manifest.bytes,
+        files: manifest.files,
+        skipped: manifest.skipped,
+        scan_complete: manifest.scan_complete,
+        fingerprint: manifest.fingerprint,
+        object_id: manifest.object_id,
+        age_days: age_days(path, now_ms),
+    })
+}
+
+/// Inspect one explicitly selected generated directory without walking its surrounding project.
+///
+/// Ordinary development-artifact callers retain the established three-second manifest ceiling.
+/// Operations with a tighter enclosing deadline must use [`inspect_artifact_with_budget`].
+pub fn inspect_artifact(path: &Path, now_ms: u64) -> Option<DevArtifact> {
+    inspect_artifact_with_budget(path, now_ms, ARTIFACT_MANIFEST_BUDGET)
+}
+
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
-    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+    let duration = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!(
+        "{}:{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
 }
 
 fn metadata_fingerprint(records: &[String]) -> String {
@@ -194,10 +261,17 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        let Some((_, markers)) = artifact_kind(&name) else { continue };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| is_regular_marker(&parent.join(marker)));
         if marker_ok {
             candidates.push(path.to_path_buf());
         }
@@ -219,7 +293,11 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter_map(|path| {
-            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
+            let age = if now_ms == u64::MAX {
+                u64::MAX
+            } else {
+                age_days(path, now_ms)
+            };
             if age < min_age_days {
                 return None;
             }
@@ -311,12 +389,65 @@ pub fn clean_artifacts(
         .collect()
 }
 
+/// Revalidate and trash one explicitly selected artifact without scanning sibling projects.
+pub fn clean_artifact_exact(
+    request: &DevArtifact,
+    journal_path: &Path,
+    now_ms: u64,
+) -> DevArtifactCleanResult {
+    let current = inspect_artifact(Path::new(&request.path), now_ms);
+    let unchanged = current.as_ref().is_some_and(|candidate| {
+        candidate.path == request.path
+            && candidate.kind == request.kind
+            && candidate.project == request.project
+            && candidate.bytes == request.bytes
+            && candidate.files == request.files
+            && candidate.skipped == 0
+            && request.skipped == 0
+            && candidate.scan_complete
+            && request.scan_complete
+            && candidate.fingerprint == request.fingerprint
+            && !request.object_id.is_empty()
+            && candidate.object_id == request.object_id
+    });
+    if !unchanged {
+        return DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+        };
+    }
+    match crate::safety::trash_delete_if_identity(
+        Path::new(&request.path),
+        &request.object_id,
+        request.bytes,
+        journal_path,
+        now_ms,
+    ) {
+        Ok(()) => DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: true,
+            error: String::new(),
+        },
+        Err(error) => DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: error.to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
-    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
+    fn project(
+        root: &std::path::Path,
+        name: &str,
+        marker: &str,
+        artifact: &str,
+    ) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
@@ -348,6 +479,23 @@ mod tests {
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_project_markers() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("linked-marker");
+        let artifact = project.join("target");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(artifact.join("payload.bin"), b"generated").unwrap();
+        fs::write(tmp.path().join("outside.toml"), b"[package]").unwrap();
+        symlink(tmp.path().join("outside.toml"), project.join("Cargo.toml")).unwrap();
+
+        assert!(inspect_artifact(&artifact, 0).is_none());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
@@ -408,6 +556,9 @@ mod tests {
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(!journal.exists(), "stale identity must not create a journal");
+        assert!(
+            !journal.exists(),
+            "stale identity must not create a journal"
+        );
     }
 }
