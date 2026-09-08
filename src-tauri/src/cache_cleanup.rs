@@ -452,12 +452,11 @@ mod tests {
             home: tmp.path().join("home"),
         };
         let journal = tmp.path().join("journal.jsonl");
-        let targets = rules::cache_targets(&provider_cache).unwrap();
 
         let error = clean_cache_contents_inner(
             &bases,
             &provider_cache,
-            &targets,
+            &[],
             &journal,
             1,
         )
