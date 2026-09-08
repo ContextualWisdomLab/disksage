@@ -52,6 +52,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Refresh the Vite/PostCSS transitive `nanoid` lock entry to 3.3.18, removing
+  GHSA-2v37-7h3g-55p8 without adding a direct dependency or override.
 - Keep the Vitest runner and V8 coverage provider on the same 5.0.0 release,
   preventing deterministic `npm ci` peer-resolution failure in test and release jobs.
 - Reject ontology organize destinations that are relative to the process working directory,

@@ -23,6 +23,14 @@ authoritative, and no merge is claimed from queued or stale status.
   transfer predecessor results or authorize release. See Node.js Release
   Working Group. (2026). *Node.js release schedule*.
   https://github.com/nodejs/Release#release-schedule
+- The repaired dependency tree then exposed `nanoid` 3.3.17 through
+  `vite → postcss → nanoid`. `npm audit --json` reported
+  GHSA-2v37-7h3g-55p8 (`<3.3.18`, high severity, CWE-835) because a zero-size
+  custom generator can loop indefinitely. The smallest owner-side repair
+  refreshes only the existing transitive lock entry to 3.3.18; it does not add
+  a direct dependency, an override, an exclusion, or an audit bypass. See
+  GitHub. (2026). *nanoid: custom generators can loop indefinitely when size
+  is zero*. https://github.com/advisories/GHSA-2v37-7h3g-55p8
 
 ## Current product contract
 
