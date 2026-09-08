@@ -1,5 +1,18 @@
 # DiskSage product and technical gap baseline
 
+## 2026-09-08 pnpm cache evidence-bound reclaim
+
+- The fixed `pnpm-cache` catalog was re-audited to two direct children. Only `v11` (object
+  `unix:16777233:142034678`, 1,138,157,228 bytes) was selected; the lockfile marker was retained.
+- The product's recursive active-use probe completed with no pnpm process using `v11`. The item
+  moved to OS Trash under an identity-bound journal, then the proven `pnpm-store-v11` signature
+  was checked before permanent removal. Generic Trash was untouched and the original path is gone.
+- APFS availability changed from 204,988,308 KiB to 206,104,472 KiB (1,116,164 KiB / 1.0644569397
+  GiB observed). Only this host delta is credited; current availability is 187.8532142639 GiB
+  above the fixed baseline and 112.1467857361 GiB short of the 300 GiB target.
+- Receipt and journals are retained in the private research attachment; no uncertain operation was
+  replayed and folder moves receive zero capacity credit.
+
 ## 2026-09-08 container cleanup false-positive repair
 
 - A live Docker audit classified 17 tagged images as removable because the Docker-specific path
