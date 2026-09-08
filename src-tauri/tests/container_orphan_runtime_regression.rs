@@ -120,7 +120,8 @@ case "${{1:-}}" in
     ;;
   image)
     [ "${{2:-}}" = "inspect" ] || exit 96
-    case " $* " in *" --format {{{{json .}}}} "*) ;; *) echo "missing image inspect format" >&2; exit 97 ;; esac
+    case " $* " in *" --format "*) ;; *) echo "missing image inspect format" >&2; exit 97 ;; esac
+    case " $* " in *"json .Id"*"json .Size"*) ;; *) echo "missing image inspect fields" >&2; exit 98 ;; esac
     printf '%s\n' '{{"Id":"sha256:{FULL_ID}","Size":72900000}}'
     ;;
   volume|network) exit 0 ;;
