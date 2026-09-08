@@ -404,6 +404,16 @@ fn open_connection_document(path: &Path) -> Result<Option<std::fs::File>, String
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
             Err("oauth-connection-document-not-regular-file".into())
         }
+        #[cfg(unix)]
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                    Err("oauth-connection-document-not-regular-file".into())
+                }
+                Ok(_) => Err("oauth-connection-document-unreadable".into()),
+                Err(_) => Err("oauth-connection-document-unavailable".into()),
+            }
+        }
         Err(_) => Err("oauth-connection-document-unavailable".into()),
     }
 }
@@ -627,7 +637,7 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 
 fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
