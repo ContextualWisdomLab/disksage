@@ -694,7 +694,9 @@ fn parse_docker_image_ids(output: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn parse_buildx_reclaimable_ids(output: &str) -> Result<(u64, Vec<String>), String> {
+fn parse_buildx_private_immutable_reclaimable_ids(
+    output: &str,
+) -> Result<(u64, Vec<String>), String> {
     let values = split_json_envelopes(output)?;
     if values.len() > MAX_CATEGORY_RECORDS {
         return Err("record-count-exceeds-bound".to_string());
@@ -702,7 +704,26 @@ fn parse_buildx_reclaimable_ids(output: &str) -> Result<(u64, Vec<String>), Stri
     let total = u64::try_from(values.len()).map_err(|_| "record-count-overflow".to_string())?;
     let mut ids = Vec::new();
     for value in values {
-        if value.get("Reclaimable").and_then(Value::as_bool) == Some(true) {
+        let reclaimable = value
+            .get("Reclaimable")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| "build-cache-reclaimable-missing".to_string())?;
+        if reclaimable {
+            let shared = value
+                .get("Shared")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "build-cache-shared-missing".to_string())?;
+            let mutable = value
+                .get("Mutable")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "build-cache-mutable-missing".to_string())?;
+            let record_type = value
+                .get("Type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "build-cache-type-missing".to_string())?;
+            if shared || mutable || record_type == "exec.cachemount" {
+                continue;
+            }
             let id = string_field(&value, &["ID"])?;
             if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
                 return Err("build-cache-id-invalid".into());
@@ -749,7 +770,7 @@ fn inspect_docker_image_sizes(
         "image".to_string(),
         "inspect".to_string(),
         "--format".to_string(),
-        "{{json .}}".to_string(),
+        r#"{"Id":{{json .Id}},"Size":{{json .Size}}}"#.to_string(),
     ]);
     args.extend(image_ids.iter().cloned());
     let references: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -1412,7 +1433,15 @@ fn audit_category(
                 args.extend(["--format", "json"]);
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                args.extend(["images", "--all", "--no-trunc", "--format", "json"]);
+                args.extend([
+                    "images",
+                    "--all",
+                    "--filter",
+                    "dangling=true",
+                    "--no-trunc",
+                    "--format",
+                    "json",
+                ]);
             }
             OrphanCategory::Image => {
                 args.extend([
@@ -1666,7 +1695,8 @@ fn audit_category(
                 )
             }
             OrphanCategory::BuildCache => {
-                let (total, candidate_ids) = parse_buildx_reclaimable_ids(&output)?;
+                let (total, candidate_ids) =
+                    parse_buildx_private_immutable_reclaimable_ids(&output)?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -2617,14 +2647,40 @@ mod tests {
     }
 
     #[test]
-    fn buildx_inventory_selects_only_reclaimable_records() {
+    fn buildx_inventory_preserves_active_shared_mutable_and_cache_mount_records() {
         let output = concat!(
-            r#"{"ID":"abc123","Reclaimable":true}"#,
+            r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Mutable":false,"Type":"regular"}"#,
             "\n",
             r#"{"ID":"kept456","Reclaimable":false}"#,
+            "\n",
+            r#"{"ID":"shared789","Reclaimable":true,"Shared":true,"Mutable":false,"Type":"regular"}"#,
+            "\n",
+            r#"{"ID":"mutable012","Reclaimable":true,"Shared":false,"Mutable":true,"Type":"regular"}"#,
+            "\n",
+            r#"{"ID":"mount345","Reclaimable":true,"Shared":false,"Mutable":false,"Type":"exec.cachemount"}"#,
         );
-        let (total, ids) = parse_buildx_reclaimable_ids(output).unwrap();
-        assert_eq!(total, 2);
+        let (total, ids) = parse_buildx_private_immutable_reclaimable_ids(output).unwrap();
+        assert_eq!(total, 5);
         assert_eq!(ids, vec!["abc123"]);
+
+        for (output, issue) in [
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Mutable":false,"Type":"regular"}"#,
+                "build-cache-shared-missing",
+            ),
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Type":"regular"}"#,
+                "build-cache-mutable-missing",
+            ),
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Mutable":false}"#,
+                "build-cache-type-missing",
+            ),
+        ] {
+            assert_eq!(
+                parse_buildx_private_immutable_reclaimable_ids(output).unwrap_err(),
+                issue
+            );
+        }
     }
 }

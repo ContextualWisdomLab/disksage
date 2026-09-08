@@ -1,5 +1,23 @@
 # DiskSage product and technical gap baseline
 
+## 2026-09-08 container cleanup false-positive repair
+
+- A live Docker audit classified 17 tagged images as removable because the Docker-specific path
+  listed every image and checked container membership without enforcing its documented no-tag
+  invariant. Docker's own dangling-image inventory contained zero records. The repaired producer
+  query requests only `dangling=true` images before the existing membership, exact-size and
+  identity checks; the unsafe 17-image plan was never executed.
+- The same audit classified 107 BuildKit records from `Reclaimable=true` alone. Current producer
+  evidence showed that this set included 64 shared records, 30 mutable records and one execution
+  cache mount. The repaired parser requires every safety field and retains shared, mutable and
+  `exec.cachemount` records. A fresh audit reduced the candidate set to 13 private, immutable,
+  non-cache-mount records while keeping active records excluded by Buildx's reclaimable flag.
+- Two execution attempts stopped during the fresh Buildx inventory with
+  `orphan-list-build_cache-timeout`; neither reached mutation or wrote an execution receipt. The
+  13 records remain uncredited and preserved until a complete fresh audit and exact execution can
+  finish. The current standalone test now checks the implemented pre-mutation re-audit contract
+  instead of the obsolete claim that exact BuildKit deletion is unavailable.
+
 ## 2026-09-08 targeted cache-plan scope repair
 
 - A live plan for `edge-code-sign-clones` was stopped before mutation after the process opened an

@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[test]
-fn build_cache_execution_fails_closed_before_any_runtime_mutation() {
+fn build_cache_execution_requires_fresh_runtime_evidence_before_mutation() {
     let receipt_dir = tempfile::tempdir().expect("private receipt tempdir");
     std::fs::set_permissions(
         receipt_dir.path(),
@@ -30,7 +30,10 @@ fn build_cache_execution_fails_closed_before_any_runtime_mutation() {
         1,
         receipt_dir.path(),
     )
-    .expect_err("BuildKit cache has no exact identity-bound deletion primitive");
+    .expect_err("missing runtime prevents fresh BuildKit evidence");
 
-    assert_eq!(error, "orphan-prune-build-cache-exact-delete-unavailable");
+    assert_eq!(
+        error,
+        "orphan-prune-evidence-incomplete:orphan-list-build_cache-spawn:No such file or directory (os error 2)"
+    );
 }
