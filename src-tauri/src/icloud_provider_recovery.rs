@@ -358,6 +358,17 @@ pub fn execute_icloud_file_provider_recovery(
     })
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn execute_icloud_file_provider_recovery(
+    _plan: &IcloudFileProviderRecoveryPlan,
+    _fresh_health: &IcloudSyncHealthEvidenceSnapshot,
+    _now_ms: u64,
+    _confirmation: &str,
+    _rationale: &str,
+) -> Result<IcloudFileProviderRecoveryResult, String> {
+    Err("icloud-recovery-platform-unsupported".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
