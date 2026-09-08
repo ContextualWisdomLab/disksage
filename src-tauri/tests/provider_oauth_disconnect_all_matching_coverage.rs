@@ -12,6 +12,16 @@ mod cloud {
     pub use disksage_lib::cloud::*;
 }
 
+fn private_tempdir() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    temp
+}
+
 fn unicode_google_root(decomposed: bool) -> CloudRoot {
     #[cfg(windows)]
     let composed = r"C:\Cloud\내 드라이브";
@@ -51,7 +61,7 @@ fn google_connection(
 
 #[test]
 fn disconnect_fails_before_any_credential_delete_when_document_replacement_is_unavailable() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
