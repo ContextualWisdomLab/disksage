@@ -26,6 +26,8 @@ mod macos_temp_guard_tests;
 mod node_view_security_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
+#[cfg(test)]
+mod cache_candidate_provider_boundary_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]

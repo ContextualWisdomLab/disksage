@@ -1,6 +1,6 @@
 # ADR-0002: Cache cleanup is per-item active-use evidence bound
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0012
 **Date:** 2026-08-20
 
 ## Context
@@ -99,5 +99,6 @@ applies to user files or cloud-provider placeholders.
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)
+- [ADR-0012: Cache Trash permanent deletion fails closed](0012-cache-trash-permanent-delete-fails-closed.md)
 - `src-tauri/src/cache_cleanup.rs`
 - `src-tauri/src/rules.rs`

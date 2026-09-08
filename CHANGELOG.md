@@ -104,6 +104,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Return a stable cache-cleanup argument error without reflecting an untrusted option payload into
+  terminal or automation logs; permanent cache-Trash deletion remains fail closed.
 - Default personal cloud-provider OAuth consent to read-only; upload scope and API write
   authority now require an explicit user opt-in.
 - Catalog the Cargo registry source tree as an explicit, identity-bound regenerable-cache target;
