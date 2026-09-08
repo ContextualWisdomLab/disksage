@@ -679,3 +679,44 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## Organization evidence gap — source audit at ae41fc9e
+
+Status: open, not shipped. Source revision: `ae41fc9e3b37bc7c9a62a3c46e4ee421f2f360dc` (PR #346).
+
+The organization preview retains session, package, companion and project-boundary cases,
+and deliberately reports that the whole tree is unverified. These safeguards do not establish
+why a document belongs to a semantic group. The inspected move-plan record carries a class,
+source metadata, production-time lineage and an optional bundle manifest. It has no explicit
+record for the content-supported classification rationale, concept-scheme release, or uncertainty
+of the proposed semantic relationship. Production-time confidence must not be interpreted as
+classification confidence.
+
+Acceptance remains open: bind a classification decision to the reviewed source evidence and
+concept version, expose its uncertainty before execution, and preserve that decision through
+execution and undo receipts. Verify the complete command path with synthetic boundary cases
+without publishing private document text. Reuse the existing plan and journal boundaries;
+do not introduce an independent classification authority or infer deletion eligibility from
+semantic similarity. A source fingerprint or successful safety test alone cannot close this gap.
+
+Research acceptance also remains open: compare existing, topic, project and hybrid structures
+using independent groups and explicit retrieval tasks. Existing small content reviews support
+counterexamples only; no user retrieval-time improvement has been measured. RankWeave v0.18.0
+is a possible ranked-retrieval evaluation owner, not evidence of folder-navigation effectiveness
+or a deployed integration.
+
+### Execution and undo trace for the evidence gap
+
+At the same audited revision, `commands::execute_moves_inner` passes source/destination,
+a source-validation callback and the optional bundle manifest into `safety::move_file_checked`.
+`safety::do_move` writes pending/result entries with structured paths and the bundle, but does
+not persist the plan's class or production-time lineage. `undo_last_moves_inner` reconstructs
+an inverse from journal paths and bundle data. Adding a decision field only to `MovePlan`
+would therefore leave both the durable receipt and inverse operation incomplete.
+
+The repair must carry the reviewed decision through the shared move boundary into the existing
+pending/result journal entries, and link an undo to that original decision without reclassifying
+it. Legacy entries must remain explicitly evidence-unavailable. Before implementation, verify
+all journal constructors and public command serialization; after implementation, exercise plan
+serialization, execution journal round-trip and undo preservation through the public core.
+This trace is evidence of a missing contract, not a claim that the repair has been implemented.
