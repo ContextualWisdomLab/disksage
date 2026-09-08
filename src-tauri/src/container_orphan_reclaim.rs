@@ -1264,6 +1264,7 @@ struct CommandCapture {
     status_code: i32,
     stdout: String,
     stderr: String,
+    output_truncated: bool,
 }
 
 fn command_capture(
@@ -1348,6 +1349,7 @@ fn command_capture(
         status_code: status.code().unwrap_or(-1),
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
+        output_truncated: false,
     })
 }
 
@@ -1357,10 +1359,17 @@ fn mutation_capture_result(
 ) -> Result<CommandCapture, String> {
     match result {
         Ok(output) => Ok(output),
+        Err(error) if error == format!("{label}-output-too-large") => Ok(CommandCapture {
+            status_code: -1,
+            stdout: String::new(),
+            stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+            output_truncated: true,
+        }),
         Err(error) if !error.starts_with(&format!("{label}-spawn:")) => Ok(CommandCapture {
             status_code: -1,
             stdout: String::new(),
             stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+            output_truncated: false,
         }),
         Err(error) => Err(error),
     }
@@ -1903,7 +1912,7 @@ pub fn execute_container_orphan_prune(
         status_code: output.status_code,
         stdout: output.stdout,
         stderr: output.stderr,
-        output_truncated: false,
+        output_truncated: output.output_truncated,
         executed: true,
         executed_at_ms,
         before_available_bytes,
