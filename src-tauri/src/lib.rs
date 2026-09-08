@@ -60,6 +60,8 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
+/// Read-only inventory of unlinked files still held by running processes.
+pub mod deleted_open;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
 pub mod incomplete_download;
@@ -142,6 +144,8 @@ pub fn run() {
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
+            commands::inspect_deleted_open_files,
+            commands::deleted_open_audit_supported,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,

@@ -455,6 +455,23 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Returns a read-only, path-free plan for capacity held by deleted files.
+#[tauri::command]
+pub async fn inspect_deleted_open_files() -> Result<crate::deleted_open::DeletedOpenActionPlan, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let audit = crate::deleted_open::collect_deleted_open_audit()?;
+        Ok(crate::deleted_open::plan_from_audit(audit, now_ms()))
+    })
+    .await
+    .map_err(|_| "deleted-open-audit-worker-failed".to_string())?
+}
+
+/// Reports whether this platform can inspect deleted files held open by applications.
+#[tauri::command]
+pub fn deleted_open_audit_supported() -> bool {
+    cfg!(unix)
+}
+
 fn valid_brew_fingerprint(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
