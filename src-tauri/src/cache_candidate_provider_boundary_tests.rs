@@ -1,4 +1,4 @@
-use disksage_lib::rules::{cache_candidates, BaseDirs};
+use crate::rules::{cache_candidates, BaseDirs};
 
 #[test]
 fn cache_candidates_hide_managed_file_provider_roots() {
