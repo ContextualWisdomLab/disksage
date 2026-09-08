@@ -25,8 +25,8 @@ case "$*" in
   "images "*) exit 0 ;;
   *"volume ls"*) exit 0 ;;
   *"network ls"*) exit 0 ;;
-  *"buildx du --format json"*)
-    printf '%s\n' '{{"ID":"cache123","Reclaimable":true}}'
+  *"buildx du"*)
+    printf '%s\n' '{{"ID":"cache123","Reclaimable":true,"Shared":false,"Mutable":false,"Type":"regular"}}'
     exit 0
     ;;
   *"buildx prune --all --filter id~=^(cache123)$ --force") exit 0 ;;
