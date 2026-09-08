@@ -417,7 +417,7 @@
           <p class="notice" role="status">
             {runtimeStorageRecoverySucceeded(recoveryExecution)
               ? "연결을 복구했습니다. 저장 공간을 다시 확인하세요."
-              : "연결 복구가 완료되지 않았습니다. 실행 중인 작업과 게스트 연결 상태를 확인하세요."}
+              : "연결 복구가 완료되지 않았습니다. 실행 중인 작업과 연결 상태를 확인하세요."}
           </p>
         {/if}
       </div>
