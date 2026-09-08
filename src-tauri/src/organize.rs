@@ -1,3 +1,8 @@
+#[path = "organization_boundary.rs"]
+mod organization_boundary;
+#[path = "organization_bundle.rs"]
+pub mod organization_bundle;
+
 use std::path::{Component, Path, PathBuf};
 
 use crate::dupes::FileEntry;
@@ -21,12 +26,73 @@ pub struct MovePlan {
     pub src: String,
     pub dst: String,
     pub class_id: String,
+    /// Producer provenance only; this does not attest semantic correctness.
+    #[serde(default)]
+    pub classification_source: Option<String>,
     #[serde(default)]
     pub source_size: Option<u64>,
     #[serde(default)]
     pub source_mtime_ms: Option<u64>,
     #[serde(default)]
     pub lineage: LineageMetadata,
+    #[serde(default)]
+    pub bundle: Option<organization_bundle::BundleManifest>,
+}
+
+/// Preview preserves unplanned items explicitly; omission is not a deletion recommendation.
+#[derive(Debug, serde::Serialize)]
+pub struct OrganizationPreview {
+    /// The bounded collector cannot attest that it visited the entire requested tree.
+    pub whole_tree_verified: bool,
+    pub observed_file_count: usize,
+    pub moves: Vec<MovePlan>,
+    pub retained: Vec<RetainedItem>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RetainedItem {
+    pub path: String,
+    pub reason: &'static str,
+}
+
+fn companion_sources(files: &[FileEntry]) -> std::collections::HashSet<PathBuf> {
+    let mut companion_extensions = std::collections::HashMap::new();
+    for file in files {
+        if let (Some(parent), Some(stem)) = (file.path.parent(), file.path.file_stem()) {
+            companion_extensions
+                .entry((parent, stem))
+                .or_insert_with(std::collections::HashSet::new)
+                .insert(file.path.extension());
+        }
+    }
+    files.iter().filter(|file| {
+        file.path.parent().zip(file.path.file_stem()).is_some_and(|key| {
+            companion_extensions.get(&key).is_some_and(|extensions| extensions.len() > 1)
+        })
+    }).map(|file| file.path.clone()).collect()
+}
+
+pub fn organization_preview(files: &[FileEntry], moves: Vec<MovePlan>) -> OrganizationPreview {
+    let companions = companion_sources(files);
+    let planned: std::collections::HashSet<&str> = moves.iter().map(|p| p.src.as_str()).collect();
+    let retained = files.iter().filter(|f| !planned.contains(f.path.to_string_lossy().as_ref()))
+        .map(|f| RetainedItem {
+            path: f.path.to_string_lossy().into_owned(),
+            reason: if crate::safety::agent_state_guard::is_agent_state(&f.path) {
+                "agent_state"
+            } else if organization_boundary::package_ancestor(&f.path) {
+                "package_boundary"
+            } else if companions.contains(&f.path) {
+                "companion_bundle"
+            } else if f.path.parent().is_none_or(|parent| {
+                organization_boundary::validate_project_ancestors(parent).is_err()
+            }) {
+                "project_boundary_unverified"
+            } else {
+                "not_planned"
+            },
+        }).collect();
+    OrganizationPreview { whole_tree_verified: false, observed_file_count: files.len(), moves, retained }
 }
 
 #[cfg(not(coverage))]
@@ -113,17 +179,27 @@ fn plan_moves_impl(
 ) -> Vec<MovePlan> {
     let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
     let reasoner = crate::ontology::Reasoner::build(onto);
+    let companions = companion_sources(files);
     let mut plans = Vec::new();
     let mut lineage_probe_count = 0;
     for f in files {
         let Some(name) = f.path.file_name() else { continue };
+        if crate::safety::agent_state_guard::is_agent_state(&f.path)
+            || organization_boundary::package_ancestor(&f.path)
+            || companions.contains(&f.path)
+            || f.path.parent().is_none_or(|parent| {
+                organization_boundary::validate_project_ancestors(parent).is_err()
+            })
+        {
+            continue;
+        }
         let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
-            Some(c) => c,
+        let (local, classification_source) = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
+            Some(c) => (c, "user_rule"),
             None => match pick(&f.path, &candidates) {
-                Some(picked) => picked,
+                Some(picked) => (picked, "model_picker"),
                 None => match classify(&f.path) {
-                    Some(c) => c.to_string(),
+                    Some(c) => (c.to_string(), "extension"),
                     None => continue,
                 },
             },
@@ -134,6 +210,10 @@ fn plan_moves_impl(
             continue;
         };
         let dst = folder_path.join(name);
+        if crate::safety::agent_state_guard::is_agent_state(&dst)
+            || organization_boundary::package_ancestor(&dst) {
+            continue;
+        }
         if f.path.parent() == Some(folder_path.as_path()) {
             continue;
         }
@@ -142,7 +222,7 @@ fn plan_moves_impl(
                 lineage_probe_count += 1;
                 probe(&f.path)
             }
-            Some(_) => Some(LineageMetadata::default()),
+            Some(_) => None,
             None => Some(LineageMetadata::default()),
         };
         let Some(lineage) = lineage else { continue };
@@ -150,9 +230,11 @@ fn plan_moves_impl(
             src: f.path.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             class_id: class.id.clone(),
+            classification_source: Some(classification_source.into()),
             source_size: lineage_probe.map(|_| f.size),
             source_mtime_ms: lineage_probe.map(|_| f.mtime_ms),
             lineage,
+            bundle: None,
         });
     }
     plans
@@ -240,6 +322,15 @@ pub fn plan_moves_with_metadata(
 
 pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
     let path = Path::new(&plan.src);
+    if let Some(expected) = &plan.bundle {
+        organization_boundary::validate_destination(Path::new(&plan.dst))?;
+        if organization_bundle::observe(path)? != *expected {
+            return Err("폴더 구성이나 내용이 바뀌어 묶음 이동을 보류합니다.".into());
+        }
+        return Ok(());
+    }
+    organization_boundary::validate_individual_move(path)?;
+    organization_boundary::validate_destination(Path::new(&plan.dst))?;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "organize-source-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -296,8 +387,15 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
     }
 
-    fn fe_at(p: &str, size: u64, mtime_ms: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms }
+    fn fixture_file(root: &Path, relative: &str, size: u64) -> FileEntry {
+        fixture_file_at(root, relative, size, 0)
+    }
+
+    fn fixture_file_at(root: &Path, relative: &str, size: u64, mtime_ms: u64) -> FileEntry {
+        let path = root.join(relative.trim_start_matches('/'));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+        FileEntry { path, size, mtime_ms }
     }
 
     fn onto_with_target(target: &str) -> Ontology {
@@ -311,10 +409,107 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
     }
 
     #[test]
+    fn legacy_plan_has_no_invented_classification_source() {
+        let legacy = r#"{"src":"/source","dst":"/destination","class_id":"class"}"#;
+        let plan: MovePlan = serde_json::from_str(legacy).unwrap();
+        assert_eq!(plan.classification_source, None);
+        let restored: MovePlan = serde_json::from_str(&serde_json::to_string(&plan).unwrap()).unwrap();
+        assert_eq!(restored.classification_source, None);
+    }
+
+    #[test]
+    fn preview_explains_preserved_relationships_without_making_move_plans() {
+        let fixture = tempfile::tempdir().unwrap();
+        let files = vec![fixture_file(fixture.path(), "/a/recording.wav", 1), fixture_file(fixture.path(), "/a/recording.tmk", 2),
+            fixture_file(fixture.path(), "/a/Editor.app/Contents/readme.txt", 3), fixture_file(fixture.path(), "/a/unknown.bin", 4)];
+        let preview = organization_preview(&files, Vec::new());
+        assert!(preview.moves.is_empty());
+        assert!(!preview.whole_tree_verified);
+        assert_eq!(preview.observed_file_count, 4);
+        assert_eq!(preview.retained.iter().map(|item| item.reason).collect::<Vec<_>>(),
+            vec!["companion_bundle", "companion_bundle", "package_boundary", "not_planned"]);
+    }
+
+    #[test]
+    fn planner_preserves_companions_and_package_descendants_before_picking() {
+        let fixture = tempfile::tempdir().unwrap();
+        let onto = parse_ttl(ONTO).unwrap();
+        let files = vec![
+            fixture_file(fixture.path(), "/downloads/recording.png", 10),
+            fixture_file(fixture.path(), "/downloads/recording.json", 20),
+            fixture_file(fixture.path(), "/downloads/Editor.app/Contents/image.png", 30),
+        ];
+        let calls = Cell::new(0);
+        let plans = plan_moves_with(&files, &onto, Path::new("/home/u"), 0, &[], &|_, _| {
+            calls.set(calls.get() + 1);
+            Some("Image".into())
+        });
+        assert!(plans.is_empty());
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn planner_retains_project_documents_before_content_classification() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = root.path().join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        let image = docs.join("photo.png");
+        std::fs::write(&image, b"project image").unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), b"[package]").unwrap();
+        let files = vec![fe(image.to_str().unwrap(), 13)];
+        let plans = plan_moves_with(&files, &parse_ttl(ONTO).unwrap(), root.path(),
+            0, &[], &|_, _| panic!("project content must not reach individual classification"));
+        assert!(plans.is_empty());
+        let preview = organization_preview(&files, plans);
+        assert_eq!(preview.retained[0].reason, "project_boundary_unverified");
+        assert_eq!(std::fs::read(image).unwrap(), b"project image");
+    }
+
+    #[test]
+    fn planner_retains_agent_sessions_before_classification_and_rejects_state_destinations() {
+        let fixture = tempfile::tempdir().unwrap();
+        let files = vec![fixture_file(fixture.path(), "/project/.codex/sessions/session.png", 10),
+            fixture_file(fixture.path(), "/project/.claude/projects/conversation.png", 20)];
+        let plans = plan_moves_with(&files, &parse_ttl(ONTO).unwrap(), Path::new("/home/u"),
+            0, &[], &|_, _| panic!("session must not reach classification"));
+        let preview = organization_preview(&files, plans);
+        assert!(preview.moves.is_empty());
+        assert_eq!(preview.retained.len(), 2);
+        assert!(preview.retained.iter().all(|item| item.reason == "agent_state"));
+        let ontology = onto_with_target("/project/.claude/archive");
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/downloads/photo.png", 1)], &ontology,
+            Path::new("/home/u")).is_empty());
+    }
+
+    #[test]
+    fn execution_rejects_companion_created_after_planning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("recording.png");
+        std::fs::write(&source, b"original").unwrap();
+        let files = vec![FileEntry { path: source.clone(), size: 8, mtime_ms: 0 }];
+        let plans = plan_moves(&files, &parse_ttl(ONTO).unwrap(), tmp.path());
+        assert_eq!(plans.len(), 1);
+        assert!(validate_move_source(&plans[0]).is_ok());
+        let companion = tmp.path().join("recording.json");
+        std::fs::write(&companion, b"metadata").unwrap();
+        assert_eq!(validate_move_source(&plans[0]).unwrap_err(), "organize-companion-bundle-required");
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+        assert_eq!(std::fs::read(companion).unwrap(), b"metadata");
+    }
+
+    #[test]
+    fn planner_rejects_destination_inside_package() {
+        let fixture = tempfile::tempdir().unwrap();
+        let ontology = onto_with_target("/Applications/Editor.app/Contents/Documents");
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/downloads/photo.png", 1)], &ontology, Path::new("/home/u")).is_empty());
+    }
+
+    #[test]
     fn plans_move_to_resolved_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         // ~ → home, {class} → Image
@@ -366,15 +561,17 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn metadata_probe_is_bounded_per_plan() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
+        let home = tempfile::tempdir().unwrap();
         let files = (0..MAX_LINEAGE_PROBES + 1)
-            .map(|i| fe(&format!("/downloads/{i}.png"), 1))
+            .map(|i| fixture_file(fixture.path(), &format!("/downloads/{i}.png"), 1))
             .collect::<Vec<_>>();
         let probes = Cell::new(0);
         let plans = plan_moves_with_metadata(
             &files,
             &onto,
-            Path::new("/home/u"),
+            home.path(),
             1_800_000_000_000,
             &[],
             &|_, _| None,
@@ -384,38 +581,42 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
             },
         );
         assert_eq!(probes.get(), MAX_LINEAGE_PROBES);
-        assert_eq!(plans.len(), MAX_LINEAGE_PROBES + 1);
-        assert_eq!(plans[MAX_LINEAGE_PROBES].src, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
-        assert_eq!(plans[MAX_LINEAGE_PROBES].source_size, Some(1));
-        assert!(plans[MAX_LINEAGE_PROBES].lineage.lineage_fingerprint.is_empty());
+        assert_eq!(plans.len(), MAX_LINEAGE_PROBES);
+        let preview = organization_preview(&files, plans);
+        assert_eq!(preview.retained.len(), 1);
+        assert_eq!(preview.retained[0].path, fixture.path().join(format!("downloads/{}.png", MAX_LINEAGE_PROBES)).to_string_lossy());
     }
 
     #[test]
     fn skips_unclassified_and_targetless() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
         let files = vec![
-            fe("/x/unknown.xyz", 10),   // 미분류 → 제외
-            fe("/x/main.rs", 20),       // Code: targetFolder 없음 → 제외
+            fixture_file(fixture.path(), "/x/unknown.xyz", 10),   // 미분류 → 제외
+            fixture_file(fixture.path(), "/x/main.rs", 20),       // Code: targetFolder 없음 → 제외
         ];
         assert!(plan_moves(&files, &onto, home).is_empty());
     }
 
     #[test]
     fn skips_file_already_in_destination() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
-        let home = Path::new("/home/u");
+        let home_path = fixture.path().join("home/u");
+        let home = home_path.as_path();
         // 이미 목적지 폴더에 있는 파일
-        let files = vec![fe("/home/u/Media/Image/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/home/u/Media/Image/pic.png", 100)];
         assert!(plan_moves(&files, &onto, home).is_empty());
     }
 
     #[test]
     fn skips_classified_file_whose_class_absent_from_ontology() {
+        let fixture = tempfile::tempdir().unwrap();
         // mp4 → classify "Video"지만 ONTO엔 Video 클래스가 없음 → 클래스 조회 else(continue) 커버
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        assert!(plan_moves(&[fe("/x/movie.mp4", 100)], &onto, home).is_empty());
+        assert!(plan_moves(&[fixture_file(fixture.path(), "/x/movie.mp4", 100)], &onto, home).is_empty());
     }
 
     #[test]
@@ -428,10 +629,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn target_folder_without_class_placeholder_is_used_verbatim() {
+        let fixture = tempfile::tempdir().unwrap();
         // ~/Installers 처럼 {class} 없는 targetFolder — 치환 없이 그대로, filename만 붙는다
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/setup.exe", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/setup.exe", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/home/u/Installers").join("setup.exe");
@@ -440,6 +642,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 
     #[test]
     fn target_folder_without_tilde_is_absolute() {
+        let fixture = tempfile::tempdir().unwrap();
         // ~ 없는 절대경로 targetFolder — home 치환 없이 그대로
         let ttl = r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -449,7 +652,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 "#;
         let onto = parse_ttl(ttl).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto, home);
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/opt/media/Image").join("pic.png");
@@ -458,44 +661,50 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn rejects_relative_target_folder_that_depends_on_process_cwd() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("relative/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_parent_traversal_in_home_relative_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("~/Media/../escape/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_parent_traversal_in_absolute_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("/opt/media/../escape/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn rejects_named_tilde_target_that_is_not_home_token() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("~other/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
 
     #[test]
     fn preserves_literal_tilde_inside_absolute_target_folder() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = onto_with_target("/opt/~archive/{class}");
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].dst, "/opt/~archive/Image/pic.png");
     }
 
     #[test]
     fn rejects_home_relative_target_when_home_is_relative() {
+        let fixture = tempfile::tempdir().unwrap();
         let onto = parse_ttl(ONTO).unwrap();
-        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("."));
+        let plans = plan_moves(&[fixture_file(fixture.path(), "/downloads/pic.png", 100)], &onto, Path::new("."));
         assert!(plans.is_empty());
     }
 
@@ -503,7 +712,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     #[test]
     fn windows_home_relative_target_uses_native_absolute_path() {
         let home = PathBuf::from(r"C:\Users\u");
-        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = [fixture_file(fixture.path(), "downloads/pic.png", 100)];
         let plans = plan_moves(&files, &onto_with_target("~/Media/{class}"), &home);
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].dst, r"C:\Users\u\Media\Image\pic.png");
@@ -513,7 +723,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     #[test]
     fn windows_relative_target_fails_closed() {
         let home = PathBuf::from(r"C:\Users\u");
-        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let fixture = tempfile::tempdir().unwrap();
+        let files = [fixture_file(fixture.path(), "downloads/pic.png", 100)];
         assert!(plan_moves(&files, &onto_with_target("relative/{class}"), &home).is_empty());
     }
 
@@ -529,35 +740,40 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn picker_choice_overrides_extension_classify() {
+        let fixture = tempfile::tempdir().unwrap();
         // main.rs는 확장자로 "Code"(targetFolder 없음 → 평소 제외)로 분류되지만,
         // picker가 "Image"(targetFolder 있음)를 고르면 Image 목적지로 계획된다.
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/src/main.rs", 20)];
+        let files = vec![fixture_file(fixture.path(), "/src/main.rs", 20)];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("model_picker"));
         assert!(plans[0].class_id.ends_with("Image"));
     }
 
     #[test]
     fn picker_none_falls_back_to_extension_classify() {
+        let fixture = tempfile::tempdir().unwrap();
         // picker가 None이면 기존 확장자 분류(pic.png → Image)로 폴백 — plan_moves와 동일
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let pick = |_p: &Path, _c: &[&str]| None;
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("extension"));
         assert!(plans[0].class_id.ends_with("Image"));
     }
 
     #[test]
     fn picker_candidates_include_ontology_class_names() {
+        let fixture = tempfile::tempdir().unwrap();
         // picker에 넘어오는 후보 목록이 온톨로지 클래스 로컬명을 포함하는지 확인
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        let files = vec![fe("/downloads/pic.png", 100)];
+        let files = vec![fixture_file(fixture.path(), "/downloads/pic.png", 100)];
         let seen = std::cell::RefCell::new(Vec::<String>::new());
         let pick = |_p: &Path, cands: &[&str]| {
             *seen.borrow_mut() = cands.iter().map(|s| s.to_string()).collect();
@@ -571,6 +787,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn user_rule_overrides_picker_and_extension() {
+        let fixture = tempfile::tempdir().unwrap();
         // pic.png는 확장자로 Image지만, 사용자 규칙(ext png → Installer)이 우선 → Installer 목적지
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -579,8 +796,9 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string()); // picker가 Image를 골라도
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file(fixture.path(), "/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("user_rule"));
         assert!(plans[0].class_id.ends_with("Installer")); // 규칙이 picker를 이긴다
         // 규칙이 우선하므로 plan_moves_with 내부에서 pick은 호출되지 않는다(설계상 의도).
         // 라인 커버리지 확보를 위해 클로저 자체가 유효한 picker임을 별도로 확인.
@@ -589,6 +807,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
 
     #[test]
     fn no_user_rule_match_falls_through_to_picker() {
+        let fixture = tempfile::tempdir().unwrap();
         // 규칙이 있으나 매칭 안 되면(ext iso) 기존 precedence(picker→classify)로
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -597,13 +816,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file(fixture.path(), "/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image")); // 확장자 폴백
     }
 
     #[test]
     fn user_rule_age_predicate_matches_old_file_only() {
+        let fixture = tempfile::tempdir().unwrap();
         // now = 100 days in ms; rule: min_age_days 30 → Installer. Old file (mtime 0 → age 100d) matches; fresh (mtime≈now → age 0) doesn't.
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
@@ -614,17 +834,18 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
         // old file → age 100d ≥ 30 → rule matches → Installer target
-        let old = plan_moves_with(&[fe_at("/d/pic.png", 10, 0)], &onto, home, now, &rules, &pick);
+        let old = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, 0)], &onto, home, now, &rules, &pick);
         assert_eq!(old.len(), 1);
         assert!(old[0].class_id.ends_with("Installer"));
         // fresh file → age 0 < 30 → rule skips → extension classify (png→Image)
-        let fresh = plan_moves_with(&[fe_at("/d/pic.png", 10, now)], &onto, home, now, &rules, &pick);
+        let fresh = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, now)], &onto, home, now, &rules, &pick);
         assert_eq!(fresh.len(), 1);
         assert!(fresh[0].class_id.ends_with("Image"));
     }
 
     #[test]
     fn future_dated_file_saturates_to_age_zero() {
+        let fixture = tempfile::tempdir().unwrap();
         // mtime > now (future-dated / clock skew): saturating_sub → age 0, no panic/underflow.
         // rule min_age_days: 1 → age 0 < 1 → no match → extension classify (png → Image).
         let onto = parse_ttl(ONTO).unwrap();
@@ -636,7 +857,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe_at("/d/pic.png", 10, future)], &onto, home, now, &rules, &pick);
+        let plans = plan_moves_with(&[fixture_file_at(fixture.path(), "/d/pic.png", 10, future)], &onto, home, now, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image")); // age saturated to 0 → rule skipped → ext classify
     }

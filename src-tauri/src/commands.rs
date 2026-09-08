@@ -185,11 +185,13 @@ pub fn clean_dev_artifacts_inner(
         .collect()
 }
 
-/// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
+/// Read unambiguous legacy move paths. New entries use structured paths.
 pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
-    path_field
-        .split_once(" -> ")
-        .map(|(s, d)| (s.to_string(), d.to_string()))
+    let (source, destination) = path_field.split_once(" -> ")?;
+    if source.is_empty() || destination.is_empty() || destination.contains(" -> ") {
+        return None;
+    }
+    Some((source.to_owned(), destination.to_owned()))
 }
 
 /// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
@@ -201,10 +203,10 @@ pub fn execute_moves_inner(
     plans
         .iter()
         .map(|p| {
-            match organize::validate_move_source(p).and_then(|_| {
-                safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms)
-                    .map_err(|error| error.to_string())
-            }) {
+            match safety::move_file_checked(
+                Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms,
+                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation), p.bundle.as_ref(), p.classification_source.as_deref(),
+            ) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
                     ok: true,
@@ -230,16 +232,27 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .iter()
         .filter(|e| e.op == "move" && e.outcome == "ok")
         .take(limit)
-        .filter_map(|e| parse_move_entry(&e.path))
-        .map(|(src, dst)| {
-            match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
+        .filter_map(|e| {
+            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone(), paths.bundle.clone(), paths.classification_source.clone()))
+                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into(), None, None)))
+        })
+        .map(|(src, dst, bundle, classification_source)| {
+            let inverse = organize::MovePlan { src: dst.to_string_lossy().into_owned(),
+                dst: src.to_string_lossy().into_owned(), bundle, ..Default::default() };
+            let moved = safety::move_file_checked(&dst, &src, journal_path, now_ms,
+                &|| if inverse.bundle.is_some() {
+                    organize::validate_move_source(&inverse).map_err(safety::SafetyError::Validation)
+                } else {
+                    Ok(())
+                }, inverse.bundle.as_ref(), classification_source.as_deref());
+            match moved {
                 Ok(()) => CleanResult {
-                    path: src,
+                    path: src.to_string_lossy().into_owned(),
                     ok: true,
                     error: String::new(),
                 },
                 Err(e) => CleanResult {
-                    path: src,
+                    path: src.to_string_lossy().into_owned(),
                     ok: false,
                     error: e.to_string(),
                 },
@@ -2935,7 +2948,7 @@ pub fn plan_organize(
     root: String,
     app: AppHandle,
     state: State<AppState>,
-) -> Result<Vec<organize::MovePlan>, String> {
+) -> Result<organize::OrganizationPreview, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let rules = crate::userrules::parse_rules(&user_rules_json(&app))?;
     let files = dupes::collect_files_bounded(Path::new(&root), 10_000, Duration::from_secs(10))?;
@@ -2965,7 +2978,7 @@ pub fn plan_organize(
                     }
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with_metadata(
+                return Ok(organize::organization_preview(&files, organize::plan_moves_with_metadata(
                     &files,
                     &onto,
                     &home,
@@ -2973,11 +2986,11 @@ pub fn plan_organize(
                     &rules,
                     &pick,
                     &organize::lineage_metadata_for_path,
-                ));
+                )));
             }
         }
     }
-    Ok(organize::plan_moves_with_metadata(
+    Ok(organize::organization_preview(&files, organize::plan_moves_with_metadata(
         &files,
         &onto,
         &home,
@@ -2985,7 +2998,13 @@ pub fn plan_organize(
         &rules,
         &|_, _| None,
         &organize::lineage_metadata_for_path,
-    ))
+    )))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_bundle_organize(root: String, target_parent: String) -> Result<organize::MovePlan, String> {
+    organize::organization_bundle::plan(Path::new(&root), Path::new(&target_parent))
 }
 
 #[cfg(not(coverage))]
@@ -3503,6 +3522,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
 
     #[test]
     fn parse_move_entry_splits_valid_entry() {
+        let legacy: safety::JournalEntry = serde_json::from_str(
+            r#"{"ts_ms":1,"op":"move","path":"/a/b -> /c/d","bytes":1,"outcome":"ok"}"#,
+        ).unwrap();
+        assert!(legacy.move_paths.is_none());
         assert_eq!(
             parse_move_entry("/a/b -> /c/d"),
             Some(("/a/b".to_string(), "/c/d".to_string()))
@@ -3512,6 +3535,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn parse_move_entry_malformed_is_none() {
         assert_eq!(parse_move_entry("no arrow here"), None);
+        assert_eq!(parse_move_entry("/a/draft -> revised.bin -> /b/draft -> revised.bin"), None);
+        assert_eq!(parse_move_entry(" -> /b"), None);
     }
 
     #[test]
@@ -3613,7 +3638,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
         assert_eq!(results.len(), 6);
-        assert!(results.iter().all(|result| result.ok));
+        assert!(results.iter().all(|result| result.ok), "{:?}",
+            results.iter().map(|result| (&result.path, &result.error)).collect::<Vec<_>>());
     }
 
     #[test]
@@ -3642,6 +3668,153 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         assert!(!results[0].ok);
         assert!(results[0].error.contains("다시 스캔"));
         assert!(artifact.join("payload.bin").exists());
+    }
+
+    #[test]
+    fn execute_moves_preserves_late_relationship_markers_without_journal() {
+        for (marker, expected_error) in [
+            ("recording.tmk", "organize-companion-bundle-required"),
+            (".git", "프로젝트 내부 자료는 기존 관계를 보존하기 위해 따로 옮기지 않습니다."),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let source = tmp.path().join("recording.wav");
+            let companion = tmp.path().join(marker);
+            let destination = tmp.path().join("organized/recording.wav");
+            let journal = tmp.path().join("operations.jsonl");
+            std::fs::write(&source, b"audio").unwrap();
+            let plans = vec![organize::MovePlan {
+                src: source.to_string_lossy().into_owned(),
+                dst: destination.to_string_lossy().into_owned(),
+                ..Default::default()
+            }];
+            // A relationship marker arriving after the plan must retain the original.
+            std::fs::write(&companion, b"markers").unwrap();
+            let results = execute_moves_inner(&plans, &journal, 1);
+            assert_eq!(results.len(), 1);
+            assert!(!results[0].ok);
+            assert_eq!(results[0].error, expected_error);
+            assert_eq!(std::fs::read(source).unwrap(), b"audio");
+            assert_eq!(std::fs::read(companion).unwrap(), b"markers");
+            assert!(!destination.exists());
+            assert!(!journal.exists());
+        }
+    }
+
+    #[test]
+    fn bundle_move_and_undo_preserve_members_and_reject_new_members() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("\u{1106}\u{116e}\u{11ab}\u{1109}\u{1165} bundle");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("recording.wav"), b"original audio").unwrap();
+        std::fs::write(source.join("recording.json"), b"original metadata").unwrap();
+        let target = tmp.path().join("organized");
+        let journal = tmp.path().join("journal.jsonl");
+        let plan = organize::organization_bundle::plan(&source, &target).unwrap();
+        let destination = Path::new(&plan.dst);
+        assert_eq!(plan.bundle.as_ref().unwrap().files.len(), 2);
+        assert!(execute_moves_inner(std::slice::from_ref(&plan), &journal, 1)[0].ok);
+        assert!(!source.exists());
+        assert!(undo_last_moves_inner(1, &journal, 2)[0].ok);
+        assert_eq!(std::fs::read(source.join("recording.wav")).unwrap(), b"original audio");
+        assert_eq!(std::fs::read(source.join("recording.json")).unwrap(), b"original metadata");
+        assert!(!destination.exists());
+        assert!(execute_moves_inner(std::slice::from_ref(&plan), &journal, 3)[0].ok);
+        std::fs::write(destination.join("new note.txt"), b"keep this too").unwrap();
+        assert!(!undo_last_moves_inner(1, &journal, 4)[0].ok);
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(destination.join("new note.txt")).unwrap(), b"keep this too");
+    }
+
+    #[test]
+    fn bundle_streamed_document_group_roundtrips_and_retains_over_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("document group");
+        std::fs::create_dir(&source).unwrap();
+        let sizes = [258446usize, 186177, 242389, 139171];
+        for (index, size) in sizes.iter().enumerate() {
+            std::fs::write(source.join(format!("document_{index}.bin")), vec![index as u8; *size]).unwrap();
+        }
+        let target = tmp.path().join("organized");
+        let journal = tmp.path().join("journal.jsonl");
+        let plan = organize::organization_bundle::plan(&source, &target).unwrap();
+        for member in &plan.bundle.as_ref().unwrap().files {
+            assert_eq!(member.content_blake3, blake3::hash(&std::fs::read(source.join(&member.name)).unwrap()).to_hex().to_string());
+        }
+        assert!(execute_moves_inner(&[plan], &journal, 1)[0].ok);
+        assert!(undo_last_moves_inner(1, &journal, 2)[0].ok);
+        for (index, size) in sizes.iter().enumerate() {
+            assert_eq!(std::fs::read(source.join(format!("document_{index}.bin"))).unwrap(), vec![index as u8; *size]);
+        }
+        let extra = source.join("over_budget.bin");
+        let remaining = 8 * 1024 * 1024 - sizes.iter().sum::<usize>() as u64;
+        let extra_file = std::fs::File::create(&extra).unwrap();
+        extra_file.set_len(remaining).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_ok());
+        extra_file.set_len(remaining + 1).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        assert_eq!(std::fs::metadata(extra).unwrap().len(), remaining + 1);
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn bundle_preview_retains_nested_folders_and_project_ancestors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("notes");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("draft.txt"), b"keep").unwrap();
+        let target = tmp.path().join("organized");
+        std::fs::create_dir(source.join("nested")).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        std::fs::remove_dir(source.join("nested")).unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        assert_eq!(std::fs::read(source.join("draft.txt")).unwrap(), b"keep");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn bundle_move_rejects_same_size_content_drift_before_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("notes");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("draft.txt"), b"first").unwrap();
+        let plan = organize::organization_bundle::plan(&source, &tmp.path().join("organized")).unwrap();
+        let modified = std::fs::metadata(source.join("draft.txt")).unwrap().modified().unwrap();
+        std::fs::write(source.join("draft.txt"), b"other").unwrap();
+        std::fs::OpenOptions::new().write(true).open(source.join("draft.txt")).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        assert!(!execute_moves_inner(&[plan], &journal, 1)[0].ok);
+        assert_eq!(std::fs::read(source.join("draft.txt")).unwrap(), b"other");
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn checked_move_retains_companion_arriving_after_preflight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("recording.wav");
+        let companion = tmp.path().join("recording.json");
+        let destination = tmp.path().join("dest/recording.wav");
+        let journal = tmp.path().join("journal.jsonl");
+        std::fs::write(&source, b"original").unwrap();
+        let plan = organize::MovePlan {
+            src: source.to_string_lossy().into_owned(),
+            dst: destination.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let checks = std::cell::Cell::new(0);
+        let result = safety::move_file_checked(&source, &destination, &journal, 1, &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 2 {
+                std::fs::write(&companion, b"metadata").unwrap();
+            }
+            organize::validate_move_source(&plan).map_err(safety::SafetyError::Validation)
+        }, None, None);
+        assert_eq!(checks.get(), 2);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert_eq!(std::fs::read(&companion).unwrap(), b"metadata");
+        assert!(!destination.exists());
     }
 
     #[test]
@@ -3677,13 +3850,16 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn undo_last_moves_inner_reverses_recent_moves_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
-        let a = tmp.path().join("a.bin");
+        // Windows forbids > in filenames; the legacy parser regression runs on every OS.
+        let name = if cfg!(unix) { "draft -> revised.bin" } else { "draft revised.bin" };
+        let a = tmp.path().join(name);
         std::fs::write(&a, vec![2u8; 8]).unwrap();
-        let a_moved = tmp.path().join("dest").join("a.bin");
+        let a_moved = tmp.path().join("dest").join(name);
         let plans = vec![organize::MovePlan {
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            classification_source: Some("user_rule".into()),
             ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 5);
@@ -3692,8 +3868,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let undone = undo_last_moves_inner(10, &jp, 6);
         assert_eq!(undone.len(), 1);
         assert!(undone[0].ok);
-        assert!(a.exists());
+        assert_eq!(std::fs::read(&a).unwrap(), vec![2u8; 8]);
         assert!(!a_moved.exists());
+        let entries = safety::journal_recent(&jp, usize::MAX);
+        let moves: Vec<_> = entries.iter().filter(|e| e.op == "move").collect();
+        assert_eq!(moves.len(), 4);
+        assert!(moves.iter().all(|entry| entry.move_paths.as_ref().unwrap()
+            .classification_source.as_deref() == Some("user_rule")));
     }
 
     #[test]

@@ -34,6 +34,8 @@ mod ontology;
 mod inventory;
 #[cfg_attr(coverage, allow(dead_code))]
 mod organize;
+/// Read-only, bounded preview using the same bundle planner as the desktop application.
+pub use organize::organization_bundle::plan as plan_organization_bundle;
 #[cfg_attr(coverage, allow(dead_code))]
 mod llm;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -125,6 +127,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::plan_bundle_organize,
             commands::export_organization_lineage,
             commands::user_rules,
             commands::execute_moves,

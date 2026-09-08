@@ -9,6 +9,7 @@ pub enum SafetyError {
     Protected(PathBuf),
     Trash(String),
     Journal(String),
+    Validation(String),
 }
 
 impl std::fmt::Display for SafetyError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for SafetyError {
             SafetyError::Protected(p) => write!(f, "보호된 경로: {}", p.display()),
             SafetyError::Trash(e) => write!(f, "휴지통 이동 실패: {e}"),
             SafetyError::Journal(e) => write!(f, "저널 기록 실패: {e}"),
+            SafetyError::Validation(e) => f.write_str(e),
         }
     }
 }
@@ -177,12 +179,25 @@ pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MovePaths {
+    /// Producer provenance, not semantic verification or deletion authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification_source: Option<String>,
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<crate::organize::organization_bundle::BundleManifest>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JournalEntry {
     pub ts_ms: u64,
     pub op: String,
     pub path: String,
     pub bytes: u64,
     pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_paths: Option<MovePaths>,
 }
 
 /// std::io 오류를 SafetyError::Journal로 감싸는 공용 매퍼.
@@ -316,6 +331,7 @@ pub fn trash_delete(
         path: path.to_string_lossy().into_owned(),
         bytes,
         outcome: "pending".into(),
+        move_paths: None,
     };
     journal_append(journal_path, &entry)?;
     // fsync 없음(의식적 선택): 삭제는 휴지통 경유라 전원 단절로 pending 기록을 잃어도 복구 가능
@@ -490,6 +506,7 @@ pub fn trash_delete_if_identity(
         path: path.to_string_lossy().into_owned(),
         bytes,
         outcome: "pending".into(),
+        move_paths: None,
     };
     if let Err(error) = journal_append(journal_path, &entry) {
         let _ = std::fs::remove_dir(&staging_dir);
@@ -666,16 +683,6 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
-/// 같은 볼륨 이동 io — hard_link(create-only) 후 원본 링크 제거. 두 io 에러 모두 `?`로
-/// 전파(커버리지 규율: happy path에서 map_err 클로저가 미실행 라인으로 남지 않도록).
-/// dst가 이미 있으면 hard_link가 AlreadyExists로 실패해 덮어쓰지 않는다.
-fn hardlink_move_io(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::hard_link(src, dst)?;
-    std::fs::remove_file(src)?;
-    Ok(())
-}
-
 /// move_file이 same_volume()로 실제 결정을 주입한다.
 fn do_move(
     src: &Path,
@@ -683,6 +690,9 @@ fn do_move(
     same_vol: bool,
     journal_path: &Path,
     now_ms: u64,
+    validate: &dyn Fn() -> Result<(), SafetyError>,
+    bundle: Option<&crate::organize::organization_bundle::BundleManifest>,
+    classification_source: Option<&str>,
 ) -> Result<(), SafetyError> {
     let mut entry = JournalEntry {
         ts_ms: now_ms,
@@ -690,21 +700,20 @@ fn do_move(
         path: format!("{} -> {}", src.display(), dst.display()),
         bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
         outcome: "pending".into(),
+        move_paths: Some(MovePaths { classification_source: classification_source.map(str::to_owned), source: src.to_path_buf(), destination: dst.to_path_buf(), bundle: bundle.cloned() }),
     };
     journal_append(journal_path, &entry)?;
 
     let result = if same_vol {
-        // rename은 dst를 원자적으로 덮어쓴다(REPLACE) → dst.exists() 체크 이후 경합으로 생긴
-        // 파일이 휴지통도 안 거치고 영구 소실될 수 있다. hard_link는 create-only라 dst가 이미
-        // 있으면 AlreadyExists로 실패(덮어쓰지 않음) — 링크 성공 후 원본 링크만 제거한다.
-        // 두 단계 사이 크래시 시엔 양쪽이 같은 inode를 가리키는 무해한 중복이 남는다(손실 아님).
-        // io는 헬퍼가 `?`로 전파 → happy path에서 map_err 클로저가 미실행 라인으로 남지 않는다.
-        // 단일 경계 map_err은 hard_link 실패 테스트(dest-exists)가 커버한다.
-        hardlink_move_io(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+        // One exclusive rename avoids the intermediate two-name state of link/unlink.
+        #[cfg(target_os = "macos")]
+        { coordinated_rename(src, dst, validate) }
+        #[cfg(not(target_os = "macos"))]
+        { validate().and_then(|()| rename_noreplace(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))) }
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
-        copy_verified_io(src, dst)
-            .map_err(|e| SafetyError::Trash(e.to_string()))
+        validate().and_then(|()| copy_verified_io(src, dst)
+            .map_err(|e| SafetyError::Trash(e.to_string())))
             .and_then(|()| {
                 let bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
                 trash_delete(src, bytes, journal_path, now_ms)
@@ -721,11 +730,32 @@ fn do_move(
 
 /// 앱 유일의 이동 경로 (스펙 §7-2). 영구 삭제 없음 — 원본 제거는 trash_delete 경유.
 pub fn move_file(
-    src: &Path,
-    dst: &Path,
-    journal_path: &Path,
-    now_ms: u64,
+    src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
 ) -> Result<(), SafetyError> {
+    move_file_checked(src, dst, journal_path, now_ms, &|| Ok(()), None, None)
+}
+
+/// Validate before preparation and again inside the native move accessor.
+pub(crate) fn move_file_checked(
+    src: &Path, dst: &Path, journal_path: &Path, now_ms: u64,
+    validate: &dyn Fn() -> Result<(), SafetyError>,
+    bundle: Option<&crate::organize::organization_bundle::BundleManifest>,
+    classification_source: Option<&str>,
+) -> Result<(), SafetyError> {
+    validate_move_paths(src, dst)?;
+    validate()?;
+    if dst.exists() {
+        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
+    }
+    let dst_parent = dst.parent().unwrap_or(dst);
+    std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
+    if bundle.is_some() && !same_volume(src, dst) {
+        return Err(SafetyError::Validation("묶음은 같은 볼륨 안에서만 옮길 수 있습니다.".into()));
+    }
+    do_move(src, dst, same_volume(src, dst), journal_path, now_ms, validate, bundle, classification_source)
+}
+
+fn validate_move_paths(src: &Path, dst: &Path) -> Result<(), SafetyError> {
     // 보호: src·dst 양쪽, ParentDir 거부, verbatim 정규화 — trash_delete와 동일 리거
     for p in [src, dst] {
         if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -738,17 +768,68 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
-    // 목적지 충돌 금지 (덮어쓰기 방지)
-    if dst.exists() {
-        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
-    }
-    // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
-    // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
-    // unwrap_or로 두어 라인 커버리지를 유지하면서 방어한다(도달 시 create_dir_all이 에러로 귀결).
-    let dst_parent = dst.parent().unwrap_or(dst);
-    std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
+    Ok(())
+}
 
-    do_move(src, dst, same_volume(src, dst), journal_path, now_ms)
+#[cfg(target_os = "macos")]
+fn coordinated_rename(
+    src: &Path, dst: &Path, validate: &dyn Fn() -> Result<(), SafetyError>,
+) -> Result<(), SafetyError> {
+    use std::{cell::Cell, ptr::NonNull};
+    use block2::StackBlock;
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSFileCoordinator, NSFileCoordinatorWritingOptions, NSString, NSURL};
+
+    let io_error = |e: std::io::Error| SafetyError::Trash(e.to_string());
+    let source = std::path::absolute(src).map_err(io_error)?;
+    let destination = std::path::absolute(dst).map_err(io_error)?;
+    let source_id = filesystem_object_id(&source).map_err(io_error)?;
+    let parent = destination.parent().ok_or_else(|| SafetyError::Protected(destination.clone()))?;
+    let parent_id = filesystem_object_id(&std::fs::canonicalize(parent).map_err(io_error)?).map_err(io_error)?;
+    let source_text = source.to_str().ok_or_else(|| SafetyError::Protected(source.clone()))?;
+    let destination_text = destination.to_str().ok_or_else(|| SafetyError::Protected(destination.clone()))?;
+    autoreleasepool(|_| {
+        let source_url = NSURL::fileURLWithPath(&NSString::from_str(source_text));
+        let destination_url = NSURL::fileURLWithPath(&NSString::from_str(destination_text));
+        let coordinator = NSFileCoordinator::new();
+        let outcome = Cell::new(None);
+        let invoked = Cell::new(false);
+        let accessor = StackBlock::new(|from: NonNull<NSURL>, to: NonNull<NSURL>| {
+            if invoked.replace(true) {
+                outcome.set(Some(Err(SafetyError::Trash("file coordination invoked twice".into()))));
+                return;
+            }
+            // SAFETY: Foundation lends these non-null URLs for the synchronous accessor call.
+            let (from, to) = unsafe { (from.as_ref(), to.as_ref()) };
+            let result = (|| {
+                let actual_source = from.path().map(|p| PathBuf::from(p.to_string()));
+                let actual_destination = to.path().map(|p| PathBuf::from(p.to_string()));
+                if actual_source.as_ref() != Some(&source) || actual_destination.as_ref() != Some(&destination) {
+                    return Err(SafetyError::Trash("file coordination changed the planned paths".into()));
+                }
+                validate_move_paths(&source, &destination)?;
+                if filesystem_object_id(&source).map_err(io_error)? != source_id
+                    || filesystem_object_id(&std::fs::canonicalize(parent).map_err(io_error)?).map_err(io_error)? != parent_id {
+                    return Err(SafetyError::Trash("file identity changed while waiting for coordination".into()));
+                }
+                validate()?;
+                coordinator.itemAtURL_willMoveToURL(from, to);
+                rename_noreplace(&source, &destination).map_err(io_error)?;
+                coordinator.itemAtURL_didMoveToURL(from, to);
+                Ok(())
+            })();
+            outcome.set(Some(result));
+        });
+        let mut error = None;
+        coordinator.coordinateWritingItemAtURL_options_writingItemAtURL_options_error_byAccessor(
+            &source_url, NSFileCoordinatorWritingOptions::ForMoving,
+            &destination_url, NSFileCoordinatorWritingOptions::empty(), Some(&mut error), &accessor,
+        );
+        if let Some(error) = error {
+            return Err(SafetyError::Trash(error.localizedDescription().to_string()));
+        }
+        outcome.take().unwrap_or_else(|| Err(SafetyError::Trash("file coordination did not run".into())))
+    })
 }
 
 #[cfg(test)]
@@ -800,6 +881,7 @@ mod tests {
         assert!(SafetyError::Protected(PathBuf::from("/x")).to_string().contains("보호"));
         assert!(SafetyError::Trash("boom".into()).to_string().contains("휴지통"));
         assert!(SafetyError::Journal("boom".into()).to_string().contains("저널"));
+        assert_eq!(SafetyError::Validation("source changed".into()).to_string(), "source changed");
     }
 
     #[test]
@@ -842,6 +924,17 @@ mod tests {
     }
 
     #[test]
+    fn legacy_move_journal_keeps_classification_source_unknown() {
+        let raw = r#"{"ts_ms":1,"op":"move","path":"legacy","bytes":1,"outcome":"ok","move_paths":{"source":"/a","destination":"/b"}}"#;
+        let entry: JournalEntry = serde_json::from_str(raw).unwrap();
+        assert!(entry.move_paths.as_ref().unwrap().classification_source.is_none());
+        let encoded = serde_json::to_string(&entry).unwrap();
+        assert!(!encoded.contains("classification_source"));
+        let restored: JournalEntry = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.move_paths.unwrap().source, Path::new("/a"));
+    }
+
+    #[test]
     fn journal_roundtrip_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("journal.jsonl");
@@ -854,6 +947,7 @@ mod tests {
                     path: format!("/x/{i}"),
                     bytes: i * 10,
                     outcome: "ok".into(),
+                    move_paths: None,
                 },
             )
             .unwrap();
@@ -882,6 +976,7 @@ mod tests {
                 path: "/x".into(),
                 bytes: 0,
                 outcome: "ok".into(),
+                move_paths: None,
             },
         );
         assert!(matches!(err, Err(SafetyError::Journal(_))));
@@ -1122,6 +1217,7 @@ mod tests {
                 path: "/x".into(),
                 bytes: 0,
                 outcome: "ok".into(),
+                move_paths: None,
             },
         )
         .unwrap();
@@ -1199,23 +1295,21 @@ mod tests {
         let src = tmp.path().join("a.bin");
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, vec![7u8; 30]).unwrap();
-        do_move(&src, &dst, true, &jp, 1).unwrap();
+        do_move(&src, &dst, true, &jp, 1, &|| Ok(()), None, None).unwrap();
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
     }
 
-    // Fix 1 회귀 테스트: hard_link는 create-only라 dst가 이미 있으면(TOCTOU 경합으로 그 사이
-    // 생긴 파일 시뮬레이션) AlreadyExists로 실패해야 하며, 그 경합 상대의 dst도 원본 src도
-    // 절대 건드리면 안 된다 — rename의 REPLACE 시맨틱이었다면 여기서 dst가 파괴됐을 것.
+    // A destination created after admission must survive the exclusive move unchanged.
     #[test]
-    fn do_move_same_volume_hard_link_fails_when_dest_exists() {
+    fn do_move_same_volume_fails_when_dest_exists() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
         let src = tmp.path().join("a.bin");
         let dst = tmp.path().join("b.bin");
         std::fs::write(&src, b"original").unwrap();
         std::fs::write(&dst, b"pre-existing").unwrap(); // TOCTOU 경합에서 먼저 생긴 것처럼 시뮬레이션
-        let err = do_move(&src, &dst, true, &jp, 1);
+        let err = do_move(&src, &dst, true, &jp, 1, &|| Ok(()), None, None);
         assert!(matches!(err, Err(SafetyError::Trash(_))));
         assert!(src.exists(), "원본은 실패 시 보존");
         assert_eq!(
@@ -1234,7 +1328,7 @@ mod tests {
         let dst = tmp.path().join("moved-disksage-xvol-fixture.bin");
         std::fs::write(&src, vec![9u8; 40]).unwrap();
         // same_vol=false 강제 → 실제 같은 볼륨이어도 copy+verify+trash 경로 실행
-        do_move(&src, &dst, false, &jp, 2).unwrap();
+        do_move(&src, &dst, false, &jp, 2, &|| Ok(()), None, None).unwrap();
         assert!(!src.exists(), "원본은 휴지통으로");
         assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
         // 원본이 휴지통에 있음 확인 후 테스트 픽스처만 purge

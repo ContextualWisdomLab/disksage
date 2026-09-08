@@ -126,6 +126,7 @@ export interface JournalEntry {
   path: string;
   bytes: number;
   outcome: string;
+  move_paths?: { source: string; destination: string };
 }
 export interface DupeGroup {
   hash: string;
@@ -269,6 +270,7 @@ export interface MovePlan {
   src: string;
   dst: string;
   class_id: string;
+  classification_source?: string | null;
   source_size?: number | null;
   source_mtime_ms?: number | null;
   lineage?: {
@@ -277,10 +279,21 @@ export interface MovePlan {
     production_time_confidence?: string | null;
     lineage_fingerprint: string;
   };
+  bundle?: { root_object_id: string; files: { name: string; object_id: string; bytes: number; modified_ns: string; content_blake3: string }[] } | null;
 }
 
+export interface OrganizationPreview {
+  whole_tree_verified: boolean;
+  observed_file_count: number;
+  moves: MovePlan[];
+  retained: { path: string; reason: "agent_state" | "package_boundary" | "companion_bundle" | "project_boundary_unverified" | "not_planned" }[];
+}
+
+export const planBundleOrganize = (root: string, targetParent: string) =>
+  invoke<MovePlan>("plan_bundle_organize", { root, targetParent });
+
 export const planOrganize = (root: string) =>
-  invoke<MovePlan[]>("plan_organize", { root });
+  invoke<OrganizationPreview>("plan_organize", { root });
 
 export interface OrganizationLineageItem {
   lineage_fingerprint: string;
