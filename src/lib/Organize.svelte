@@ -141,7 +141,7 @@
   </h2>
   <details>
     <summary>선택한 폴더를 기존 묶음 그대로 이동</summary>
-    <p class="muted">주제를 자동 분류하지 않고 현재 폴더 이름과 구성원을 함께 보존합니다. 현재는 하위 폴더 없이 로컬 파일 32개, 합계 512KiB 이하인 문서 묶음을 지원합니다.</p>
+    <p class="muted">주제를 자동 분류하지 않고 현재 폴더 이름과 구성원을 함께 보존합니다. 현재는 하위 폴더 없이 로컬 파일 32개, 합계 8MiB 이하인 문서 묶음을 지원합니다.</p>
     <label>대상 상위 폴더
       <input bind:value={bundleParent} placeholder="대상 폴더의 절대 경로" disabled={busy} />
     </label>

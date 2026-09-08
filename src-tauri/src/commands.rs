@@ -3726,6 +3726,37 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     }
 
     #[test]
+    fn bundle_streamed_document_group_roundtrips_and_retains_over_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("document group");
+        std::fs::create_dir(&source).unwrap();
+        let sizes = [258446usize, 186177, 242389, 139171];
+        for (index, size) in sizes.iter().enumerate() {
+            std::fs::write(source.join(format!("document_{index}.bin")), vec![index as u8; *size]).unwrap();
+        }
+        let target = tmp.path().join("organized");
+        let journal = tmp.path().join("journal.jsonl");
+        let plan = organize::organization_bundle::plan(&source, &target).unwrap();
+        for member in &plan.bundle.as_ref().unwrap().files {
+            assert_eq!(member.content_blake3, blake3::hash(&std::fs::read(source.join(&member.name)).unwrap()).to_hex().to_string());
+        }
+        assert!(execute_moves_inner(&[plan], &journal, 1)[0].ok);
+        assert!(undo_last_moves_inner(1, &journal, 2)[0].ok);
+        for (index, size) in sizes.iter().enumerate() {
+            assert_eq!(std::fs::read(source.join(format!("document_{index}.bin"))).unwrap(), vec![index as u8; *size]);
+        }
+        let extra = source.join("over_budget.bin");
+        let remaining = 8 * 1024 * 1024 - sizes.iter().sum::<usize>() as u64;
+        let extra_file = std::fs::File::create(&extra).unwrap();
+        extra_file.set_len(remaining).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_ok());
+        extra_file.set_len(remaining + 1).unwrap();
+        assert!(organize::organization_bundle::plan(&source, &target).is_err());
+        assert_eq!(std::fs::metadata(extra).unwrap().len(), remaining + 1);
+        assert!(source.exists());
+    }
+
+    #[test]
     fn bundle_preview_retains_nested_folders_and_project_ancestors() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("notes");

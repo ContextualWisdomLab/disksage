@@ -20,9 +20,9 @@ pub struct BundleFile {
     pub content_blake3: String,
 }
 
-// ponytail: flat, 32-file/512-KiB bundles; recursive membership and streaming need separate validation.
+// ponytail: flat, 32-file/8-MiB bundles; larger or recursive groups need separate I/O-budget validation.
 const MAX_FILES: usize = 32;
-const MAX_BYTES: u64 = 512 * 1024;
+const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 fn unavailable(_: impl std::fmt::Display) -> String {
     "폴더 구성이나 파일 상태를 확인하지 못해 현재 위치에 보존합니다.".into()
@@ -108,20 +108,30 @@ pub fn observe(source: &Path) -> Result<BundleManifest, String> {
             return Err(unavailable("file replaced"));
         }
         let modified = opened.modified().map_err(unavailable)?;
-        let mut bytes = Vec::new();
-        (&file)
-            .take(MAX_BYTES.saturating_sub(total) + 1)
-            .read_to_end(&mut bytes)
-            .map_err(unavailable)?;
+        let mut reader = (&file).take(MAX_BYTES.saturating_sub(total) + 1);
+        let mut buffer = [0u8; 64 * 1024];
+        let mut hasher = blake3::Hasher::new();
+        let mut bytes_read = 0u64;
+        loop {
+            let count = match reader.read(&mut buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result.map_err(unavailable)?,
+            };
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            bytes_read += count as u64;
+        }
         let after = file.metadata().map_err(unavailable)?;
-        if bytes.len() as u64 != opened.len()
+        if bytes_read != opened.len()
             || after.len() != opened.len()
             || after.modified().map_err(unavailable)? != modified
             || crate::safety::filesystem_object_id(&path).map_err(unavailable)? != object_id
         {
             return Err("확인 중 파일이 바뀌어 묶음 이동을 보류합니다.".into());
         }
-        total += bytes.len() as u64;
+        total += bytes_read;
         files.push(BundleFile {
             name,
             object_id,
@@ -131,7 +141,7 @@ pub fn observe(source: &Path) -> Result<BundleManifest, String> {
                 .map_err(unavailable)?
                 .as_nanos()
                 .to_string(),
-            content_blake3: blake3::hash(&bytes).to_hex().to_string(),
+            content_blake3: hasher.finalize().to_hex().to_string(),
         });
     }
     if files.is_empty()

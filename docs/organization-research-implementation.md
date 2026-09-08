@@ -70,6 +70,21 @@ The bounded pilot binds complete membership, raw relative names, file contents, 
 
 ## Existing-folder movement pilot
 
-The UI now previews an explicitly selected existing folder and destination parent. It does not infer a topic or ontology class. The current supported scope is a flat bundle of at most 32 local regular files totaling 512 KiB. Nested, unavailable, linked, cloud-only, recognized project, and protected package/session scopes are retained. General recursive and semantic grouping remain unfinished.
+The UI now previews an explicitly selected existing folder and destination parent. It does not infer a topic or ontology class. The current supported scope is a flat bundle of at most 32 local regular files totaling 8 MiB. Nested, unavailable, linked, cloud-only, recognized project, and protected package/session scopes are retained. General recursive and semantic grouping remain unfinished.
 
 The move plan and undo receipt now bind member names, file identities, sizes, exact modification timestamps, and content digests. The same plan validator runs inside native coordination. Movement across volumes is unavailable for these bundles. Tests have verified a decomposed-Hangul folder name, complete companion movement and undo, refusal after a new member appears, and same-size/same-mtime content drift. The first completed command run passed 31 tests and failed the unchanged live cache-cleanup assertion. After adding error diagnostics and the project-boundary regression, all 33 command tests passed. The intermittent cache assertion was not reproduced in that run; its underlying cause is not established by this result. All 47 shared safety tests also passed. The latest frontend check reported zero errors and warnings. No real user folder was moved by this pilot validation.
+
+### Bounded content verification beyond the initial prototype
+
+A reviewed four-document group totaled 826,183 bytes and exceeded the initial 512 KiB
+budget. A synthetic public-core regression reproduced that refusal before the change.
+The proposed implementation keeps a fixed 64 KiB read buffer and incremental BLAKE3
+state, with an 8 MiB total observation budget and the existing 32-file limit. This is
+an operational bound for small document groups, not a classification threshold or a
+claim of support for arbitrary folder trees. The bounded reader includes one extra
+byte to detect growth; observed byte count, identity, length and modification checks
+still reject changed sources. Dataless, project, package, link, collision and
+cross-volume restrictions remain in force. The regression covers the observed group
+size, digest equivalence, execution/undo, exact-budget acceptance and one-byte excess.
+Performance and iCloud behavior for this wider budget remain unverified until measured;
+local test success alone is not permission to move a private group or claim deployment.
