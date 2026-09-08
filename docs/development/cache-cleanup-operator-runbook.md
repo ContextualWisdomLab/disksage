@@ -72,9 +72,10 @@ A future irreversible implementation requires all of the following before it can
   provider placeholders; and
 - platform-specific integration evidence for every enabled platform.
 
-Until that evidence is integrated, leave reviewed cache directories in OS Trash or use the
-operating system's own user-managed Trash controls. DiskSage does not claim physically reclaimed
-capacity from an unsupported permanent-purge path.
+Until that evidence is integrated, leave reviewed cache directories in OS Trash. After reviewing
+their contents, empty the native Trash manually with the operating system's own user-managed Trash
+controls. DiskSage does not claim physically reclaimed capacity from an unsupported permanent-purge
+path.
 
 ## Catalog scope
 
