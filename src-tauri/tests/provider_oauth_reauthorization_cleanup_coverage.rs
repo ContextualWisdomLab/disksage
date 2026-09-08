@@ -16,6 +16,16 @@ mod cloud {
     pub use disksage_lib::cloud::*;
 }
 
+fn private_tempdir() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    temp
+}
+
 fn unicode_google_root(decomposed: bool) -> CloudRoot {
     #[cfg(windows)]
     let composed = r"C:\Cloud\내 드라이브";
@@ -71,7 +81,7 @@ fn google_connection(
 
 #[test]
 fn failed_legacy_cleanup_reports_unavailable_retry_publication_and_preserves_canonical_document() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
@@ -111,7 +121,7 @@ fn failed_legacy_cleanup_reports_unavailable_retry_publication_and_preserves_can
 
 #[test]
 fn successful_legacy_cleanup_keeps_the_published_document_canonical_only() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
@@ -139,7 +149,7 @@ fn successful_legacy_cleanup_keeps_the_published_document_canonical_only() {
 
 #[test]
 fn no_stale_identity_never_calls_the_credential_delete_boundary() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let requested_root = unicode_google_root(false);
     let canonical = google_connection(&requested_root, connection_id(&requested_root), 200);
@@ -160,7 +170,7 @@ fn no_stale_identity_never_calls_the_credential_delete_boundary() {
 
 #[test]
 fn failed_retry_visibility_publication_is_reported_separately() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
