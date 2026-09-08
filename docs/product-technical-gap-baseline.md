@@ -14,9 +14,12 @@
   non-cache-mount records while keeping active records excluded by Buildx's reclaimable flag.
 - Two execution attempts stopped during the fresh Buildx inventory with
   `orphan-list-build_cache-timeout`; neither reached mutation or wrote an execution receipt. The
-  13 records remain uncredited and preserved until a complete fresh audit and exact execution can
-  finish. The current standalone test now checks the implemented pre-mutation re-audit contract
-  instead of the obsolete claim that exact BuildKit deletion is unavailable.
+  13 records then passed a complete fresh re-audit. The exact prune attempt returned an
+  indeterminate outcome and wrote a receipt; it was not replayed. A follow-up read-only audit
+  found zero BuildKit candidates, but concurrent activity prevents signed attribution, so the
+  observed 913,813,504-byte change remains uncredited. The current standalone test now checks the
+  implemented pre-mutation re-audit contract instead of the obsolete claim that exact BuildKit
+  deletion is unavailable.
 
 ## 2026-09-08 targeted cache-plan scope repair
 

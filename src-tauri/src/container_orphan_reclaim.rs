@@ -1467,7 +1467,12 @@ fn audit_category(
                 args.extend(["network", "ls", "--no-trunc", "--format", "json"]);
             }
             OrphanCategory::BuildCache if target.kind.is_docker() => {
-                args.extend(["buildx", "du", "--format", "json"]);
+                args.extend([
+                    "buildx",
+                    "du",
+                    "--format",
+                    r#"{"ID":{{json .ID}},"Reclaimable":{{json .Reclaimable}},"Shared":{{json .Shared}},"Mutable":{{json .Mutable}},"Type":{{json .Type}}}"#,
+                ]);
             }
             OrphanCategory::BuildCache => return Err("build-cache-docker-only".into()),
         }
