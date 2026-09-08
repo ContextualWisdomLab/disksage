@@ -8,24 +8,26 @@ fn provider_oauth_source() -> String {
 }
 
 #[test]
-fn oauth_connection_publication_consumes_the_object_bound_owner() {
+fn oauth_connection_publication_uses_create_new_owner_and_refuses_existing_replacement() {
     let source = provider_oauth_source();
 
     assert!(
-        source.contains("crate::object_bound_publication::replace_object_bound_bytes"),
-        "provider OAuth must consume the canonical object-bound replacement primitive"
+        source.contains(
+            "crate::private_directory_publication::write_private_bytes_create_new_with_parents("
+        ),
+        "provider OAuth create-new publication must consume the canonical private-directory owner"
     );
     assert!(
-        source.contains("oauth-connection-directory-sync-failed"),
-        "containing-directory durability failure must remain a stable OAuth-domain error"
-    );
-    assert!(
-        source.contains("oauth-connection-document-publication-uncertain"),
-        "post-publication namespace drift must not be reported as a clean rollback"
+        source.contains("oauth-connection-document-object-bound-replacement-unavailable"),
+        "existing connection documents must fail closed while exact-source replacement authority is unavailable"
     );
     assert!(
         source.contains("oauth-connection-document-object-bound-publication-unavailable"),
-        "platforms without object-bound publication must fail closed without a pathname fallback"
+        "platforms without canonical private publication must fail closed without a pathname fallback"
+    );
+    assert!(
+        !source.contains("crate::object_bound_publication::replace_object_bound_bytes"),
+        "provider OAuth must not reintroduce the superseded replacement owner while existing-record replacement is unavailable"
     );
 
     for forbidden in [
