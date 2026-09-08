@@ -4154,7 +4154,7 @@ fn source_blocked_reason(
 
 /// File Provider's private storage and download staging trees are owned by macOS. Their files
 /// are implementation state, not user payloads; only a provider-aware operation may reclaim them.
-fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
+pub(crate) fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
     let mut previous = String::new();
     path.components().any(|component| {
         let name = normalized_account_text(&component.as_os_str().to_string_lossy());
@@ -4170,7 +4170,7 @@ fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
 /// Photos databases are individually archive-shaped but are owned by the Photos package.
 /// Moving one member would corrupt the library; only a future package-aware operation may handle
 /// the bundle as a whole.
-fn path_inside_managed_photo_library(path: &Path) -> bool {
+pub(crate) fn path_inside_managed_photo_library(path: &Path) -> bool {
     path.components().any(|component| {
         let name = normalized_account_text(&component.as_os_str().to_string_lossy());
         name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
