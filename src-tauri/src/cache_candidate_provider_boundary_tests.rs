@@ -27,7 +27,7 @@ fn cache_candidates_hide_managed_file_provider_roots() {
 
 #[cfg(unix)]
 #[test]
-fn cache_candidates_hide_managed_file_provider_roots_reached_through_symlinked_ancestor() {
+fn cache_candidates_mark_managed_file_provider_roots_reached_through_symlinked_ancestor_non_actionable() {
     use std::os::unix::fs::symlink;
 
     let temporary = tempfile::tempdir().expect("temporary directory");
@@ -48,9 +48,14 @@ fn cache_candidates_hide_managed_file_provider_roots_reached_through_symlinked_a
     };
 
     let candidates = cache_candidates(&bases);
+    let os_temp = candidates
+        .iter()
+        .find(|candidate| candidate.id == "os-temp")
+        .expect("catalog preserves unavailable roots for stable UI composition");
 
     assert!(
-        !candidates.iter().any(|candidate| candidate.id == "os-temp"),
+        !os_temp.exists,
         "a symlinked ancestor must not make managed File Provider storage actionable"
     );
+    assert_eq!(os_temp.bytes, 0);
 }
