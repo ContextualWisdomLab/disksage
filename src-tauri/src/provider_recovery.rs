@@ -337,7 +337,9 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     )
     .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
     if primary_runtime_observed {
-        request_quit("OneDrive")?;
+        if request_quit("OneDrive").is_err() {
+            request_graceful_term("OneDrive")?;
+        }
     }
     let operation = (|| {
         let deadline = Instant::now() + Duration::from_secs(10);
