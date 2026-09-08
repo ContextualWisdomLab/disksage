@@ -126,12 +126,13 @@ mod tests {
     fn replacement_between_identity_and_binding_fails_closed() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("business.db");
+        let replacement = temp.path().join("replacement.db");
         std::fs::write(&file, b"original").unwrap();
+        std::fs::write(&replacement, b"replacement").unwrap();
         let original_id = filesystem_object_id(&file).unwrap();
 
         let error = bind_current_object(&file, RETAINED_CLASS, || {
-            std::fs::remove_file(&file).unwrap();
-            std::fs::write(&file, b"replacement").unwrap();
+            std::fs::rename(&replacement, &file).unwrap();
         })
         .unwrap_err();
 
