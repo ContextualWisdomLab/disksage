@@ -52,6 +52,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Invoke the installed Tauri CLI entry point directly in CPU and GPU release
+  builds, preventing Windows npm argument forwarding from dropping the
+  `--features` flag while retaining its value as an invalid positional argument.
 - Refresh the Vite/PostCSS transitive `nanoid` lock entry to 3.3.18, removing
   GHSA-2v37-7h3g-55p8 without adding a direct dependency or override.
 - Keep the Vitest runner and V8 coverage provider on the same 5.0.0 release,

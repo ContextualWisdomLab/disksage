@@ -117,7 +117,7 @@ jobs:
           cache-targets: false
 
       - name: Tauri build (with embedded LLM)
-        run: npm run tauri -- build --features llm-engine
+        run: node node_modules/@tauri-apps/cli/tauri.js build --features llm-engine
 
       - name: Diagnose WiX MSI linker failure
         if: failure() && matrix.os == 'windows-2022'
@@ -378,7 +378,7 @@ jobs:
         shell: bash
         run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
       - name: "Tauri build (GPU: CUDA [+ Vulkan on Linux] + dynamic backends)"
-        run: npm run tauri -- build --no-bundle --features "${{ matrix.features }}"
+        run: node node_modules/@tauri-apps/cli/tauri.js build --no-bundle --features "${{ matrix.features }}"
       - name: Build engine smoke-test binary
         run: cargo test --manifest-path src-tauri/Cargo.toml --release --no-run --features "${{ matrix.features }}" --lib
       - name: List built shared libs (diagnostic)

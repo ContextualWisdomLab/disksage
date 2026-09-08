@@ -31,6 +31,18 @@ authoritative, and no merge is claimed from queued or stale status.
   a direct dependency, an override, an exclusion, or an audit bypass. See
   GitHub. (2026). *nanoid: custom generators can loop indefinitely when size
   is zero*. https://github.com/advisories/GHSA-2v37-7h3g-55p8
+- PR #349 successor head `3fc9ca427fe5c2d47676c62d5acd8aa9e3788380`
+  then exposed a Windows-only release invocation defect. In exact-head Release
+  run `34185620046`, Linux job `101933323953` and macOS job `101933323793`
+  preserved `tauri build --features llm-engine` and completed successfully.
+  Windows job `101933324113` instead logged `tauri build llm-engine`, then
+  Cargo rejected the retained value as an unexpected positional argument. The
+  root cause is npm script argument forwarding dropping `--features` on this
+  Windows runtime, not Tauri, Rust, WiX, or the Vitest dependency update. The
+  repair invokes the installed `@tauri-apps/cli/tauri.js` entry point directly
+  for both CPU and GPU release paths and regression-tests that neither path can
+  return to the affected `npm run tauri -- build ...` form. Successor hosted
+  checks remain authoritative.
 
 ## Current product contract
 
