@@ -264,7 +264,7 @@ mod tests {
         let docker = temp.path().join("docker");
         std::fs::write(
             &docker,
-            "#!/bin/sh\ncase \"$*\" in\n  *\" info\") exit 0 ;;\n  *\"buildx du --format json\"*) printf '%s\\n' '{\"ID\":\"cache123\",\"Reclaimable\":true}' ;;\n  *) exit 0 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$*\" in\n  *\" info\") exit 0 ;;\n  *\"buildx du\"*) printf '%s\\n' '{\"ID\":\"cache123\",\"Reclaimable\":true,\"Shared\":false,\"Mutable\":false,\"Type\":\"regular\"}' ;;\n  *) exit 0 ;;\nesac\n",
         )
         .unwrap();
         std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
