@@ -1,5 +1,6 @@
 use disksage_lib::container_orphan_reclaim::{
-    probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+    probe_container_orphans_with_receipt_dir, ContainerRuntimeKind, ContainerRuntimeTarget,
+    OrphanCategory,
 };
 
 #[cfg(unix)]
@@ -44,7 +45,7 @@ case "${{1:-}}" in
     if [ "${{2:-}}" = "inspect" ]; then
       # Current Podman documentation shows valid inspect JSON that can omit Containers
       # when no running containers are present. Membership must come from `ps --all`.
-      printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true}}]'
+      printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true,"labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]'
       exit 0
     fi
     exit 94
@@ -73,7 +74,13 @@ esac
 #[test]
 fn podman_network_without_any_container_membership_is_a_bounded_candidate() {
     let (_temp, target) = podman_network_target(false);
-    let plan = probe_container_orphans(&target);
+    let receipt_dir = tempfile::tempdir().expect("private receipt directory");
+    let mut permissions = std::fs::metadata(receipt_dir.path())
+        .expect("receipt directory metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(receipt_dir.path(), permissions).expect("private receipt directory");
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipt_dir.path());
     let network = plan
         .categories
         .iter()
@@ -91,7 +98,13 @@ fn podman_network_without_any_container_membership_is_a_bounded_candidate() {
 #[test]
 fn podman_network_with_stopped_container_membership_is_preserved() {
     let (_temp, target) = podman_network_target(true);
-    let plan = probe_container_orphans(&target);
+    let receipt_dir = tempfile::tempdir().expect("private receipt directory");
+    let mut permissions = std::fs::metadata(receipt_dir.path())
+        .expect("receipt directory metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(receipt_dir.path(), permissions).expect("private receipt directory");
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipt_dir.path());
     let network = plan
         .categories
         .iter()
