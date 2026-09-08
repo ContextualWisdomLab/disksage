@@ -59,9 +59,9 @@ fn exact_open_pull_request_vetoes_historical_merged_worktree_authority() {
             r#"#!/bin/sh
 set -eu
 case " $* " in
-  *' --state closed '*) printf '[]' ;;
-  *' --state merged --head shared-head '*) printf '%s' '[{{"headRefName":"shared-head","headRefOid":"{head}","isCrossRepository":false,"state":"MERGED"}}]' ;;
-  *' --state open --head shared-head '*) printf '%s' '[{{"headRefName":"shared-head","headRefOid":"{head}","isCrossRepository":false,"state":"OPEN"}}]' ;;
+  *' api --paginate repos/{{owner}}/{{repo}}/pulls?state=all&per_page=100 --jq '*) printf '%s\n' \
+    '{{"headRefName":"shared-head","headRefOid":"{head}","isCrossRepository":false,"createdAt":"2026-01-01T00:00:00Z","state":"MERGED"}}' \
+    '{{"headRefName":"shared-head","headRefOid":"{head}","isCrossRepository":false,"createdAt":"2026-01-02T00:00:00Z","state":"OPEN"}}' ;;
   *) exit 64 ;;
 esac
 "#
