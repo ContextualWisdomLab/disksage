@@ -270,6 +270,7 @@ export interface MovePlan {
   src: string;
   dst: string;
   class_id: string;
+  classification_source?: string | null;
   source_size?: number | null;
   source_mtime_ms?: number | null;
   lineage?: {

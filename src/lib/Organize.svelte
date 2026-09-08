@@ -188,6 +188,13 @@
         {#each group as p (p.src)}
           <li>
             <span class="path" title={p.src}>{p.src}</span>
+            <span class="lineage">{p.classification_source === "user_rule"
+              ? "사용자 규칙에 따른 제안 · 내용 검증 안 됨"
+              : p.classification_source === "model_picker"
+              ? "AI 분류 제안 · 내용 검증 안 됨"
+              : p.classification_source === "extension"
+              ? "파일 형식에 따른 제안 · 내용 검증 안 됨"
+              : "분류 근거 확인 필요"}</span>
             {#if verdicts[p.src]}
               {@const b = verdictBadge(verdicts[p.src])}
               <span class={b.cls} title={b.title}>{b.label}</span>

@@ -26,6 +26,9 @@ pub struct MovePlan {
     pub src: String,
     pub dst: String,
     pub class_id: String,
+    /// Producer provenance only; this does not attest semantic correctness.
+    #[serde(default)]
+    pub classification_source: Option<String>,
     #[serde(default)]
     pub source_size: Option<u64>,
     #[serde(default)]
@@ -191,12 +194,12 @@ fn plan_moves_impl(
             continue;
         }
         let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
-            Some(c) => c,
+        let (local, classification_source) = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
+            Some(c) => (c, "user_rule"),
             None => match pick(&f.path, &candidates) {
-                Some(picked) => picked,
+                Some(picked) => (picked, "model_picker"),
                 None => match classify(&f.path) {
-                    Some(c) => c.to_string(),
+                    Some(c) => (c.to_string(), "extension"),
                     None => continue,
                 },
             },
@@ -227,6 +230,7 @@ fn plan_moves_impl(
             src: f.path.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             class_id: class.id.clone(),
+            classification_source: Some(classification_source.into()),
             source_size: lineage_probe.map(|_| f.size),
             source_mtime_ms: lineage_probe.map(|_| f.mtime_ms),
             lineage,
@@ -402,6 +406,15 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
 "#;
         parse_ttl(&ttl.replace("TARGET", target)).unwrap()
+    }
+
+    #[test]
+    fn legacy_plan_has_no_invented_classification_source() {
+        let legacy = r#"{"src":"/source","dst":"/destination","class_id":"class"}"#;
+        let plan: MovePlan = serde_json::from_str(legacy).unwrap();
+        assert_eq!(plan.classification_source, None);
+        let restored: MovePlan = serde_json::from_str(&serde_json::to_string(&plan).unwrap()).unwrap();
+        assert_eq!(restored.classification_source, None);
     }
 
     #[test]
@@ -736,6 +749,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("model_picker"));
         assert!(plans[0].class_id.ends_with("Image"));
     }
 
@@ -749,6 +763,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let pick = |_p: &Path, _c: &[&str]| None;
         let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("extension"));
         assert!(plans[0].class_id.ends_with("Image"));
     }
 
@@ -783,6 +798,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string()); // picker가 Image를 골라도
         let plans = plan_moves_with(&[fixture_file(fixture.path(), "/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].classification_source.as_deref(), Some("user_rule"));
         assert!(plans[0].class_id.ends_with("Installer")); // 규칙이 picker를 이긴다
         // 규칙이 우선하므로 plan_moves_with 내부에서 pick은 호출되지 않는다(설계상 의도).
         // 라인 커버리지 확보를 위해 클로저 자체가 유효한 picker임을 별도로 확인.

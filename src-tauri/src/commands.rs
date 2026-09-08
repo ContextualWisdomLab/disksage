@@ -205,7 +205,7 @@ pub fn execute_moves_inner(
         .map(|p| {
             match safety::move_file_checked(
                 Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms,
-                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation), p.bundle.as_ref(),
+                &|| organize::validate_move_source(p).map_err(safety::SafetyError::Validation), p.bundle.as_ref(), p.classification_source.as_deref(),
             ) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
@@ -233,19 +233,18 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .filter(|e| e.op == "move" && e.outcome == "ok")
         .take(limit)
         .filter_map(|e| {
-            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone(), paths.bundle.clone()))
-                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into(), None)))
+            e.move_paths.as_ref().map(|paths| (paths.source.clone(), paths.destination.clone(), paths.bundle.clone(), paths.classification_source.clone()))
+                .or_else(|| parse_move_entry(&e.path).map(|(src, dst)| (src.into(), dst.into(), None, None)))
         })
-        .map(|(src, dst, bundle)| {
+        .map(|(src, dst, bundle, classification_source)| {
             let inverse = organize::MovePlan { src: dst.to_string_lossy().into_owned(),
                 dst: src.to_string_lossy().into_owned(), bundle, ..Default::default() };
-            let moved = if inverse.bundle.is_some() {
-                safety::move_file_checked(&dst, &src, journal_path, now_ms,
-                    &|| organize::validate_move_source(&inverse).map_err(safety::SafetyError::Validation),
-                    inverse.bundle.as_ref())
-            } else {
-                safety::move_file(&dst, &src, journal_path, now_ms)
-            };
+            let moved = safety::move_file_checked(&dst, &src, journal_path, now_ms,
+                &|| if inverse.bundle.is_some() {
+                    organize::validate_move_source(&inverse).map_err(safety::SafetyError::Validation)
+                } else {
+                    Ok(())
+                }, inverse.bundle.as_ref(), classification_source.as_deref());
             match moved {
                 Ok(()) => CleanResult {
                     path: src.to_string_lossy().into_owned(),
@@ -3779,7 +3778,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 std::fs::write(&companion, b"metadata").unwrap();
             }
             organize::validate_move_source(&plan).map_err(safety::SafetyError::Validation)
-        }, None);
+        }, None, None);
         assert_eq!(checks.get(), 2);
         assert!(result.is_err());
         assert_eq!(std::fs::read(&source).unwrap(), b"original");
@@ -3829,6 +3828,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            classification_source: Some("user_rule".into()),
             ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 5);
@@ -3839,6 +3839,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         assert!(undone[0].ok);
         assert_eq!(std::fs::read(&a).unwrap(), vec![2u8; 8]);
         assert!(!a_moved.exists());
+        let entries = safety::journal_recent(&jp, usize::MAX);
+        let moves: Vec<_> = entries.iter().filter(|e| e.op == "move").collect();
+        assert_eq!(moves.len(), 4);
+        assert!(moves.iter().all(|entry| entry.move_paths.as_ref().unwrap()
+            .classification_source.as_deref() == Some("user_rule")));
     }
 
     #[test]

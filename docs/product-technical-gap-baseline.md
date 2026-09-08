@@ -720,3 +720,26 @@ it. Legacy entries must remain explicitly evidence-unavailable. Before implement
 all journal constructors and public command serialization; after implementation, exercise plan
 serialization, execution journal round-trip and undo preservation through the public core.
 This trace is evidence of a missing contract, not a claim that the repair has been implemented.
+
+### Multi-topic document evidence — exploratory observation, 2026-09-08
+
+Two private conversation exports (21,803 bytes combined) were reviewed after native
+non-shared/upload-complete/no-conflict checks. The dialogue continues a career discussion
+across both exports; the second changes to statistical analysis near its end and explicitly
+proposes restarting the call to separate the summary. This contradicts treating one whole
+file as exactly one topic. It does not establish project ownership, transcript accuracy,
+app-link independence, or a correct destination. Both originals stayed in place. Size and
+modification time were unchanged after reading; native post-read observation reported both
+uploaded with no conflicts. No other-device check or retrieval experiment was performed.
+
+Acceptance must preserve the original event/document group while allowing multiple topic
+associations tied to reviewed spans. Generated summaries and speakers' hypotheses must
+remain attributed assertions, not domain facts. Topic associations must not authorize
+splitting or deleting the source. A synthetic regression should cover a mid-document topic
+change with an unresolved app reference, keeping physical movement on hold. Private text,
+personal identifiers, and private source paths must never become public test fixtures.
+
+The proposed producer-source patch in PR #346 is only a prerequisite: it identifies the
+source of a suggestion and carries that label into move/undo receipts. It does not implement
+span evidence, a released concept mapping, independent evaluation, or app-link verification.
+This gap remains open regardless of that patch's test outcome.

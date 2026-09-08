@@ -157,6 +157,7 @@ mod tests {
             src: "/private/source/secret.mov".into(),
             dst: "/Users/example/Media/Media/secret.mov".into(),
             class_id: "https://disksage.app/ontology#Media".into(),
+            classification_source: None,
             source_size: Some(42),
             source_mtime_ms: Some(123),
             bundle: None,
