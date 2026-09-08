@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Return a bounded, path-free keep-local receipt when a native provider probe times out or returns
+  no output; separate shared APFS movement from completed action-attributable receipt totals, and
+  keep customer guidance action-first while moving evidence codes into audit details.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

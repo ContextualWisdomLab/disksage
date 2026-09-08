@@ -218,6 +218,7 @@ export interface PodmanDanglingImagePruneExecution {
   before_available_bytes: number | null;
   after_available_bytes: number | null;
   observed_available_gain_bytes: number | null;
+  reclaim_progress: ReclaimProgressSummary | null;
   rationale: string;
 }
 
@@ -824,6 +825,19 @@ export interface LocalVolumeSnapshot {
   evidence_fingerprint: string;
 }
 
+export interface ByteChange {
+  direction: "increased" | "decreased" | "unchanged";
+  bytes: number;
+}
+
+export interface ReclaimProgressSummary {
+  global_available_change: ByteChange;
+  action_attributable_bytes: number;
+  completed_receipt_count: number;
+  limitations: string[];
+}
+
+
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
   evidence_complete: boolean;
@@ -872,6 +886,15 @@ export interface ProviderGlobalSyncReport {
   pending_indexable_count: number | null;
   blockers: string[];
   notices: string[];
+  probe_receipt?: {
+    schema_kind: string;
+    schema_version: number;
+    observed_at_ms: number;
+    outcome: "inconclusive";
+    keep_local: true;
+    next_action: "keep-local-and-rescan";
+    audit_reason_codes: string[];
+  };
 }
 
 export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";

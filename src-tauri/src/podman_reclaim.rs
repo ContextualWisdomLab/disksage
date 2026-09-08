@@ -146,6 +146,7 @@ pub struct PodmanDanglingImagePruneExecution {
     pub after_available_bytes: Option<u64>,
     /// Only a positive before/after available-space delta is reported; it is still attribution-weak.
     pub observed_available_gain_bytes: Option<u64>,
+    pub reclaim_progress: Option<crate::volume_pressure::ReclaimProgressSummary>,
     pub rationale: String,
 }
 
@@ -780,10 +781,11 @@ pub fn prune_dangling_images(
         return Err("podman-prune-confirmation-mismatch".into());
     }
 
-    let before_available_bytes = std::env::current_dir()
-        .ok()
-        .and_then(|path| crate::volume_pressure::snapshot_volume(&path, executed_at_ms).ok())
-        .map(|snapshot| snapshot.available_bytes);
+    let current_dir = std::env::current_dir().ok();
+    let before_snapshot = current_dir.as_ref().and_then(|path| {
+        crate::volume_pressure::snapshot_volume(path, executed_at_ms).ok()
+    });
+    let before_available_bytes = before_snapshot.as_ref().map(|snapshot| snapshot.available_bytes);
     let output = command_capture(
         podman_bin,
         &["--connection", requested_machine, "image", "prune", "--force"],
@@ -794,15 +796,31 @@ pub fn prune_dangling_images(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(executed_at_ms);
-    let after_available_bytes = std::env::current_dir()
-        .ok()
-        .and_then(|path| {
-            crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok()
-        })
-        .map(|snapshot| snapshot.available_bytes);
+    let after_snapshot = current_dir.as_ref().and_then(|path| {
+        crate::volume_pressure::snapshot_volume(path, after_observed_at_ms).ok()
+    });
+    let after_available_bytes = after_snapshot.as_ref().map(|snapshot| snapshot.available_bytes);
     let observed_available_gain_bytes = before_available_bytes.zip(after_available_bytes).and_then(
         |(before, after)| after.checked_sub(before),
     );
+    let reclaim_progress = before_snapshot
+        .as_ref()
+        .zip(after_snapshot.as_ref())
+        .and_then(|(before, after)| {
+            crate::volume_pressure::compare_snapshots(before, after, None)
+                .ok()
+                .and_then(|comparison| {
+                    crate::volume_pressure::summarize_reclaim_progress(
+                        &comparison,
+                        &[crate::volume_pressure::ActionReclaimReceipt {
+                            receipt_id: evidence.candidate_set_sha256.clone(),
+                            completed: output.status_code == 0,
+                            attributable_allocated_bytes: 0,
+                        }],
+                    )
+                    .ok()
+                })
+        });
     Ok(PodmanDanglingImagePruneExecution {
         schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
         candidate_set_sha256: evidence.candidate_set_sha256,
@@ -823,6 +841,7 @@ pub fn prune_dangling_images(
         before_available_bytes,
         after_available_bytes,
         observed_available_gain_bytes,
+        reclaim_progress,
         rationale: rationale.to_string(),
     })
 }

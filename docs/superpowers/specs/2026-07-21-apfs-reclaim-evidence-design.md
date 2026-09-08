@@ -34,6 +34,9 @@ reparse points are included in `skipped` rather than silently disappearing from 
 The GUI must label selection totals as logical size. Moving an item to Trash preserves its blocks;
 actual physical recovery can only be claimed from a post-lifecycle filesystem free-space
 observation after Trash is emptied or from an equally strong filesystem-native unique-extent proof.
+The progress summary therefore keeps the global available-space change in a separate field from
+`action_attributable_bytes`, which sums only unique completed action receipts. The two values are
+never substituted for one another or silently reconciled.
 
 For example, a read-only cache review can be run with:
 
