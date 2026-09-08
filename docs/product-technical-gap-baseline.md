@@ -7,6 +7,18 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-09-08 exact-head CI RCA
+
+- PR #348 predecessor `89566711e4616892b15d7939ad4b7d5d9efc4f29`
+  carried the valid immutable `softprops/action-gh-release` 3.0.3 update but
+  inherited the stale retry assertion and Windows artifact namespace failures
+  repaired by canonical PR #264. After ordinary integration of #264, the
+  release provenance test correctly failed because it still required the
+  previous 3.0.2 commit while the workflow used 3.0.3 commit
+  `efb35369e0ad2afab669f228072c1b0d510eae64`. The repair updates that exact
+  pin assertion; it does not relax provenance, accept a mutable tag, or bypass
+  release verification. Successor hosted checks remain authoritative.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
