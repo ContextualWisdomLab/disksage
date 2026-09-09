@@ -3,8 +3,9 @@
 #import <Photos/Photos.h>
 
 static const NSUInteger DSMaxChunkBytes = 8 * 1024 * 1024;
-static const int64_t DSResourceTimeoutNanos = 30LL * NSEC_PER_SEC;
 static const int64_t DSAuthorizationTimeoutNanos = 5LL * 60LL * NSEC_PER_SEC;
+static NSArray<NSString *> *DSPageIdentifiers = nil;
+static NSString *DSPageInventoryIdentity = nil;
 
 static char *DSJSON(id value) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
@@ -27,6 +28,18 @@ static NSString *DSHex(const unsigned char *bytes, NSUInteger length) {
   NSMutableString *hex = [NSMutableString stringWithCapacity:length * 2];
   for (NSUInteger index = 0; index < length; index++) [hex appendFormat:@"%02x", bytes[index]];
   return hex;
+}
+
+static NSString *DSInventoryIdentity(PHFetchResult<PHAsset *> *fetch) {
+  CC_SHA256_CTX context; CC_SHA256_Init(&context);
+  for (PHAsset *asset in fetch) {
+    NSData *identifier = [asset.localIdentifier dataUsingEncoding:NSUTF8StringEncoding];
+    uint64_t length = CFSwapInt64HostToLittle((uint64_t)identifier.length);
+    CC_SHA256_Update(&context, &length, sizeof(length));
+    CC_SHA256_Update(&context, identifier.bytes, (CC_LONG)identifier.length);
+  }
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(digest, &context);
+  return DSHex(digest, sizeof(digest));
 }
 
 static NSString *DSMetadataFingerprint(PHAsset *asset, PHAssetResource *resource) {
@@ -81,7 +94,7 @@ static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
   __block uint64_t byteCount = 0;
   __block BOOL exceeded = NO;
   __block NSError *completionError = nil;
-  PHAssetResourceDataRequestID requestID = [[PHAssetResourceManager defaultManager]
+  [[PHAssetResourceManager defaultManager]
       requestDataForAssetResource:resource
       options:options
       dataReceivedHandler:^(NSData *data) {
@@ -96,11 +109,7 @@ static NSDictionary *DSReadResource(PHAsset *asset, uint64_t maxBytes) {
         completionError = error;
         dispatch_semaphore_signal(done);
       }];
-  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, DSResourceTimeoutNanos)) != 0) {
-    [[PHAssetResourceManager defaultManager] cancelDataRequest:requestID];
-    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC));
-    return @{ @"state": @"unavailable", @"blocker": @"local-content-read-timed-out" };
-  }
+  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
   if (completionError) {
     return @{ @"state": @"icloud-only-or-unavailable", @"blocker": @"download-original-in-photos" };
   }
@@ -195,6 +204,54 @@ char *ds_photos_request_authorization(void) {
 
 char *ds_photos_inventory(uint32_t maxAssets, uint64_t maxBytes) {
   return DSJSON(DSInventory(MIN((NSUInteger)maxAssets, 10000), MIN(maxBytes, 536870912ULL), nil));
+}
+
+// One PhotoKit asset is the native pagination unit. Each call returns only after PhotoKit's
+// resource completion handler (or its explicit unavailable result), allowing the UI to checkpoint,
+// repaint, or cancel between assets without guessing a wall-clock page timeout.
+char *ds_photos_inventory_page(uint64_t offset, uint64_t maxBytes) {
+  PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+  if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited)
+    return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @((uint64_t)(NSDate.date.timeIntervalSince1970 * 1000)),
+                     @"total_count": @0, @"offset": @(offset), @"next_offset": [NSNull null],
+                     @"inventory_identity": @"",
+                     @"native_completion_observed": @YES, @"page_duration_ms": @0,
+                     @"assets": @[], @"unavailable_count": @0 });
+  PHFetchOptions *options = [PHFetchOptions new];
+  options.predicate = [NSPredicate predicateWithFormat:@"mediaType == %d", PHAssetMediaTypeImage];
+  PHFetchResult<PHAsset *> *fetch = [PHAsset fetchAssetsWithOptions:options];
+  if (offset == 0 || !DSPageIdentifiers || !DSPageInventoryIdentity) {
+    NSMutableArray<NSString *> *identifiers = [NSMutableArray arrayWithCapacity:fetch.count];
+    for (PHAsset *asset in fetch) [identifiers addObject:asset.localIdentifier];
+    DSPageIdentifiers = [identifiers copy];
+    DSPageInventoryIdentity = DSInventoryIdentity(fetch);
+  }
+  NSString *inventoryIdentity = DSPageInventoryIdentity;
+  uint64_t snapshotTotal = DSPageIdentifiers.count;
+  uint64_t total = fetch.count;
+  BOOL libraryChanged = total != snapshotTotal;
+  uint64_t started = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
+  NSArray *assets = @[];
+  uint64_t unavailable = 0;
+  if (total == snapshotTotal && offset < snapshotTotal) {
+    NSString *identifier = DSPageIdentifiers[(NSUInteger)offset];
+    PHFetchResult<PHAsset *> *selected = [PHAsset fetchAssetsWithLocalIdentifiers:@[identifier] options:nil];
+    if (selected.count == 1) {
+      NSDictionary *asset = DSAssetEvidence(selected.firstObject, MIN(maxBytes, 536870912ULL));
+      assets = @[asset];
+      unavailable = asset[@"content_sha256"] ? 0 : 1;
+    } else libraryChanged = YES;
+  }
+  if (libraryChanged || (offset + assets.count >= snapshotTotal && ![DSInventoryIdentity(fetch) isEqualToString:inventoryIdentity]))
+    inventoryIdentity = @"photos-library-changed";
+  uint64_t completed = (uint64_t)(NSDate.date.timeIntervalSince1970 * 1000);
+  NSNumber *next = offset + assets.count < snapshotTotal ? @(offset + assets.count) : nil;
+  return DSJSON(@{ @"authorization": DSStatus(status), @"observed_at_ms": @(completed),
+                   @"total_count": @(snapshotTotal), @"offset": @(offset),
+                   @"inventory_identity": inventoryIdentity,
+                   @"next_offset": next ?: [NSNull null], @"native_completion_observed": @YES,
+                   @"page_duration_ms": @(completed - started), @"assets": assets,
+                   @"unavailable_count": @(unavailable) });
 }
 
 char *ds_photos_delete(const char *requestJSON) {

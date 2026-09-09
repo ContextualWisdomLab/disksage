@@ -58,6 +58,120 @@ pub struct PhotosDuplicateInventory {
     pub exact_groups: Vec<PhotosExactGroup>,
     pub unavailable_count: u64,
     pub near_duplicate_evidence: Option<String>,
+    #[serde(default)]
+    pub inventory_total_count: Option<u64>,
+    #[serde(default)]
+    pub inventory_page_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosInventoryPage {
+    pub authorization: String,
+    pub observed_at_ms: u64,
+    pub total_count: u64,
+    pub inventory_identity: String,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
+    pub native_completion_observed: bool,
+    pub page_duration_ms: u64,
+    pub assets: Vec<PhotosAssetEvidence>,
+    pub unavailable_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosInventoryCheckpoint {
+    pub next_offset: u64,
+    pub total_count: u64,
+    pub inventory_identity: String,
+}
+
+/// Merge one native-completed PhotoKit page into a resumable read-only checkpoint.
+pub fn merge_inventory_page(
+    previous: Option<PhotosDuplicateInventory>,
+    page: PhotosInventoryPage,
+) -> Result<PhotosDuplicateInventory, String> {
+    if !page.native_completion_observed || page.assets.len() > 1 {
+        return Err("photos-page-native-completion-required".into());
+    }
+    let mut inventory = previous.unwrap_or(PhotosDuplicateInventory {
+        authorization: page.authorization.clone(),
+        observed_at_ms: Some(page.observed_at_ms),
+        inventory_fingerprint: None,
+        evidence_complete: false,
+        inventory_truncated: true,
+        next_action: "사진 확인을 계속하세요.".into(),
+        assets: Vec::new(),
+        exact_groups: Vec::new(),
+        unavailable_count: 0,
+        near_duplicate_evidence: Some("unavailable-without-measured-content-equivalence".into()),
+        inventory_total_count: Some(page.total_count),
+        inventory_page_identity: Some(page.inventory_identity.clone()),
+    });
+    if inventory.authorization != page.authorization
+        || inventory.inventory_total_count != Some(page.total_count)
+        || inventory.inventory_page_identity.as_deref() != Some(&page.inventory_identity)
+        || inventory.assets.len() as u64 != page.offset
+        || page
+            .next_offset
+            .is_some_and(|next| next != page.offset + page.assets.len() as u64)
+        || page.total_count < page.offset + page.assets.len() as u64
+    {
+        return Err("photos-page-checkpoint-mismatch".into());
+    }
+    inventory.assets.extend(page.assets);
+    inventory.unavailable_count = inventory
+        .unavailable_count
+        .checked_add(page.unavailable_count)
+        .ok_or("photos-page-count-overflow")?;
+    inventory.observed_at_ms = Some(page.observed_at_ms);
+    let complete = page.next_offset.is_none() && inventory.assets.len() as u64 == page.total_count;
+    inventory.inventory_truncated = !complete;
+    inventory.evidence_complete = complete
+        && inventory.unavailable_count == 0
+        && matches!(inventory.authorization.as_str(), "authorized" | "limited");
+    inventory.next_action = if complete {
+        if inventory.unavailable_count > 0 {
+            "사진 앱에서 이 Mac에 없는 원본을 다운로드한 뒤 다시 확인하세요.".into()
+        } else {
+            "검사가 끝났습니다. 정확한 사본 그룹을 검토하세요.".into()
+        }
+    } else {
+        format!(
+            "{}개 중 {}개를 확인했습니다. 계속하려면 사진 확인을 누르세요.",
+            page.total_count,
+            inventory.assets.len()
+        )
+    };
+    let mut groups = BTreeMap::<String, Vec<PhotosAssetEvidence>>::new();
+    for asset in &inventory.assets {
+        if let Some(digest) = &asset.content_sha256 {
+            groups
+                .entry(digest.clone())
+                .or_default()
+                .push(asset.clone());
+        }
+    }
+    inventory.exact_groups = groups
+        .into_iter()
+        .filter(|(_, members)| members.len() > 1)
+        .map(|(content_sha256, members)| PhotosExactGroup {
+            content_sha256,
+            members,
+            keeper_required: true,
+            automatic_delete_allowed: false,
+        })
+        .collect();
+    inventory.inventory_fingerprint = if complete {
+        Some(hash_json(&(
+            inventory.assets.clone(),
+            inventory.unavailable_count,
+        ))?)
+    } else {
+        None
+    };
+    Ok(inventory)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +405,7 @@ mod native {
         fn ds_photos_authorization_status() -> *mut c_char;
         fn ds_photos_request_authorization() -> *mut c_char;
         fn ds_photos_inventory(max_assets: u32, max_bytes: u64) -> *mut c_char;
+        fn ds_photos_inventory_page(offset: u64, max_bytes: u64) -> *mut c_char;
         fn ds_photos_delete(request_json: *const c_char) -> *mut c_char;
         #[cfg(test)]
         fn ds_photos_select_still_resource_index(types: *const i64, count: usize) -> i64;
@@ -315,6 +430,10 @@ mod native {
 
     pub fn inventory() -> Result<PhotosDuplicateInventory, String> {
         take_json(unsafe { ds_photos_inventory(MAX_INVENTORY_ASSETS, MAX_RESOURCE_BYTES) })
+    }
+
+    pub fn inventory_page(offset: u64) -> Result<PhotosInventoryPage, String> {
+        take_json(unsafe { ds_photos_inventory_page(offset, MAX_RESOURCE_BYTES) })
     }
 
     #[derive(Deserialize)]
@@ -362,6 +481,9 @@ mod native {
     pub fn inventory() -> Result<PhotosDuplicateInventory, String> {
         Err("photos-library-macos-only".into())
     }
+    pub fn inventory_page(_: u64) -> Result<PhotosInventoryPage, String> {
+        Err("photos-library-macos-only".into())
+    }
     pub fn delete(_: &PhotosDeletionPlan) -> Result<(), String> {
         Err("photos-library-macos-only".into())
     }
@@ -387,6 +509,42 @@ pub async fn inspect_photos_duplicates() -> Result<PhotosDuplicateInventory, Str
     tauri::async_runtime::spawn_blocking(native::inventory)
         .await
         .map_err(|_| "photos-operation-interrupted".to_string())?
+}
+
+#[tauri::command]
+pub async fn inspect_photos_duplicates_page(
+    checkpoint: Option<PhotosInventoryCheckpoint>,
+) -> Result<PhotosInventoryPage, String> {
+    let offset = checkpoint.as_ref().map_or(0, |value| value.next_offset);
+    let page = tauri::async_runtime::spawn_blocking(move || native::inventory_page(offset))
+        .await
+        .map_err(|_| "photos-operation-interrupted".to_string())??;
+    if !matches!(page.authorization.as_str(), "authorized" | "limited") {
+        return Err("photos-authorization-required".into());
+    }
+    if checkpoint.as_ref().is_some_and(|value| {
+        value.total_count != page.total_count
+            || value.inventory_identity != page.inventory_identity
+            || value.next_offset != page.offset
+    }) {
+        return Err("photos-page-checkpoint-mismatch".into());
+    }
+    Ok(page)
+}
+
+#[tauri::command]
+pub fn finalize_photos_duplicate_inventory(
+    pages: Vec<PhotosInventoryPage>,
+) -> Result<PhotosDuplicateInventory, String> {
+    let mut inventory = None;
+    for page in pages {
+        inventory = Some(merge_inventory_page(inventory, page)?);
+    }
+    let inventory = inventory.ok_or("photos-page-checkpoint-empty")?;
+    if inventory.inventory_truncated {
+        return Err("photos-page-checkpoint-incomplete".into());
+    }
+    Ok(inventory)
 }
 
 #[tauri::command]
@@ -511,7 +669,63 @@ mod tests {
             near_duplicate_evidence: Some(
                 "unavailable-without-measured-content-equivalence".into(),
             ),
+            inventory_total_count: Some(2),
+            inventory_page_identity: Some("stable-library".into()),
         }
+    }
+
+    fn page(offset: u64, total: u64, asset: PhotosAssetEvidence) -> PhotosInventoryPage {
+        PhotosInventoryPage {
+            authorization: "authorized".into(),
+            observed_at_ms: 100 + offset,
+            total_count: total,
+            inventory_identity: "stable-library".into(),
+            offset,
+            next_offset: (offset + 1 < total).then_some(offset + 1),
+            native_completion_observed: true,
+            page_duration_ms: 7,
+            assets: vec![asset],
+            unavailable_count: 0,
+        }
+    }
+
+    #[test]
+    fn native_completed_pages_resume_and_only_finish_at_exact_total() {
+        let first = merge_inventory_page(None, page(0, 2, member("keep", 10))).unwrap();
+        assert!(first.inventory_truncated);
+        assert!(!first.evidence_complete);
+        assert!(first.inventory_fingerprint.is_none());
+        let complete = merge_inventory_page(Some(first), page(1, 2, member("remove", 8))).unwrap();
+        assert!(!complete.inventory_truncated);
+        assert!(complete.evidence_complete);
+        assert!(complete.inventory_fingerprint.is_some());
+        assert_eq!(complete.exact_groups.len(), 1);
+    }
+
+    #[test]
+    fn page_gap_or_missing_native_completion_is_rejected() {
+        let first = merge_inventory_page(None, page(0, 2, member("keep", 10))).unwrap();
+        assert_eq!(
+            merge_inventory_page(Some(first.clone()), page(0, 2, member("remove", 8))).unwrap_err(),
+            "photos-page-checkpoint-mismatch"
+        );
+        let mut incomplete = page(1, 2, member("remove", 8));
+        incomplete.native_completion_observed = false;
+        assert_eq!(
+            merge_inventory_page(Some(first), incomplete).unwrap_err(),
+            "photos-page-native-completion-required"
+        );
+    }
+
+    #[test]
+    fn equal_count_library_replacement_invalidates_checkpoint_identity() {
+        let first = merge_inventory_page(None, page(0, 2, member("keep", 10))).unwrap();
+        let mut replaced = page(1, 2, member("replacement", 8));
+        replaced.inventory_identity = "changed-library".into();
+        assert_eq!(
+            merge_inventory_page(Some(first), replaced).unwrap_err(),
+            "photos-page-checkpoint-mismatch"
+        );
     }
 
     #[test]
@@ -647,10 +861,11 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_bounds_callbacks() {
+    fn native_boundary_keeps_local_reads_offline_without_an_arbitrary_timeout() {
         let source = include_str!("../native/photos_bridge.m");
         assert!(source.contains("networkAccessAllowed = NO"));
-        assert!(source.contains("cancelDataRequest:requestID"));
+        assert!(source.contains("dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER)"));
+        assert!(!source.contains("cancelDataRequest:requestID"));
         assert!(source.contains("DSAuthorizationTimeoutNanos"));
     }
 

@@ -234,6 +234,16 @@ export interface PhotosDuplicateInventory {
   authorization: string; observed_at_ms: number | null; inventory_fingerprint: string | null;
   evidence_complete: boolean; inventory_truncated: boolean; next_action: string; assets: PhotosAssetEvidence[];
   exact_groups: PhotosExactGroup[]; unavailable_count: number; near_duplicate_evidence: string | null;
+  inventory_total_count?: number | null;
+  inventory_page_identity?: string | null;
+}
+export interface PhotosInventoryCheckpoint {
+  next_offset: number; total_count: number; inventory_identity: string;
+}
+export interface PhotosInventoryPage {
+  authorization: string; observed_at_ms: number; total_count: number; offset: number;
+  next_offset: number | null; inventory_identity: string; native_completion_observed: boolean;
+  page_duration_ms: number; assets: PhotosAssetEvidence[]; unavailable_count: number;
 }
 export interface PhotosKeeperSelection { content_sha256: string; keeper_local_identifier: string }
 export interface PhotosDeletionPlan {
@@ -246,7 +256,10 @@ export interface PhotosDeletionReceipt {
 }
 export const photosAuthorizationStatus = () => invoke<PhotosAuthorization>("photos_authorization_status");
 export const requestPhotosAuthorization = () => invoke<PhotosAuthorization>("request_photos_authorization");
-export const inspectPhotosDuplicates = () => invoke<PhotosDuplicateInventory>("inspect_photos_duplicates");
+export const inspectPhotosDuplicatesPage = (checkpoint: PhotosInventoryCheckpoint | null) =>
+  invoke<PhotosInventoryPage>("inspect_photos_duplicates_page", { checkpoint });
+export const finalizePhotosDuplicateInventory = (pages: PhotosInventoryPage[]) =>
+  invoke<PhotosDuplicateInventory>("finalize_photos_duplicate_inventory", { pages });
 export const planPhotosDuplicateDeletion = (inventory: PhotosDuplicateInventory, selections: PhotosKeeperSelection[]) =>
   invoke<PhotosDeletionPlan>("plan_photos_duplicate_deletion", { inventory, selections });
 export const executePhotosDuplicateDeletion = (

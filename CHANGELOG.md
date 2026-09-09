@@ -5,6 +5,8 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Make Apple Photos duplicate inventory resumable and cancellable between native-completed assets,
+  with visible progress and no arbitrary whole-library timeout.
 - Connect exact decoded-pixel duplicate groups to the existing reversible photo quarantine engine;
   forged or stale audits, ambiguous keepers without an explicit selection, and changed roots fail closed.
   The review screen shows measured evidence and blockers, requires direct typed approval, and reports
