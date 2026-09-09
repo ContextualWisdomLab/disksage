@@ -153,6 +153,121 @@ export const recentOperations = (limit = 20) =>
   invoke<JournalEntry[]>("recent_operations", { limit });
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
+
+export interface ExactPhotoEvidence {
+  path: string;
+  bytes: number;
+  width: number;
+  height: number;
+  bit_depth: number;
+  codec: string;
+  codec_lossless: boolean;
+  object_id: string;
+}
+export interface ExactPhotoGroup {
+  content_digest: string;
+  grouping_basis: string;
+  members: ExactPhotoEvidence[];
+  keeper_path: string | null;
+  keeper_blocker: string | null;
+}
+export interface PhotoDuplicateAudit {
+  schema_kind: string;
+  generated_at_ms: number;
+  audit_fingerprint: string;
+  exact_groups: ExactPhotoGroup[];
+  inspected_input_count: number;
+  rejected_input_counts: Record<string, number>;
+  evidence_complete: boolean;
+  perceptual_grouping_available: boolean;
+  perceptual_grouping_blocker: string;
+}
+export interface PhotoQuarantineSelection {
+  group_fingerprint: string;
+  survivor_relative_path: string;
+}
+export interface PhotoQuarantinePlan {
+  plan_fingerprint: string;
+  candidate_file_count: number;
+  logical_candidate_bytes: number;
+  selections: PhotoQuarantineSelection[];
+  exact_approval_phrase: string;
+  permanent_delete_allowed: boolean;
+}
+export interface PhotoQuarantineReceipt {
+  plan_fingerprint: string;
+  moved_file_count: number;
+  failed_file_count: number;
+  permanent_delete_performed: boolean;
+  items: Array<{ member_fingerprint: string; moved_to_os_trash: boolean; error: string | null }>;
+}
+export const auditExactPhotoDuplicates = (paths: string[]) =>
+  invoke<PhotoDuplicateAudit>("audit_exact_photo_duplicates", { paths });
+export const planExactPhotoDuplicateQuarantine = (
+  audit: PhotoDuplicateAudit,
+  selections: PhotoQuarantineSelection[],
+) => invoke<PhotoQuarantinePlan>("plan_exact_photo_duplicate_quarantine", {
+  audit, selections,
+});
+export const executeExactPhotoDuplicateQuarantine = (
+  audit: PhotoDuplicateAudit,
+  plan: PhotoQuarantinePlan,
+  approvalPhrase: string,
+  rationale: string,
+  executedAtMs: number,
+) => invoke<PhotoQuarantineReceipt>("execute_exact_photo_duplicate_quarantine", {
+  audit, plan, approvalPhrase, rationale, executedAtMs,
+});
+
+export interface PhotosAuthorization { authorization: string }
+export interface PhotosAssetEvidence {
+  local_identifier: string; width_pixels: number; height_pixels: number; pixel_count: number;
+  creation_ms: number | null; modification_ms: number | null; state: string; blocker: string | null;
+  content_sha256: string | null; encoded_bytes: number | null; original_filename: string | null;
+  uniform_type_identifier: string | null; resource_type: number | null; metadata_fingerprint: string | null;
+}
+export interface PhotosExactGroup {
+  content_sha256: string; members: PhotosAssetEvidence[]; keeper_required: boolean;
+  automatic_delete_allowed: boolean;
+}
+export interface PhotosDuplicateInventory {
+  authorization: string; observed_at_ms: number | null; inventory_fingerprint: string | null;
+  evidence_complete: boolean; inventory_truncated: boolean; next_action: string; assets: PhotosAssetEvidence[];
+  exact_groups: PhotosExactGroup[]; unavailable_count: number; near_duplicate_evidence: string | null;
+  inventory_total_count?: number | null;
+  inventory_page_identity?: string | null;
+}
+export interface PhotosInventoryCheckpoint {
+  next_offset: number; total_count: number; inventory_identity: string;
+}
+export interface PhotosInventoryPage {
+  authorization: string; observed_at_ms: number; total_count: number; offset: number;
+  next_offset: number | null; inventory_identity: string; native_completion_observed: boolean;
+  page_duration_ms: number; assets: PhotosAssetEvidence[]; unavailable_count: number;
+}
+export interface PhotosKeeperSelection { content_sha256: string; keeper_local_identifier: string }
+export interface PhotosDeletionPlan {
+  plan_fingerprint: string; delete_identifiers: string[]; logical_candidate_bytes: number;
+  exact_approval_phrase: string; permanent_delete_requested: false;
+}
+export interface PhotosDeletionReceipt {
+  receipt_id: string; deleted_count: number; system_confirmation_completed: boolean;
+  permanent_delete_requested: false; next_action: string;
+}
+export const photosAuthorizationStatus = () => invoke<PhotosAuthorization>("photos_authorization_status");
+export const requestPhotosAuthorization = () => invoke<PhotosAuthorization>("request_photos_authorization");
+export const inspectPhotosDuplicatesPage = (checkpoint: PhotosInventoryCheckpoint | null) =>
+  invoke<PhotosInventoryPage>("inspect_photos_duplicates_page", { checkpoint });
+export const finalizePhotosDuplicateInventory = (pages: PhotosInventoryPage[]) =>
+  invoke<PhotosDuplicateInventory>("finalize_photos_duplicate_inventory", { pages });
+export const planPhotosDuplicateDeletion = (inventory: PhotosDuplicateInventory, selections: PhotosKeeperSelection[]) =>
+  invoke<PhotosDeletionPlan>("plan_photos_duplicate_deletion", { inventory, selections });
+export const executePhotosDuplicateDeletion = (
+  inventory: PhotosDuplicateInventory, plan: PhotosDeletionPlan, approvalPhrase: string,
+  rationale: string, executedAtMs: number,
+) => invoke<PhotosDeletionReceipt>("execute_photos_duplicate_deletion", {
+  inventory, plan, approvalPhrase, rationale, executedAtMs,
+});
 export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
 export const cleanOrphanCandidates = (
   planFingerprint: string,

@@ -99,6 +99,13 @@ pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+/// Bounded, path-free ontology planning for uninstalled macOS application data.
+pub mod orphan;
+pub mod photo_duplicate;
+pub mod photo_duplicate_quarantine;
+pub mod photo_similarity_audit;
+/// PhotoKit-only duplicate review and system-confirmed deletion for Apple Photos libraries.
+pub mod photos_library;
 /// Privacy-safe desktop projection of read-only Podman reclaim evidence.
 pub mod podman_desktop;
 /// Distinct IPC registration for the privacy-safe Podman evidence contract.
@@ -127,9 +134,6 @@ pub mod semantic_catalog;
 pub mod shared_temp_reclaim;
 pub mod volume_pressure;
 pub mod zotero_local;
-/// Bounded, path-free ontology planning for uninstalled macOS application data.
-pub mod orphan;
-pub mod photo_similarity_audit;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -156,6 +160,15 @@ pub fn run() {
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
+            photo_duplicate_quarantine::audit_exact_photo_duplicates,
+            photo_duplicate_quarantine::plan_exact_photo_duplicate_quarantine,
+            photo_duplicate_quarantine::execute_exact_photo_duplicate_quarantine,
+            photos_library::photos_authorization_status,
+            photos_library::request_photos_authorization,
+            photos_library::inspect_photos_duplicates_page,
+            photos_library::finalize_photos_duplicate_inventory,
+            photos_library::plan_photos_duplicate_deletion,
+            photos_library::execute_photos_duplicate_deletion,
             commands::get_ontology,
             commands::disk_inventory,
             commands::ontology_coherence,

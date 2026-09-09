@@ -556,7 +556,28 @@ pub(crate) fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<
     Ok(active)
 }
 
-#[cfg(any(not(unix), coverage))]
+#[cfg(all(target_os = "windows", not(coverage)))]
+pub(crate) fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let mut active = BTreeSet::new();
+    for path in paths {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+        {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                active.insert(path.clone());
+            }
+            Err(_) => return Err("duplicate-reclaim-active-use-windows-probe-incomplete".into()),
+        }
+    }
+    Ok(active)
+}
+
+#[cfg(any(all(not(unix), not(target_os = "windows")), coverage))]
 pub(crate) fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     Err("duplicate-reclaim-active-use-unsupported-platform".into())
 }

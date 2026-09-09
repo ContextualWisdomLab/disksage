@@ -133,6 +133,10 @@ name = "disksage-dev-artifacts"
 path = "src/bin/disksage-dev-artifacts.rs"
 
 [[bin]]
+name = "disksage-photo-duplicate-audit"
+path = "src/bin/disksage-photo-duplicate-audit.rs"
+
+[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
@@ -179,6 +183,7 @@ required-features = ["archive-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
