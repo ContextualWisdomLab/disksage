@@ -38,5 +38,15 @@ fn generate_cloud_plan_implementation() {
 
 fn main() {
     generate_cloud_plan_implementation();
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rerun-if-changed=native/photos_bridge.m");
+        cc::Build::new()
+            .file("native/photos_bridge.m")
+            .flag("-fobjc-arc")
+            .compile("disksage_photos_bridge");
+        println!("cargo:rustc-link-lib=framework=Photos");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+    }
     tauri_build::build()
 }

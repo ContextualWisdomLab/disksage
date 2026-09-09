@@ -1228,6 +1228,20 @@ runner's private workspace temp root instead of weakening the shared production 
   cannot form a deletion cluster with an external file. The 44 external Pictures images currently
   have unique exact-content digests; perceptual comparison and measured quality-survivor selection
   remain an open product Gap and no non-identical photo was deleted.
+- The managed Apple Photos gap now has a separate macOS-native PhotoKit path. It requests read/write
+  access only from the customer's connect action, inventories local identifiers and measured
+  resource evidence without allowing network download, groups only exact SHA-256 content matches,
+  and requires one explicit keeper per group. iCloud-only originals block deletion planning and
+  remain unmaterialized. Execution re-fetches every identifier, metadata fingerprint, and local
+  content digest before invoking Photos' own deletion transaction and confirmation; a create-new
+  receipt follows success. Near-duplicate managed assets remain unavailable rather than receiving
+  an uncalibrated score, so that Gap is explicit and non-destructive.
+- A 5,000-item read-only audit did not return customer-visible progress before an external
+  60-second observation was stopped. The native bridge now returns exactly one asset only after
+  PhotoKit's completion callback; Rust persists gap-free checkpoint evidence, and the UI renders
+  progress and accepts cancellation between completed assets. Resuming uses the accepted
+  checkpoint instead of restarting. No elapsed-time threshold is interpreted as failure and no
+  photo mutation is introduced by this audit path.
 
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open

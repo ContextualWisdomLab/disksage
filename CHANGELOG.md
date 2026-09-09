@@ -5,6 +5,8 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Make Apple Photos duplicate inventory resumable and cancellable between native-completed assets,
+  with visible progress and no arbitrary whole-library timeout.
 - Connect exact decoded-pixel duplicate groups to the existing reversible photo quarantine engine;
   forged or stale audits, ambiguous keepers without an explicit selection, and changed roots fail closed.
   The review screen shows measured evidence and blockers, requires direct typed approval, and reports
@@ -315,6 +317,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
 - Align release artifact verification with the pinned `windows-2022` build matrix name, and make the container-capacity regression fixture satisfy the same runtime-health probe required in production.
 - Require standalone-clone cleanup to bind a real in-root Git directory, complete audit evidence, and an external safe journal before an approved Trash move.
+- Add a native Apple Photos duplicate workflow that preserves iCloud-only originals, groups exact
+  local content, requires an explicit keeper and fresh approval, revalidates PhotoKit identifiers,
+  and delegates deletion confirmation and Recently Deleted behavior to Photos.
 
 ### Security
 
