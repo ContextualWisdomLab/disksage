@@ -417,7 +417,7 @@ fn layer_in_use_failure_remains_auditable_and_never_claims_repair() {
     assert_eq!(receipt.status_code, 1);
     assert_eq!(
         receipt.execution_issue.as_deref(),
-        Some("podman-storage-repair-command-failed")
+        Some("podman-storage-repair-provider-exit-status-unexpected")
     );
     assert!(!receipt.executed);
     assert!(receipt.postcheck_complete);
