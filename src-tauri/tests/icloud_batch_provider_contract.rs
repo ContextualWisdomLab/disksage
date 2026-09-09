@@ -6,7 +6,7 @@ use std::path::PathBuf;
 fn non_icloud_batch_root_is_rejected_before_item_planning() {
     let root = CloudRoot {
         id: "onedrive:test".into(),
-        provider: CloudProvider::OneDrive,
+        provider: CloudProvider::Onedrive,
         account_scope: CloudAccountScope::Personal,
         label: "OneDrive test".into(),
         path: "/cloud".into(),
