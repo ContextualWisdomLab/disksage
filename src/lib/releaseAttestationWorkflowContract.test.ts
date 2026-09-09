@@ -23,6 +23,8 @@ describe("release attestation workflow contract", () => {
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
     expect(verifierIndex).toBeGreaterThan(downloadIndex);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
+    const verifier = readFileSync(resolve(repositoryRoot, ".github/scripts/verify-release-artifacts.sh"), "utf8");
+    expect(verifier).toContain("expected exactly 17 regular files");
   });
 
   it("binds Cargo SBOM metadata to the shipped Rust manifest", () => {

@@ -6,8 +6,140 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Port the privacy-safe Podman desktop evidence projection into the runtime-orphan stack. The
+  customer screen now uses a dedicated read-only IPC schema, keeps every capacity domain optional
+  and separate, and no longer renders the detailed internal Podman reclaim plan.
+- Verify each registered worktree HEAD against same-repository GitHub PR commit membership so
+  squash-merged and detached intermediate commits can be classified without ancestry or branch
+  guesses; any exact membership in an open PR takes precedence and preserves the worktree.
+- Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
+  and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
+  `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
+- Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
+- Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
+- Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
+  Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
+  environment trees without recursively scanning them, and the
+  cleanup screen names each Python cache and test environment so the next action is clear.
+- Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
+  command after stopping the sync app, then restart sync and verify allocation reduction while
+  retaining the cloud item and the existing approval and receipt contract. Provider-wide
+  new-copy admission remains confined to copy/upload workflows and cannot deadlock local-space
+  recovery while unrelated downloads, indexing, or historical provider errors exist. If the
+  normal quit request stalls, DiskSage uses one bounded graceful `SIGTERM` fallback and never
+  force-kills the client; the stop check distinguishes the desktop app from its resident File
+  Provider helper. The execution path uses the already-bound File Provider item evidence instead
+  of making the vendor's optional `/getpin` query a second, weaker prerequisite.
+- Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
+  copies in the approval batch and exclude sync-incomplete items without exposing their paths.
+- Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
+  and post-allocation verification contract to OneDrive Files On-Demand. The generic
+  `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
+- Add an explicit `--execute --permanent` development-artifact mode that physically removes only
+  a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
+  outcome; the default remains reversible OS Trash.
+- Reclaim Superset's isolated HTTP and compiled-code caches while retaining cookies, local and
+  session storage, IndexedDB, preferences, and historical network diagnostics.
+- Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
+  editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
+  identity revalidation, Trash, and journaling.
+
+- Catalog AppMap downloaded tool binaries as regenerable macOS data. Superset network diagnostics
+  remain separately visible for explicit review because historical logs cannot be regenerated.
+- Add standalone stale-PR clone reclamation: only a clean, inactive, single-worktree clone whose
+  exact branch and head OID match fresh same-repository GitHub evidence can move to OS Trash.
+  Branch deletion, Git pruning, detached clones, dirty clones, and implicit age thresholds remain
+  prohibited. The same contract is available through a headless plan-first CLI with exact human
+  confirmation and an external append-only journal.
+- Add an explicit operator-supplied cutoff for stale same-repository open pull-request worktrees
+  (ADR-0015). GitHub creation time, state, branch, and exact head OID are refreshed before each
+  removal; branches and commits remain untouched and no implicit age threshold is used.
+- Expose current same-repository closed-PR and explicitly stale-open PR evidence through the
+  headless worktree audit/removal CLIs, with the same live re-audit and exact approval contract as
+  the desktop application.
+- Reclaim clean, inactive worktrees for same-repository pull requests closed without merge only
+  when GitHub reports an exact branch-and-head match; refresh that evidence before each removal
+  and preserve fork, detached, dirty, active, or changed worktrees.
+- Reclaim clean, inactive worktrees whose exact branch and head match a same-repository merged pull
+  request even when squash or rebase history does not retain that head. Closed-unmerged and merged
+  evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
+  registered as worktrees so repositories with long merged histories remain auditable. All lookup
+  calls consume one shared timeout budget rather than multiplying the configured wait per branch.
+- Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
+  library selected as the scan root. External files remain auditable without interpreting Photos'
+  private databases and derivatives as independent duplicate-delete candidates. Reclaim also
+  canonicalizes every approved member immediately before mutation and fails closed if a replaced
+  parent symlink redirects it outside the audited root or into a managed Photos library.
+- Stage each verified duplicate by filesystem identity before permanent removal, restoring rather
+  than deleting a pathname replacement that races the approved audit; receipts distinguish active
+  skips from failed removals and retain stable failure reasons.
+- Apply the single GitHub evidence deadline to desktop worktree planning, desktop removal, the
+  removal CLI, and every mutation-boundary live re-audit instead of refreshing the timeout for
+  each pull-request lookup.
+- Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
+  stopped containers, unreferenced images, dangling volumes, and unused custom networks across
+  Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution
+  re-audits immediately before mutating and requires an approval phrase embedding the SHA-256
+  fingerprint of the exact candidate identity set; running or paused containers, tagged images,
+  built-in networks, and attached volumes are never candidates. Exposed via the Cleanup screen
+  with confirmation gating, bounded rationale input, and actionable failure copy, plus a
+  read-only `disksage-container-orphan-plan` CLI for headless evidence.
+- Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
+  by converting the human-readable listing with a unit heuristic; missing or mismatched identity
+  evidence keeps the category blocked.
+- Pin Docker-native approval and execution to the same resolved daemon endpoint so mutable context
+  configuration cannot redirect an approved deletion.
+- Preserve an indeterminate mutation receipt after a started exact-delete command exits non-zero,
+  times out, or loses capture evidence; the UI directs customers to refresh instead of reporting
+  the partially applied operation as untouched.
+- Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
+  current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
+  Trash targets; the shared root and other-user/system-owned objects remain protected.
+- Add Podman/Colima VM storage maintenance planning (ADR-0014): inspect guest state and offer a
+  bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
+  unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is
+  rewritten by this feature.
+- Run bounded runtime trim and recovery waits on Tauri's blocking pool so long guest maintenance
+  cannot occupy asynchronous command workers.
+- Preserve Docker context TLS credentials by executing through the explicitly pinned context while
+  binding approval to the complete inspected context definition.
+- Surface an approved duplicate at a deterministic sibling recovery name when its original path is
+  concurrently occupied, and report preservation or rollback failure explicitly.
+- Detect a running but unreachable Podman/Colima guest, offer a separate exact-phrase-approved
+  runtime-native stop/start recovery, and re-check reachability before enabling trim. Trim receipts
+  now include bounded before/after host-volume evidence for the measured available-space change.
+
 ### Changed
 
+- Stop descending once a marker-validated development artifact is found, avoiding a second full
+  traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
+- Keep a partially failed permanent artifact deletion in its private staging location; never restore
+  a partially removed tree to the live path as if it were intact.
+- Require complete inactive-use evidence for every development artifact immediately before Trash,
+  including `node_modules`, Rust targets, generated indexes, and editor-obsolete extensions.
+- Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
+  `~/.cache` for uv, Codex runtimes, Node, PyTorch, Prisma, and GitHub CLI, plus
+  `~/Library/pnpm/store` for pnpm's content-addressed store. The existing guarded cleanup keeps
+  identity, active-use, Trash, and journal gates; caches without an established automatic policy
+  remain manual-review candidates.
+- Recognize macOS Trash collision-renamed cache directories only when their known base name and
+  cache-specific directory structure both revalidate, including uv git and pnpm registry metadata
+  caches; arbitrary Trash entries remain excluded from permanent purge.
+- Extend the same structural purge proof to uv archive caches and pnpm v10/v11 store layouts while
+  preserving the bounded no-symlink traversal and pending/terminal journal records.
+- Reject control characters in the Podman/Colima VM-trim rationale before any runtime probe or
+  receipt write, keeping maintenance records bounded and consistent with other actions.
+- Fix Colima runtime-state parsing to retain validated status values before temporary JSON data is
+  dropped; Rust hosted test compilation now remains borrow-safe while invalid state still fails
+  closed.
+- Clarify reclaim-domain contracts and customer actions: exact-content photo groups remain
+  reversible, non-identical photos require a manual comparison, and cleanup messages no longer
+  expose implementation details.
+- Verify Podman network membership through its container listing, follow installed CLI symlinks,
+  hide unavailable runtime panels behind one actionable summary, terminate runtime subprocess
+  groups on timeout, and exclude merged history before bounding closed-PR evidence.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
@@ -45,8 +177,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
 - Return the candidate-specific cloud copy approval action, exact confirmation phrase, and maximum approval age from the Rust plan contract; the frontend only displays and submits that backend-authored phrase and fails closed when it is missing or does not match the candidate action.
 - Align the frontend toolchain on Vite 8.2 and `@sveltejs/vite-plugin-svelte` 7.2 so the declared peer dependency graph is installable and reproducible.
-- Declare the supported Node.js runtime floor as Node.js 20.19 or Node.js 22.12 and later, matching Vite 8 requirements.
-- Pin the primary test workflow to Node.js 20.19.0 so the minimum supported runtime is continuously verified.
+- Raise the supported Node.js runtime floor to 22.12 and pin test and release workflows to
+  Node.js 22.12.0, matching Vitest 5 after Node.js 20 reached end-of-life.
 - Document the iCloud batch operation's local-only versus path-free shareable evidence boundary and map its fail-closed controls to NIST SP 800-53 Release 5.2.0, ISO/IEC 27040:2024, and primary secure-design literature with APA 7th references and deterministic documentation contract tests.
 - Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
@@ -56,6 +188,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   honor absolute Linux `$XDG_DATA_HOME` and redirected Windows `%APPDATA%`, ignore invalid relative
   environment paths, keep explicit `--connections` and `--home` authoritative, and preserve native
   non-UTF-8 filesystem operands while leaving macOS Application Support behavior unchanged.
+- Use macOS `NSFileManager` for reversible Trash moves so cleanup does not wait on Finder
+  AppleEvents or inherit a stalled Finder copy queue.
+- Permit fully current-user-owned real children of the shared Unix temporary root while retaining
+  fail-closed protection for the root, symlinks, mixed ownership, unreadable trees, and oversized
+  ownership observations.
+- Invoke the installed Tauri CLI entry point directly in CPU and GPU release
+  builds, preventing Windows npm argument forwarding from dropping the
+  `--features` flag while retaining its value as an invalid positional argument.
+- Refresh the Vite/PostCSS transitive `nanoid` lock entry to 3.3.18, removing
+  GHSA-2v37-7h3g-55p8 without adding a direct dependency or override.
+- Keep the Vitest runner and V8 coverage provider on the same 5.0.0 release,
+  preventing deterministic `npm ci` peer-resolution failure in test and release jobs.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
@@ -105,6 +249,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   an unknown observation is no longer treated as proof that the provider process is absent.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
+- Align release artifact verification with the pinned `windows-2022` build matrix name, and make the container-capacity regression fixture satisfy the same runtime-health probe required in production.
+- Require standalone-clone cleanup to bind a real in-root Git directory, complete audit evidence, and an external safe journal before an approved Trash move.
 
 ### Security
 
@@ -122,3 +268,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Bind the default on-device GGUF model to an immutable upstream revision, exact byte count, and SHA-256 digest; replace whole-model buffering and named sibling staging with bounded streaming into an unnamed same-directory temporary file; ignore and preserve unrelated legacy `.part` paths; refuse destination overwrite with create-new semantics; capture destination ownership from the returned open file handle; re-read and rehash the still-open staging source while copying; flush, sync, re-read, and rehash the destination before final acceptance; reject same-file source or destination mutation; preserve foreign destination replacements through identity-bound cleanup; and keep model installation inside the Rust coverage surface with privacy-safe stable errors and deterministic race regressions.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
+- Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
