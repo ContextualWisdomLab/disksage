@@ -470,6 +470,23 @@ pub fn execute(
 
 const MAX_AUDIT_BYTES: usize = 128 * 1024;
 
+fn validate_audit_parent_ancestors(app_data_dir: &Path, allow_missing: bool) -> Result<(), String> {
+    for ancestor in app_data_dir
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("brew-cleanup-audit-parent-unsafe".into());
+            }
+            Ok(_) => {}
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("brew-cleanup-audit-parent-unavailable".into()),
+        }
+    }
+    Ok(())
+}
+
 fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     if !app_data_dir.is_absolute()
         || app_data_dir
@@ -478,16 +495,35 @@ fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     {
         return Err("brew-cleanup-audit-directory-invalid".into());
     }
+    validate_audit_parent_ancestors(app_data_dir, true)?;
     std::fs::create_dir_all(app_data_dir)
         .map_err(|_| "brew-cleanup-audit-parent-create-failed".to_string())?;
+    validate_audit_parent_ancestors(app_data_dir, false)?;
     let parent = std::fs::symlink_metadata(app_data_dir)
         .map_err(|_| "brew-cleanup-audit-parent-unavailable".to_string())?;
     if parent.file_type().is_symlink() || !parent.is_dir() {
         return Err("brew-cleanup-audit-parent-unsafe".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if parent.permissions().mode() & 0o022 != 0 {
+            return Err("brew-cleanup-audit-parent-writable-by-others".into());
+        }
+    }
+
     let directory = app_data_dir.join("brew-cleanup-records");
-    std::fs::create_dir_all(&directory)
-        .map_err(|_| "brew-cleanup-audit-directory-create-failed".to_string())?;
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err("brew-cleanup-audit-directory-create-failed".into()),
+    }
     let metadata = std::fs::symlink_metadata(&directory)
         .map_err(|_| "brew-cleanup-audit-directory-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -496,39 +532,119 @@ fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| "brew-cleanup-audit-directory-permissions-failed".to_string())?;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("brew-cleanup-audit-directory-writable-by-others".into());
+        }
     }
     Ok(directory)
+}
+
+fn prepare_audit_record(
+    app_data_dir: &Path,
+    record: &BrewCleanupAuditRecord,
+) -> Result<(PathBuf, String, PathBuf, Vec<u8>), String> {
+    let directory = audit_directory(app_data_dir)?;
+    let filename = format!(
+        "{:020}-{}-{}.json",
+        record.executed_at_ms, record.plan.plan_fingerprint, record.judgment_id
+    );
+    if filename.as_bytes().contains(&b'/') || filename == "." || filename == ".." {
+        return Err("brew-cleanup-audit-filename-invalid".into());
+    }
+    let path = directory.join(&filename);
+    let encoded = serde_json::to_vec_pretty(record)
+        .map_err(|_| "brew-cleanup-audit-serialization-failed".to_string())?;
+    if encoded.len() > MAX_AUDIT_BYTES {
+        return Err("brew-cleanup-audit-too-large".into());
+    }
+    Ok((directory, filename, path, encoded))
 }
 
 pub fn write_audit_record(
     app_data_dir: &Path,
     record: &BrewCleanupAuditRecord,
 ) -> Result<PathBuf, String> {
-    let directory = audit_directory(app_data_dir)?;
-    let filename = format!(
-        "{:020}-{}-{}.json",
-        record.executed_at_ms, record.plan.plan_fingerprint, record.judgment_id
-    );
-    let path = directory.join(filename);
-    let encoded = serde_json::to_vec_pretty(record)
-        .map_err(|_| "brew-cleanup-audit-serialization-failed".to_string())?;
-    if encoded.len() > MAX_AUDIT_BYTES {
-        return Err("brew-cleanup-audit-too-large".into());
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    let (directory, filename, path, encoded) = prepare_audit_record(app_data_dir, record)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        return write_audit_record_unix_with_hook(&directory, &filename, &path, &encoded, || {});
     }
-    let mut file = options
-        .open(&path)
-        .map_err(|_| "brew-cleanup-audit-create-failed".to_string())?;
+    #[cfg(not(unix))]
+    {
+        let _ = (directory, filename, path, encoded);
+        Err("brew-cleanup-audit-platform-unsupported".into())
+    }
+}
+
+#[cfg(unix)]
+fn write_audit_record_unix_with_hook<F>(
+    directory: &Path,
+    filename: &str,
+    path: &Path,
+    encoded: &[u8],
+    before_create: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(),
+{
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let directory_name = CString::new(directory.as_os_str().as_bytes())
+        .map_err(|_| "brew-cleanup-audit-directory-invalid".to_string())?;
+    let directory_fd = unsafe {
+        libc::open(
+            directory_name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if directory_fd < 0 {
+        return Err("brew-cleanup-audit-directory-open-failed".into());
+    }
+    let directory_file = unsafe { std::fs::File::from_raw_fd(directory_fd) };
+    let opened_directory = directory_file
+        .metadata()
+        .map_err(|_| "brew-cleanup-audit-directory-metadata-failed".to_string())?;
+    let current_directory = std::fs::symlink_metadata(directory)
+        .map_err(|_| "brew-cleanup-audit-directory-identity-drift".to_string())?;
+    if !opened_directory.is_dir()
+        || current_directory.file_type().is_symlink()
+        || !current_directory.is_dir()
+        || opened_directory.permissions().mode() & 0o022 != 0
+        || current_directory.permissions().mode() & 0o022 != 0
+        || opened_directory.dev() != current_directory.dev()
+        || opened_directory.ino() != current_directory.ino()
+    {
+        return Err("brew-cleanup-audit-directory-identity-drift".into());
+    }
+
+    let record_name =
+        CString::new(filename).map_err(|_| "brew-cleanup-audit-filename-invalid".to_string())?;
+    before_create();
+    let record_fd = unsafe {
+        libc::openat(
+            directory_file.as_raw_fd(),
+            record_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o400,
+        )
+    };
+    if record_fd < 0 {
+        return Err("brew-cleanup-audit-create-failed".into());
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(record_fd) };
+
+    let cleanup = || {
+        unsafe {
+            libc::unlinkat(directory_file.as_raw_fd(), record_name.as_ptr(), 0);
+        }
+        let _ = directory_file.sync_all();
+    };
+
     let result = (|| -> Result<(), String> {
-        file.write_all(&encoded)
+        file.write_all(encoded)
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
             .map_err(|_| "brew-cleanup-audit-write-failed".to_string())?;
@@ -536,19 +652,55 @@ pub fn write_audit_record(
             .metadata()
             .map_err(|_| "brew-cleanup-audit-metadata-failed".to_string())?
             .permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
+        permissions.set_mode(0o400);
+        file.set_permissions(permissions)
             .map_err(|_| "brew-cleanup-audit-permissions-failed".to_string())?;
-        std::fs::File::open(&directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "brew-cleanup-audit-directory-sync-failed".to_string())
+        directory_file
+            .sync_all()
+            .map_err(|_| "brew-cleanup-audit-directory-sync-failed".to_string())?;
+
+        let opened_directory = directory_file
+            .metadata()
+            .map_err(|_| "brew-cleanup-audit-directory-metadata-failed".to_string())?;
+        let current_directory = std::fs::symlink_metadata(directory)
+            .map_err(|_| "brew-cleanup-audit-directory-identity-drift".to_string())?;
+        let opened_record = file
+            .metadata()
+            .map_err(|_| "brew-cleanup-audit-metadata-failed".to_string())?;
+        let current_record = std::fs::symlink_metadata(path)
+            .map_err(|_| "brew-cleanup-audit-directory-identity-drift".to_string())?;
+        if current_directory.file_type().is_symlink()
+            || !current_directory.is_dir()
+            || current_record.file_type().is_symlink()
+            || !current_record.is_file()
+            || opened_directory.dev() != current_directory.dev()
+            || opened_directory.ino() != current_directory.ino()
+            || opened_record.dev() != current_record.dev()
+            || opened_record.ino() != current_record.ino()
+        {
+            return Err("brew-cleanup-audit-directory-identity-drift".into());
+        }
+        Ok(())
     })();
+
     if let Err(error) = result {
-        drop(file);
-        let _ = std::fs::remove_file(&path);
+        cleanup();
         return Err(error);
     }
-    Ok(path)
+    Ok(path.to_path_buf())
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn write_audit_record_with_before_create_hook<F>(
+    app_data_dir: &Path,
+    record: &BrewCleanupAuditRecord,
+    before_create: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(),
+{
+    let (directory, filename, path, encoded) = prepare_audit_record(app_data_dir, record)?;
+    write_audit_record_unix_with_hook(&directory, &filename, &path, &encoded, before_create)
 }
 
 #[cfg(test)]
@@ -681,6 +833,7 @@ mod tests {
         assert_eq!(output.stdout, "object-bound\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn audit_records_are_create_new_and_private() {
         let temp = tempfile::tempdir().unwrap();
@@ -710,13 +863,10 @@ mod tests {
         let path = write_audit_record(temp.path(), &record).unwrap();
         assert!(path.exists());
         assert!(write_audit_record(temp.path(), &record).is_err());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o400
-            );
-        }
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
     }
 }
