@@ -107,7 +107,7 @@ pub mod rules;
 #[cfg(test)]
 mod rules_ontology_contract_tests;
 #[cfg_attr(coverage, allow(dead_code))]
-mod safety;
+pub mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 pub mod semantic_catalog;
