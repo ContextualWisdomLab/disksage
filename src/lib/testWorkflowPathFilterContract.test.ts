@@ -84,6 +84,12 @@ describe("test workflow path-filter contract", () => {
     expect(workflow).toContain("& .\\target\\agent-state-guard.exe --nocapture");
   });
 
+  it("reports absent Windows agent-state source without claiming runtime evidence", () => {
+    expect(workflow).toContain(
+      "SKIP agent_state_guard: owner source absent; no runtime regression executed",
+    );
+  });
+
   it("runs the provider OAuth Windows process contract when that owner source is present", () => {
     expect(workflow).toContain("Test-Path 'src-tauri/tests/provider_oauth_cli_process.rs'");
     expect(workflow).toContain(
