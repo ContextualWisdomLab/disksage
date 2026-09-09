@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a canonical acquisition documentation graph covering PRD, TRD, Architecture, ADRs, UML, conceptual ERD/data model, API/evidence contracts, threat model, testing, operability, commercial roadmap, release/rollback, traceability, and repository governance; protect the graph with a deterministic documentation contract test.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
