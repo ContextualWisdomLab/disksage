@@ -101,7 +101,7 @@ jobs:
 
   windows-home-resolution:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -122,6 +122,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & .\target\agent-state-guard.exe --nocapture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Windows provider OAuth process contract when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/tests/provider_oauth_cli_process.rs') {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP provider_oauth_cli_process: owner test source absent; no runtime regression executed'
           }
 
   llm-engine-build:
