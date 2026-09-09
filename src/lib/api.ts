@@ -1333,6 +1333,10 @@ export const copyCloudCandidateViaProviderApi = (
   minAgeDays,
   limit,
 });
+/** Request cancellation of the single in-flight native copy operation. */
+export const cancelCloudCopy = (metadataFingerprint: string) => invoke<void>("cancel_cloud_copy", {
+  metadataFingerprint,
+});
 export const adoptExistingCloudCandidate = (
   root: string,
   cloudRoot: string,

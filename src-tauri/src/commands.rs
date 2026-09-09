@@ -16,10 +16,11 @@ use crate::scanner::ScanResult;
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::organize;
 use crate::safety;
+use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
+    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
     organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
@@ -40,6 +41,10 @@ pub struct AppState {
     pub scanning: Arc<AtomicBool>,
     /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
     pub cloud_review: Arc<Mutex<()>>,
+    /// One serialized native copy cancellation token. It is reset at each command boundary.
+    pub cloud_copy_cancel: Arc<AtomicBool>,
+    /// Candidate fingerprint for the one native copy that may be cancelled.
+    pub cloud_copy_operation: Arc<Mutex<Option<String>>>,
     /// The latest model judgment is process-local and consumed by one execution attempt.
     pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
     /// Latest binary/polytomous judge calibration. It is process-local and never grants authority
@@ -386,6 +391,23 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
 #[tauri::command]
 pub fn cancel_scan(state: State<AppState>) {
     state.cancel.store(true, Ordering::SeqCst);
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn cancel_cloud_copy(
+    metadata_fingerprint: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let active = state
+        .cloud_copy_operation
+        .lock()
+        .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+    if active.as_deref() != Some(metadata_fingerprint.as_str()) {
+        return Err("cloud-copy-not-active".into());
+    }
+    state.cloud_copy_cancel.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 #[cfg(not(coverage))]
@@ -1684,6 +1706,39 @@ pub struct CloudCopyOutput {
 }
 
 #[cfg(not(coverage))]
+fn require_native_copy_not_cancelled(cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if cancel.is_some_and(|token| token.load(Ordering::SeqCst)) {
+        return Err("cloud-copy-cancelled".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn require_native_copy_not_cancelled_with_failure(
+    cancel: Option<&AtomicBool>,
+    candidate: &cloud::CloudCandidate,
+    action: cloud_transfer::CloudCopyApprovalAction,
+    failure_dir: &Path,
+) -> Result<(), String> {
+    let error = match require_native_copy_not_cancelled(cancel) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let journal_error = cloud_transfer::record_copy_failure(
+        candidate,
+        action,
+        &error,
+        cloud::system_now_ms(),
+        failure_dir,
+    )
+    .err();
+    Err(match journal_error {
+        Some(journal_error) => format!("{error};{journal_error}"),
+        None => error,
+    })
+}
+
+#[cfg(not(coverage))]
 fn create_cloud_candidate_receipt(
     root: &str,
     cloud_root: &str,
@@ -1695,6 +1750,7 @@ fn create_cloud_candidate_receipt(
     approval_rationale: &str,
     app: &AppHandle,
     adopt_existing: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<CloudCopyOutput, String> {
     use tauri::Manager;
     if metadata_fingerprint.len() != 64
@@ -1703,6 +1759,9 @@ fn create_cloud_candidate_receipt(
             .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("metadata-fingerprint-invalid".into());
+    }
+    if !adopt_existing {
+        require_native_copy_not_cancelled(cancel)?;
     }
     let planning =
         cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
@@ -1727,17 +1786,21 @@ fn create_cloud_candidate_receipt(
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
     let receipt_dir = app_data_dir.join("cloud-receipts");
+    let failure_dir = app_data_dir.join("cloud-copy-failures");
+    let action = if adopt_existing {
+        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
+    } else {
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly
+    };
+    if !adopt_existing {
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
+    }
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
             .into_iter()
             .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
     } else {
         None
-    };
-    let action = if adopt_existing {
-        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
-    } else {
-        cloud_transfer::CloudCopyApprovalAction::CopyOnly
     };
     let action_at_ms = cloud::system_now_ms();
     let copy_approval = cloud_transfer::create_cloud_copy_approval(
@@ -1754,10 +1817,12 @@ fn create_cloud_candidate_receipt(
         // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
         // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),
         )?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         if selected.provider == cloud::CloudProvider::Icloud {
             cloud::require_pre_copy_evidence_cohort(report.pre_copy_evidence.as_ref())?;
             let health = icloud_health
@@ -1770,6 +1835,7 @@ fn create_cloud_candidate_receipt(
                 .ok_or_else(|| "provider-global-sync-evidence-unavailable".to_string())?;
             provider_global_sync::require_new_copy_admission(global_sync)?;
         }
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let snapshot = report
             .capacity
             .as_ref()
@@ -1782,23 +1848,43 @@ fn create_cloud_candidate_receipt(
                 &snapshot.snapshot,
             );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
-    let (receipt, receipt_path) = if adopt_existing {
+    let copy_result = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+        )
     } else {
-        cloud_transfer::prepare_cloud_copy_with_approval(
+        let cancel = cancel.ok_or_else(|| "native-copy-cancellation-unavailable".to_string())?;
+        cloud_transfer::prepare_cloud_copy_with_approval_cancelable(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+            cancel,
+        )
+    };
+    let (receipt, receipt_path) = match copy_result {
+        Ok(result) => result,
+        Err(error) => {
+            let journal_error = cloud_transfer::record_copy_failure(
+                candidate,
+                action,
+                &error,
+                cloud::system_now_ms(),
+                &failure_dir,
+            )
+            .err();
+            return Err(match journal_error {
+                Some(journal_error) => format!("{error};{journal_error}"),
+                None => error,
+            });
+        }
     };
     let mut projection_warnings = Vec::new();
     let (adr_path, goal_path) = match app.path().app_data_dir() {
@@ -2071,22 +2157,62 @@ pub async fn copy_cloud_candidate(
     state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
+    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
+    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = cloud_review
-            .lock()
-            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        create_cloud_candidate_receipt(
-            &root,
-            &cloud_root,
-            &metadata_fingerprint,
-            min_size_mib,
-            min_age_days,
-            limit,
-            &exact_confirmation_phrase,
-            &approval_rationale,
-            &app,
-            false,
-        )
+        struct NativeCopyReset {
+            cancel: Arc<AtomicBool>,
+            operation: Arc<Mutex<Option<String>>>,
+            fingerprint: String,
+        }
+
+        impl Drop for NativeCopyReset {
+            fn drop(&mut self) {
+                self.cancel.store(false, Ordering::SeqCst);
+                if let Ok(mut active) = self.operation.lock() {
+                    if active.as_deref() == Some(self.fingerprint.as_str()) {
+                        *active = None;
+                    }
+                }
+            }
+        }
+
+        {
+            let mut active = cloud_copy_operation
+                .lock()
+                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            if active.is_some() {
+                return Err("cloud-copy-already-active".to_string());
+            }
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            *active = Some(metadata_fingerprint.clone());
+        }
+        let _reset = NativeCopyReset {
+            cancel: Arc::clone(&cloud_copy_cancel),
+            operation: Arc::clone(&cloud_copy_operation),
+            fingerprint: metadata_fingerprint.clone(),
+        };
+        // Register before taking the shared review lock so a queued copy can be cancelled.
+        // The token remains set if cancellation races with lock acquisition.
+        let result = (|| {
+            let _guard = cloud_review
+                .lock()
+                .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+            create_cloud_candidate_receipt(
+                &root,
+                &cloud_root,
+                &metadata_fingerprint,
+                min_size_mib,
+                min_age_days,
+                limit,
+                &exact_confirmation_phrase,
+                &approval_rationale,
+                &app,
+                false,
+                Some(&cloud_copy_cancel),
+            )
+        })();
+        result
     })
     .await
     .map_err(|_| "cloud-copy-task-failed".to_string())?
@@ -2157,6 +2283,7 @@ pub async fn adopt_existing_cloud_candidate(
             &approval_rationale,
             &app,
             true,
+            None,
         )
     })
     .await

@@ -304,9 +304,14 @@ pub fn write_immutable_decision(
     if encoded.len() as u64 > MAX_DECISION_BYTES {
         return Err("cloud-review-decision-too-large".into());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|_| "cloud-review-decision-create-failed".to_string())?;
     let result = (|| -> Result<(), String> {
@@ -318,7 +323,7 @@ pub fn write_immutable_decision(
             .map_err(|_| "cloud-review-decision-metadata-failed".to_string())?
             .permissions();
         permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
+        file.set_permissions(permissions)
             .map_err(|_| "cloud-review-decision-permissions-failed".to_string())?;
         #[cfg(unix)]
         std::fs::File::open(directory)
