@@ -2,6 +2,7 @@
 
 use disksage_lib::dev_artifacts::find_artifacts;
 use std::fs;
+use std::io::Write;
 
 fn cargo_target(root: &std::path::Path, name: &str) -> std::path::PathBuf {
     let project = root.join(name);
@@ -20,7 +21,8 @@ fn development_roots_are_ranked_by_reclaimable_allocation_not_logical_size() {
     let temp = tempfile::tempdir().unwrap();
 
     let sparse = cargo_target(temp.path(), "sparse");
-    let sparse_file = fs::File::create(sparse.join("huge-sparse.bin")).unwrap();
+    let mut sparse_file = fs::File::create(sparse.join("huge-sparse.bin")).unwrap();
+    sparse_file.write_all(&[0x5a; 4096]).unwrap();
     sparse_file.set_len(128 * 1024 * 1024).unwrap();
 
     let dense = cargo_target(temp.path(), "dense");
