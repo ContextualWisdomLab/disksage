@@ -679,3 +679,49 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-09-09 autonomous loop evidence (Asia/Seoul)
+
+- Current head: `main` at `0e90f9ce` (`0e90f9cebadbd7f59606baaec4ca1d2f178c899a`),
+  `origin/main` in sync. `git diff --check` PASS. `git status` clean except two
+  untracked generated JSON files (`registered_agents.json`,
+  `task_agent_mapping.json`) left out of scope; nothing staged.
+- Open-PR state: 83 open PRs, 13 open issues. PR #264
+  (`fix/release-artifact-windows-namespace-v1` -> `main`) at `90ca4484` is
+  BLOCKED / MERGEABLE / CHANGES_REQUESTED (opencode-agent gated on peer
+  failures). Its 5 failing checks: CodeQL compat-actions + javascript-typescript
+  (owner-path dispatch `state=failure`, `.github:30`), noema-review (infra
+  `429 Too Many Requests`, deepseek-v4-flash, 97.8s `response_error`), strix
+  (`STRIX_PROVIDER_UNAVAILABLE`), opencode-review (gated on the empty
+  failed-check rollup, not an independent code defect). Green on that head:
+  release matrix, test, llm-engine-build, Semgrep, Trivy, Scorecard, osv. Base
+  is current (not BEHIND), so no update-branch is needed.
+- Stacked CLEAN leaves (non-main bases; `Review skipped` is valid skip evidence
+  only for those bases, no `main` advancement): #267, #312, #317, #321, #349 —
+  zero check failures on current heads; #349 carries only a stale
+  `COVERAGE_BLOCKED` on old head `49827c3e`. Chain: 264 -> 267 -> 282
+  (DIRTY/CONFLICTING) -> 316 (DIRTY) -> 317 -> 321 leaf (5-deep); #312 is
+  stranded on closed-unmerged base #308 (`fix/release-artifact-namespace-v2`,
+  no path to `main`). Decision: HOLD merges — no smallest mergeable unit
+  advances `main` without amplifying risk; the next useful unit is owner-side
+  (CodeQL dispatch triage, 429/provider canary convergence, fresh exact-head
+  opencode verdict, resolve #282/#316 bottom-up without force-push, re-evaluate
+  #349 coverage on `854778d9`).
+- Provider receipt: no fresh bounded receipt this loop;
+  `volume-pressure-evidence/`, `provider-client-runtime-evidence/`, and
+  `icloud-sync-health-evidence/` are absent; no `bird`/`fileproviderd` quiet
+  observation; no iCloud/Google/OneDrive attestation. Disk headroom via `df`
+  only: `/System/Volumes/Data` 926Gi total, 767Gi used, 111Gi avail (88%) —
+  healthy against the 2026-08-22 99% pressure tail, but df-only, not a
+  timestamp/fingerprint-bound cohort and not compared to a live incident.
+- Local verification: `svelte-check`/`vitest` NOT run (`node_modules` absent, no
+  `npm install` under read-only scope) — recorded as blocked/unverified, not
+  green.
+- Autonomous KPIs for this program (no user ask): K1 open-PR count
+  lower-is-better (baseline 83); K2 main-target BLOCKED count lower-is-better;
+  K3 fresh exact-head review evidence higher-is-better; K4 gap-baseline
+  freshness (this dated loop entry present). Smallest acceptance proof this
+  loop: triage HOLD decision + this dated entry; no merge claimed.
+- This entry adds dated evidence only. No incomplete probe, comment, or review
+  state is converted into transfer or deletion authority; history above is
+  unchanged.
