@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 pub const MAVEN_CACHE_AUDIT_SCHEMA_KIND: &str = "disksage.maven-cache-audit/v1";
+pub const MAVEN_CACHE_ONTOLOGY_CLASS: &str = "https://disksage.app/ontology#PackageCacheArtifact";
 
 #[derive(Debug, Clone, Copy)]
 pub struct MavenCacheAuditOptions {
@@ -24,6 +25,7 @@ impl Default for MavenCacheAuditOptions {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MavenCacheCandidate {
+    pub ontology_class: String,
     pub relative_path: String,
     pub bytes: u64,
     pub artifact_files: u64,
@@ -42,6 +44,7 @@ pub struct MavenCacheAuditIssue {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MavenCacheAuditReport {
     pub schema_kind: String,
+    pub ontology_class: String,
     pub repository_root: String,
     pub generated_at_ms: u64,
     pub scanned_entries: u64,
@@ -431,6 +434,7 @@ fn audit_marker_directory(root: &Path, directory: &Path) -> DirectoryAudit {
         .max()
         .unwrap_or(0);
     let candidate = MavenCacheCandidate {
+        ontology_class: MAVEN_CACHE_ONTOLOGY_CLASS.into(),
         relative_path: relative.clone(),
         bytes,
         artifact_files: payload_names.len() as u64,
@@ -516,6 +520,7 @@ pub fn audit_maven_repository(
 
     Ok(MavenCacheAuditReport {
         schema_kind: MAVEN_CACHE_AUDIT_SCHEMA_KIND.into(),
+        ontology_class: MAVEN_CACHE_ONTOLOGY_CLASS.into(),
         repository_root: root_text,
         generated_at_ms,
         scanned_entries: discovery.scanned_entries,

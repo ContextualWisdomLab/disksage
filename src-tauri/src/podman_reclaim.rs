@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -95,8 +96,32 @@ pub enum PodmanRecommendedActionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PodmanRecommendedAction {
     pub kind: PodmanRecommendedActionKind,
+    pub ontology_class: &'static str,
     pub requires_human_approval: bool,
     pub rationale: String,
+}
+
+fn recommended_action(
+    kind: PodmanRecommendedActionKind,
+    requires_human_approval: bool,
+    rationale: impl Into<String>,
+) -> PodmanRecommendedAction {
+    let ontology_class = match kind {
+        PodmanRecommendedActionKind::ReviewUnusedImages => {
+            "https://disksage.app/ontology#ContainerImage"
+        }
+        PodmanRecommendedActionKind::ReviewUnusedVolumes => {
+            "https://disksage.app/ontology#ContainerVolume"
+        }
+        PodmanRecommendedActionKind::ReviewGuestTrim => "https://disksage.app/ontology#VirtualDisk",
+        _ => "https://disksage.app/ontology#ContainerArtifact",
+    };
+    PodmanRecommendedAction {
+        kind,
+        ontology_class,
+        requires_human_approval,
+        rationale: rationale.into(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -376,10 +401,7 @@ fn parse_unused_image_candidates(
 ) -> Result<(u64, u64, Vec<UnusedImageCandidate>), String> {
     let records: Vec<PodmanImageRecord> = serde_json::from_str(output)
         .map_err(|error| format!("invalid-podman-images-json:{error}"))?;
-    let total_records =
-        u64::try_from(records.len()).map_err(|_| "podman-images-count-overflow".to_string())?;
-    let mut referenced_records = 0u64;
-    let mut candidates = Vec::new();
+    let mut images: BTreeMap<String, (Vec<String>, u64, bool)> = BTreeMap::new();
     for mut record in records {
         if record.id.len() != 64
             || !record
@@ -394,22 +416,30 @@ fn parse_unused_image_candidates(
         tags.extend(record.names.take().unwrap_or_default());
         tags.sort();
         tags.dedup();
-        if record.containers > 0 {
-            referenced_records = referenced_records
-                .checked_add(1)
-                .ok_or_else(|| "podman-images-count-overflow".to_string())?;
-        } else {
-            candidates.push(UnusedImageCandidate {
-                id: record.id,
-                tags,
-                size_bytes: record.size_bytes,
-            });
+        let image = images
+            .entry(record.id)
+            .or_insert_with(|| (Vec::new(), record.size_bytes, false));
+        if image.1 != record.size_bytes {
+            return Err("podman-images-duplicate-size-mismatch".to_string());
         }
+        image.0.extend(tags);
+        image.0.sort();
+        image.0.dedup();
+        image.2 |= record.containers > 0;
     }
-    candidates.sort_by(|left, right| left.id.cmp(&right.id));
-    if candidates.windows(2).any(|pair| pair[0].id == pair[1].id) {
-        return Err("podman-images-duplicate-id".to_string());
-    }
+    let total_records =
+        u64::try_from(images.len()).map_err(|_| "podman-images-count-overflow".to_string())?;
+    let referenced_records = u64::try_from(images.values().filter(|image| image.2).count())
+        .map_err(|_| "podman-images-count-overflow".to_string())?;
+    let candidates = images
+        .into_iter()
+        .filter(|(_, image)| !image.2)
+        .map(|(id, (tags, size_bytes, _))| UnusedImageCandidate {
+            id,
+            tags,
+            size_bytes,
+        })
+        .collect();
     Ok((total_records, referenced_records, candidates))
 }
 
@@ -621,44 +651,41 @@ fn assess(
             < 2;
         if guest.available_bytes < CRITICAL_GUEST_AVAILABLE_BYTES || critical_ratio {
             reason_codes.push("guest-filesystem-critical".to_string());
-            recommended_actions.push(PodmanRecommendedAction {
-                kind: PodmanRecommendedActionKind::RestoreGuestHeadroom,
-                requires_human_approval: true,
-                rationale: "게스트의 재생성 가능 캐시와 오래된 로그를 검토해 API가 시작할 여유를 확보합니다."
-                    .to_string(),
-            });
+            recommended_actions.push(recommended_action(
+                PodmanRecommendedActionKind::RestoreGuestHeadroom,
+                true,
+                "게스트의 재생성 가능 캐시와 오래된 로그를 검토해 API가 시작할 여유를 확보합니다.",
+            ));
         }
     }
 
     if gap.is_some_and(|bytes| bytes >= MATERIAL_ALLOCATION_GAP_BYTES) {
         reason_codes.push("raw-allocation-exceeds-guest-used".to_string());
-        recommended_actions.push(PodmanRecommendedAction {
-            kind: PodmanRecommendedActionKind::ReviewGuestTrim,
-            requires_human_approval: true,
-            rationale: "게스트에서 해제된 블록이 호스트 raw 할당으로 남았는지 TRIM 전후 관측으로 확인합니다."
-                .to_string(),
-        });
+        recommended_actions.push(recommended_action(
+            PodmanRecommendedActionKind::ReviewGuestTrim,
+            true,
+            "게스트에서 해제된 블록이 호스트 raw 할당으로 남았는지 TRIM 전후 관측으로 확인합니다.",
+        ));
     }
 
     if let Some(store) = store {
         if store.containers_stopped > 0 {
-            recommended_actions.push(PodmanRecommendedAction {
-                kind: PodmanRecommendedActionKind::ReviewStoppedContainers,
-                requires_human_approval: true,
-                rationale: format!(
+            recommended_actions.push(recommended_action(
+                PodmanRecommendedActionKind::ReviewStoppedContainers,
+                true,
+                format!(
                     "중지 컨테이너 {}개가 참조하는 이미지와 볼륨을 사람 검토 대상으로 유지합니다.",
                     store.containers_stopped
                 ),
-            });
+            ));
         }
     } else if machine.is_some_and(|value| value.state.eq_ignore_ascii_case("running")) {
         reason_codes.push("podman-api-evidence-missing".to_string());
-        recommended_actions.push(PodmanRecommendedAction {
-            kind: PodmanRecommendedActionKind::InvestigateApi,
-            requires_human_approval: false,
-            rationale: "머신은 실행 중이지만 API 증거가 없어 소켓과 게스트 여유 공간을 점검합니다."
-                .to_string(),
-        });
+        recommended_actions.push(recommended_action(
+            PodmanRecommendedActionKind::InvestigateApi,
+            false,
+            "머신은 실행 중이지만 API 증거가 없어 소켓과 게스트 여유 공간을 점검합니다.",
+        ));
     }
 
     let podman_reported_reclaimable_bytes = system_df.and_then(|evidence| {
@@ -687,22 +714,22 @@ fn assess(
                     evidence.images.reclaimable_bytes
                 )
             };
-            recommended_actions.push(PodmanRecommendedAction {
-                kind: PodmanRecommendedActionKind::ReviewUnusedImages,
-                requires_human_approval: true,
+            recommended_actions.push(recommended_action(
+                PodmanRecommendedActionKind::ReviewUnusedImages,
+                true,
                 rationale,
-            });
+            ));
         }
         if evidence.local_volumes.reclaimable_bytes > 0 {
             reason_codes.push("podman-unused-volumes-reported".to_string());
-            recommended_actions.push(PodmanRecommendedAction {
-                kind: PodmanRecommendedActionKind::ReviewUnusedVolumes,
-                requires_human_approval: true,
-                rationale: format!(
+            recommended_actions.push(recommended_action(
+                PodmanRecommendedActionKind::ReviewUnusedVolumes,
+                true,
+                format!(
                     "Podman이 미사용 volume 후보 {}바이트를 보고했습니다. 데이터 보존 여부를 별도 승인합니다.",
                     evidence.local_volumes.reclaimable_bytes
                 ),
-            });
+            ));
         }
     }
 
@@ -786,7 +813,13 @@ pub fn prune_dangling_images(
         .map(|snapshot| snapshot.available_bytes);
     let output = command_capture(
         podman_bin,
-        &["--connection", requested_machine, "image", "prune", "--force"],
+        &[
+            "--connection",
+            requested_machine,
+            "image",
+            "prune",
+            "--force",
+        ],
         PODMAN_PRUNE_TIMEOUT,
         "podman-prune-dangling-images",
     )?;
@@ -796,13 +829,11 @@ pub fn prune_dangling_images(
         .unwrap_or(executed_at_ms);
     let after_available_bytes = std::env::current_dir()
         .ok()
-        .and_then(|path| {
-            crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok()
-        })
+        .and_then(|path| crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok())
         .map(|snapshot| snapshot.available_bytes);
-    let observed_available_gain_bytes = before_available_bytes.zip(after_available_bytes).and_then(
-        |(before, after)| after.checked_sub(before),
-    );
+    let observed_available_gain_bytes = before_available_bytes
+        .zip(after_available_bytes)
+        .and_then(|(before, after)| after.checked_sub(before));
     Ok(PodmanDanglingImagePruneExecution {
         schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
         candidate_set_sha256: evidence.candidate_set_sha256,
@@ -968,7 +999,7 @@ pub fn probe_podman_reclaim(
         &issues,
     );
     let dangling_prune_approval_phrase = unused_images.as_ref().and_then(|evidence| {
-        (evidence.unused_untagged_records > 0 && evidence.unused_tagged_records == 0)
+        (evidence.unused_untagged_records > 0)
             .then(|| prune_approval_phrase(&evidence.candidate_set_sha256))
     });
     PodmanReclaimPlan {
@@ -1141,6 +1172,17 @@ mod tests {
             r#"[{"Id":"NOT-AN-ID","RepoTags":[],"Containers":0,"Size":1}]"#
         )
         .is_err());
+        let duplicate_tags = parse_podman_images(
+            r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["one:latest"],"Containers":0,"Size":200},{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["two:latest"],"Containers":0,"Size":200}]"#,
+        )
+        .unwrap();
+        assert_eq!(duplicate_tags.total_records, 1);
+        assert_eq!(duplicate_tags.unused_records, 1);
+        assert_eq!(duplicate_tags.unused_tagged_records, 1);
+        assert!(parse_podman_images(
+            r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":[],"Containers":0,"Size":200},{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":[],"Containers":0,"Size":201}]"#,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1158,14 +1200,12 @@ mod tests {
         );
         let tagged = r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["localhost/keep:latest"],"Containers":0,"Size":200}]"#;
         let (_, _, tagged_candidates) = parse_unused_image_candidates(tagged).unwrap();
-        let tagged_evidence =
-            summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
+        let tagged_evidence = summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
         assert_eq!(tagged_evidence.unused_untagged_records, 0);
         assert_eq!(tagged_evidence.unused_tagged_records, 1);
         let digest_only = r#"[{"Id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","RepoTags":null,"RepoDigests":["docker.io/library/python@sha256:abc"],"Names":["docker.io/library/python@sha256:abc"],"Containers":0,"Size":200}]"#;
         let (_, _, digest_candidates) = parse_unused_image_candidates(digest_only).unwrap();
-        let digest_evidence =
-            summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
+        let digest_evidence = summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
         assert_eq!(digest_evidence.unused_untagged_records, 0);
         assert_eq!(digest_evidence.unused_tagged_records, 1);
     }
@@ -1191,11 +1231,11 @@ mod tests {
                 raw_allocated_minus_guest_used_bytes: None,
                 status: "unverified".into(),
                 reason_codes: vec!["host-physical-reclaim-unverified".into()],
-                recommended_actions: vec![PodmanRecommendedAction {
-                    kind: PodmanRecommendedActionKind::ReviewGuestTrim,
-                    requires_human_approval: true,
-                    rationale: "review".into(),
-                }],
+                recommended_actions: vec![recommended_action(
+                    PodmanRecommendedActionKind::ReviewGuestTrim,
+                    true,
+                    "review",
+                )],
             },
             issues: vec!["partial-evidence".into()],
         };

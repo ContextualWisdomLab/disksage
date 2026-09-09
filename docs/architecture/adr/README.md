@@ -18,6 +18,7 @@ new numbered record rather than rewriting history.
 | [0010](0010-rooted-organize-destinations.md) | Require rooted, process-independent organize destinations | Accepted |
 | [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
 | [0020](0020-native-temp-reclaim-is-evidence-bound.md) | Native temp reclaim is evidence-bound | Proposed |
+| [0021](0021-macos-native-temp-root-is-user-scoped.md) | Scope macOS native temp reclaim to the OS-reported user temp root | Proposed |
 
 ADR-0012 through ADR-0019 are reserved by an earlier active container/runtime-reclamation owner
 lineage and are intentionally not duplicated here. They become part of this branch's index only

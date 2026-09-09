@@ -1,11 +1,12 @@
 use disksage_lib::podman_reclaim::{
-    probe_podman_reclaim, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
+    probe_podman_reclaim, prune_dangling_images, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
 };
 use std::path::PathBuf;
 use std::time::Duration;
 
 const USAGE: &str = "Usage: disksage-podman-reclaim-plan [--machine NAME] [--podman-bin PATH] [--timeout-seconds N] [--pretty]\n\
-Builds read-only Podman guest/raw allocation evidence. It never prunes, removes, trims, or stops anything.";
+       disksage-podman-reclaim-plan --execute-dangling --confirmation-phrase PHRASE --rationale TEXT [--machine NAME] [--podman-bin PATH] [--pretty]\n\
+Builds read-only Podman evidence by default. The execution form deletes only the exact revalidated dangling image IDs.";
 
 fn next_utf8_argument(
     args: &mut impl Iterator<Item = std::ffi::OsString>,
@@ -23,6 +24,9 @@ fn run() -> Result<(), String> {
     let mut podman_bin = PathBuf::from("podman");
     let mut timeout = DEFAULT_PROBE_TIMEOUT;
     let mut pretty = false;
+    let mut execute_dangling = false;
+    let mut confirmation_phrase = None;
+    let mut rationale = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -53,6 +57,21 @@ fn run() -> Result<(), String> {
                 timeout = Duration::from_secs(seconds);
             }
             Some("--pretty") => pretty = true,
+            Some("--execute-dangling") => execute_dangling = true,
+            Some("--confirmation-phrase") => {
+                confirmation_phrase = Some(next_utf8_argument(
+                    &mut args,
+                    "--confirmation-phrase requires a value",
+                    "--confirmation-phrase requires a UTF-8 value",
+                )?);
+            }
+            Some("--rationale") => {
+                rationale = Some(next_utf8_argument(
+                    &mut args,
+                    "--rationale requires a value",
+                    "--rationale requires a UTF-8 value",
+                )?);
+            }
             Some("-h" | "--help") => {
                 println!("{USAGE}");
                 return Ok(());
@@ -62,11 +81,37 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let plan = probe_podman_reclaim(&podman_bin, &machine, timeout);
-    let json = if pretty {
-        serde_json::to_string_pretty(&plan)
+    if !execute_dangling && (confirmation_phrase.is_some() || rationale.is_some()) {
+        return Err(format!(
+            "execution arguments require --execute-dangling\n{USAGE}"
+        ));
+    }
+    let value = if execute_dangling {
+        let confirmation_phrase = confirmation_phrase
+            .as_deref()
+            .ok_or_else(|| "--execute-dangling requires --confirmation-phrase".to_string())?;
+        let rationale = rationale
+            .as_deref()
+            .ok_or_else(|| "--execute-dangling requires --rationale".to_string())?;
+        let executed_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "system clock is before the Unix epoch".to_string())?
+            .as_millis() as u64;
+        serde_json::to_value(prune_dangling_images(
+            &podman_bin,
+            &machine,
+            confirmation_phrase,
+            rationale,
+            executed_at_ms,
+        )?)
     } else {
-        serde_json::to_string(&plan)
+        serde_json::to_value(probe_podman_reclaim(&podman_bin, &machine, timeout))
+    }
+    .map_err(|error| error.to_string())?;
+    let json = if pretty {
+        serde_json::to_string_pretty(&value)
+    } else {
+        serde_json::to_string(&value)
     }
     .map_err(|error| error.to_string())?;
     println!("{json}");

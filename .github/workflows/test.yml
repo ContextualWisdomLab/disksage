@@ -68,23 +68,60 @@ jobs:
         with:
           node-version: 20.19.0
       - run: npm ci
+      - name: Frontend type and Svelte contract checks
+        run: npm run check
       - run: npm test
       - run: npm run build
 
   windows-home-resolution:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
       - name: Windows absolute-home regression
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows Podman descendant-lifecycle regression
+        shell: pwsh
+        run: |
+          rustc --edition=2021 --test src-tauri/src/windows_process_tree.rs -o target/windows-process-tree.exe
+          & .\target\windows-process-tree.exe
+      - name: Windows Podman prune execution contract
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test podman_windows_prune_execution_contract
+
+  macos-filesystem-safety:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - name: macOS file-descriptor bound regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test macos_parallel_directory_fd_bound
+      - name: macOS trash no-replace regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test macos_trash_no_replace
+      - name: macOS external-volume trash regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test macos_external_volume_trash
+      - name: macOS user temp-root reclaim contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test macos_temp_reclaim_user_root
+      - name: macOS filesystem safety unit regressions
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib safety::tests
 
   llm-engine-build:
     runs-on: ubuntu-latest

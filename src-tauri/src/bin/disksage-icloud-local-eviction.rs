@@ -58,7 +58,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--path") => {
                 if path.is_some() {
@@ -102,7 +106,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err(usage().into()),
             Some(_) => return Err("icloud-local-eviction-unknown-argument".into()),
@@ -165,7 +173,8 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
         .filter(|root| cloud::cloud_root_path_matches(Path::new(&root.path), requested))
         .collect();
     match matches.as_slice() {
-        [only] => Ok(*only),
+        [only] if only.provider == cloud::CloudProvider::Icloud => Ok(*only),
+        [..] if matches.len() == 1 => Err("icloud-local-eviction-root-required".into()),
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
@@ -274,6 +283,9 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    if disksage_lib::cloud_local_eviction::run_native_icloud_eviction_helper_if_requested() {
+        return;
+    }
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
@@ -347,5 +359,22 @@ mod tests {
             "human:test".into(),
         ])
         .is_err());
+    }
+
+    #[test]
+    fn root_selector_rejects_non_icloud_provider() {
+        let roots = vec![CloudRoot {
+            id: "onedrive-personal".into(),
+            provider: cloud::CloudProvider::Onedrive,
+            account_scope: cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: CLOUD_ROOT.into(),
+            readable: true,
+            access_issue: None,
+        }];
+        assert_eq!(
+            select_root(&roots, Path::new(CLOUD_ROOT)).unwrap_err(),
+            "icloud-local-eviction-root-required"
+        );
     }
 }

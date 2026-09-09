@@ -27,6 +27,8 @@ export const topFiles = (limit = 200) => invoke<EntryView[]>("top_files", { limi
 
 export interface CacheCandidate {
   id: string;
+  ontology_class: string;
+  measurement_ontology_class: string;
   label: string;
   path: string;
   bytes: number;
@@ -41,6 +43,7 @@ export interface CacheTarget {
 export interface DevArtifact {
   path: string;
   kind: string;
+  ontology_class: string;
   project: string;
   bytes: number;
   files: number;
@@ -195,6 +198,7 @@ export interface PodmanReclaimPlan {
     reason_codes: string[];
     recommended_actions: Array<{
       kind: string;
+      ontology_class: string;
       requires_human_approval: boolean;
       rationale: string;
     }>;
@@ -204,6 +208,175 @@ export interface PodmanReclaimPlan {
 
 export const inspectPodmanReclaim = () =>
   invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
+
+export interface ColimaReclaimPlan {
+  schema_kind: "disksage.colima-reclaim-plan";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaDownloadCache";
+  evidence_complete: boolean;
+  executable_available: boolean;
+  cache_allocated_bytes: number;
+  cache_entries: number;
+  plan_fingerprint: string | null;
+  cache_prune_approval_phrase: string | null;
+  profiles: Array<{
+    name: string;
+    status: string;
+    runtime: string;
+    configured_disk_bytes: number;
+    compaction_eligible: boolean;
+    blockers: string[];
+  }>;
+  issues: string[];
+}
+
+export const inspectColimaReclaim = () =>
+  invoke<ColimaReclaimPlan>("inspect_colima_reclaim");
+
+export interface ColimaCachePruneExecution {
+  schema_kind: "disksage.colima-cache-prune-execution";
+  schema_version: number;
+  plan_fingerprint: string;
+  before_cache_allocated_bytes: number;
+  after_cache_allocated_bytes: number;
+  observed_allocation_reduction_bytes: number;
+  status_code: number;
+  executed: boolean;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const executeColimaCachePrune = (
+  confirmationPhrase: string,
+  rationale: string,
+) =>
+  invoke<ColimaCachePruneExecution>("execute_colima_cache_prune", {
+    confirmationPhrase,
+    rationale,
+  });
+
+export interface ColimaDanglingImagePlan {
+  schema_kind: "disksage.colima-dangling-image-plan";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaDanglingImage";
+  profile: string;
+  candidate_count: number;
+  candidate_set_sha256: string | null;
+  exact_approval_phrase: string | null;
+  evidence_complete: boolean;
+  issues: string[];
+}
+
+export interface ColimaDanglingImageExecution {
+  schema_kind: "disksage.colima-dangling-image-execution";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaDanglingImage";
+  profile: string;
+  candidate_set_sha256: string;
+  before_candidate_count: number;
+  after_candidate_count: number;
+  observed_removed_count: number;
+  status_code: number;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const inspectColimaDanglingImages = (profile: string) =>
+  invoke<ColimaDanglingImagePlan>("inspect_colima_dangling_images", { profile });
+
+export const executeColimaDanglingImages = (
+  profile: string,
+  confirmationPhrase: string,
+  rationale: string,
+) =>
+  invoke<ColimaDanglingImageExecution>("execute_colima_dangling_images", {
+    profile,
+    confirmationPhrase,
+    rationale,
+  });
+
+export interface ColimaEmptyVolumePlan {
+  schema_kind: "disksage.colima-empty-volume-plan";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaEmptyVolume";
+  profile: string;
+  dangling_count: number;
+  empty_candidate_count: number;
+  candidate_set_sha256: string | null;
+  exact_approval_phrase: string | null;
+  evidence_complete: boolean;
+  issues: string[];
+}
+
+export interface ColimaEmptyVolumeExecution {
+  schema_kind: "disksage.colima-empty-volume-execution";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaEmptyVolume";
+  profile: string;
+  candidate_set_sha256: string;
+  before_candidate_count: number;
+  after_candidate_count: number;
+  observed_removed_count: number;
+  status_code: number;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const inspectColimaEmptyVolumes = (profile: string) =>
+  invoke<ColimaEmptyVolumePlan>("inspect_colima_empty_volumes", { profile });
+
+export const executeColimaEmptyVolumes = (
+  profile: string,
+  confirmationPhrase: string,
+  rationale: string,
+) =>
+  invoke<ColimaEmptyVolumeExecution>("execute_colima_empty_volumes", {
+    profile,
+    confirmationPhrase,
+    rationale,
+  });
+
+export interface ColimaGuestTrimPlan {
+  schema_kind: "disksage.colima-guest-trim-plan";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaGuestTrim";
+  profile: string;
+  configured_disk_bytes: number;
+  candidate_fingerprint: string | null;
+  exact_approval_phrase: string | null;
+  guest_trim_eligible: boolean;
+  native_host_compaction_supported: boolean;
+  blockers: string[];
+}
+
+export interface ColimaGuestTrimExecution {
+  schema_kind: "disksage.colima-guest-trim-execution";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#ColimaGuestTrim";
+  profile: string;
+  candidate_fingerprint: string;
+  status_code: number;
+  executed: boolean;
+  before_available_bytes: number | null;
+  after_available_bytes: number | null;
+  observed_available_gain_bytes: number | null;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const inspectColimaGuestTrim = (profile: string) =>
+  invoke<ColimaGuestTrimPlan>("inspect_colima_guest_trim", { profile });
+
+export const executeColimaGuestTrim = (
+  profile: string,
+  confirmationPhrase: string,
+  rationale: string,
+) =>
+  invoke<ColimaGuestTrimExecution>("execute_colima_guest_trim", {
+    profile,
+    confirmationPhrase,
+    rationale,
+  });
 
 export interface PodmanDanglingImagePruneExecution {
   schema_version: number;
@@ -253,6 +426,9 @@ export interface OntoClass {
   equivalents: string[];
   disjoints: string[];
   target_folder: string | null;
+  reclaim_policy: string | null;
+  allowed_actions: string[];
+  required_evidence: string[];
 }
 export interface Ontology {
   classes: OntoClass[];
@@ -562,6 +738,7 @@ export interface GitWorktreeActiveUseEvidence {
 }
 
 export interface GitWorktreeAuditEntry {
+  ontology_class: "https://disksage.app/ontology#GitWorktree";
   path: string;
   path_fingerprint: string;
   head: string;
@@ -672,6 +849,68 @@ export interface StaleGitWorktreeRemovalOutput {
   result_path: string | null;
   result_record_error: string | null;
 }
+
+export interface PullRequestEvidence {
+  number: number;
+  state: string;
+  headRefName: string;
+  headRefOid: string;
+  createdAtMs: number;
+  url: string;
+  association_method: "exact-head" | "commit-associated";
+}
+
+export interface StaleGitClonePlan {
+  schema_kind: "disksage.stale-git-clone-plan";
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#GitClone";
+  path: string;
+  repository: string;
+  branch: string;
+  head: string;
+  pull_request: PullRequestEvidence | null;
+  status_clean: boolean;
+  active_use: GitWorktreeActiveUseEvidence;
+  size: GitWorktreeSizeEvidence;
+  eligible_after_human_approval: boolean;
+  blockers: string[];
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  filesystem_mutation_executed: false;
+}
+
+export interface StaleGitCloneRemoval {
+  schema_version: number;
+  ontology_class: "https://disksage.app/ontology#GitClone";
+  plan_fingerprint: string;
+  repository: string;
+  branch: string;
+  head: string;
+  pull_request_number: number;
+  removed_allocated_bytes_upper_bound: number;
+  rationale: string;
+  executed_at_ms: number;
+  filesystem_mutation_executed: true;
+  path_absence_verified: boolean;
+  recoverability: "remote-reclone-only";
+}
+
+export const planStaleGitClone = (repository_root: string, open_age_days: number) =>
+  invoke<StaleGitClonePlan>("plan_stale_git_clone", { repositoryRoot: repository_root, openAgeDays: open_age_days });
+
+export const removeStaleGitClone = (
+  repository_root: string,
+  open_age_days: number,
+  approved_plan_fingerprint: string,
+  confirmation_exact_approval_phrase: string,
+  rationale: string,
+) => invoke<StaleGitCloneRemoval>("remove_stale_git_clone", {
+  repositoryRoot: repository_root,
+  openAgeDays: open_age_days,
+  approvedPlanFingerprint: approved_plan_fingerprint,
+  confirmationExactApprovalPhrase: confirmation_exact_approval_phrase,
+  rationale,
+});
 
 export interface OAuthConnection {
   connection_id: string;

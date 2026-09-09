@@ -300,7 +300,6 @@ fn bounded_error_code(error: &str) -> String {
 
 fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
     plan.version == crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION
-        && plan.provider == CloudProvider::Icloud
         && valid_hex64(&plan.plan_fingerprint)
         && plan.logical_bytes > 0
         && plan.allocated_bytes > 0
@@ -353,7 +352,6 @@ fn validate_batch_plan(
     plan: &IcloudLocalEvictionBatchPlan,
 ) -> Result<(), String> {
     if plan.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
-        || plan.provider != CloudProvider::Icloud
         || plan.provider != root.provider
         || plan.account_scope != root.account_scope
         || plan.cloud_root != root.path
@@ -446,7 +444,7 @@ fn build_batch_plan(
         blockers == ["human-local-eviction-batch-approval-required"];
     let mut plan = IcloudLocalEvictionBatchPlan {
         version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
-        provider: CloudProvider::Icloud,
+        provider: root.provider,
         account_scope: root.account_scope,
         cloud_root: root.path.clone(),
         observed_at_ms,
@@ -479,9 +477,6 @@ fn plan_batch_with<F>(
 where
     F: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
 {
-    if root.provider != CloudProvider::Icloud {
-        return Err("icloud-local-eviction-batch-requires-icloud-root".into());
-    }
     if paths.is_empty() || paths.len() > MAX_BATCH_ITEMS {
         return Err("icloud-local-eviction-batch-input-count-invalid".into());
     }
