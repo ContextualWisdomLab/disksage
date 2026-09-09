@@ -184,3 +184,26 @@ grants transfer/deletion authority.
   (green), 190, 334, 354 (Test + noema).
 - External blockade unchanged in kind (noema 429/502, CodeQL dispatch,
   dependency 403); strix partially recovered (354/309-era passes).
+
+## L119+ 1000-program harvest (22:3x–23:0xZ)
+
+- L119 rust-lib unit-test map (2 parallel): 28 + 29 files × 2 laps = 114.
+  Every module's test fns + last-2-commits recorded; heaviest churn centers
+  on #213-era commits (expected — provider-sync goals mega-merge).
+- L120 326/327 implement: 326 forward-merge (2 conflicts, both-sides kept)
+  + with_outcome assertion fix, vitest file green, commit 5b832778 pushed.
+  327 forward-merge (2 conflicts) — prescribed podman fix REFUTED
+  (string never existed in any history; 9/9 tests green as-is), merged
+  content only, commit 2846b7ff pushed. Verify-over-assumption win.
+- L121 334 E0603 follow-up: journal_process_lock.rs (334's own new file)
+  imports private `safety` module — one-line `pub mod safety` (items already
+  pub), cargo check --test green, pushed a45be316.
+- L122 203 topFiles: root cause = missing sveltekit() plugin (no .svelte
+  transform) + svelte-hash exact-string brittleness. STALE-ASSERTION fix
+  (plugin + hash normalization), local full 45/173 green, pushed f3bfa0cd.
+- L123 338/344 build fails re-classified: concurrency-cancel transient
+  (queue saturation from rapid stack merges), not source. No action.
+- L124 closed-audit: all closes in window are merges (incl. 212, 353);
+  zero improper closes. 354's 15:40 close was improper (delta unsucceeded)
+  -> reopened + ready by this loop.
+- Test-green harvest: 331 (22m19s), 312 (21m47s), 354 (22m11s), 309 (23m14s).
