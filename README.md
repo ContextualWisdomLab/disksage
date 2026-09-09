@@ -1,185 +1,195 @@
 # DiskSage
 
-> **The wise way to reclaim your disk.**
-> 디스크의 현자 — 내 디스크에 뭐가 있는지 알려주고, 지워도 되는지 판별해주는 크로스플랫폼 디스크 정리 앱.
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ContextualWisdomLab/disksage)
 
-**DiskSage** is a cross-platform (Windows / Linux / macOS) disk-space manager by [ContextualWisdomLab](https://github.com/ContextualWisdomLab). It scans your drives, shows what's actually there, and uses a fully offline on-device LLM to advise whether files are safe to delete — while an OWL ontology keeps your files organized.
+**Privacy-first desktop storage analysis and reclaim decision support for macOS, Windows, and Linux.**
 
-## Features (v1 roadmap)
+DiskSage helps people under disk pressure understand what is consuming local storage, identify evidence-backed recovery candidates, and see the next safe action without trusting an unexplained deletion rule or model verdict.
 
-- 🗺 **Large file explorer** — parallel scan with treemap visualization
-- 🧹 **Known cache & temp cleanup** — OS, browser, and package-manager caches
-- 🛠 **Dev artifact cleanup** — stale `node_modules`, `target/`, `venv`, …
-- 👯 **Duplicate finder** — size → partial hash → BLAKE3 full hash
-- 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit; move plans use a complete bounded scan, bind metadata-first production-time lineage and source size/mtime, revalidate them immediately before moving, and skip File Provider dataless sources
-- 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
-- 🧠 **On-device LLM advisor** — embedded llama.cpp model judges delete-safety and ontology classes from bounded metadata-first lineage evidence, fully offline
-- ☁️ **Metadata-first cloud archive** — detects iCloud Drive, OneDrive, and Google Drive; inspects embedded file metadata, bounded dataset schemas, Rust-parsed ZIP indexes, and incomplete-download archive fragments without extracting payloads; exports a bounded path-free pre-copy preview contract for semantic-data-portal; verifies macOS iCloud quota through Apple's read-only native account client and revalidates authoritative OneDrive/Google account capacity through read-only OAuth with a conservative reserve when configured; for personal roots, permits copy-only through an observed native desktop client when OAuth quota evidence is the only missing input; requires a fresh bounded local provider-client runtime observation before a new vendor-root copy; refuses to add a new iCloud item while the read-only local CloudDocs queue reports pending, blocked, out-of-quota, unclassified, or errored work; performs gated copy-plus-hash verification; verifies macOS File Provider status first with native PKCE OAuth checksum plus exact OneDrive path or Google My Drive parent-chain fallback; and distinguishes normal provider-confirmation waits from overdue unconfirmed copies while retaining the source
-- 🟢 **Provider client runtime gate** — observes only bounded process names, never emits a command line, path, account identifier, or process name, and blocks new OneDrive/Google Drive copies when the local vendor runtime is not observed; runtime presence remains only a local prerequisite and never becomes an account-authentication, capacity, or sync-completion claim
-- ⏸️ **iCloud pre-copy pressure gate** — reads the private CloudDocs database through immutable SQLite mode, a bounded native `brctl status` summary, and a path-free `fileproviderctl dump` activity probe; emits only queue/state aggregates and stable blocker codes, and fails closed before a new iCloud copy when the existing local upload queue is non-empty, unhealthy, native status times out, or File Provider reports no-progress fetches; a quiet queue still does not prove remote capacity, per-item synchronization, or eviction safety
-- 🧾 **Naruon cloud-copy readiness envelope** — combines path-free production-time evidence aggregates, planner/review blockers, provider-client runtime, authoritative capacity assessment, and iCloud queue/native status; binds them with a recursively key-sorted SHA-256 fingerprint while keeping every write, sync, review, and eviction authority false
-- 🧩 **Split-archive set audit** — groups `.zip.partNNN` siblings, proves internal gaps and duplicate indices, totals discard-review bytes, and emits a stable path-redacted fingerprint while keeping exact paths in an optional create-new mode-0600 private dossier
-- ⏳ **Incomplete-download audit** — inventories `.crdownload` files by bounded magic bytes, embedded ZIP structure, acquisition context, filesystem-modified staleness, final-sibling presence, and bounded active-use evidence without treating download time or filename dates as production dates
-- 🩺 **Incomplete-download recovery validation** — decodes bounded PNG payloads and streams bounded whole-file or embedded ZIP ranges to EOF with entry CRC checks, without extraction, rename, or discard
-- 🧬 **Incomplete-download materialization plan** — binds fresh audit and recovery fingerprints to exact non-overlapping byte ranges, SHA-256/BLAKE3 content lineage, and content-addressed filename suggestions while withholding destination selection and write approval
-- ☁️ **Destination-bound recovery approval plan** — binds validated output units to one discovered cloud root, relative destination, fresh provider capacity evidence, collision checks, and one exact human-approval fingerprint without creating any output
-- 🌿 **Stale Git worktree audit/removal** — resolves an exact retention-reference OID set, preserves every exact retained tip plus primary/current/dirty/unmerged/locked/prunable/active worktree, measures bounded allocated bytes, and gates clean merged inactive candidates behind a path-bound fingerprint, exact approval phrase, immediate re-audit, and immutable approval/result records; branch deletion and `git worktree prune` are unreachable
+It is local-first by design. Scanning and deterministic safety decisions do not require a cloud service, OAuth account, or external LLM. Optional provider and ecosystem integrations add evidence or convenience without becoming deletion authority.
 
-## Safety first
+## What DiskSage helps with
 
-Every user-file destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path** for those files. Developer-artifact selections carry a bounded, metadata-only fingerprint, byte/file counts, scan status, and a platform filesystem-object identity; the Rust command re-scans immediately before trashing, atomically stages the exact identity in a private sibling directory, and rejects changed, recreated, unreadable, or incomplete candidates. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. Stale Git worktree removal is the explicit repository-management exception: it invokes non-force `git worktree remove` only for clean, merged, inactive, fingerprint-identical candidates, records immutable approval/result evidence, retains branches, and never runs prune. All user-file trash operations are journaled and retain their private recovery directory so OS-trash undo has a valid staged target, while restoring to the original path remains a separate recovery step.
+| Need | DiskSage approach |
+| --- | --- |
+| Understand disk use | Bounded, cancellable inventory with logical size, physical allocation, unknown regions, and category views |
+| Reclaim regenerable space | Domain-specific review of caches, temporary data, and development artifacts rather than age-only deletion rules |
+| Review duplicates | Exact-content evidence first; preservation and keeper decisions remain explicit |
+| Handle stale development data | Evidence-aware Git, build-artifact, container, and VM workflows that preserve active or ambiguous state |
+| Archive local data to cloud roots | Verify exact local copy and provider evidence before a separate local-source decision |
+| Explain blocked actions | Show an observable condition and next safe action instead of exposing internal error/module names |
+| Keep recovery evidence | Distinguish proposed bytes, processed bytes, and observed filesystem recovery in bounded receipts |
+| Get optional advice | On-device model and ontology assistance may explain or classify candidates but cannot override deterministic safety gates |
 
-The headless split-archive audit is read-only. A contiguous sequence does not invent proof that its
-last observed member is the terminal part, and a missing-part result is never automatic deletion
-authority:
+## Safety is the product boundary
 
-```sh
-cargo run --features cloud-cli --bin disksage-multipart-archive-audit -- \
-  --root /absolute/source \
-  --private-output /absolute/private/new-audit.json
+DiskSage does not treat “old”, “large”, “looks duplicated”, or “the model said so” as deletion authority.
+
+A candidate becomes actionable only when the current domain can prove enough of the relevant identity, content, allocation, provider, active-use, lineage, and approval evidence. Missing, stale, conflicting, timed-out, or ambiguous evidence fails closed.
+
+Important product invariants include:
+
+- inventory and review are read-only until a separate action is explicitly approved;
+- planning, copy, provider confirmation, local-removal review, and execution remain distinct states;
+- source identity and evidence are rechecked immediately before mutation;
+- symlinks, provider placeholders, active files, incomplete scans, and replacement races are preserved or rejected;
+- user-file removal uses a reversible Trash/quarantine path with journal/receipt evidence;
+- permanent deletion is not a user-file product action;
+- a verified copy inside a cloud-provider root is not proof that the provider completed remote synchronization; and
+- model or ontology output may advise, never self-authorize a filesystem mutation.
+
+The canonical product contract is [`docs/PRD.md`](docs/PRD.md). Current implementation gaps and active evidence are tracked separately in [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md).
+
+## Current maturity
+
+DiskSage is in **early development**. The source package metadata is currently `0.1.0`, and this repository has **no published GitHub release yet**. Source version numbers, successful local tests, open pull requests, or measured development experiments are not release or production-support claims.
+
+The current source already contains substantial inventory, local reclaim, duplicate, cloud-evidence, provider-safety, Git/container/VM, recovery, and operational-audit foundations. Capability is intentionally platform- and provider-specific: when DiskSage cannot prove a safe operation on the current platform, that operation remains unavailable rather than being simulated.
+
+The product-level outcome target is **300 GB of verified, attributable local capacity recovery on an eligible real-world workload**. That is a target, not a claim that every device has 300 GB available to reclaim or that DiskSage has already recovered that amount on a production device. Candidate logical bytes and observed filesystem free-space deltas remain separate measurements.
+
+## Cloud-provider boundary
+
+DiskSage can work with local roots exposed by iCloud Drive, OneDrive, and Google Drive, but the providers remain authoritative for their own account, quota, synchronization, and remote-object state.
+
+The intended workflow is:
+
+```text
+reviewed candidate
+      |
+      v
+exact local copy verified
+      |
+      v
+provider sync pending
+      |
+      v
+provider sync confirmed
+      |
+      v
+local-source review
+      |
+      v
+reversible local action
 ```
 
-Incomplete-download auditing is also read-only. Its default 30-day threshold is only a review
-signal: detected payload types can still be incomplete, and undetected payloads may still be
-partially recoverable.
+A local copy never silently becomes “uploaded”. A provider timeout, ambiguous account, stale capacity evidence, collision, placeholder, active use, or incomplete sync evidence keeps the local source in place.
 
-```sh
-cargo run --features cloud-cli --bin disksage-incomplete-download-audit -- \
-  --root /absolute/source \
-  --stale-after-days 30 \
-  --private-output /absolute/private/new-incomplete-download-audit.json
+Current provider capabilities are not assumed to be symmetric. In particular, native removal of only a local iCloud materialization is a distinct capability; DiskSage does not invent equivalent OneDrive or Google Drive authority where it cannot prove one.
+
+## Quick start for source development
+
+DiskSage is a Tauri 2 / Rust / Svelte 5 desktop application. Current source metadata requires Node.js `^20.19.0 || >=22.12.0`; the Tauri crate currently declares Rust `1.88` as its minimum compiler baseline on this documentation branch.
+
+Install the JavaScript dependencies from the lockfile:
+
+```bash
+npm ci
 ```
 
-Recovery validation must follow a fresh audit and remains read-only. PNG output memory, ZIP entry
-count, individual uncompressed size, and total uncompressed size are bounded. A successful result
-is recovery evidence only and does not authorize automatic extension restoration or discard.
+Run the desktop development application:
 
-```sh
-cargo run --features cloud-cli --bin disksage-incomplete-download-recovery -- \
-  --root /absolute/source \
-  --stale-after-days 30 \
-  --private-output /absolute/private/new-incomplete-download-recovery.json
+```bash
+npm run tauri -- dev
 ```
 
-Materialization planning repeats the fresh audit and recovery validation, hashes every validated
-range, and remains destination-independent. Exact paths, offsets, digests, and suggested filenames
-appear only in the optional create-new mode-0600 private report. The public summary cannot authorize
-output creation because no destination has been selected.
+Frontend-only development is also available when working on non-native UI surfaces:
 
-```sh
-cargo run --features cloud-cli --bin disksage-incomplete-download-materialization -- \
-  --root /absolute/source \
-  --stale-after-days 30 \
-  --private-output /absolute/private/new-incomplete-download-materialization.json
+```bash
+npm run dev
 ```
 
-The next read-only stage can bind that plan to an existing discovered cloud root and a relative
-destination. It verifies provider capacity and destination collisions, but still creates no
-directory or output. Paths and proposed names remain only in the optional mode-0600 private report.
+Because there is no published DiskSage release yet, these commands are source-development paths, not an end-user installer promise.
 
-```sh
-cargo run --features cloud-cli --bin disksage-incomplete-download-destination-plan -- \
-  --source-root /absolute/source \
-  --cloud-root /absolute/existing/cloud/root \
-  --destination-subdirectory DiskSage/Recovered/IncompleteDownloads \
-  --live-icloud-capacity \
-  --private-output /absolute/private/new-incomplete-download-destination-plan.json
+## Verify the source
+
+Run the repository's ordinary frontend checks:
+
+```bash
+npm run check
+npm test
+npm run build
 ```
 
-Materialization is a separate mutating command. It refuses to run without the exact destination
-plan fingerprint, attributed human approval, an explicit `--execute` flag, fresh provider capacity,
-and a private receipt directory outside both source and cloud roots. It regenerates and compares
-the full source lineage, stages every range with create-new names, verifies all planned digests,
-then promotes each verified inode with a no-clobber create-new hard link before removing its
-staging name. Failures roll back files created by that invocation. It never renames, discards,
-trashes, or deletes a source, and the resulting receipt does not claim provider sync or authorize
-local-source eviction.
+For the Rust/Tauri source:
 
-```sh
-cargo run --features cloud-cli --bin disksage-incomplete-download-materialize -- \
-  --source-root /absolute/source \
-  --destination-plan /absolute/private/destination-plan.json \
-  --confirm-plan-fingerprint LOWERCASE_HEX64 \
-  --receipt-dir /absolute/private/receipts \
-  --approved-by human:reviewer \
-  --rationale "Approved exact provider, account, units, bytes, and destination plan" \
-  --live-icloud-capacity \
-  --execute
+```bash
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Stale-worktree auditing does not fetch or assume that local remote-tracking
-references are current, so operators should refresh every selected reference before auditing.
-`--reference-ref` is repeatable: use the integration branch and every current open-PR exact head.
-An exact retained tip is always preserved. A different secondary worktree is a removal candidate
-only when its HEAD is already contained in at least one resolved retention OID, its tracked and
-untracked state is clean, its bounded allocated-byte scan is complete, it is neither locked nor
-prunable, and no active CWD or recursive `lsof` consumer is observed. Local paths, branch names,
-and reference names appear only in an optional create-new mode-0600 report. The public approval
-phrase is plan evidence; it is not execution authority by itself.
+Some specialized operational CLIs are feature-gated and platform-specific. Use the applicable command documented by its architecture/runbook rather than enabling a mutation because a binary happens to compile.
 
-```sh
-cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
-  --repository-root /absolute/repository/worktree \
-  --reference-ref origin/develop \
-  --reference-ref CURRENT_OPEN_PR_HEAD_OID \
-  --private-output /absolute/private/new-git-worktree-audit.json
+A passing source suite is engineering evidence for that exact revision. It is not proof of a published release, provider synchronization, physical-capacity recovery, or safe eligibility for a particular user's file.
+
+## Architecture at a glance
+
+```text
+Local filesystems / provider roots
+              |
+              | bounded read-only evidence
+              v
++------------------------------------+
+|              DiskSage              |
+|------------------------------------|
+| inventory + physical allocation    |
+| evidence / identity / active use   |
+| domain-specific reclaim planning   |
+| optional local model + ontology    |
+| approval + revalidation boundary   |
+| reversible action + receipts       |
++------------------+-----------------+
+                   |
+          explicit reviewed action
+                   |
+                   v
+          OS / provider boundary
 ```
 
-After reviewing that exact private report, the mutating command repeats the full audit immediately
-before removal. It requires the unchanged plan fingerprint, exact approval phrase, attributed
-reviewer, rationale, and a record root outside every audited worktree. It removes only the
-currently matching candidates and stops on any drift; branches remain and no prune is performed.
+DiskSage owns local storage analysis, evidence-backed reclaim decisions, reversible local-action contracts, and their receipts. It does not own cloud-provider synchronization truth, customer accounts, external filesystem semantics, another ContextualWisdomLab product's data model, or a general-purpose remote execution plane.
 
-```sh
-cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
-  --repository-root /absolute/repository/worktree \
-  --reference-ref origin/develop \
-  --approved-removal-plan-fingerprint LOWERCASE_HEX64 \
-  --confirmation-exact-approval-phrase 'DiskSage stale worktree … 승인 LOWERCASE_HEX64' \
-  --reviewed-by human:reviewer \
-  --rationale "Merged, clean, inactive worktree with no retained unmerged commits" \
-  --record-root /absolute/private/disksage-app-data
-```
+Optional ecosystem consumers and providers integrate through explicit contracts. They do not gain shared filesystem, database, credential, or deletion authority merely because DiskSage can exchange evidence with them.
 
-## Local volume evidence CLI
+## Privacy and network posture
 
-DiskSage can capture a read-only, path-redacted filesystem-capacity snapshot:
+DiskSage is local-first. File content, raw private paths, account identifiers, provider database rows, command lines, and secrets do not leave the device by default.
 
-```sh
-cargo run --manifest-path src-tauri/Cargo.toml \
-  --features volume-cli \
-  --bin disksage-volume-snapshot -- --path /System/Volumes/Data
-```
+Private receipts and detailed evidence stay local with restrictive storage boundaries. Shareable diagnostics should use bounded aggregates, stable codes, timestamps, and fingerprints rather than customer paths or credentials. Optional network integrations require an explicit purpose and documented data boundary.
 
-The JSON reports native `total`, `free`, and user-available bytes, allocation granularity,
-available-space basis points, and a deterministic pressure band. It includes a SHA-256 evidence
-fingerprint but never emits the queried path, mount name, account identifier, or file content.
+The on-device advice path is intentionally separate from deterministic mutation eligibility: advice can explain why an item may be interesting, but it cannot make an unsafe or insufficiently evidenced action executable.
 
-To compare a fresh observation with a previously saved snapshot:
+## Customer-visible states
 
-```sh
-cargo run --manifest-path src-tauri/Cargo.toml \
-  --features volume-cli \
-  --bin disksage-volume-snapshot -- \
-  --path /System/Volumes/Data \
-  --baseline before.json \
-  --logical-removed-bytes 3806089216
-```
+DiskSage's customer copy should help a person decide what to do next:
 
-The comparison binds both complete snapshots and the calculated deltas. A logical removal count is
-recorded as operator evidence only: `physical_reclaim_bytes` remains `null` and attribution remains
-`unproven`, because APFS, sync providers, swap, builds, and other concurrent writers can change free
-space during the same interval. Baselines are limited to a regular, non-symlink JSON file of at most
-64 KiB.
+| State | Meaning | Next action |
+| --- | --- | --- |
+| Scanning | Evidence collection is still running | Keep DiskSage open or cancel safely |
+| Review ready | Exact candidates and consequences are available | Review selected items and recovery method |
+| Waiting for provider | A cloud copy is not yet proven current remotely | Let the provider finish, refresh, and keep the local source |
+| Needs attention | Capacity, activity, permission, collision, or identity evidence is incomplete | Resolve the named condition and scan again |
+| Approved, rechecking | DiskSage is validating the exact reviewed state again | Avoid changing the selected items until the check finishes |
+| Recovered | The reversible action completed and a receipt exists | Verify the measured result; use Undo/Restore if needed |
+| No eligible candidates | No further safe action is currently supported | Review preserved blockers or choose another scan domain |
 
-## Status
+Internal module names and raw provider diagnostics belong in developer/operator evidence, not in customer-facing explanations.
 
-🚧 Early development. See the [base design](docs/superpowers/specs/2026-07-10-disksage-design.md), [dataset metadata profile design](docs/superpowers/specs/2026-07-16-dataset-metadata-profile-design.md), [cloud OAuth security design](docs/superpowers/specs/2026-07-16-cloud-provider-oauth-pkce-design.md), [cloud capacity evidence design](docs/superpowers/specs/2026-07-21-cloud-capacity-evidence-design.md), [provider client runtime gate design](docs/superpowers/specs/2026-07-31-provider-client-runtime-gate-design.md), [iCloud pre-copy pressure gate design](docs/superpowers/specs/2026-07-31-icloud-pre-copy-pressure-gate-design.md), [Naruon cloud-copy readiness design](docs/superpowers/specs/2026-07-31-naruon-cloud-copy-readiness-design.md), [redacted Naruon capacity export design](docs/superpowers/specs/2026-07-29-naruon-cloud-capacity-export-design.md), and [semantic catalog pre-copy export design](docs/superpowers/specs/2026-07-29-semantic-catalog-export-design.md).
+## Documentation map
 
-## Tech
+- [`docs/PRD.md`](docs/PRD.md) — canonical product outcomes, jobs, safety invariants, provider capabilities, and acceptance criteria.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — architecture and ownership index.
+- [`docs/architecture/adr/`](docs/architecture/adr/) — accepted architecture decisions and safety boundaries.
+- [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md) — dated implementation and product-gap evidence.
+- [`docs/superpowers/specs/`](docs/superpowers/specs/) — detailed accepted designs where deeper implementation context is needed.
+- [`CHANGELOG.md`](CHANGELOG.md) — integrated user-visible source changes; not release evidence by itself.
+- [`SECURITY.md`](SECURITY.md) — security policy where present in the current checkout.
 
-Tauri 2 · Rust · Svelte 5 · llama.cpp · OWL/Turtle
+## Contributing
+
+Start with [`AGENTS.md`](AGENTS.md), the canonical PRD, architecture/ADR records, and the current gap baseline before changing a safety-sensitive workflow.
+
+Keep changes inside DiskSage's local storage-analysis and reclaim responsibility. New cleanup or provider capabilities need evidence specific to that domain; do not convert a rule of thumb, filename date, model score, external tool output, or sibling-service response into mutation authority. Customer-facing changes should state the observable condition and next safe action rather than expose implementation ownership.
 
 ## License
 
-MIT
+DiskSage is licensed under the [MIT License](LICENSE). Third-party crates, JavaScript packages, provider APIs, datasets, models, fonts, and other external assets retain their own terms and are not relicensed by DiskSage.
