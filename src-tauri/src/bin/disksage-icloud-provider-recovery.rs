@@ -71,16 +71,37 @@ fn now_ms() -> Result<u64, String> {
     u64::try_from(value).map_err(|_| "system-time-overflow".into())
 }
 
-fn read_plan(path: &Path) -> Result<IcloudFileProviderRecoveryPlan, String> {
+#[cfg(target_os = "macos")]
+fn current_user_uid() -> Result<u32, String> {
+    Ok(unsafe { libc::getuid() })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_user_uid() -> Result<u32, String> {
+    Err("icloud-recovery-platform-unsupported".into())
+}
+
+fn read_plan_with_hook<F>(
+    path: &Path,
+    before_read: F,
+) -> Result<IcloudFileProviderRecoveryPlan, String>
+where
+    F: FnOnce(),
+{
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "icloud-recovery-plan-unavailable".to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
         return Err("icloud-recovery-plan-unsafe".into());
     }
+    before_read();
     serde_json::from_slice(
         &std::fs::read(path).map_err(|_| "icloud-recovery-plan-read-failed".to_string())?,
     )
     .map_err(|_| "icloud-recovery-plan-json-invalid".into())
+}
+
+fn read_plan(path: &Path) -> Result<IcloudFileProviderRecoveryPlan, String> {
+    read_plan_with_hook(path, || {})
 }
 
 fn run() -> Result<(), String> {
@@ -104,7 +125,7 @@ fn run() -> Result<(), String> {
         serde_json::to_value(plan_icloud_file_provider_recovery(
             &health,
             daemon,
-            unsafe { libc::getuid() },
+            current_user_uid()?,
             now,
         ))
     }
@@ -159,5 +180,57 @@ mod tests {
             home
         )
         .is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_plan_read_rejects_path_replacement_after_admission() {
+        use disksage_lib::icloud_provider_recovery::IcloudFileProviderDaemonIdentity;
+
+        fn plan(observed_at_ms: u64) -> IcloudFileProviderRecoveryPlan {
+            IcloudFileProviderRecoveryPlan {
+                schema_version: 1,
+                observed_at_ms,
+                health_evidence_fingerprint_sha256: "a".repeat(64),
+                stale_error_count: 1,
+                oldest_stale_error_age_ms: 15 * 60 * 1_000,
+                daemon: IcloudFileProviderDaemonIdentity {
+                    uid: 501,
+                    pid: 1234,
+                    service_label: "com.apple.FileProvider".into(),
+                    executable_path: "/System/Library/Frameworks/FileProvider.framework/Support/fileproviderd".into(),
+                    executable_object_id: "b".repeat(64),
+                    apple_signature_valid: true,
+                },
+                blockers: Vec::new(),
+                eligible: true,
+                plan_fingerprint_sha256: "c".repeat(64),
+                exact_approval_phrase: "test approval".into(),
+                mutation_performed: false,
+            }
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        let replacement_path = temp.path().join("replacement.json");
+        let admitted_path = temp.path().join("admitted.json");
+        std::fs::write(
+            &plan_path,
+            serde_json::to_vec(&plan(1)).expect("serialize admitted plan"),
+        )
+        .expect("write admitted plan");
+        std::fs::write(
+            &replacement_path,
+            serde_json::to_vec(&plan(2)).expect("serialize replacement plan"),
+        )
+        .expect("write replacement plan");
+
+        let error = read_plan_with_hook(&plan_path, || {
+            std::fs::rename(&plan_path, &admitted_path).expect("move admitted object");
+            std::fs::rename(&replacement_path, &plan_path).expect("install replacement object");
+        })
+        .expect_err("path replacement must not switch execution-plan authority");
+
+        assert_eq!(error, "icloud-recovery-plan-object-changed");
     }
 }
