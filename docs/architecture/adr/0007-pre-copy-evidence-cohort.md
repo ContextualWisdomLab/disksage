@@ -1,6 +1,6 @@
 # ADR-0007: Gate iCloud copy plans on a fresh evidence cohort
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context

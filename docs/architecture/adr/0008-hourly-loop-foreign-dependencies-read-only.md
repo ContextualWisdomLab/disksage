@@ -1,6 +1,6 @@
 # ADR-0008: Keep the hourly loop read-only at foreign dependency boundaries
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context

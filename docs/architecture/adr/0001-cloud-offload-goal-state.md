@@ -1,6 +1,6 @@
 # ADR-0001: Provider evidence drives the cloud-offload Goal
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-13
 
 ## Context

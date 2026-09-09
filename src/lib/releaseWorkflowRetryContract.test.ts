@@ -13,7 +13,7 @@ function readRepositoryFile(relativePath: string): string {
 describe('release workflow retry contract', () => {
   it('cancels stale first attempts without self-cancelling explicit reruns', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain("cancel-in-progress: ${{ github.run_attempt == 1 }}");
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}");
     expect(workflow).not.toContain('cancel-in-progress: true');
   });
 
@@ -24,7 +24,7 @@ describe('release workflow retry contract', () => {
     );
     expect(
       workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
-    ).toBe(2);
+    ).toBe(3);
   });
 
   it('documents retry-safe concurrency in authoritative evidence', () => {
