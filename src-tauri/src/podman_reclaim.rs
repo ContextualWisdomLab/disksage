@@ -31,6 +31,8 @@ pub struct RawImageEvidence {
     pub logical_bytes: u64,
     /// st_blocks * 512 on Unix. This is observed host allocation, not reclaim proof.
     pub allocated_bytes: Option<u64>,
+    /// Stable hash of the host file identity (device and inode on Unix).
+    pub identity_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -146,6 +148,34 @@ pub struct PodmanDanglingImagePruneExecution {
     pub after_available_bytes: Option<u64>,
     /// Only a positive before/after available-space delta is reported; it is still attribution-weak.
     pub observed_available_gain_bytes: Option<u64>,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanStorageCheckPlan {
+    pub schema_version: u32,
+    pub machine: String,
+    pub damaged_layer_records: u64,
+    pub candidate_set_sha256: String,
+    pub evidence_complete: bool,
+    pub exact_approval_phrase: Option<String>,
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanStorageRepairExecution {
+    pub schema_version: u32,
+    pub machine: String,
+    pub candidate_set_sha256: String,
+    pub command: Vec<String>,
+    pub status_code: i32,
+    pub command_attempted: bool,
+    pub execution_issue: Option<String>,
+    pub executed: bool,
+    pub repaired_layer_records: u64,
+    pub remaining_damaged_layer_records: u64,
+    pub postcheck_complete: bool,
+    pub executed_at_ms: u64,
     pub rationale: String,
 }
 
@@ -474,11 +504,56 @@ fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     };
     #[cfg(not(unix))]
     let allocated_bytes = None;
+    #[cfg(unix)]
+    let identity_sha256 = {
+        use std::os::unix::fs::MetadataExt;
+        let mut hasher = Sha256::new();
+        hasher.update(b"disksage-runtime-image-identity-v1\0");
+        hasher.update(metadata.dev().to_le_bytes());
+        hasher.update(metadata.ino().to_le_bytes());
+        Some(lower_hex(&hasher.finalize()))
+    };
+    #[cfg(not(unix))]
+    let identity_sha256 = None;
     Ok(RawImageEvidence {
         path: path.to_string_lossy().into_owned(),
         logical_bytes: metadata.len(),
         allocated_bytes,
+        identity_sha256,
     })
+}
+
+/// Reads only the configured sparse image and its current host allocation.
+fn configured_raw_image_evidence(
+    record: &MachineInspectRecord,
+) -> Result<RawImageEvidence, String> {
+    let config_path = Path::new(&record.config_dir.path).join(format!("{}.json", record.name));
+    fs::read_to_string(&config_path)
+        .map_err(|error| format!("machine-config-read:{error}"))
+        .and_then(|output| parse_machine_config(&output))
+        .and_then(|path| raw_image_evidence(&path))
+}
+
+/// Reads only the configured sparse image and its current host allocation.
+pub fn inspect_raw_image_evidence(
+    podman_bin: &Path,
+    requested_machine: &str,
+    timeout: Duration,
+) -> Result<RawImageEvidence, String> {
+    if !valid_machine_name(requested_machine) {
+        return Err("unsafe-requested-machine-name".into());
+    }
+    let record = command_text(
+        podman_bin,
+        &["machine", "inspect", requested_machine],
+        timeout,
+        "podman-machine-inspect",
+    )
+    .and_then(|output| parse_machine_inspect(&output))?;
+    if record.name != requested_machine {
+        return Err("machine-name-mismatch".into());
+    }
+    configured_raw_image_evidence(&record)
 }
 
 fn bounded_detail(value: &str) -> String {
@@ -530,10 +605,18 @@ fn command_capture(
     timeout: Duration,
     label: &str,
 ) -> Result<CommandCapture, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("{label}-spawn:{error}"))?;
     let stdout = child
@@ -552,16 +635,14 @@ fn command_capture(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_readonly_process_tree(&mut child);
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-wait:{error}"));
@@ -569,6 +650,9 @@ fn command_capture(
         }
     };
 
+    // A completed CLI may leave descendants holding inherited pipes. Its private process group
+    // can be terminated without touching the long-lived Podman VM process.
+    terminate_readonly_process_tree(&mut child);
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
@@ -580,6 +664,15 @@ fn command_capture(
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
         output_truncated: false,
     })
+}
+
+fn terminate_readonly_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn command_text(
@@ -786,7 +879,13 @@ pub fn prune_dangling_images(
         .map(|snapshot| snapshot.available_bytes);
     let output = command_capture(
         podman_bin,
-        &["--connection", requested_machine, "image", "prune", "--force"],
+        &[
+            "--connection",
+            requested_machine,
+            "image",
+            "prune",
+            "--force",
+        ],
         PODMAN_PRUNE_TIMEOUT,
         "podman-prune-dangling-images",
     )?;
@@ -796,13 +895,11 @@ pub fn prune_dangling_images(
         .unwrap_or(executed_at_ms);
     let after_available_bytes = std::env::current_dir()
         .ok()
-        .and_then(|path| {
-            crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok()
-        })
+        .and_then(|path| crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok())
         .map(|snapshot| snapshot.available_bytes);
-    let observed_available_gain_bytes = before_available_bytes.zip(after_available_bytes).and_then(
-        |(before, after)| after.checked_sub(before),
-    );
+    let observed_available_gain_bytes = before_available_bytes
+        .zip(after_available_bytes)
+        .and_then(|(before, after)| after.checked_sub(before));
     Ok(PodmanDanglingImagePruneExecution {
         schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
         candidate_set_sha256: evidence.candidate_set_sha256,
@@ -869,11 +966,7 @@ pub fn probe_podman_reclaim(
     });
 
     let raw_image = inspect.as_ref().and_then(|record| {
-        let config_path = Path::new(&record.config_dir.path).join(format!("{}.json", record.name));
-        fs::read_to_string(&config_path)
-            .map_err(|error| format!("machine-config-read:{error}"))
-            .and_then(|output| parse_machine_config(&output))
-            .and_then(|path| raw_image_evidence(&path))
+        configured_raw_image_evidence(record)
             .map_err(|error| issues.push(error))
             .ok()
     });
@@ -1048,6 +1141,7 @@ mod tests {
             path: "/tmp/machine.raw".into(),
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(70 * GIB),
+            identity_sha256: Some("a".repeat(64)),
         };
         let result = assess(
             None,
@@ -1158,14 +1252,12 @@ mod tests {
         );
         let tagged = r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["localhost/keep:latest"],"Containers":0,"Size":200}]"#;
         let (_, _, tagged_candidates) = parse_unused_image_candidates(tagged).unwrap();
-        let tagged_evidence =
-            summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
+        let tagged_evidence = summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
         assert_eq!(tagged_evidence.unused_untagged_records, 0);
         assert_eq!(tagged_evidence.unused_tagged_records, 1);
         let digest_only = r#"[{"Id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","RepoTags":null,"RepoDigests":["docker.io/library/python@sha256:abc"],"Names":["docker.io/library/python@sha256:abc"],"Containers":0,"Size":200}]"#;
         let (_, _, digest_candidates) = parse_unused_image_candidates(digest_only).unwrap();
-        let digest_evidence =
-            summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
+        let digest_evidence = summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
         assert_eq!(digest_evidence.unused_untagged_records, 0);
         assert_eq!(digest_evidence.unused_tagged_records, 1);
     }
@@ -1256,6 +1348,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "slow-probe-timeout");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_probe_closes_inherited_descendant_pipes() {
+        let started = Instant::now();
+        let output = command_text(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 10 & printf complete"],
+            Duration::from_secs(2),
+            "descendant-pipe-probe",
+        )
+        .unwrap();
+        assert_eq!(output, "complete");
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

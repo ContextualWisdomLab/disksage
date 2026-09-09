@@ -55,7 +55,7 @@ const MAX_BUILD_CACHE_FILTER_BYTES: usize = 24 * 1024;
 pub enum ContainerRuntimeKind {
     /// Plain `docker` against the default context / local socket.
     DockerNative,
-    /// `docker --context colima` against a Colima-managed socket.
+    /// `docker --context colima` for Colima-managed Docker sockets.
     DockerColimaContext,
     /// `podman --connection <machine>` against a running Podman machine.
     PodmanMachine,
@@ -358,7 +358,12 @@ pub struct ContainerOrphanPlan {
 }
 
 /// Execution receipt for one approved prune. Mirrors the Podman dangling-image receipt
-/// shape so downstream consumers can treat both uniformly.
+/// shape so downstream consumers can treat both uniformly. `executed` records verified
+/// mutation (status 0, nonzero with stdout evidence of a partial removal, or truncated
+/// indeterminate output); a clean safe-refusal with empty output and nonzero status is not
+/// executed. `status_code` separately records completion, and `output_truncated` bounds
+/// oversized evidence. Container removal never passes `--force`, so a container that
+/// restarted after the audit cannot be force-removed via a stale stopped-state observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerOrphanPruneExecution {
     pub schema_version: u32,
@@ -1903,6 +1908,14 @@ pub fn execute_container_orphan_prune(
     let observed_available_gain_bytes = before_available_bytes
         .zip(after_available_bytes)
         .and_then(|(before, after)| after.checked_sub(before));
+    // Never force: Container exact delete is ["container","rm"] without --force, so a
+    // stale stopped observation can at most attempt a safe removal. Mark executed only
+    // on verified mutation (success, partial stdout evidence, or truncated indeterminate)
+    // so safe-refusal (nonzero, empty output) stays non-executed while partial mutation
+    // (nonzero with stdout evidence) remains auditable.
+    let executed = output.status_code == 0
+        || !output.stdout.trim().is_empty()
+        || output.output_truncated;
     let mut receipt = ContainerOrphanPruneExecution {
         schema_version: CONTAINER_ORPHAN_SCHEMA_VERSION,
         runtime_display_name: target.display_name(),
@@ -1913,7 +1926,7 @@ pub fn execute_container_orphan_prune(
         stdout: output.stdout,
         stderr: output.stderr,
         output_truncated: output.output_truncated,
-        executed: true,
+        executed,
         executed_at_ms,
         before_available_bytes,
         after_available_bytes,

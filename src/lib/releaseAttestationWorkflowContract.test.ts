@@ -23,8 +23,27 @@ describe("release attestation workflow contract", () => {
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
     expect(verifierIndex).toBeGreaterThan(downloadIndex);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
+    expect(attestJob).toContain("expected exactly 43 regular files before SBOM generation");
+    expect(attestJob).toContain("expected exactly 44 regular files after SBOM generation");
     const verifier = readFileSync(resolve(repositoryRoot, ".github/scripts/verify-release-artifacts.sh"), "utf8");
-    expect(verifier).toContain("expected exactly 17 regular files");
+    expect(verifier).toContain("expected exactly 43 regular files");
+    expect(verifier).toContain('require_exactly_one_file "${expected_dirs[0]}" "$required_cli"');
+    expect(verifier).toContain('require_exactly_one_file "${expected_dirs[2]}" "$required_cli"');
+    expect(verifier).toContain('disksage-podman-storage-repair-linux-x86_64');
+  });
+
+  it("ships the cleanup executables exposed by this release line", () => {
+    const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
+
+    for (const executable of [
+      "disksage-podman-storage-repair",
+      "disksage-photo-similarity-audit",
+      "disksage-shared-temp-reclaim-plan",
+    ]) {
+      expect(workflow).toContain(`--bin ${executable}`);
+      expect(workflow).toContain(`${executable}-macos-arm64`);
+      expect(workflow).toContain(`${executable}-macos-arm64.sha256`);
+    }
   });
 
   it("binds Cargo SBOM metadata to the shipped Rust manifest", () => {

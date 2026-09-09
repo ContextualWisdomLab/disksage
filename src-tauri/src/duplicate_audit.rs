@@ -496,7 +496,7 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+pub(crate) fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     let mut active = BTreeSet::new();
     let candidate_identities: BTreeMap<(u64, u64), &PathBuf> = paths
         .iter()
@@ -557,7 +557,7 @@ fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, S
 }
 
 #[cfg(any(not(unix), coverage))]
-fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+pub(crate) fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     Err("duplicate-reclaim-active-use-unsupported-platform".into())
 }
 

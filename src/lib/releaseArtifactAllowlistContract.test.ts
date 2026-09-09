@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -22,24 +24,79 @@ const platformDirectories = {
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
+  'disksage-podman-storage-repair-linux-x86_64',
+  'disksage-photo-similarity-audit-linux-x86_64',
+  'disksage-shared-temp-reclaim-plan-linux-x86_64',
   'disksage-cloud-plan-windows-x86_64.exe',
   'disksage-duplicate-audit-windows-x86_64.exe',
+  'disksage-podman-storage-repair-windows-x86_64.exe',
+  'disksage-photo-similarity-audit-windows-x86_64.exe',
+  'disksage-shared-temp-reclaim-plan-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
+  'disksage-cloud-local-eviction-batch-macos-arm64',
+  'disksage-icloud-local-eviction-batch-macos-arm64',
+  'disksage-cloud-local-inventory-macos-arm64',
+  'disksage-onedrive-finder-verify-macos-arm64',
+  'disksage-podman-storage-repair-macos-arm64',
+  'disksage-photo-similarity-audit-macos-arm64',
+  'disksage-shared-temp-reclaim-plan-macos-arm64',
 ] as const;
 
-/** Create one complete 17-file release artifact tree accepted by the canonical verifier. */
+/** Read one UTF-8 file from the source-controlled repository root. */
+function readRepositoryFile(relativePath: string): string {
+  return readFileSync(resolve(repositoryRoot, relativePath), 'utf8');
+}
+
+/** Return one top-level GitHub Actions job block after normalizing line endings. */
+function extractWorkflowJob(workflow: string, jobName: string): string {
+  const normalizedWorkflow = workflow.replace(/\r\n?/g, '\n');
+  const marker = `\n  ${jobName}:\n`;
+  const start = normalizedWorkflow.indexOf(marker);
+  if (start < 0) throw new Error(`Missing workflow job: ${jobName}`);
+  const remaining = normalizedWorkflow.slice(start + marker.length);
+  const nextJobOffset = remaining.search(/\n  [a-zA-Z0-9_-]+:\n/);
+  return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
+}
+
+/** Extract the literal Bash body from one named workflow step. */
+function extractWorkflowRunScript(job: string, stepName: string): string {
+  const normalizedJob = job.replace(/\r\n?/g, '\n');
+  const stepMarker = `      - name: ${stepName}\n`;
+  const stepStart = normalizedJob.indexOf(stepMarker);
+  if (stepStart < 0) throw new Error(`Missing workflow step: ${stepName}`);
+  const runMarker = '        run: |\n';
+  const runStart = normalizedJob.indexOf(runMarker, stepStart);
+  if (runStart < 0) throw new Error(`Missing literal run block: ${stepName}`);
+  const remaining = normalizedJob.slice(runStart + runMarker.length);
+  const nextStepOffset = remaining.search(/\n      - (?:name:|uses:)/);
+  const script = nextStepOffset < 0 ? remaining : remaining.slice(0, nextStepOffset);
+  return script
+    .split('\n')
+    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
+    .join('\n');
+}
+
+/** Create one complete, valid pre-SBOM release artifact tree and checkout fixture. */
 function createCompleteReleaseFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-allowlist-'));
+  const verifierTarget = join(fixtureRoot, '.github/scripts/verify-release-artifacts.sh');
+  mkdirSync(dirname(verifierTarget), { recursive: true });
+  copyFileSync(
+    resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+    verifierTarget,
+  );
+
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
-  for (const [directory, bundlePath] of [
-    [platformDirectories.linux, 'bundle/deb/disksage.deb'],
-    [platformDirectories.linux, 'bundle/appimage/disksage.AppImage'],
-    [platformDirectories.windows, 'bundle/msi/disksage.msi'],
-    [platformDirectories.windows, 'bundle/nsis/disksage-setup.exe'],
-    [platformDirectories.macos, 'bundle/dmg/disksage.dmg'],
-  ] as const) {
-    const absolutePath = join(artifactRoot, directory, bundlePath);
+  const bundlePaths = [
+    `${platformDirectories.linux}/bundle/deb/disksage.deb`,
+    `${platformDirectories.linux}/bundle/appimage/disksage.AppImage`,
+    `${platformDirectories.windows}/bundle/msi/disksage.msi`,
+    `${platformDirectories.windows}/bundle/nsis/disksage-setup.exe`,
+    `${platformDirectories.macos}/bundle/dmg/disksage.dmg`,
+  ];
+  for (const bundlePath of bundlePaths) {
+    const absolutePath = join(artifactRoot, bundlePath);
     mkdirSync(dirname(absolutePath), { recursive: true });
     writeFileSync(absolutePath, `bundle:${bundlePath}`);
   }

@@ -642,6 +642,7 @@ pub(crate) fn clean_cache_contents_inner(
                     path: target.path,
                     ok: false,
                     error: "cache-target-active-use-evidence-incomplete".into(),
+                    warning: String::new(),
                 };
             };
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
@@ -660,9 +661,10 @@ pub(crate) fn clean_cache_contents_inner(
                     path: target.path,
                     ok: false,
                     error: error.into(),
+                    warning: String::new(),
                 };
             }
-            match safety::trash_delete_if_identity_in_catalog_root(
+            match safety::trash_delete_if_identity_with_outcome_in_catalog_root(
                 Path::new(&target.path),
                 dir,
                 &target.object_id,
@@ -670,15 +672,23 @@ pub(crate) fn clean_cache_contents_inner(
                 journal_path,
                 now_ms,
             ) {
-                Ok(()) => CleanResult {
+                Ok(outcome) if outcome.moved_to_trash => CleanResult {
                     path: target.path,
                     ok: true,
                     error: String::new(),
+                    warning: safety::trash_delete_outcome_warning(&outcome).unwrap_or_default(),
+                },
+                Ok(_) => CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: "trash move did not complete; rescan before cleanup".into(),
+                    warning: String::new(),
                 },
                 Err(error) => CleanResult {
                     path: target.path,
                     ok: false,
                     error: error.to_string(),
+                    warning: String::new(),
                 },
             }
         })
@@ -706,6 +716,7 @@ pub(crate) fn clean_regenerable_caches_inner(
                                 path: candidate.path,
                                 ok: false,
                                 error,
+                                warning: String::new(),
                             }]
                         })
                 }
@@ -713,6 +724,7 @@ pub(crate) fn clean_regenerable_caches_inner(
                     path: candidate.path,
                     ok: false,
                     error,
+                    warning: String::new(),
                 }],
             }
         })
@@ -1117,5 +1129,20 @@ mod tests {
 
         assert_eq!(error, "cache-root-not-current-or-safe");
         assert_eq!(fs::read(&outside_file).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn completed_cache_move_serializes_warning_without_failure() {
+        let result = CleanResult {
+            path: "/private/fixture/cache".into(),
+            ok: true,
+            error: String::new(),
+            warning: "terminal audit record unavailable".into(),
+        };
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["error"], "");
+        assert_eq!(value["warning"], "terminal audit record unavailable");
     }
 }

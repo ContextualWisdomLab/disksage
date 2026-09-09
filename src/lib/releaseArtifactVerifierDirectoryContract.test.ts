@@ -31,7 +31,7 @@ function addCli(artifactRoot: string, directory: string, name: string) {
   );
 }
 
-/** Materializes the exact 17-file Linux, Windows, and macOS release artifact contract. */
+/** Materializes the exact 43-file Linux, Windows, and macOS release artifact contract. */
 function materializeExactArtifactSet(artifactRoot: string) {
   write(join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb'), 'deb');
   write(join(artifactRoot, platformDirectories.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
@@ -41,10 +41,23 @@ function materializeExactArtifactSet(artifactRoot: string) {
 
   addCli(artifactRoot, platformDirectories.linux, 'disksage-cloud-plan-linux-x86_64');
   addCli(artifactRoot, platformDirectories.linux, 'disksage-duplicate-audit-linux-x86_64');
+  addCli(artifactRoot, platformDirectories.linux, 'disksage-podman-storage-repair-linux-x86_64');
+  addCli(artifactRoot, platformDirectories.linux, 'disksage-photo-similarity-audit-linux-x86_64');
+  addCli(artifactRoot, platformDirectories.linux, 'disksage-shared-temp-reclaim-plan-linux-x86_64');
   addCli(artifactRoot, platformDirectories.windows, 'disksage-cloud-plan-windows-x86_64.exe');
   addCli(artifactRoot, platformDirectories.windows, 'disksage-duplicate-audit-windows-x86_64.exe');
+  addCli(artifactRoot, platformDirectories.windows, 'disksage-podman-storage-repair-windows-x86_64.exe');
+  addCli(artifactRoot, platformDirectories.windows, 'disksage-photo-similarity-audit-windows-x86_64.exe');
+  addCli(artifactRoot, platformDirectories.windows, 'disksage-shared-temp-reclaim-plan-windows-x86_64.exe');
   addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-plan-macos-arm64');
   addCli(artifactRoot, platformDirectories.macos, 'disksage-duplicate-audit-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-local-eviction-batch-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-icloud-local-eviction-batch-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-local-inventory-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-onedrive-finder-verify-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-podman-storage-repair-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-photo-similarity-audit-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-shared-temp-reclaim-plan-macos-arm64');
 }
 
 /** Runs the repository-owned verifier against one isolated downloaded-artifact fixture. */

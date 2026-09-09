@@ -22,10 +22,23 @@ const platformDirectories = {
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
+  'disksage-podman-storage-repair-linux-x86_64',
+  'disksage-photo-similarity-audit-linux-x86_64',
+  'disksage-shared-temp-reclaim-plan-linux-x86_64',
   'disksage-cloud-plan-windows-x86_64.exe',
   'disksage-duplicate-audit-windows-x86_64.exe',
+  'disksage-podman-storage-repair-windows-x86_64.exe',
+  'disksage-photo-similarity-audit-windows-x86_64.exe',
+  'disksage-shared-temp-reclaim-plan-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
+  'disksage-cloud-local-eviction-batch-macos-arm64',
+  'disksage-icloud-local-eviction-batch-macos-arm64',
+  'disksage-cloud-local-inventory-macos-arm64',
+  'disksage-onedrive-finder-verify-macos-arm64',
+  'disksage-podman-storage-repair-macos-arm64',
+  'disksage-photo-similarity-audit-macos-arm64',
+  'disksage-shared-temp-reclaim-plan-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 repository file from the source-controlled project root. */
@@ -44,7 +57,7 @@ function extractWorkflowJob(workflow: string, jobName: string): string {
   return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
 }
 
-/** Create one complete 17-file release-artifact tree for admission-boundary tests. */
+/** Create one complete 43-file release-artifact tree for admission-boundary tests. */
 function createReleaseArtifactFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-provenance-'));
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
@@ -104,6 +117,14 @@ describe('release artifact provenance contract', () => {
     expect(buildJob).not.toContain('softprops/action-gh-release');
     expect(buildJob).toContain('if ! "$asset_path" --help');
     expect(buildJob).not.toContain('--help 2>&1 || true');
+    expect(buildJob).toContain('disksage-icloud-local-eviction-batch-macos-arm64');
+    expect(buildJob).toContain('disksage-cloud-local-inventory-macos-arm64');
+    expect(buildJob).not.toContain('disksage-icloud-local-eviction-batch-linux');
+    expect(buildJob).not.toContain('disksage-icloud-local-eviction-batch-windows');
+    expect(buildJob).not.toContain('disksage-cloud-local-inventory-linux');
+    expect(buildJob).not.toContain('disksage-cloud-local-inventory-windows');
+    expect(buildJob).not.toContain('disksage-cloud-local-eviction-batch-linux');
+    expect(buildJob).not.toContain('disksage-cloud-local-eviction-batch-windows');
 
     expect(attestJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
     expect(attestJob).toContain('needs: build');
@@ -122,9 +143,11 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
     expect(attestJob).toContain('disksage.spdx.json');
-    expect(attestJob).not.toContain('require_exactly_one_file');
-    expect(verifier).toContain('expected exactly 17 regular files');
-    expect(verifier).toContain('require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64');
+    expect(attestJob).toContain('expected exactly 43 regular files before SBOM generation');
+    expect(attestJob).toContain('expected exactly 44 regular files after SBOM generation');
+    expect(attestJob).not.toContain('require_exactly_one_file "$required_name"');
+    expect(verifier).toContain('expected exactly 43 regular files');
+    expect(verifier).toContain('require_exactly_one_file "${expected_dirs[0]}" "$required_cli"');
 
     expect(publishJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
     expect(publishJob).toContain('needs: attest-release');
@@ -191,7 +214,7 @@ describe('release artifact provenance contract', () => {
         const result = runReleaseArtifactVerifier(fixtureRoot);
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain('Unexpected release artifact entries');
-        expect(result.stderr).toContain('expected exactly 17 regular files, found 18');
+        expect(result.stderr).toContain('expected exactly 43 regular files, found 44');
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
       }

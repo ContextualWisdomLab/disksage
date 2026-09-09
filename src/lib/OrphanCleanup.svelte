@@ -145,6 +145,9 @@
   {/if}
   {#if result}
     <p class="muted" role="status">{result.moved_count}/{result.requested_count}개를 휴지통으로 이동했습니다. 휴지통을 비우기 전에는 복원할 수 있습니다.</p>
+    {#if result.items.some((item) => item.moved_to_trash && item.warning)}
+      <p class="warning" role="status">이동은 완료됐지만 일부 기록을 확인하지 못했습니다. 휴지통에서 항목을 확인한 뒤 고아 관계 조사를 다시 실행하세요.</p>
+    {/if}
   {/if}
 </section>
 
@@ -152,6 +155,7 @@
   section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
   .notice { color: #555; font-size: 0.9rem; }
   .error { color: #b00; }
+  .warning { color: #7a5a00; }
   .muted { color: #666; font-size: 0.85rem; }
   .list { list-style: none; padding: 0; max-height: 30vh; overflow-y: auto; }
   .list li { display: grid; gap: 0.25rem; padding: 0.25rem 0; }

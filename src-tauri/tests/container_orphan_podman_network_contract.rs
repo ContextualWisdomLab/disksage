@@ -1,16 +1,24 @@
 use disksage_lib::container_orphan_reclaim::{
-    probe_container_orphans_with_receipt_dir, ContainerRuntimeKind, ContainerRuntimeTarget,
-    OrphanCategory,
+    ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+    probe_container_orphans_with_receipt_dir,
 };
 
+#[cfg(unix)]
+use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::path::PathBuf;
 
 #[cfg(unix)]
-const NETWORK_ID: &str =
-    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const NETWORK_ID: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+#[cfg(unix)]
+fn private_receipt_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
 
 #[cfg(unix)]
 fn podman_network_target(attached: bool) -> (tempfile::TempDir, ContainerRuntimeTarget) {
@@ -43,9 +51,10 @@ case "${{1:-}}" in
       exit 0
     fi
     if [ "${{2:-}}" = "inspect" ]; then
+      # Podman network inspect may omit `Containers`; membership is verified via `container ps --all`.
       # Current Podman documentation shows valid inspect JSON that can omit Containers
-      # when no running containers are present. Membership must come from `ps --all`.
-      printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true,"labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]'
+      # when no running containers are present. Implementation accepts both `Labels` and `labels`.
+      printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true,"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]'
       exit 0
     fi
     exit 94
@@ -74,13 +83,8 @@ esac
 #[test]
 fn podman_network_without_any_container_membership_is_a_bounded_candidate() {
     let (_temp, target) = podman_network_target(false);
-    let receipt_dir = tempfile::tempdir().expect("private receipt directory");
-    let mut permissions = std::fs::metadata(receipt_dir.path())
-        .expect("receipt directory metadata")
-        .permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(receipt_dir.path(), permissions).expect("private receipt directory");
-    let plan = probe_container_orphans_with_receipt_dir(&target, receipt_dir.path());
+    let _receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, _receipts.path());
     let network = plan
         .categories
         .iter()
@@ -98,13 +102,8 @@ fn podman_network_without_any_container_membership_is_a_bounded_candidate() {
 #[test]
 fn podman_network_with_stopped_container_membership_is_preserved() {
     let (_temp, target) = podman_network_target(true);
-    let receipt_dir = tempfile::tempdir().expect("private receipt directory");
-    let mut permissions = std::fs::metadata(receipt_dir.path())
-        .expect("receipt directory metadata")
-        .permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(receipt_dir.path(), permissions).expect("private receipt directory");
-    let plan = probe_container_orphans_with_receipt_dir(&target, receipt_dir.path());
+    let _receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, _receipts.path());
     let network = plan
         .categories
         .iter()

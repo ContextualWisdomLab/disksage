@@ -355,6 +355,7 @@ mod tests {
                 path: "/Users/private/.local/share/private-machine.raw".to_string(),
                 logical_bytes: 900,
                 allocated_bytes: Some(700),
+                identity_sha256: Some("d".repeat(64)),
             }),
             guest_filesystem: Some(GuestFilesystemEvidence {
                 total_bytes: 800,

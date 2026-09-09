@@ -47,6 +47,18 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
+            exit 1
+          fi
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
@@ -56,19 +68,28 @@ jobs:
         with:
           workspaces: src-tauri
           cache-targets: false
-      - name: Configure private test temp
-        run: |
-          mkdir -p "$RUNNER_TEMP/disksage"
-          echo "TMPDIR=$RUNNER_TEMP/disksage" >> "$GITHUB_ENV"
       - name: Rust tests (includes unix symlink test)
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Rust, cloud, and archive proof tests
+        env:
+          # Mutation fixtures must live outside the globally protected shared /tmp tree.
+          TMPDIR: ${{ runner.temp }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli,archive-cli
       - name: Headless cloud planner tests
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
       - name: Extraction-free archive tree proof tests
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
@@ -88,6 +109,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Windows absolute-home regression
         shell: pwsh
@@ -104,6 +126,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install build deps (llama.cpp native + tauri)
         run: |
           sudo apt-get update

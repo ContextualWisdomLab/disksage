@@ -67,11 +67,11 @@ pub fn collect(
         Default::default()
     };
 
-    let exact = git_worktree::github_exact_pull_request_commit_membership(
+    let exact = crate::git_worktree_impl::github_exact_pull_request_commit_membership(
         repository_root,
         remaining_local_options(options, started)?.command_timeout_ms,
     )?;
-    let mut pull_request_commits = git_worktree::github_pull_request_commit_membership_with_exact(
+    let mut pull_request_commits = crate::git_worktree_impl::github_pull_request_commit_membership_with_exact(
         repository_root,
         remaining_local_options(options, started)?,
         exact,

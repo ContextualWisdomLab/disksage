@@ -123,10 +123,13 @@ pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 pub mod semantic_catalog;
+/// Exact-evidence reclamation for completed DiskSage-owned top-level shared-temp artifacts.
+pub mod shared_temp_reclaim;
 pub mod volume_pressure;
 pub mod zotero_local;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
 pub mod orphan;
+pub mod photo_similarity_audit;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -175,6 +178,7 @@ pub fn run() {
             runtime_storage_commands::inspect_runtime_storage,
             commands::execute_runtime_storage_trim,
             commands::execute_runtime_storage_recovery,
+            commands::execute_inactive_podman_machine_stop,
             container_orphan_commands::inspect_container_orphans,
             container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,

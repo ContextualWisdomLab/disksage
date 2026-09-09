@@ -181,6 +181,7 @@ pub struct FileProviderItemStatus {
     pub is_excluded_from_sync: bool,
     pub is_sync_paused: bool,
     pub is_trashed: bool,
+    pub is_keep_downloaded: bool,
     pub capabilities: u64,
     pub allows_eviction: bool,
     pub observed_bytes: u64,
@@ -288,6 +289,7 @@ fn file_provider_evidence_id(
         snapshot.item.is_excluded_from_sync as u8,
         snapshot.item.is_sync_paused as u8,
         snapshot.item.is_trashed as u8,
+        snapshot.item.is_keep_downloaded as u8,
         snapshot.item.allows_eviction as u8,
     ]);
     hasher.update(&snapshot.item.capabilities.to_le_bytes());
@@ -360,12 +362,19 @@ fn file_provider_status_u64(output: &str, key: &str) -> Result<u64, String> {
 
 fn file_provider_identifier_fingerprint(output: &str) -> Result<String, String> {
     let identifier = file_provider_status_value(output, "itemIdentifier")?.trim();
-    if identifier.is_empty() || identifier.len() > FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES {
+    let version = file_provider_status_value(output, "versionIdentifier")?.trim();
+    if identifier.is_empty()
+        || version.is_empty()
+        || identifier.len() > FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES
+        || version.len() > FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES
+    {
         return Err("file-provider-status-field-invalid:itemIdentifier".into());
     }
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-file-provider-item-identifier-v1\0");
+    hasher.update(b"disksage-file-provider-item-version-v2\0");
     hasher.update(identifier.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(version.as_bytes());
     Ok(hasher.finalize().to_hex().to_string())
 }
 
@@ -406,6 +415,7 @@ pub fn parse_file_providerctl_item_status(
         is_excluded_from_sync: file_provider_status_bool(output, "isExcludedFromSync")?,
         is_sync_paused: file_provider_status_bool(output, "isSyncPaused")?,
         is_trashed: file_provider_status_bool(output, "isTrashed")?,
+        is_keep_downloaded: file_provider_status_bool(output, "isKeepDownloaded")?,
         capabilities,
         allows_eviction: capabilities & FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING != 0,
         observed_bytes: provider_reported_bytes,
@@ -710,7 +720,7 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
+pub(crate) fn file_providerctl_status(path: impl AsRef<std::ffi::OsStr>) -> Result<String, String> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -1300,7 +1310,9 @@ mod tests {
             isExcludedFromSync = 0;
             isSyncPaused = 0;
             isTrashed = 0;
+            isKeepDownloaded = 0;
             itemIdentifier = opaque-provider-item;
+            versionIdentifier = opaque-provider-version;
         "#
     }
 
@@ -1312,6 +1324,7 @@ mod tests {
         assert!(snapshot.is_local_current());
         assert!(snapshot.is_sync_complete());
         assert!(snapshot.item.allows_eviction);
+        assert!(!snapshot.item.is_keep_downloaded);
         assert_eq!(snapshot.item.item_identifier_fingerprint.len(), 64);
 
         for provider in [CloudProvider::Onedrive, CloudProvider::GoogleDrive] {
@@ -1410,6 +1423,17 @@ mod tests {
         assert!(!status
             .item_identifier_fingerprint
             .contains("opaque-provider-item"));
+
+        let changed_version = uploaded_file_provider_output().replace(
+            "versionIdentifier = opaque-provider-version",
+            "versionIdentifier = newer",
+        );
+        assert_ne!(
+            status.item_identifier_fingerprint,
+            parse_file_providerctl_item_status(&changed_version, 42)
+                .unwrap()
+                .item_identifier_fingerprint
+        );
 
         let no_eviction =
             uploaded_file_provider_output().replace("capabilities = 805306495", "capabilities = 0");

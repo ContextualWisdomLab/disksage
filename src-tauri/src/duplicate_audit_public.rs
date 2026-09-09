@@ -6,6 +6,8 @@
 
 use std::path::{Component, Path};
 
+pub(crate) use crate::duplicate_audit_implementation::active_duplicate_candidates;
+
 pub use crate::duplicate_audit_implementation::{
     collect_exact_duplicate_audit, ExactDuplicateAuditCluster, ExactDuplicateAuditMember,
     ExactDuplicateAuditReport, ExactDuplicateAuditSummary, ExactDuplicateProductionMetadata,
