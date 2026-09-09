@@ -29,14 +29,13 @@ This index records what exists vs what is absent, without inventing policy.
 `docs/operations/manual-publishing-runbook.md`, `prompts/build.txt`,
 `prompts/plan.txt`, `ARCHITECTURE.md`.
 
-## De-facto authorities used by the 2026-09-09 loop
+## Evidence sources consulted by the 2026-09-09 loop
 
-1. This index (existence facts only, no invented rules).
-2. The gap-baseline loop rule (dated evidence only; no transfer/deletion
-   authority from incomplete probes, comments, or reviews).
-3. The `README.md` safety contract.
+1. This index (existence facts read).
+2. The gap-baseline loop rule text read from
+   `docs/product-technical-gap-baseline.md`.
+3. The `README.md` safety contract text read.
 4. The GitHub ruleset `CWL Central required workflows` on `main`
-   (`opencode` / `noema` / `strix` / `codeql-pr`).
+   (`opencode` / `noema` / `strix` / `codeql-pr`) as listed.
 
-Do not create the absent policy files with invented rules; record a real
-repo decision first, then document it.
+No absent policy file was created in this loop.

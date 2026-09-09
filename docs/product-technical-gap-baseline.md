@@ -725,3 +725,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - This entry adds dated evidence only. No incomplete probe, comment, or review
   state is converted into transfer or deletion authority; history above is
   unchanged.
+- PR353 `98441e7e` opened for this loop's docs; drafting subagent initially targeted base `codex/canonical-prd` (PR315 head) by mistake — retargeted to `main` via API PATCH (no force-push, no code change); base now `main`, MERGEABLE.
+- Current-head CodeRabbit: `Review completed` pass + 1 actionable COMMENTED finding on canonical-docs.md authority wording (addressed by Edit 1 above); no `@coderabbitai ignore` used.
+- noema-review FAILED on infra transport `502 Bad Gateway` (meta/llama-3.2-11b-vision-instruct, 113.6s response_error); opencode-agent CHANGES_REQUESTED gated solely on that noema failure (coverage success, model pool exhausted, no code findings). Rerun via check-runs rerequest API and `gh run rerun` both 404 (reusable owner workflow `321236726` not resolvable in this repo) — this evidence commit is the fresh-gate trigger.
