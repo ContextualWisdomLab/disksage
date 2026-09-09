@@ -1,6 +1,6 @@
 # ADR-0011: Failed copy evidence and placeholder-safe adoption
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-25
 
 ## Context
