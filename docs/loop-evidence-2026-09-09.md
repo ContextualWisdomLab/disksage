@@ -91,3 +91,50 @@ grants transfer/deletion authority.
   rerun-404 + base-verify-at-creation lessons).
 - Draft PRs: not touched (author intent).
 - 282 merge: needs dedicated per-file resolution (32 paths).
+
+## L98+ second push (15:0x–15:4xZ)
+
+- L98 peer-coexistence doctrine confirmed: 4+ base flips + 5 close/reopen
+  cycles + draft-lowerings on PR353/354, all actor seonghobae (own
+  credential = parallel same-program session applying standing-order stack
+  policy: draft-lower + restack onto canonical + immediate rerun). Accepted
+  without fight; peer's stack landings verified legitimate (321/349/267/
+  317/316/355 all green-head server-side squash merges). Own retriggers now
+  on hourly+ backoff only — retriggering aggravates Noema 429s.
+- L99 PR353 restack accepted: base canonical-prd (#315). Forward-merged
+  #315 into 353's branch (worktree wt353): auto-merge absorbed #315's tree;
+  single manual conflict (gap-baseline restructured into 90-line projection
+  + archived 08-22) resolved keep-theirs + re-appended corrected 09-09
+  section (stale base/HOLD claims updated). Pushed db8f029a..61a4e3b3;
+  PR353 CLEAN/MERGEABLE (draft). 315's restructure preserved verbatim.
+- L100 PR331 md-5 0.11 DEP-BREAK fixed: `zotero_local.rs:358`
+  `format!("{:x}", digest.finalize())` (LowerHex removed upstream) ->
+  `.iter().map(|b| format!("{b:02x}")).collect()`. Pushed c956f8e4..ea90b764
+  (fast-forward, head verified). CI authority pending (builds running;
+  CodeQL/dep-403 external).
+- L101 PR309 RCA corrected: NOT comparator — APFS sparse fixture allocates
+  0 blocks, correctly excluded by intentional zero-allocation filter.
+  Test-only fixture fix (write 4KB real bytes), local cargo test
+  FAILED-before/ok-after (env builds fine). Pushed 01429e38..ad1ccc14.
+- L102 PR311 RCA: fake-`gh` missing pulls endpoint (fixed in worktree,
+  uncommitted) exposed DESIGNED blockers (default-branch-protected per
+  08fc7342 + ADR 0017; ancestry-missing). Green needs scenario rewrite or
+  protection revert — author/product decision. Left uncommitted in wt311.
+  Recommendation recorded; no forced change.
+- L103 PR312 retargeted orphan base -> main (peer closed #308 lineage):
+  MERGEABLE/BLOCKED, central gates running (no 429 yet this round).
+- L104 peer drafts 356/357 noted (foundation-adoption pattern, like merged
+  #355). Not touched.
+- L105 Noema storm: 429/502 across 5+ attempts, 4 models, ~4hrs. Discipline:
+  no retrigger <1hr; reads-only watches. No rerun API (404 reusable owner
+  workflows). opencode verdicts purely gated (no code findings anywhere).
+- L106 PR338 re-verified CLEAN/MERGEABLE (earlier UNSTABLE cleared itself —
+  flaky/green now). No action.
+
+## KPI snapshot (15:4xZ)
+
+- Open PRs: 82 (helpers: 321/349/267/317/316/355 merged; +353/+354/+356/+357
+  new; net -2 this push after +4 creations).
+- main head: 0e90f9ce (unmoved all day — all landings are stack-internal).
+- Merges need main-bound roots (264 + 258-era docs) after gateway recovery.
+- Local: svelte-check 0; npm 144/144; cargo single-tests green where run.
