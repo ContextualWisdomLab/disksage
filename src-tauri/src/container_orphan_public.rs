@@ -4,6 +4,7 @@ use crate::container_orphan_reclaim::{
 
 const FALLBACK_ISSUE: &str = "container-runtime-evidence-unavailable";
 const INDETERMINATE_PRUNE_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
+const MUTABLE_VOLUME_IDENTITY: &str = "container-volume-identity-not-immutable";
 
 fn stable_issue(raw: &str) -> String {
     let token = raw.split(':').next().unwrap_or_default();
@@ -20,6 +21,14 @@ fn stable_issue(raw: &str) -> String {
 }
 
 fn public_command_shape(category: OrphanCategory, has_candidates: bool) -> Vec<String> {
+    if category == OrphanCategory::BuildCache {
+        let mut command = vec!["buildx".into(), "prune".into(), "--all".into()];
+        if has_candidates {
+            command.extend(["--filter".into(), "id~=^(<candidate-set>)$".into()]);
+        }
+        command.push("--force".into());
+        return command;
+    }
     let mut command = vec![category.as_str().to_string(), "rm".to_string()];
     if has_candidates {
         command.push("<candidate-set>".to_string());
@@ -27,19 +36,43 @@ fn public_command_shape(category: OrphanCategory, has_candidates: bool) -> Vec<S
     command
 }
 
+/// Rejects public mutation categories whose runtime deletion target cannot be bound to immutable
+/// object identity. Docker/Podman volume deletion is name-addressed; a volume can be deleted and
+/// recreated under the same name after the final audit but before `volume rm` executes. Until the
+/// runtime provides conditional deletion bound to the audited object identity, volume evidence is
+/// intentionally read-only.
+pub fn ensure_mutation_category_authority(category: OrphanCategory) -> Result<(), String> {
+    if category == OrphanCategory::Volume {
+        Err(MUTABLE_VOLUME_IDENTITY.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Removes runtime stderr, paths, socket details, local machine names, and record fragments from
-/// the machine-readable public plan while retaining stable fail-closed issue categories.
+/// the machine-readable public plan while retaining stable fail-closed issue categories. A volume
+/// plan remains observable but never publishes destructive authority because the runtime delete is
+/// bound only to a reusable volume name rather than immutable object identity.
 pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
     plan.runtime.detail_issue = plan.runtime.detail_issue.as_deref().map(stable_issue);
     plan.runtime.display_name = plan.runtime.kind.as_str().to_string();
     for category in &mut plan.categories {
         category.issue = category.issue.as_deref().map(stable_issue);
-        if category.prune_command.is_some() {
-            let has_candidates = category
-                .evidence
-                .as_ref()
-                .is_some_and(|evidence| evidence.candidate_records > 0);
-            category.prune_command = Some(public_command_shape(category.category, has_candidates));
+        if ensure_mutation_category_authority(category.category).is_err() {
+            category.prune_command = None;
+            category.approval_phrase = None;
+            continue;
+        }
+        let has_candidates = category
+            .evidence
+            .as_ref()
+            .is_some_and(|evidence| evidence.candidate_records > 0);
+        let public_command = public_command_shape(category.category, has_candidates);
+        if public_command.is_empty() {
+            category.prune_command = None;
+            category.approval_phrase = None;
+        } else if category.prune_command.is_some() {
+            category.prune_command = Some(public_command);
         }
     }
     let mut issues = plan
@@ -89,8 +122,8 @@ pub fn sanitize_execution(
 mod tests {
     use super::*;
     use crate::container_orphan_reclaim::{
-        probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
-        RuntimeHealthEvidence,
+        probe_container_orphans, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
+        ContainerRuntimeTarget, RuntimeHealthEvidence,
     };
     use std::path::PathBuf;
 
@@ -111,9 +144,13 @@ mod tests {
             },
             categories: Vec::new(),
             issues: vec![format!("runtime-info-failed:{secret}")],
+            receipt_directory_sha256: None,
         };
         let sanitized = sanitize_plan(plan);
-        assert_eq!(sanitized.runtime.detail_issue.as_deref(), Some("runtime-info-failed"));
+        assert_eq!(
+            sanitized.runtime.detail_issue.as_deref(),
+            Some("runtime-info-failed")
+        );
         assert_eq!(sanitized.issues, vec!["runtime-info-failed"]);
         let json = serde_json::to_string(&sanitized).unwrap();
         assert!(!json.contains(secret));
@@ -164,11 +201,17 @@ mod tests {
             after_available_bytes: Some(1_200),
             observed_available_gain_bytes: Some(200),
             rationale: "Reviewed exact evidence.".into(),
+            receipt_sha256: None,
+            receipt_recorded: false,
+            receipt_record_error: Some("orphan-receipt-create-failed".into()),
         };
         let sanitized = sanitize_execution(execution);
         let json = serde_json::to_string(&sanitized).unwrap();
         assert_eq!(sanitized.runtime_display_name, "container-runtime");
-        assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
+        assert_eq!(
+            sanitized.command,
+            vec!["container", "rm", "<candidate-set>"]
+        );
         assert!(sanitized.stdout.is_empty());
         assert_eq!(sanitized.stderr, INDETERMINATE_PRUNE_OUTCOME);
         assert_eq!(sanitized.before_available_bytes, None);
@@ -179,9 +222,98 @@ mod tests {
     }
 
     #[test]
+    fn build_cache_public_command_exposes_only_exact_candidate_shape() {
+        assert_eq!(
+            public_command_shape(OrphanCategory::BuildCache, true),
+            vec![
+                "buildx",
+                "prune",
+                "--all",
+                "--filter",
+                "id~=^(<candidate-set>)$",
+                "--force"
+            ]
+        );
+    }
+
+    #[test]
+    fn public_mutation_policy_rejects_name_bound_volumes() {
+        assert_eq!(
+            ensure_mutation_category_authority(OrphanCategory::Volume).unwrap_err(),
+            MUTABLE_VOLUME_IDENTITY
+        );
+        for category in [
+            OrphanCategory::Container,
+            OrphanCategory::Image,
+            OrphanCategory::Network,
+            OrphanCategory::BuildCache,
+        ] {
+            assert!(ensure_mutation_category_authority(category).is_ok());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approval_is_retained_only_with_exact_public_mutation_shape() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp.path().join("receipts");
+        std::fs::create_dir(&receipt_dir).unwrap();
+        std::fs::set_permissions(&receipt_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let docker = temp.path().join("docker");
+        std::fs::write(
+            &docker,
+            "#!/bin/sh\ncase \"$*\" in\n  *\" info\") exit 0 ;;\n  *\"buildx du\"*) printf '%s\\n' '{\"ID\":\"cache123\",\"Reclaimable\":true,\"Shared\":false,\"Mutable\":false,\"Type\":\"regular\"}' ;;\n  *) exit 0 ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let target = ContainerRuntimeTarget::new(
+            ContainerRuntimeKind::DockerNative,
+            docker,
+            None,
+        )
+        .unwrap();
+        let mut plan = probe_container_orphans_with_receipt_dir(&target, &receipt_dir);
+        let build_cache = plan
+            .categories
+            .iter_mut()
+            .find(|category| category.category == OrphanCategory::BuildCache)
+            .unwrap();
+        assert!(build_cache.approval_phrase.is_some());
+        assert!(build_cache.prune_command.is_some());
+
+        let sanitized = sanitize_plan(plan);
+        let build_cache = sanitized
+            .categories
+            .iter()
+            .find(|category| category.category == OrphanCategory::BuildCache)
+            .unwrap();
+        assert!(build_cache.approval_phrase.is_some());
+        assert_eq!(
+            build_cache.prune_command.as_deref(),
+            Some(
+                [
+                    "buildx",
+                    "prune",
+                    "--all",
+                    "--filter",
+                    "id~=^(<candidate-set>)$",
+                    "--force"
+                ]
+                .map(str::to_string)
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
     fn malformed_issue_tokens_fall_back_without_reflection() {
         assert_eq!(stable_issue("Bad Token:/secret"), FALLBACK_ISSUE);
         assert_eq!(stable_issue(""), FALLBACK_ISSUE);
-        assert_eq!(stable_issue("orphan-list-container-failed:/secret"), "orphan-list-container-failed");
+        assert_eq!(
+            stable_issue("orphan-list-container-failed:/secret"),
+            "orphan-list-container-failed"
+        );
     }
 }

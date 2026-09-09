@@ -1,6 +1,7 @@
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
-    ContainerRuntimeTarget, OrphanCategory,
+    execute_container_orphan_prune, probe_container_orphans,
+    probe_container_orphans_with_receipt_dir, ContainerRuntimeKind, ContainerRuntimeTarget,
+    OrphanCategory,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,6 +36,13 @@ fn docker_target(runtime: &Path) -> ContainerRuntimeTarget {
 }
 
 #[cfg(unix)]
+fn private_receipt_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
+
+#[cfg(unix)]
 #[test]
 fn healthy_empty_docker_lists_are_complete_and_binary_is_not_repeated() {
     let (_temp, runtime) = fake_runtime(
@@ -46,6 +54,7 @@ case "${1:-}" in
     exit 0
     ;;
   images) exit 0 ;;
+  buildx) exit 0 ;;
   volume)
     [ "${2:-}" = "ls" ] || exit 92
     exit 0
@@ -63,12 +72,25 @@ esac
     );
 
     let plan = probe_container_orphans(&docker_target(&runtime));
-    assert!(plan.runtime.healthy, "runtime info must receive info as argv[1]");
-    assert!(plan.evidence_complete, "zero-record Docker listings are complete evidence");
-    assert_eq!(plan.categories.len(), 4);
+    assert!(
+        plan.runtime.healthy,
+        "runtime info must receive info as argv[1]"
+    );
+    assert!(
+        plan.evidence_complete,
+        "zero-record Docker listings are complete evidence"
+    );
+    assert_eq!(plan.categories.len(), 5);
     for category in &plan.categories {
-        assert!(category.evidence_complete, "{:?}: {:?}", category.category, category.issue);
-        let evidence = category.evidence.as_ref().expect("complete category evidence");
+        assert!(
+            category.evidence_complete,
+            "{:?}: {:?}",
+            category.category, category.issue
+        );
+        let evidence = category
+            .evidence
+            .as_ref()
+            .expect("complete category evidence");
         assert_eq!(evidence.total_records, 0);
         assert_eq!(evidence.candidate_records, 0);
         assert!(category.approval_phrase.is_none());
@@ -77,7 +99,7 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn docker_audit_requests_full_ids_and_uses_dangling_image_evidence() {
+fn docker_audit_requests_full_ids_and_all_image_evidence() {
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (_temp, runtime) = fake_runtime(&format!(
         r#"
@@ -93,12 +115,13 @@ case "${{1:-}}" in
     ;;
   images)
     case " $* " in *" --no-trunc "*) ;; *) echo "missing image --no-trunc" >&2; exit 93 ;; esac
-    case " $* " in *" --filter dangling=true "*) ;; *) echo "missing dangling filter" >&2; exit 94 ;; esac
+    case " $* " in *" --all "*) ;; *) echo "missing all-images scope" >&2; exit 94 ;; esac
     printf '%s\n' '{{"Containers":"N/A","ID":"{FULL_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
     ;;
   image)
     [ "${{2:-}}" = "inspect" ] || exit 96
-    case " $* " in *" --format {{{{json .}}}} "*) ;; *) echo "missing image inspect format" >&2; exit 97 ;; esac
+    case " $* " in *" --format "*) ;; *) echo "missing image inspect format" >&2; exit 97 ;; esac
+    case " $* " in *"json .Id"*"json .Size"*) ;; *) echo "missing image inspect fields" >&2; exit 98 ;; esac
     printf '%s\n' '{{"Id":"sha256:{FULL_ID}","Size":72900000}}'
     ;;
   volume|network) exit 0 ;;
@@ -126,7 +149,10 @@ esac
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
     assert_eq!(evidence.candidate_size_sum_bytes, Some(72_900_000));
-    assert!(image.approval_phrase.is_some());
+    assert!(
+        image.approval_phrase.is_none(),
+        "an unbound receipt directory must not publish mutation approval"
+    );
 }
 
 #[cfg(unix)]
@@ -175,6 +201,10 @@ case "${{1:-}}" in
       printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
       exit 0
     fi
+    if [ "${{2:-}}" = "inspect" ] && [ "${{3:-}}" = "{FULL_ID}" ]; then
+      printf '%s\n' '[{{"Id":"{FULL_ID}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]'
+      exit 0
+    fi
     if [ "${{2:-}}" = "rm" ] && [ "${{3:-}}" = "{FULL_ID}" ] && [ "${{4:-}}" = "" ]; then
       printf '%s\n' '{FULL_ID}'
       exit 0
@@ -191,7 +221,8 @@ esac
 "#
     ));
     let target = docker_target(&runtime);
-    let plan = probe_container_orphans(&target);
+    let receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipts.path());
     let container = plan
         .categories
         .iter()
@@ -208,6 +239,7 @@ esac
         phrase,
         "Remove the exact stopped-container candidate verified by DiskSage.",
         1,
+        receipts.path(),
     )
     .expect("exact candidate removal must succeed");
 
@@ -216,7 +248,66 @@ esac
     assert!(execution.stdout.contains(FULL_ID));
     assert!(!execution.command.iter().any(|part| part == "prune"));
     assert!(!execution.command.iter().any(|part| part == FULL_ID));
-    assert_eq!(execution.command.last().map(String::as_str), Some("<candidate-set>"));
+    assert_eq!(
+        execution.command.last().map(String::as_str),
+        Some("<candidate-set>")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn volume_execution_requires_explicit_ownership_and_preserves_compose_volumes() {
+    let (_temp, runtime) = fake_runtime(
+        r#"
+case "${1:-}" in
+  info|container|images|network) exit 0 ;;
+  volume)
+    case "${2:-}" in
+      ls)
+        printf '%s\n' '[{"Name":"owned-cache"},{"Name":"compose-data"}]'
+        ;;
+      inspect)
+        if [ "${3:-}" = "owned-cache" ]; then
+          printf '%s\n' '[{"Name":"owned-cache","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}]'
+        else
+          printf '%s\n' '[{"Name":"compose-data","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"com.docker.compose.project":"customer-app"}}]'
+        fi
+        ;;
+      rm)
+        [ "${3:-}" = "owned-cache" ] && [ "${4:-}" = "" ] || exit 97
+        printf '%s\n' 'owned-cache'
+        ;;
+      *) exit 98 ;;
+    esac
+    ;;
+  *) exit 99 ;;
+esac
+"#,
+    );
+    let target = docker_target(&runtime);
+    let receipts = private_receipt_dir();
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipts.path());
+    let volume = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Volume)
+        .expect("volume category");
+    let evidence = volume.evidence.as_ref().expect("volume evidence");
+    assert_eq!(evidence.total_records, 2);
+    assert_eq!(evidence.candidate_records, 1);
+
+    let execution = execute_container_orphan_prune(
+        &target,
+        OrphanCategory::Volume,
+        volume.approval_phrase.as_deref().unwrap(),
+        "Remove only the explicitly owned cache volume after fresh reinspection.",
+        1,
+        receipts.path(),
+    )
+    .expect("owned volume removal must succeed");
+    assert!(execution.executed);
+    assert!(execution.stdout.contains("owned-cache"));
+    assert!(!execution.stdout.contains("compose-data"));
 }
 
 #[cfg(unix)]
@@ -253,7 +344,8 @@ esac
 #[test]
 fn non_utf8_cli_argument_prints_real_usage_not_a_literal_placeholder() {
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
-    let opaque = std::ffi::OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let opaque =
+        std::ffi::OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
     let output = Command::new(binary)
         .arg(opaque)
         .output()
@@ -307,11 +399,25 @@ fn singleton_cli_options_reject_duplicates_before_domain_work() {
             "--runtime may be supplied once",
         ),
         (
-            vec!["--runtime", "docker-colima-context", "--scope", "one", "--scope", "two"],
+            vec![
+                "--runtime",
+                "docker-colima-context",
+                "--scope",
+                "one",
+                "--scope",
+                "two",
+            ],
             "--scope may be supplied once",
         ),
         (
-            vec!["--runtime", "docker-native", "--bin", "first", "--bin", "second"],
+            vec![
+                "--runtime",
+                "docker-native",
+                "--bin",
+                "first",
+                "--bin",
+                "second",
+            ],
             "--bin may be supplied once",
         ),
         (
@@ -396,8 +502,8 @@ esac
 
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
-    let document: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("machine-readable container orphan evidence");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("machine-readable container orphan evidence");
     assert_eq!(document["runtime"]["healthy"], true);
     assert_eq!(document["evidence_complete"], true);
 }

@@ -117,6 +117,19 @@ fn approval_id(plan: &GitCloneReclaimPlan, approved_at_ms: u64, approved_by: &st
     hasher.finalize().to_hex().to_string()
 }
 
+fn ensure_git_clone_approval_fresh(
+    approval: &GitCloneReclaimApproval,
+    observed_at_ms: u64,
+) -> Result<(), String> {
+    if observed_at_ms < approval.approved_at_ms
+        || observed_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
+    {
+        Err("git-clone-execution-approval-invalid-or-stale".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Return whether the requested root is a regular standalone clone rather than a linked
 /// worktree or a repository whose administrative directory is redirected through a symlink.
 ///
@@ -369,11 +382,10 @@ pub fn execute_git_clone_reclaim(
         || approval.plan_fingerprint != approved_plan.plan_fingerprint
         || approved_plan.exact_approval_phrase.as_deref()
             != Some(approval.exact_approval_phrase.as_str())
-        || requested_at_ms < approval.approved_at_ms
-        || requested_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
     {
         return Err("git-clone-execution-approval-invalid-or-stale".into());
     }
+    ensure_git_clone_approval_fresh(approval, requested_at_ms)?;
     validate_journal_destination(Path::new(&approved_plan.repository_root), journal_path)?;
     let live = plan_git_clone_reclaim(
         Path::new(&approved_plan.repository_root),
@@ -389,6 +401,7 @@ pub fn execute_git_clone_reclaim(
     {
         return Err("git-clone-live-plan-mismatch".into());
     }
+    ensure_git_clone_approval_fresh(approval, crate::cloud::system_now_ms())?;
     let trash_outcome = crate::safety::trash_delete_if_identity_with_outcome(
         Path::new(&live.repository_root),
         &live.repository_object_id,
@@ -442,6 +455,28 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().into()
+    }
+
+    #[test]
+    fn approval_freshness_is_rechecked_at_mutation_boundary() {
+        let approval = GitCloneReclaimApproval {
+            version: GIT_CLONE_RECLAIM_VERSION,
+            approval_id: "approval".into(),
+            plan_fingerprint: "plan".into(),
+            exact_approval_phrase: "phrase".into(),
+            approved_at_ms: 100,
+            approved_by: "human:test".into(),
+            rationale: "reviewed".into(),
+        };
+        assert!(ensure_git_clone_approval_fresh(&approval, 100 + MAX_APPROVAL_AGE_MS).is_ok());
+        assert_eq!(
+            ensure_git_clone_approval_fresh(&approval, 101 + MAX_APPROVAL_AGE_MS).unwrap_err(),
+            "git-clone-execution-approval-invalid-or-stale"
+        );
+        assert_eq!(
+            ensure_git_clone_approval_fresh(&approval, 99).unwrap_err(),
+            "git-clone-execution-approval-invalid-or-stale"
+        );
     }
 
     #[cfg(unix)]

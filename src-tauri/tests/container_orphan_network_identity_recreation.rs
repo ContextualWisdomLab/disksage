@@ -1,5 +1,5 @@
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
 };
 
@@ -9,11 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[cfg(unix)]
-const NETWORK_ID_A: &str =
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const NETWORK_ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 #[cfg(unix)]
-const NETWORK_ID_B: &str =
-    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const NETWORK_ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 #[cfg(unix)]
 #[test]
@@ -49,7 +47,7 @@ case "${1:-}" in
         printf '{"ID":"%s","Name":"custom-net","Driver":"bridge"}\n' "$network_id"
         ;;
       inspect)
-        printf '[{"Containers":{}}]\n'
+        printf '[{"Id":"%s","Name":"custom-net","Driver":"bridge","Containers":{},"Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}]\n' "${3:-missing}"
         ;;
       rm)
         printf '%s\n' "${3:-missing}" > "$delete_marker"
@@ -60,7 +58,10 @@ case "${1:-}" in
   *) exit 93 ;;
 esac
 "#
-    .replace("__NETWORK_GENERATION__", &network_generation.display().to_string())
+    .replace(
+        "__NETWORK_GENERATION__",
+        &network_generation.display().to_string(),
+    )
     .replace("__DELETE_MARKER__", &deletion_marker.display().to_string())
     .replace("__ID_A__", NETWORK_ID_A)
     .replace("__ID_B__", NETWORK_ID_B);
@@ -79,7 +80,9 @@ esac
     )
     .expect("valid Docker target");
 
-    let plan = probe_container_orphans(&target);
+    let receipts = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(receipts.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let plan = probe_container_orphans_with_receipt_dir(&target, receipts.path());
     let network = plan
         .categories
         .iter()
@@ -106,6 +109,7 @@ esac
         &approval,
         "operator requested exact network cleanup",
         1,
+        receipts.path(),
     )
     .expect_err("a recreated network with the same name must invalidate the approval");
 

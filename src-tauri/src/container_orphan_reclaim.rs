@@ -14,7 +14,7 @@
 //!    a SHA-256 fingerprint of the exact sorted candidate identity set.
 //! 3. Running or paused containers are never candidates. Built-in networks
 //!    (`bridge`, `host`, `none`, `podman`) are never candidates. Image deletion targets only
-//!    full identities returned by each runtime's authoritative `dangling=true` image filter
+//!    full image identities that no container references
 //!    after a bounded container-membership query proves no container references the image.
 //! 4. Mutation targets only the exact identities observed by the fresh audit. Category-wide
 //!    `prune` commands are never used, so a resource that becomes orphaned after the audit cannot
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,7 @@ pub const MAX_CATEGORY_RECORDS: usize = 4_096;
 /// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
 /// supported host, including Windows command-line limits and 200-byte volume/network names.
 const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
+const MAX_BUILD_CACHE_FILTER_BYTES: usize = 24 * 1024;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +55,7 @@ const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
 pub enum ContainerRuntimeKind {
     /// Plain `docker` against the default context / local socket.
     DockerNative,
-    /// `docker --context colima` against a Colima-managed socket.
+    /// `docker --context colima` for Colima-managed Docker sockets.
     DockerColimaContext,
     /// `podman --connection <machine>` against a running Podman machine.
     PodmanMachine,
@@ -120,7 +122,7 @@ impl ContainerRuntimeTarget {
     }
 
     /// Pins Docker-native commands to one resolved daemon endpoint.
-    pub(crate) fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
+    pub fn docker_native_host(binary_path: PathBuf, host: String) -> Result<Self, String> {
         if host.is_empty()
             || host.len() > MAX_DOCKER_HOST_BYTES
             || host.chars().any(char::is_control)
@@ -137,7 +139,10 @@ impl ContainerRuntimeTarget {
     }
 
     /// Pins Docker-native commands to a named CLI context, preserving its TLS material.
-    pub(crate) fn docker_native_context(binary_path: PathBuf, context: String) -> Result<Self, String> {
+    pub(crate) fn docker_native_context(
+        binary_path: PathBuf,
+        context: String,
+    ) -> Result<Self, String> {
         if !valid_scope_name(&context) {
             return Err("unsafe-runtime-scope-name".into());
         }
@@ -211,7 +216,13 @@ pub(crate) fn resolve_docker_context_host(
     }
     let output = command_text(
         binary_path,
-        &["context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
+        &[
+            "context",
+            "inspect",
+            context,
+            "--format",
+            "{{json .Endpoints.docker.Host}}",
+        ],
         ORPHAN_COMMAND_TIMEOUT,
         "docker-context-host-inspect",
     )?;
@@ -235,8 +246,8 @@ pub(crate) fn resolve_docker_context_fingerprint(
         ORPHAN_COMMAND_TIMEOUT,
         "docker-context-inspect",
     )?;
-    let value: Value = serde_json::from_str(output.trim())
-        .map_err(|_| "docker-context-invalid".to_string())?;
+    let value: Value =
+        serde_json::from_str(output.trim()).map_err(|_| "docker-context-invalid".to_string())?;
     let canonical = serde_json::to_vec(&value).map_err(|_| "docker-context-invalid".to_string())?;
     let digest = Sha256::digest(canonical);
     let mut encoded = String::with_capacity(digest.len() * 2);
@@ -253,12 +264,14 @@ pub(crate) fn resolve_docker_context_fingerprint(
 pub enum OrphanCategory {
     /// Stopped containers (`exited`/`created`/`dead`/`stopped` states).
     Container,
-    /// Runtime-reported dangling images.
+    /// Images with no container reference.
     Image,
     /// Dangling volumes not referenced by any container.
     Volume,
     /// Custom networks with no attached container endpoint.
     Network,
+    /// BuildKit records currently reported as reclaimable by `docker buildx du`.
+    BuildCache,
 }
 
 impl OrphanCategory {
@@ -268,6 +281,7 @@ impl OrphanCategory {
             Self::Image => "image",
             Self::Volume => "volume",
             Self::Network => "network",
+            Self::BuildCache => "build_cache",
         }
     }
 
@@ -277,6 +291,7 @@ impl OrphanCategory {
             Self::Image => "disksage.container-image-orphans.v1",
             Self::Volume => "disksage.container-volume-orphans.v1",
             Self::Network => "disksage.container-network-orphans.v1",
+            Self::BuildCache => "disksage.container-build-cache.v1",
         }
     }
 
@@ -286,6 +301,7 @@ impl OrphanCategory {
             Self::Image => ["image", "rm"],
             Self::Volume => ["volume", "rm"],
             Self::Network => ["network", "rm"],
+            Self::BuildCache => ["buildx", "prune"],
         }
     }
 }
@@ -338,11 +354,17 @@ pub struct ContainerOrphanPlan {
     pub runtime: RuntimeHealthEvidence,
     pub categories: Vec<OrphanCategoryPlan>,
     pub issues: Vec<String>,
+    pub receipt_directory_sha256: Option<String>,
 }
 
 /// Execution receipt for one approved prune. Mirrors the Podman dangling-image receipt
-/// shape so downstream consumers can treat both uniformly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// shape so downstream consumers can treat both uniformly. `executed` records verified
+/// mutation (status 0, nonzero with stdout evidence of a partial removal, or truncated
+/// indeterminate output); a clean safe-refusal with empty output and nonzero status is not
+/// executed. `status_code` separately records completion, and `output_truncated` bounds
+/// oversized evidence. Container removal never passes `--force`, so a container that
+/// restarted after the audit cannot be force-removed via a stale stopped-state observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerOrphanPruneExecution {
     pub schema_version: u32,
     pub runtime_display_name: String,
@@ -360,6 +382,105 @@ pub struct ContainerOrphanPruneExecution {
     /// Only a positive before/after available-space delta is reported; attribution-weak.
     pub observed_available_gain_bytes: Option<u64>,
     pub rationale: String,
+    pub receipt_sha256: Option<String>,
+    pub receipt_recorded: bool,
+    pub receipt_record_error: Option<String>,
+}
+
+fn private_receipt_directory_identity(path: &Path) -> Result<(PathBuf, String), String> {
+    if !path.is_absolute() {
+        return Err("orphan-receipt-directory-not-absolute".into());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("orphan-receipt-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("orphan-receipt-directory-not-private".into());
+        }
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"disksage.container-orphan-receipt-directory.v1\0");
+        hash_frame(
+            &mut hasher,
+            canonical.as_os_str().to_string_lossy().as_bytes(),
+        );
+        hash_frame(&mut hasher, &metadata.dev().to_be_bytes());
+        hash_frame(&mut hasher, &metadata.ino().to_be_bytes());
+        return Ok((canonical, lower_hex(&hasher.finalize())));
+    }
+    #[cfg(not(unix))]
+    {
+        Err("orphan-receipt-secure-mode-unsupported".into())
+    }
+}
+
+fn write_execution_receipt(
+    receipt_dir: &Path,
+    receipt: &ContainerOrphanPruneExecution,
+) -> Result<String, String> {
+    let (canonical, _) = private_receipt_directory_identity(receipt_dir)?;
+    let mut encoded = serde_json::to_vec_pretty(receipt)
+        .map_err(|_| "orphan-receipt-json-invalid".to_string())?;
+    if encoded.len() > 1024 * 1024 {
+        return Err("orphan-receipt-too-large".into());
+    }
+    let digest = lower_hex(&Sha256::digest(&encoded));
+    let path = canonical.join(format!(
+        "{}-{}-{}.json",
+        receipt.executed_at_ms,
+        receipt.category.as_str(),
+        receipt.candidate_set_sha256
+    ));
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o400);
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "orphan-receipt-create-failed".to_string())?;
+    if file
+        .write_all(&encoded)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err("orphan-receipt-write-failed".into());
+    }
+    encoded.fill(0);
+    if std::fs::File::open(&canonical)
+        .and_then(|dir| dir.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err("orphan-receipt-parent-sync-failed".into());
+    }
+    Ok(digest)
+}
+
+fn read_execution_receipt(
+    path: &Path,
+    expected_sha256: &str,
+) -> Result<ContainerOrphanPruneExecution, String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "orphan-receipt-unavailable".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024 {
+        return Err("orphan-receipt-unsafe".into());
+    }
+    let encoded = std::fs::read(path).map_err(|_| "orphan-receipt-read-failed".to_string())?;
+    if lower_hex(&Sha256::digest(&encoded)) != expected_sha256 {
+        return Err("orphan-receipt-digest-mismatch".into());
+    }
+    serde_json::from_slice(&encoded).map_err(|_| "orphan-receipt-json-invalid".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +497,12 @@ struct ContainerRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ResourceOwnershipEvidence {
+    identity_binding: String,
+    explicitly_reclaimable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageRecord {
     id: String,
     tags: Vec<String>,
@@ -386,6 +513,17 @@ struct ImageRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VolumeRecord {
     name: String,
+}
+
+const DISKSAGE_OWNER_LABEL: &str = "io.contextualwisdomlab.disksage.owner";
+const DISKSAGE_RECLAIMABLE_LABEL: &str = "io.contextualwisdomlab.disksage.reclaimable";
+const DISKSAGE_BUSINESS_DATA_LABEL: &str = "io.contextualwisdomlab.disksage.business-data";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VolumeOwnershipEvidence {
+    name: String,
+    identity_binding: String,
+    explicitly_reclaimable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,7 +685,7 @@ fn parse_image_records(output: &str) -> Result<Vec<ImageRecord>, String> {
     Ok(records)
 }
 
-fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> {
+fn parse_docker_image_ids(output: &str) -> Result<Vec<String>, String> {
     let values = split_json_envelopes(output)?;
     if values.len() > MAX_CATEGORY_RECORDS {
         return Err("record-count-exceeds-bound".to_string());
@@ -561,8 +699,48 @@ fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> 
         .collect()
 }
 
+fn parse_buildx_private_immutable_reclaimable_ids(
+    output: &str,
+) -> Result<(u64, Vec<String>), String> {
+    let values = split_json_envelopes(output)?;
+    if values.len() > MAX_CATEGORY_RECORDS {
+        return Err("record-count-exceeds-bound".to_string());
+    }
+    let total = u64::try_from(values.len()).map_err(|_| "record-count-overflow".to_string())?;
+    let mut ids = Vec::new();
+    for value in values {
+        let reclaimable = value
+            .get("Reclaimable")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| "build-cache-reclaimable-missing".to_string())?;
+        if reclaimable {
+            let shared = value
+                .get("Shared")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "build-cache-shared-missing".to_string())?;
+            let mutable = value
+                .get("Mutable")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "build-cache-mutable-missing".to_string())?;
+            let record_type = value
+                .get("Type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "build-cache-type-missing".to_string())?;
+            if shared || mutable || record_type == "exec.cachemount" {
+                continue;
+            }
+            let id = string_field(&value, &["ID"])?;
+            if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                return Err("build-cache-id-invalid".into());
+            }
+            ids.push(id);
+        }
+    }
+    Ok((total, bounded_build_cache_candidate_ids(ids)?))
+}
+
 /// Parse the exact byte sizes returned by `docker image inspect` for the already-authorized
-/// dangling image identities.  The list command's `Size` field is human-readable, so it is not
+/// unreferenced image identities. The list command's `Size` field is human-readable, so it is not
 /// converted with a unit heuristic; inspect's numeric `Size` is the only accepted estimate.
 fn parse_docker_image_sizes(output: &str) -> Result<BTreeMap<String, u64>, String> {
     let values = split_json_envelopes(output)?;
@@ -597,7 +775,7 @@ fn inspect_docker_image_sizes(
         "image".to_string(),
         "inspect".to_string(),
         "--format".to_string(),
-        "{{json .}}".to_string(),
+        r#"{"Id":{{json .Id}},"Size":{{json .Size}}}"#.to_string(),
     ]);
     args.extend(image_ids.iter().cloned());
     let references: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -663,6 +841,197 @@ fn parse_volume_records(output: &str) -> Result<Vec<VolumeRecord>, String> {
         records.push(VolumeRecord { name });
     }
     Ok(records)
+}
+
+fn parse_volume_ownership(
+    output: &str,
+    expected_name: &str,
+) -> Result<VolumeOwnershipEvidence, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("volume-inspect-record-count-invalid".to_string());
+    }
+    let record = &records[0];
+    let name = validate_resource_name(&string_field(record, &["Name", "name"])?, "volume")?;
+    if name != expected_name {
+        return Err("volume-inspect-name-mismatch".to_string());
+    }
+    let driver = string_field(record, &["Driver", "driver"])?;
+    let created_at = string_field(record, &["CreatedAt", "createdAt", "created_at"])?;
+    if driver.is_empty() || created_at.is_empty() {
+        return Err("volume-inspect-identity-incomplete".to_string());
+    }
+    let empty_labels = serde_json::Map::new();
+    let labels = match record.get("Labels").or_else(|| record.get("labels")) {
+        Some(Value::Object(labels)) => labels,
+        Some(Value::Null) => &empty_labels,
+        Some(_) => return Err("volume-inspect-label-invalid".to_string()),
+        None => return Err("volume-inspect-labels-incomplete".to_string()),
+    };
+    let mut ordered_labels = Vec::with_capacity(labels.len());
+    for (key, value) in labels {
+        let value = value
+            .as_str()
+            .ok_or_else(|| "volume-inspect-label-invalid".to_string())?;
+        ordered_labels.push((key.as_str(), value));
+    }
+    ordered_labels.sort_unstable();
+    let compose_owned = ordered_labels
+        .iter()
+        .any(|(key, _)| key.starts_with("com.docker.compose."));
+    let explicitly_reclaimable = !compose_owned
+        && labels
+            .get(DISKSAGE_BUSINESS_DATA_LABEL)
+            .and_then(Value::as_str)
+            != Some("true")
+        && labels.get(DISKSAGE_OWNER_LABEL).and_then(Value::as_str) == Some("disksage")
+        && labels
+            .get(DISKSAGE_RECLAIMABLE_LABEL)
+            .and_then(Value::as_str)
+            == Some("true");
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.container-volume-identity.v1\0");
+    for value in [name.as_bytes(), driver.as_bytes(), created_at.as_bytes()] {
+        hash_frame(&mut hasher, value);
+    }
+    for (key, value) in ordered_labels {
+        hash_frame(&mut hasher, key.as_bytes());
+        hash_frame(&mut hasher, value.as_bytes());
+    }
+    Ok(VolumeOwnershipEvidence {
+        name,
+        identity_binding: lower_hex(&hasher.finalize()),
+        explicitly_reclaimable,
+    })
+}
+
+fn parsed_labels<'a>(
+    record: &'a Value,
+    nested: Option<&str>,
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    let owner = nested.and_then(|key| record.get(key)).unwrap_or(record);
+    match owner.get("Labels").or_else(|| owner.get("labels")) {
+        Some(Value::Object(labels)) => Ok(labels),
+        Some(_) => Err("resource-inspect-label-invalid".to_string()),
+        None => Err("resource-inspect-labels-incomplete".to_string()),
+    }
+}
+
+fn ownership_binding(
+    domain: &[u8],
+    fields: &[&str],
+    labels: &serde_json::Map<String, Value>,
+) -> Result<ResourceOwnershipEvidence, String> {
+    let mut ordered = Vec::with_capacity(labels.len());
+    for (key, value) in labels {
+        ordered.push((
+            key.as_str(),
+            value
+                .as_str()
+                .ok_or_else(|| "resource-inspect-label-invalid".to_string())?,
+        ));
+    }
+    ordered.sort_unstable();
+    let compose_owned = ordered
+        .iter()
+        .any(|(key, _)| key.starts_with("com.docker.compose."));
+    let explicitly_reclaimable = !compose_owned
+        && labels.get(DISKSAGE_OWNER_LABEL).and_then(Value::as_str) == Some("disksage")
+        && labels
+            .get(DISKSAGE_RECLAIMABLE_LABEL)
+            .and_then(Value::as_str)
+            == Some("true");
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    for field in fields {
+        hash_frame(&mut hasher, field.as_bytes());
+    }
+    for (key, value) in ordered {
+        hash_frame(&mut hasher, key.as_bytes());
+        hash_frame(&mut hasher, value.as_bytes());
+    }
+    Ok(ResourceOwnershipEvidence {
+        identity_binding: lower_hex(&hasher.finalize()),
+        explicitly_reclaimable,
+    })
+}
+
+fn parse_container_ownership(
+    output: &str,
+    expected_id: &str,
+) -> Result<ResourceOwnershipEvidence, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("container-inspect-record-count-invalid".into());
+    }
+    let record = &records[0];
+    let id = normalize_hex_id(&string_field(record, &["Id", "ID", "id"])?, "container")?;
+    if id != expected_id {
+        return Err("container-inspect-id-mismatch".into());
+    }
+    let state = record
+        .get("State")
+        .or_else(|| record.get("state"))
+        .and_then(|value| value.get("Status").or_else(|| value.get("status")))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "container-inspect-state-incomplete".to_string())?
+        .to_ascii_lowercase();
+    if !matches!(state.as_str(), "exited" | "created" | "dead" | "stopped") {
+        return Err("container-inspect-not-stopped".into());
+    }
+    let created = string_field(record, &["Created", "created"])?;
+    ownership_binding(
+        b"disksage.container-identity.v1\0",
+        &[&id, &state, &created],
+        parsed_labels(record, Some("Config"))?,
+    )
+}
+
+fn parse_network_ownership(
+    output: &str,
+    expected_id: &str,
+    require_embedded_membership: bool,
+) -> Result<(ResourceOwnershipEvidence, bool), String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("network-inspect-record-count-invalid".into());
+    }
+    let record = &records[0];
+    let id = normalize_hex_id(&string_field(record, &["Id", "ID", "id"])?, "network")?;
+    if id != expected_id {
+        return Err("network-inspect-id-mismatch".into());
+    }
+    let name = validate_resource_name(&string_field(record, &["Name", "name"])?, "network")?;
+    let driver = string_field(record, &["Driver", "driver"])?;
+    let attached = if require_embedded_membership {
+        network_has_attached_containers(output)?
+    } else {
+        false
+    };
+    let ownership = ownership_binding(
+        b"disksage.container-network-identity.v1\0",
+        &[&id, &name, &driver],
+        parsed_labels(record, None)?,
+    )?;
+    Ok((ownership, attached))
+}
+
+fn inspect_volume_ownership(
+    target: &ContainerRuntimeTarget,
+    prefix: &[String],
+    volume_name: &str,
+) -> Result<VolumeOwnershipEvidence, String> {
+    let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
+    args.extend(["volume", "inspect", volume_name]);
+    parse_volume_ownership(
+        &command_text(
+            &target.binary_path,
+            &args,
+            ORPHAN_COMMAND_TIMEOUT,
+            "orphan-volume-ownership",
+        )?,
+        volume_name,
+    )
 }
 
 const BUILTIN_NETWORK_NAMES: [&str; 4] = ["bridge", "host", "none", "podman"];
@@ -762,11 +1131,16 @@ fn candidate_fingerprint(domain_tag: &str, ids: &[&str]) -> String {
     lower_hex(&hasher.finalize())
 }
 
-fn approval_phrase(category: OrphanCategory, candidate_set_sha256: &str) -> String {
+fn approval_phrase(
+    category: OrphanCategory,
+    candidate_set_sha256: &str,
+    receipt_directory_sha256: &str,
+) -> String {
     format!(
-        "DiskSage {} orphan prune 승인 {}",
+        "DiskSage {} orphan prune 승인 {} receipt {}",
         category.as_str(),
-        candidate_set_sha256
+        candidate_set_sha256,
+        receipt_directory_sha256
     )
 }
 
@@ -802,12 +1176,52 @@ fn bounded_exact_candidate_ids(mut candidate_ids: Vec<String>) -> Result<Vec<Str
     Ok(candidate_ids)
 }
 
+fn bounded_build_cache_candidate_ids(
+    mut candidate_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    candidate_ids.sort_unstable();
+    if candidate_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("duplicate-candidate-id".to_string());
+    }
+    let filter_bytes = candidate_ids.iter().try_fold(8usize, |total, id| {
+        total
+            .checked_add(id.len())
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "build-cache-filter-size-overflow".to_string())
+    })?;
+    if filter_bytes > MAX_BUILD_CACHE_FILTER_BYTES {
+        return Err("build-cache-filter-exceeds-bound".to_string());
+    }
+    Ok(candidate_ids)
+}
+
+fn build_cache_id_filter(candidate_ids: &[String]) -> Result<String, String> {
+    if candidate_ids.is_empty() {
+        return Err("orphan-prune-empty-candidate-set".into());
+    }
+    if candidate_ids.iter().any(|id| {
+        id.is_empty() || id.len() > 128 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }) {
+        return Err("build-cache-id-invalid".into());
+    }
+    let candidate_ids = bounded_build_cache_candidate_ids(candidate_ids.to_vec())?;
+    Ok(format!("id~=^({})$", candidate_ids.join("|")))
+}
+
 fn redacted_exact_delete_command(
     prefix: &[String],
     category: OrphanCategory,
     has_candidates: bool,
 ) -> Vec<String> {
     let mut command = prefix.to_vec();
+    if category == OrphanCategory::BuildCache {
+        command.extend(["buildx".into(), "prune".into(), "--all".into()]);
+        if has_candidates {
+            command.extend(["--filter".into(), "id~=^(<candidate-set>)$".into()]);
+        }
+        command.push("--force".into());
+        return command;
+    }
     command.extend(
         category
             .exact_delete_subcommand()
@@ -855,6 +1269,7 @@ struct CommandCapture {
     status_code: i32,
     stdout: String,
     stderr: String,
+    output_truncated: bool,
 }
 
 fn command_capture(
@@ -939,6 +1354,7 @@ fn command_capture(
         status_code: status.code().unwrap_or(-1),
         stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
         stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
+        output_truncated: false,
     })
 }
 
@@ -948,10 +1364,17 @@ fn mutation_capture_result(
 ) -> Result<CommandCapture, String> {
     match result {
         Ok(output) => Ok(output),
+        Err(error) if error == format!("{label}-output-too-large") => Ok(CommandCapture {
+            status_code: -1,
+            stdout: String::new(),
+            stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+            output_truncated: true,
+        }),
         Err(error) if !error.starts_with(&format!("{label}-spawn:")) => Ok(CommandCapture {
             status_code: -1,
             stdout: String::new(),
             stderr: INDETERMINATE_MUTATION_OUTCOME.to_string(),
+            output_truncated: false,
         }),
         Err(error) => Err(error),
     }
@@ -994,7 +1417,11 @@ pub fn probe_runtime_health(target: &ContainerRuntimeTarget) -> RuntimeHealthEvi
     }
 }
 
-fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> OrphanCategoryPlan {
+fn audit_category(
+    target: &ContainerRuntimeTarget,
+    category: OrphanCategory,
+    receipt_directory_sha256: Option<&str>,
+) -> OrphanCategoryPlan {
     let build_issue_plan = |issue: String| OrphanCategoryPlan {
         category,
         evidence_complete: false,
@@ -1022,6 +1449,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Image if target.kind.is_docker() => {
                 args.extend([
                     "images",
+                    "--all",
                     "--filter",
                     "dangling=true",
                     "--no-trunc",
@@ -1052,6 +1480,15 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Network => {
                 args.extend(["network", "ls", "--no-trunc", "--format", "json"]);
             }
+            OrphanCategory::BuildCache if target.kind.is_docker() => {
+                args.extend([
+                    "buildx",
+                    "du",
+                    "--format",
+                    r#"{"ID":{{json .ID}},"Reclaimable":{{json .Reclaimable}},"Shared":{{json .Shared}},"Mutable":{{json .Mutable}},"Type":{{json .Type}}}"#,
+                ]);
+            }
+            OrphanCategory::BuildCache => return Err("build-cache-docker-only".into()),
         }
         let output = command_text(
             &target.binary_path,
@@ -1084,17 +1521,37 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
-                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                if candidates.len() > MAX_EXACT_DELETE_CANDIDATES {
+                    return Err("candidate-count-exceeds-bound".to_string());
+                }
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for candidate in candidates {
+                    let mut inspect_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
+                    inspect_args.extend(["container", "inspect", &candidate.id]);
+                    let ownership = parse_container_ownership(
+                        &command_text(
+                            &target.binary_path,
+                            &inspect_args,
+                            ORPHAN_COMMAND_TIMEOUT,
+                            "orphan-container-ownership",
+                        )?,
+                        &candidate.id,
+                    )?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(candidate.id.clone());
+                        identity_bindings.push(ownership.identity_binding);
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
                     candidate_ids,
                 )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                let listed_ids =
-                    bounded_exact_candidate_ids(parse_docker_dangling_image_ids(&output)?)?;
+                let listed_ids = bounded_exact_candidate_ids(parse_docker_image_ids(&output)?)?;
                 let total = u64::try_from(listed_ids.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
                 let mut candidate_ids = Vec::with_capacity(listed_ids.len());
@@ -1114,7 +1571,12 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 })?;
                 let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
-                    Some(summarize_candidates(category, total, &refs, Some(size_sum))?),
+                    Some(summarize_candidates(
+                        category,
+                        total,
+                        &refs,
+                        Some(size_sum),
+                    )?),
                     candidate_ids,
                 )
             }
@@ -1147,9 +1609,19 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 let records = parse_volume_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let candidate_ids: Vec<String> =
-                    records.iter().map(|record| record.name.clone()).collect();
-                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                if records.len() > MAX_EXACT_DELETE_CANDIDATES {
+                    return Err("candidate-count-exceeds-bound".to_string());
+                }
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for record in &records {
+                    let ownership = inspect_volume_ownership(target, &prefix, &record.name)?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(ownership.name);
+                        identity_bindings.push(ownership.identity_binding);
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
                     candidate_ids,
@@ -1158,6 +1630,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
                 let mut attached: Vec<String> = Vec::new();
+                let mut ownership_by_id = BTreeMap::new();
                 let mut inspected_candidates = 0usize;
                 for record in &records {
                     if BUILTIN_NETWORK_NAMES.contains(&record.name.as_str())
@@ -1174,54 +1647,75 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         .as_deref()
                         .ok_or_else(|| "network-id-missing".to_string())
                         .and_then(|id| normalize_hex_id(id, "network"))?;
-                    let has_attached_containers = if target.kind
-                        == ContainerRuntimeKind::PodmanMachine
-                    {
-                        let filter = format!("network={network_id}");
-                        let mut membership_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        membership_args.extend([
-                            "container",
-                            "ps",
-                            "--all",
-                            "--filter",
-                            &filter,
-                            "--format",
-                            "json",
-                        ]);
-                        !split_json_envelopes(&command_text(
-                            &target.binary_path,
-                            &membership_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-membership",
-                        )?)?
-                        .is_empty()
-                    } else {
-                        let mut inspect_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        inspect_args.extend(["network", "inspect", &network_id]);
-                        network_has_attached_containers(&command_text(
-                            &target.binary_path,
-                            &inspect_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-inspect",
-                        )?)?
-                    };
+                    let mut ownership_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
+                    ownership_args.extend(["network", "inspect", &network_id]);
+                    let ownership_output = command_text(
+                        &target.binary_path,
+                        &ownership_args,
+                        ORPHAN_COMMAND_TIMEOUT,
+                        "orphan-network-ownership",
+                    )?;
+                    let (ownership, inspected_attached) = parse_network_ownership(
+                        &ownership_output,
+                        &network_id,
+                        target.kind != ContainerRuntimeKind::PodmanMachine,
+                    )?;
+                    ownership_by_id.insert(network_id.clone(), ownership);
+                    let has_attached_containers =
+                        if target.kind == ContainerRuntimeKind::PodmanMachine {
+                            let filter = format!("network={network_id}");
+                            let mut membership_args: Vec<&str> =
+                                prefix.iter().skip(1).map(String::as_str).collect();
+                            membership_args.extend([
+                                "container",
+                                "ps",
+                                "--all",
+                                "--filter",
+                                &filter,
+                                "--format",
+                                "json",
+                            ]);
+                            !split_json_envelopes(&command_text(
+                                &target.binary_path,
+                                &membership_args,
+                                ORPHAN_COMMAND_TIMEOUT,
+                                "orphan-network-membership",
+                            )?)?
+                            .is_empty()
+                        } else {
+                            inspected_attached
+                        };
                     if has_attached_containers {
                         attached.push(record.name.clone());
                     }
                 }
                 let (total, candidates) = classify_network_candidates(&records, &attached)?;
-                let candidate_ids: Vec<String> = candidates
-                    .iter()
-                    .map(|candidate| {
-                        candidate
-                            .id
-                            .as_deref()
-                            .ok_or_else(|| "network-id-missing".to_string())
-                            .and_then(|id| normalize_hex_id(id, "network"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for candidate in candidates {
+                    let id = candidate
+                        .id
+                        .as_deref()
+                        .ok_or_else(|| "network-id-missing".to_string())
+                        .and_then(|id| normalize_hex_id(id, "network"))?;
+                    let ownership = ownership_by_id
+                        .get(&id)
+                        .ok_or_else(|| "network-ownership-evidence-missing".to_string())?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(id);
+                        identity_bindings.push(ownership.identity_binding.clone());
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &ids, None)?),
+                    candidate_ids,
+                )
+            }
+            OrphanCategory::BuildCache => {
+                let (total, candidate_ids) =
+                    parse_buildx_private_immutable_reclaimable_ids(&output)?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1229,7 +1723,12 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
         };
-        Ok((evidence, bounded_exact_candidate_ids(candidate_ids)?))
+        let candidate_ids = if category == OrphanCategory::BuildCache {
+            bounded_build_cache_candidate_ids(candidate_ids)?
+        } else {
+            bounded_exact_candidate_ids(candidate_ids)?
+        };
+        Ok((evidence, candidate_ids))
     })();
     match outcome {
         Ok((evidence, candidate_ids)) => {
@@ -1237,7 +1736,9 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 .as_ref()
                 .is_some_and(|item| item.candidate_records > 0);
             let approval_phrase = match (&evidence, has_candidates) {
-                (Some(item), true) => Some(approval_phrase(category, &item.candidate_set_sha256)),
+                (Some(item), true) => receipt_directory_sha256.map(|identity| {
+                    approval_phrase(category, &item.candidate_set_sha256, identity)
+                }),
                 _ => None,
             };
             OrphanCategoryPlan {
@@ -1258,8 +1759,14 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
     }
 }
 
-pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
+pub fn probe_container_orphans_with_receipt_dir(
+    target: &ContainerRuntimeTarget,
+    receipt_dir: &Path,
+) -> ContainerOrphanPlan {
     let started = Instant::now();
+    let receipt_identity = private_receipt_directory_identity(receipt_dir)
+        .ok()
+        .map(|(_, identity)| identity);
     let runtime = probe_runtime_health(target);
     let categories: Vec<OrphanCategoryPlan> = if runtime.healthy {
         [
@@ -1267,9 +1774,11 @@ pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrph
             OrphanCategory::Image,
             OrphanCategory::Volume,
             OrphanCategory::Network,
+            OrphanCategory::BuildCache,
         ]
         .into_iter()
-        .map(|category| audit_category(target, category))
+        .filter(|category| target.kind.is_docker() || *category != OrphanCategory::BuildCache)
+        .map(|category| audit_category(target, category, receipt_identity.as_deref()))
         .collect()
     } else {
         Vec::new()
@@ -1292,7 +1801,17 @@ pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrph
         runtime,
         categories,
         issues,
+        receipt_directory_sha256: receipt_identity,
     }
+}
+
+pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
+    let mut plan = probe_container_orphans_with_receipt_dir(target, Path::new("."));
+    plan.receipt_directory_sha256 = None;
+    for category in &mut plan.categories {
+        category.approval_phrase = None;
+    }
+    plan
 }
 
 fn host_available_bytes(observed_at_ms: u64) -> Option<u64> {
@@ -1315,6 +1834,7 @@ pub fn execute_container_orphan_prune(
     confirmation_phrase: &str,
     rationale: &str,
     executed_at_ms: u64,
+    receipt_dir: &Path,
 ) -> Result<ContainerOrphanPruneExecution, String> {
     if executed_at_ms == 0 {
         return Err("orphan-prune-time-invalid".into());
@@ -1327,7 +1847,8 @@ pub fn execute_container_orphan_prune(
         return Err("orphan-prune-rationale-invalid".into());
     }
     let prefix = target.command_prefix()?;
-    let plan = audit_category(target, category);
+    let (_, receipt_directory_sha256) = private_receipt_directory_identity(receipt_dir)?;
+    let plan = audit_category(target, category, Some(&receipt_directory_sha256));
     if !plan.evidence_complete {
         return Err(format!(
             "orphan-prune-evidence-incomplete:{}",
@@ -1346,20 +1867,36 @@ pub fn execute_container_orphan_prune(
     if plan.candidate_ids.len() != candidate_count {
         return Err("orphan-prune-candidate-set-internal-mismatch".into());
     }
-    let expected_phrase = approval_phrase(category, &evidence.candidate_set_sha256);
+    let expected_phrase = approval_phrase(
+        category,
+        &evidence.candidate_set_sha256,
+        &receipt_directory_sha256,
+    );
     if confirmation_phrase != expected_phrase {
         return Err("orphan-prune-confirmation-mismatch".into());
     }
 
     let before_available_bytes = host_available_bytes(executed_at_ms);
     let mut owned_args: Vec<String> = prefix.iter().skip(1).cloned().collect();
-    owned_args.extend(
-        category
-            .exact_delete_subcommand()
-            .into_iter()
-            .map(str::to_string),
-    );
-    owned_args.extend(plan.candidate_ids.iter().cloned());
+    if category == OrphanCategory::BuildCache {
+        let filter = build_cache_id_filter(&plan.candidate_ids)?;
+        owned_args.extend([
+            "buildx".into(),
+            "prune".into(),
+            "--all".into(),
+            "--filter".into(),
+            filter,
+            "--force".into(),
+        ]);
+    } else {
+        owned_args.extend(
+            category
+                .exact_delete_subcommand()
+                .into_iter()
+                .map(str::to_string),
+        );
+        owned_args.extend(plan.candidate_ids.iter().cloned());
+    }
     let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
     let label = format!("orphan-prune-{}", category.as_str());
     let output = mutation_capture_result(
@@ -1371,7 +1908,15 @@ pub fn execute_container_orphan_prune(
     let observed_available_gain_bytes = before_available_bytes
         .zip(after_available_bytes)
         .and_then(|(before, after)| after.checked_sub(before));
-    Ok(ContainerOrphanPruneExecution {
+    // Never force: Container exact delete is ["container","rm"] without --force, so a
+    // stale stopped observation can at most attempt a safe removal. Mark executed only
+    // on verified mutation (success, partial stdout evidence, or truncated indeterminate)
+    // so safe-refusal (nonzero, empty output) stays non-executed while partial mutation
+    // (nonzero with stdout evidence) remains auditable.
+    let executed = output.status_code == 0
+        || !output.stdout.trim().is_empty()
+        || output.output_truncated;
+    let mut receipt = ContainerOrphanPruneExecution {
         schema_version: CONTAINER_ORPHAN_SCHEMA_VERSION,
         runtime_display_name: target.display_name(),
         category,
@@ -1380,7 +1925,7 @@ pub fn execute_container_orphan_prune(
         status_code: output.status_code,
         stdout: output.stdout,
         stderr: output.stderr,
-        output_truncated: false,
+        output_truncated: output.output_truncated,
         // A non-zero exact-delete status means the runtime refused the mutation (for example,
         // because a previously stopped container restarted). Keep the attempted command and
         // status in the receipt, but never report the reclaim as executed.
@@ -1390,7 +1935,18 @@ pub fn execute_container_orphan_prune(
         after_available_bytes,
         observed_available_gain_bytes,
         rationale: rationale.to_string(),
-    })
+        receipt_sha256: None,
+        receipt_recorded: false,
+        receipt_record_error: None,
+    };
+    match write_execution_receipt(receipt_dir, &receipt) {
+        Ok(digest) => {
+            receipt.receipt_sha256 = Some(digest);
+            receipt.receipt_recorded = true;
+        }
+        Err(error) => receipt.receipt_record_error = Some(error),
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -1530,9 +2086,7 @@ mod tests {
 
     #[test]
     fn docker_container_plain_name_is_one_name() {
-        let output = format!(
-            "{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}"
-        );
+        let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}");
         assert_eq!(parse_container_records(&output).unwrap()[0].names, ["web"]);
     }
 
@@ -1608,16 +2162,16 @@ mod tests {
     }
 
     #[test]
-    fn docker_dangling_image_records_bind_only_full_ids() {
+    fn docker_image_records_bind_only_full_ids() {
         let documented = format!(
             "{{\"Containers\":\"N/A\",\"ID\":\"{DOCKER_ID_A}\",\"Repository\":\"<none>\",\"Size\":\"72.9MB\",\"Tag\":\"<none>\"}}"
         );
         assert_eq!(
-            parse_docker_dangling_image_ids(&documented).unwrap(),
+            parse_docker_image_ids(&documented).unwrap(),
             vec![DOCKER_ID_A.to_string()]
         );
         assert_eq!(
-            parse_docker_dangling_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
+            parse_docker_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
             "image-invalid-id"
         );
     }
@@ -1704,6 +2258,105 @@ mod tests {
         assert_eq!(parse_volume_records(ndjson).unwrap()[0].name, "data-vol");
         let array = "[{\"name\":\"cache-vol\",\"driver\":\"local\"}]";
         assert_eq!(parse_volume_records(array).unwrap()[0].name, "cache-vol");
+    }
+
+    #[test]
+    fn volume_ownership_requires_explicit_disksage_labels_and_rejects_compose() {
+        let owned = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}]"#;
+        let evidence = parse_volume_ownership(owned, "cache-vol").unwrap();
+        assert!(evidence.explicitly_reclaimable);
+        assert_eq!(evidence.identity_binding.len(), 64);
+
+        let compose = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true","com.docker.compose.project":"app"}}]"#;
+        assert!(
+            !parse_volume_ownership(compose, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
+
+        let unlabeled = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":null}]"#;
+        assert!(
+            !parse_volume_ownership(unlabeled, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
+
+        let business = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true","io.contextualwisdomlab.disksage.business-data":"true"}}]"#;
+        assert!(
+            !parse_volume_ownership(business, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
+    }
+
+    #[test]
+    fn container_ownership_requires_labels_stopped_state_and_exact_identity() {
+        let owned = format!(
+            r#"[{{"Id":"{DOCKER_ID_A}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]"#
+        );
+        assert!(
+            parse_container_ownership(&owned, DOCKER_ID_A)
+                .unwrap()
+                .explicitly_reclaimable
+        );
+        assert_eq!(
+            parse_container_ownership(&owned.replace("exited", "running"), DOCKER_ID_A)
+                .unwrap_err(),
+            "container-inspect-not-stopped"
+        );
+        let compose = owned.replace(
+            "\"io.contextualwisdomlab.disksage.owner\"",
+            "\"com.docker.compose.project\":\"app\",\"io.contextualwisdomlab.disksage.owner\"",
+        );
+        assert!(
+            !parse_container_ownership(&compose, DOCKER_ID_A)
+                .unwrap()
+                .explicitly_reclaimable
+        );
+        assert_eq!(
+            parse_container_ownership(&owned, DOCKER_ID_B).unwrap_err(),
+            "container-inspect-id-mismatch"
+        );
+    }
+
+    #[test]
+    fn network_ownership_requires_labels_and_no_compose_namespace() {
+        let owned = format!(
+            r#"[{{"Id":"{DOCKER_ID_A}","Name":"cache-net","Driver":"bridge","Containers":{{}},"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]"#
+        );
+        let (evidence, attached) = parse_network_ownership(&owned, DOCKER_ID_A, true).unwrap();
+        assert!(evidence.explicitly_reclaimable);
+        assert!(!attached);
+        let compose = owned.replace(
+            "\"io.contextualwisdomlab.disksage.owner\"",
+            "\"com.docker.compose.network\":\"default\",\"io.contextualwisdomlab.disksage.owner\"",
+        );
+        assert!(
+            !parse_network_ownership(&compose, DOCKER_ID_A, true)
+                .unwrap()
+                .0
+                .explicitly_reclaimable
+        );
+    }
+
+    #[test]
+    fn volume_ownership_fails_closed_without_complete_identity_or_labels() {
+        assert_eq!(
+            parse_volume_ownership(
+                r#"[{"Name":"cache-vol","Driver":"local","Labels":{}}]"#,
+                "cache-vol"
+            )
+            .unwrap_err(),
+            "json-field-missing:CreatedAt"
+        );
+        assert_eq!(
+            parse_volume_ownership(
+                r#"[{"Name":"other","Driver":"local","CreatedAt":"now","Labels":{}}]"#,
+                "cache-vol"
+            )
+            .unwrap_err(),
+            "volume-inspect-name-mismatch"
+        );
     }
 
     #[test]
@@ -1797,8 +2450,7 @@ mod tests {
             "network-invalid-name"
         );
         assert_eq!(
-            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]")
-                .unwrap_err(),
+            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]").unwrap_err(),
             "network-invalid-name"
         );
     }
@@ -1818,8 +2470,87 @@ mod tests {
 
     #[test]
     fn approval_phrases_embed_category_and_fingerprint() {
-        let phrase = approval_phrase(OrphanCategory::Volume, "abc123");
-        assert_eq!(phrase, "DiskSage volume orphan prune 승인 abc123");
+        let phrase = approval_phrase(OrphanCategory::Volume, "abc123", "dir456");
+        assert_eq!(
+            phrase,
+            "DiskSage volume orphan prune 승인 abc123 receipt dir456"
+        );
+    }
+
+    #[cfg(unix)]
+    fn test_execution(status_code: i32) -> ContainerOrphanPruneExecution {
+        ContainerOrphanPruneExecution {
+            schema_version: 1,
+            runtime_display_name: "runtime".into(),
+            category: OrphanCategory::Container,
+            candidate_set_sha256: "a".repeat(64),
+            command: vec!["container".into(), "rm".into(), "<candidate-set>".into()],
+            status_code,
+            stdout: String::new(),
+            stderr: (status_code != 0)
+                .then(|| INDETERMINATE_MUTATION_OUTCOME.to_string())
+                .unwrap_or_default(),
+            output_truncated: false,
+            executed: true,
+            executed_at_ms: 42,
+            before_available_bytes: None,
+            after_available_bytes: None,
+            observed_available_gain_bytes: None,
+            rationale: "reviewed exact candidates".into(),
+            receipt_sha256: None,
+            receipt_recorded: false,
+            receipt_record_error: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_receipt_rejects_duplicate_and_detects_tamper_and_symlink_directory() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = test_execution(0);
+        let digest = write_execution_receipt(dir.path(), &receipt).unwrap();
+        assert_eq!(
+            write_execution_receipt(dir.path(), &receipt).unwrap_err(),
+            "orphan-receipt-create-failed"
+        );
+        let path = dir.path().join(format!(
+            "42-container-{}.json",
+            receipt.candidate_set_sha256
+        ));
+        assert_eq!(read_execution_receipt(&path, &digest).unwrap(), receipt);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(
+            read_execution_receipt(&path, &digest).unwrap_err(),
+            "orphan-receipt-digest-mismatch"
+        );
+        let parent = tempfile::tempdir().unwrap();
+        let link = parent.path().join("receipts");
+        symlink(dir.path(), &link).unwrap();
+        assert_eq!(
+            private_receipt_directory_identity(&link).unwrap_err(),
+            "orphan-receipt-directory-unsafe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_partial_outcome_is_persisted_before_return() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = test_execution(-1);
+        let digest = write_execution_receipt(dir.path(), &receipt).unwrap();
+        let path = dir.path().join(format!(
+            "42-container-{}.json",
+            receipt.candidate_set_sha256
+        ));
+        let persisted = read_execution_receipt(&path, &digest).unwrap();
+        assert_eq!(persisted.status_code, -1);
+        assert_eq!(persisted.stderr, INDETERMINATE_MUTATION_OUTCOME);
+        assert!(persisted.executed);
     }
 
     #[cfg(unix)]
@@ -1884,11 +2615,41 @@ mod tests {
     }
 
     #[test]
+    fn build_cache_candidates_are_bounded_by_filter_bytes() {
+        let ids: Vec<String> = (0..260).map(|index| format!("cache{index:04}")).collect();
+        assert_eq!(bounded_build_cache_candidate_ids(ids).unwrap().len(), 260);
+        let oversized: Vec<String> = (0..MAX_CATEGORY_RECORDS)
+            .map(|index| format!("{index:0128}"))
+            .collect();
+        assert_eq!(
+            bounded_build_cache_candidate_ids(oversized).unwrap_err(),
+            "build-cache-filter-exceeds-bound"
+        );
+    }
+
+    #[test]
+    fn build_cache_filter_is_anchored_to_reviewed_ids() {
+        assert_eq!(
+            build_cache_id_filter(&["abc123".into(), "def456".into()]).unwrap(),
+            "id~=^(abc123|def456)$"
+        );
+        assert_eq!(
+            build_cache_id_filter(&[]).unwrap_err(),
+            "orphan-prune-empty-candidate-set"
+        );
+        assert_eq!(
+            build_cache_id_filter(&["abc.*".into()]).unwrap_err(),
+            "build-cache-id-invalid"
+        );
+    }
+
+    #[test]
     fn category_metadata_is_stable() {
         assert_eq!(OrphanCategory::Container.as_str(), "container");
         assert_eq!(OrphanCategory::Image.as_str(), "image");
         assert_eq!(OrphanCategory::Volume.as_str(), "volume");
         assert_eq!(OrphanCategory::Network.as_str(), "network");
+        assert_eq!(OrphanCategory::BuildCache.as_str(), "build_cache");
         assert_eq!(
             OrphanCategory::Container.exact_delete_subcommand(),
             ["container", "rm"]
@@ -1913,5 +2674,43 @@ mod tests {
             ContainerRuntimeKind::PodmanMachine.as_str(),
             "podman-machine"
         );
+    }
+
+    #[test]
+    fn buildx_inventory_preserves_active_shared_mutable_and_cache_mount_records() {
+        let output = concat!(
+            r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Mutable":false,"Type":"regular"}"#,
+            "\n",
+            r#"{"ID":"kept456","Reclaimable":false}"#,
+            "\n",
+            r#"{"ID":"shared789","Reclaimable":true,"Shared":true,"Mutable":false,"Type":"regular"}"#,
+            "\n",
+            r#"{"ID":"mutable012","Reclaimable":true,"Shared":false,"Mutable":true,"Type":"regular"}"#,
+            "\n",
+            r#"{"ID":"mount345","Reclaimable":true,"Shared":false,"Mutable":false,"Type":"exec.cachemount"}"#,
+        );
+        let (total, ids) = parse_buildx_private_immutable_reclaimable_ids(output).unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(ids, vec!["abc123"]);
+
+        for (output, issue) in [
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Mutable":false,"Type":"regular"}"#,
+                "build-cache-shared-missing",
+            ),
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Type":"regular"}"#,
+                "build-cache-mutable-missing",
+            ),
+            (
+                r#"{"ID":"abc123","Reclaimable":true,"Shared":false,"Mutable":false}"#,
+                "build-cache-type-missing",
+            ),
+        ] {
+            assert_eq!(
+                parse_buildx_private_immutable_reclaimable_ids(output).unwrap_err(),
+                issue
+            );
+        }
     }
 }

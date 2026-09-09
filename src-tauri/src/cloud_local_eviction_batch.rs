@@ -922,17 +922,20 @@ where
     let mut verified_count = 0u32;
     let mut total_after = 0u64;
     for item in &receipt.items {
-        let current = planner(root, Path::new(&item.path), verified_at_ms)
-            .map_err(|_| "onedrive-finder-assistance-postcheck-unavailable".to_string())?;
-        retained_count = retained_count.saturating_add(1);
+        let Ok(current) = planner(root, Path::new(&item.path), verified_at_ms) else {
+            total_after = total_after.saturating_add(item.allocated_bytes_before);
+            continue;
+        };
         let identity_matches = current.icloud_state.item_identifier_fingerprint.as_deref()
             == Some(item.item_identifier_fingerprint.as_str());
         if !identity_matches
             || current.logical_bytes != item.logical_bytes
             || current.filesystem_modified_ms != item.filesystem_modified_ms
         {
-            return Err("onedrive-finder-assistance-item-identity-changed".into());
+            total_after = total_after.saturating_add(item.allocated_bytes_before);
+            continue;
         }
+        retained_count = retained_count.saturating_add(1);
         total_after = total_after.saturating_add(current.allocated_bytes);
         if item_plan_is_verified_online_only(&current)
             && current.allocated_bytes < item.allocated_bytes_before

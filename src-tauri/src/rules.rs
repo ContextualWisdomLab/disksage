@@ -109,6 +109,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         .unwrap_or_else(|| bases.local_data.join("huggingface"));
     #[cfg(target_os = "macos")]
     entries.extend([
+        (
+            "fileprovider-temporary-items",
+            "macOS FileProvider 임시 진단 데이터",
+            bases.temp.join("com.apple.fileproviderd").join("TemporaryItems"),
+        ),
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
@@ -190,6 +195,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
         ),
     ]);
+    #[cfg(target_os = "macos")]
+    if let Some(session_root) = bases.temp.parent() {
+        entries.push((
+            "edge-code-sign-clones",
+            "Microsoft Edge code-sign 임시 복제본",
+            session_root
+                .join("X")
+                .join("com.microsoft.edgemac.code_sign_clone"),
+        ));
+    }
 
     // `/tmp` is a symlink on macOS; use `/private/tmp` so the root itself is a real directory.
     // Shared temporary cleanup is limited to current-user-owned, non-linked trees below.
@@ -527,33 +542,43 @@ impl CatalogRoot {
     }
 }
 
+fn measure_cache_candidate(id: &str, label: &str, path: PathBuf) -> CacheCandidate {
+    let root = CatalogRoot::open(&path);
+    let exists = root.is_some();
+    let bytes = if id == "shared-temp" {
+        cache_targets(&path)
+            .ok()
+            .map(|targets| {
+                targets
+                    .into_iter()
+                    .fold(0u64, |total, target| total.saturating_add(target.bytes))
+            })
+            .unwrap_or(0)
+    } else {
+        root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0)
+    };
+    CacheCandidate {
+        id: id.into(),
+        label: label.into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        exists,
+    }
+}
+
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
     catalog(bases)
         .into_iter()
-        .map(|(id, label, path)| {
-            let root = CatalogRoot::open(&path);
-            let exists = root.is_some();
-            let bytes = if id == "shared-temp" {
-                cache_targets(&path)
-                    .ok()
-                    .map(|targets| {
-                        targets
-                            .into_iter()
-                            .fold(0u64, |total, target| total.saturating_add(target.bytes))
-                    })
-                    .unwrap_or(0)
-            } else {
-                root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0)
-            };
-            CacheCandidate {
-                id: id.into(),
-                label: label.into(),
-                path: path.to_string_lossy().into_owned(),
-                bytes,
-                exists,
-            }
-        })
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
         .collect()
+}
+
+/// Measure one fixed catalog root without traversing unrelated caches.
+pub fn cache_candidate(bases: &BaseDirs, requested_id: &str) -> Option<CacheCandidate> {
+    catalog(bases)
+        .into_iter()
+        .find(|(id, _, _)| *id == requested_id)
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
 }
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
@@ -652,6 +677,10 @@ mod tests {
         let npm_c = cands.iter().find(|c| c.id == "npm-cache").unwrap();
         assert!(npm_c.exists);
         assert_eq!(npm_c.bytes, 128);
+        let targeted = cache_candidate(&bases, "npm-cache").unwrap();
+        assert_eq!(targeted.path, npm_c.path);
+        assert_eq!(targeted.bytes, 128);
+        assert!(cache_candidate(&bases, "not-in-catalog").is_none());
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
@@ -659,6 +688,17 @@ mod tests {
         assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            cands
+                .iter()
+                .find(|candidate| candidate.id == "edge-code-sign-clones")
+                .unwrap()
+                .path,
+            tmp.path()
+                .join("X/com.microsoft.edgemac.code_sign_clone")
+                .to_string_lossy()
+        );
     }
 
     #[cfg(unix)]

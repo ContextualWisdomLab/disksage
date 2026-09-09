@@ -13,7 +13,7 @@ describe("cache cleanup destructive authority", () => {
   it("uses the identity-bound recycle primitive", () => {
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
 
-    expect(backend).toContain("safety::trash_delete_if_identity_with_outcome(");
+    expect(backend).toContain("safety::trash_delete_if_identity_with_outcome_in_catalog_root(");
     expect(backend).toContain("outcome.moved_to_trash");
     expect(backend).toContain("cache-cleanup-targets-stale");
   });

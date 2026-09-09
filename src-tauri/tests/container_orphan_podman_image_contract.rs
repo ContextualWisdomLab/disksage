@@ -68,5 +68,8 @@ esac
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
     assert_eq!(evidence.candidate_size_sum_bytes, Some(250665));
-    assert!(image.approval_phrase.is_some());
+    assert!(
+        image.approval_phrase.is_none(),
+        "read-only discovery without a receipt directory must not publish unusable authority"
+    );
 }

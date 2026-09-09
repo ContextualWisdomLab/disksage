@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 const MAX_PHOTO_PRIVATE_REPORT_BYTES: usize = 64 * 1024 * 1024;
 const EXECUTION_UNSUPPORTED: &str = "photo-audit-execution-unsupported-on-platform";
+const AUDIT_OPTIONS_REQUIRE_AUDIT: &str = "photo-audit-audit-options-require-audit";
 
 #[cfg(not(windows))]
 const USAGE: &str = "Usage: disksage-photo-similarity-audit --root ABSOLUTE_PATH [--max-entries N] [--private-output PATH]\n\
@@ -65,6 +66,7 @@ fn parse_args_with_execution_support(
     let mut arguments = arguments.into_iter();
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_set = false;
     let mut private_output = None;
     let mut private_report = None;
     let mut selections = Vec::new();
@@ -86,6 +88,7 @@ fn parse_args_with_execution_support(
                     .map_err(|_| "photo-audit-max-entries-invalid".to_string())?
                     .parse()
                     .map_err(|_| "photo-audit-max-entries-invalid".to_string())?;
+                max_entries_set = true;
             }
             Some("--private-output") if private_output.is_none() => {
                 private_output = Some(PathBuf::from(next_value(
@@ -132,6 +135,9 @@ fn parse_args_with_execution_support(
             Some("--help") | Some("-h") => return Err(USAGE.into()),
             _ => return Err("photo-audit-argument-invalid".into()),
         }
+    }
+    if execute && (private_output.is_some() || max_entries_set) {
+        return Err(AUDIT_OPTIONS_REQUIRE_AUDIT.into());
     }
     Ok(Args {
         root: root.ok_or_else(|| "photo-audit-root-missing".to_string())?,

@@ -20,6 +20,14 @@ describe("Container orphan cleanup safety UX", () => {
     );
   });
 
+  it("describes BuildKit cleanup as exact reviewed-ID deletion", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+
+    expect(source).toContain("승인된 BuildKit 캐시 ID 집합");
+    expect(source).toContain("그 항목만 정리합니다");
+    expect(source).not.toContain("전체 미사용 빌드 캐시 정리");
+  });
+
   it("gates execution behind exact phrase and non-empty rationale", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const start = source.indexOf("function pruneReady(");
@@ -29,6 +37,20 @@ describe("Container orphan cleanup safety UX", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(pruneReady).toContain(".trim() === phrase");
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
+  });
+
+  it("prevents inspect and prune from overlapping", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const inspectStart = source.indexOf("async function inspect()");
+    const inspectEnd = source.indexOf("async function prune(", inspectStart);
+    const inspectBody = source.slice(inspectStart, inspectEnd);
+    const pruneReadyStart = source.indexOf("function pruneReady(");
+    const pruneReadyEnd = source.indexOf("async function inspect()", pruneReadyStart);
+    const pruneReadyBody = source.slice(pruneReadyStart, pruneReadyEnd);
+
+    expect(inspectBody).toContain("if (busy || pruneBusyKey !== null) return;");
+    expect(pruneReadyBody).toContain("if (busy || phrase === null || pruneBusyKey !== null) return false;");
+    expect(source).toContain("disabled={busy || pruneBusyKey !== null}");
   });
 
   it("requires deliberate re-entry instead of revealing the destructive approval phrase in the input", () => {

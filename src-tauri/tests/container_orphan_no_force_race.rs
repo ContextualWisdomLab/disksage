@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
 };
 use std::fs;
@@ -21,6 +21,10 @@ case " $* " in
     ;;
   *" container ps "*)
     printf '[{{"ID":"{container_id}","State":"exited","Names":["stale"]}}]\n'
+    exit 0
+    ;;
+  *" container inspect {container_id} "*)
+    printf '[{{"Id":"{container_id}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]\n'
     exit 0
     ;;
   *" images "*)
@@ -64,8 +68,19 @@ exit 2
     )
     .expect("valid fake runtime target");
 
-    let plan = probe_container_orphans(&target);
-    assert!(plan.evidence_complete, "fixture must produce complete evidence: {plan:?}");
+    let receipts_dir = temp.path().join("receipts");
+    fs::create_dir(&receipts_dir).expect("create receipts directory");
+    let mut receipts_permissions = fs::metadata(&receipts_dir)
+        .expect("receipts directory metadata")
+        .permissions();
+    receipts_permissions.set_mode(0o700);
+    fs::set_permissions(&receipts_dir, receipts_permissions).unwrap();
+
+    let plan = probe_container_orphans_with_receipt_dir(&target, &receipts_dir);
+    assert!(
+        plan.evidence_complete,
+        "fixture must produce complete evidence: {plan:?}"
+    );
     let container_plan = plan
         .categories
         .iter()
@@ -82,6 +97,7 @@ exit 2
         approval,
         "prove restarted-container refusal",
         1,
+        &receipts_dir,
     )
     .expect("non-zero exact removal is represented in the receipt");
 

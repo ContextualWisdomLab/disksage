@@ -15,8 +15,11 @@ set -eu
 case "${{1:-}}" in
   info) exit 0 ;;
   container)
-    [ "${{2:-}}" = "ps" ] || exit 91
-    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
+    case "${{2:-}}" in
+      ps) printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}' ;;
+      inspect) printf '%s\n' '[{{"Id":"{FULL_ID}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]' ;;
+      *) exit 91 ;;
+    esac
     ;;
   images) exit 0 ;;
   volume)
@@ -57,6 +60,9 @@ esac
         .find(|category| category["category"] == serde_json::json!("container"))
         .expect("container category");
 
-    assert_eq!(container["evidence"]["candidate_records"], serde_json::json!(1));
+    assert_eq!(
+        container["evidence"]["candidate_records"],
+        serde_json::json!(1)
+    );
     assert_eq!(container["approval_phrase"], serde_json::Value::Null);
 }

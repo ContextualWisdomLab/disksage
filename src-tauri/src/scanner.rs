@@ -56,18 +56,39 @@ fn file_name_bytes(name: &OsStr) -> Vec<u8> {
     }
 }
 
-fn admit_file(manifest: &mut DirectoryFileManifest, name: &OsStr, size: u64) {
+fn file_admission_digest(name: &OsStr, size: u64) -> [u8; 32] {
     let name = file_name_bytes(name);
     let mut hasher = Sha256::new();
     hasher.update(b"disksage-directory-file-admission-v1\0");
     hasher.update((name.len() as u64).to_le_bytes());
     hasher.update(name);
     hasher.update(size.to_le_bytes());
-    let digest: [u8; 32] = hasher.finalize().into();
+    hasher.finalize().into()
+}
+
+fn admit_file(manifest: &mut DirectoryFileManifest, name: &OsStr, size: u64) {
+    let digest = file_admission_digest(name, size);
     for (aggregate, value) in manifest.digest_xor.iter_mut().zip(digest) {
         *aggregate ^= value;
     }
     manifest.file_count += 1;
+}
+
+pub(crate) fn manifest_without_file(
+    manifest: &DirectoryFileManifest,
+    name: &OsStr,
+    size: u64,
+) -> Option<DirectoryFileManifest> {
+    let mut reduced = manifest.clone();
+    reduced.file_count = reduced.file_count.checked_sub(1)?;
+    for (aggregate, value) in reduced
+        .digest_xor
+        .iter_mut()
+        .zip(file_admission_digest(name, size))
+    {
+        *aggregate ^= value;
+    }
+    Some(reduced)
 }
 
 pub(crate) fn current_directory_file_manifest(path: &Path) -> Option<DirectoryFileManifest> {

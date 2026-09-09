@@ -277,6 +277,23 @@ fn reachability_from_probe(result: Result<(i32, String, String, bool), String>) 
     result.ok().map(|output| output.0 == 0)
 }
 
+fn colima_running_status(stdout: &str) -> Option<bool> {
+    let value = serde_json::from_str::<serde_json::Value>(stdout).ok()?;
+    if let Some(status) = value.get("status").and_then(serde_json::Value::as_str) {
+        return Some(status.eq_ignore_ascii_case("running"));
+    }
+    let object = value.as_object()?;
+    ["display_name", "runtime", "driver"]
+        .iter()
+        .all(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        })
+        .then_some(true)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -353,15 +370,8 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                         (stdout.trim().eq_ignore_ascii_case("running"), true)
                     }
                     RuntimeStorageKind::Colima => {
-                        let parsed = serde_json::from_str::<serde_json::Value>(&stdout).ok();
-                        let status = parsed
-                            .as_ref()
-                            .and_then(|value| value.get("status"))
-                            .and_then(serde_json::Value::as_str);
-                        (
-                            status.is_some_and(|value| value.eq_ignore_ascii_case("running")),
-                            status.is_some(),
-                        )
+                        let running = colima_running_status(&stdout);
+                        (running.unwrap_or(false), running.is_some())
                     }
                 };
                 if runtime == RuntimeStorageKind::Colima && !state_valid {
@@ -535,12 +545,15 @@ pub fn execute_recovery(
     if stop.0 != 0 {
         return Err("runtime-storage-recovery-stop-failed".into());
     }
-    let start = run_bounded_with_timeout(&binary, start_args, RECOVERY_TIMEOUT)?;
-    if start.0 != 0 {
-        return Err("runtime-storage-recovery-start-failed".into());
-    }
-    let live = inspect_runtime(runtime, now_ms());
-    let reachable = live.guest_reachable == Some(true);
+    // Once stop succeeds, the approved operation has already mutated runtime state. Preserve
+    // that fact as a structured receipt even when the restart command itself fails or times out.
+    let start = run_bounded_with_timeout(&binary, start_args, RECOVERY_TIMEOUT)
+        .unwrap_or_else(|_| (-1, String::new(), String::new(), false));
+    let reachable = if start.0 == 0 {
+        inspect_runtime(runtime, now_ms()).guest_reachable == Some(true)
+    } else {
+        false
+    };
     Ok(RuntimeStorageRecoveryExecution {
         schema_kind: "disksage.runtime-storage-recovery-execution",
         schema_version: SCHEMA_VERSION,
@@ -549,7 +562,7 @@ pub fn execute_recovery(
         stop_status_code: stop.0,
         start_status_code: start.0,
         guest_reachable_after_recovery: reachable,
-        executed: reachable,
+        executed: start.0 == 0,
         executed_at_ms: now_ms(),
         rationale: rationale.into(),
     })
@@ -724,6 +737,23 @@ mod tests {
         let plan = inspect_runtime(RuntimeStorageKind::Colima, 42);
         assert!(!plan.host_compaction_supported);
         assert!(plan.exact_approval_phrase.is_none() || plan.guest_running == Some(true));
+    }
+
+    #[test]
+    fn colima_status_accepts_legacy_and_current_native_json() {
+        assert_eq!(colima_running_status(r#"{"status":"Running"}"#), Some(true));
+        assert_eq!(
+            colima_running_status(r#"{"status":"Stopped"}"#),
+            Some(false)
+        );
+        assert_eq!(
+            colima_running_status(
+                r#"{"display_name":"colima","runtime":"docker","driver":"macOS Virtualization.Framework"}"#
+            ),
+            Some(true)
+        );
+        assert_eq!(colima_running_status(r#"{"runtime":"docker"}"#), None);
+        assert_eq!(colima_running_status("not-json"), None);
     }
 
     #[test]

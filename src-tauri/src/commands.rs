@@ -531,13 +531,6 @@ pub fn execute_podman_dangling_image_prune(
     )
 }
 
-/// Read-only evidence for VM-backed Podman and Colima storage maintenance.
-#[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn inspect_runtime_storage() -> Vec<crate::runtime_storage::RuntimeStoragePlan> {
-    crate::runtime_storage::inspect()
-}
-
 /// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
@@ -3791,6 +3784,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
+                "edge-code-sign-clones",
                 "uv-cache",
                 "trivy-cache",
                 "appmap-download-cache",
@@ -3811,6 +3805,9 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                "edge-code-sign-clones" => tmp
+                    .path()
+                    .join("X/com.microsoft.edgemac.code_sign_clone"),
                 "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
@@ -3823,7 +3820,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 10);
+        assert_eq!(results.len(), 11);
         assert!(results.iter().all(|result| result.ok));
     }
 

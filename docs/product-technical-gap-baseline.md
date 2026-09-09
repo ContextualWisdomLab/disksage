@@ -1,5 +1,53 @@
 # DiskSage product and technical gap baseline
 
+## 2026-09-08 pnpm cache evidence-bound reclaim
+
+- The fixed `pnpm-cache` catalog was re-audited to two direct children. Only `v11` (object
+  `unix:16777233:142034678`, 1,138,157,228 bytes) was selected; the lockfile marker was retained.
+- The product's recursive active-use probe completed with no pnpm process using `v11`. The item
+  moved to OS Trash under an identity-bound journal, then the proven `pnpm-store-v11` signature
+  was checked before permanent removal. Generic Trash was untouched and the original path is gone.
+- APFS availability changed from 204,988,308 KiB to 206,104,472 KiB (1,116,164 KiB / 1.0644569397
+  GiB observed). Only this host delta is credited; current availability is 187.8532142639 GiB
+  above the fixed baseline and 112.1467857361 GiB short of the 300 GiB target.
+- Receipt and journals are retained in the private research attachment; no uncertain operation was
+  replayed and folder moves receive zero capacity credit.
+
+## 2026-09-08 container cleanup false-positive repair
+
+- A live Docker audit classified 17 tagged images as removable because the Docker-specific path
+  listed every image and checked container membership without enforcing its documented no-tag
+  invariant. Docker's own dangling-image inventory contained zero records. The repaired producer
+  query requests only `dangling=true` images before the existing membership, exact-size and
+  identity checks; the unsafe 17-image plan was never executed.
+- The same audit classified 107 BuildKit records from `Reclaimable=true` alone. Current producer
+  evidence showed that this set included 64 shared records, 30 mutable records and one execution
+  cache mount. The repaired parser requires every safety field and retains shared, mutable and
+  `exec.cachemount` records. A fresh audit reduced the candidate set to 13 private, immutable,
+  non-cache-mount records while keeping active records excluded by Buildx's reclaimable flag.
+- Two execution attempts stopped during the fresh Buildx inventory with
+  `orphan-list-build_cache-timeout`; neither reached mutation or wrote an execution receipt. The
+  13 records then passed a complete fresh re-audit. The exact prune attempt returned an
+  indeterminate outcome and wrote a receipt; it was not replayed. A follow-up read-only audit
+  found zero BuildKit candidates, but concurrent activity prevents signed attribution, so the
+  observed 913,813,504-byte change remains uncredited. The current standalone test now checks the
+  implemented pre-mutation re-audit contract instead of the obsolete claim that exact BuildKit
+  deletion is unavailable.
+
+## 2026-09-08 targeted cache-plan scope repair
+
+- A live plan for `edge-code-sign-clones` was stopped before mutation after the process opened an
+  unrelated UV cache tree. `plan_catalog_cache_headless` and its targeted execution path selected
+  one result only after `cache_candidates` had measured every catalog root. This made a narrow
+  request perform broad I/O and could delay evidence refresh while active environments changed.
+- The fixed lookup selects the requested fixed catalog ID before measuring its root. Full catalog
+  display and explicitly requested all-cache cleanup keep their existing behavior. The same narrow
+  lookup is used for the native UV prune preparation, Edge planning, and identity-bound single-cache
+  execution. Unknown IDs still fail closed.
+- Acceptance evidence requires a focused catalog lookup regression and a live Edge-only plan that
+  does not open UV cache paths. Each clone still needs exact object identity and a fresh active-use
+  probe before Trash movement; an aggregate cache size is not deletion authority.
+
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
 `3630e1eefacbeb996e6176373e6010da93bfa16c`, PR #263
@@ -74,6 +122,42 @@ queued or stale status.
   returned EOF. DiskSage therefore did not start, initialize, prune, or remove any runtime
   resource; the host had about 1.3 GiB available at that observation. The failed connection is a
   runtime-availability blocker, not evidence that any volume, image, or network is stale.
+## 2026-09-08 exact-head CI RCA
+
+- PR #349 head `49827c3e63361ba2909e34240ff350912221ea45` upgraded `vitest` to
+  5.0.0 while retaining `@vitest/coverage-v8` 4.1.11. Test run `34100921310`
+  and all three release jobs in run `34100921342` therefore failed before
+  JavaScript execution at `npm ci`: the coverage provider requires the exact
+  Vitest 4.1.11 peer. The repair aligns both packages on 5.0.0 and regenerates
+  the lockfile without `--force` or `--legacy-peer-deps`. Vitest 5 requires
+  Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`, while this branch still declared
+  and exercised Node.js 20.19.0. Because Node.js 20 reached end-of-life on
+  2026-04-30, the same repair raises the declared floor and all test/release
+  jobs to Node.js 22.12.0 rather than preserving an unsupported runtime.
+  Successor hosted checks remain authoritative; this local repair does not
+  transfer predecessor results or authorize release. See Node.js Release
+  Working Group. (2026). *Node.js release schedule*.
+  https://github.com/nodejs/Release#release-schedule
+- The repaired dependency tree then exposed `nanoid` 3.3.17 through
+  `vite → postcss → nanoid`. `npm audit --json` reported
+  GHSA-2v37-7h3g-55p8 (`<3.3.18`, high severity, CWE-835) because a zero-size
+  custom generator can loop indefinitely. The smallest owner-side repair
+  refreshes only the existing transitive lock entry to 3.3.18; it does not add
+  a direct dependency, an override, an exclusion, or an audit bypass. See
+  GitHub. (2026). *nanoid: custom generators can loop indefinitely when size
+  is zero*. https://github.com/advisories/GHSA-2v37-7h3g-55p8
+- PR #349 successor head `3fc9ca427fe5c2d47676c62d5acd8aa9e3788380`
+  then exposed a Windows-only release invocation defect. In exact-head Release
+  run `34185620046`, Linux job `101933323953` and macOS job `101933323793`
+  preserved `tauri build --features llm-engine` and completed successfully.
+  Windows job `101933324113` instead logged `tauri build llm-engine`, then
+  Cargo rejected the retained value as an unexpected positional argument. The
+  root cause is npm script argument forwarding dropping `--features` on this
+  Windows runtime, not Tauri, Rust, WiX, or the Vitest dependency update. The
+  repair invokes the installed `@tauri-apps/cli/tauri.js` entry point directly
+  for both CPU and GPU release paths and regression-tests that neither path can
+  return to the affected `npm run tauri -- build ...` form. Successor hosted
+  checks remain authoritative.
 
 ## Current product contract
 
@@ -1329,3 +1413,12 @@ runner's private workspace temp root instead of weakening the shared production 
   private mode-0700/0600 receipt is identified as
   `disksage-google-drive-live-20260829-e53df609`; no customer path or provider identifier is
   recorded here, and no mutation occurred.
+
+## 2026-09-08 content-evidence gate for organization plans
+
+- Metadata-aware organization planning now refuses the extension/name-only fallback when no
+  explicit rule or content-aware picker decision exists. The legacy metadata-free planner keeps
+  its prior extension fallback for compatibility.
+- `organize::tests` passes 23/23, including `metadata_aware_plan_skips_name_only_fallback`.
+  This closes the specific authority gap for the iCloud organization path; it does not establish
+  semantic classification accuracy or authorize moving shared/app-managed content.
