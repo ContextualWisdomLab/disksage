@@ -97,9 +97,16 @@ describe("test workflow path-filter contract", () => {
     );
   });
 
-  it("isolates Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
-    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(2);
-    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(2);
+  it("isolates every Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
+    const chromeRepositoryIsolationCount = workflow.match(
+      /grep -q 'dl\.google\.com\/linux\/chrome'/g,
+    )?.length ?? 0;
+    const signedRetryRefreshCount = workflow.match(
+      /apt-get -o Acquire::Retries=3 update/g,
+    )?.length ?? 0;
+
+    expect(chromeRepositoryIsolationCount).toBeGreaterThan(0);
+    expect(signedRetryRefreshCount).toBe(chromeRepositoryIsolationCount);
     expect(workflow).not.toContain("AllowInsecureRepositories");
     expect(workflow).not.toContain("--allow-unauthenticated");
   });
