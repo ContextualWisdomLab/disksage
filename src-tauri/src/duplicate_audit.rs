@@ -6,10 +6,12 @@
 
 use crate::cloud::{self, MetadataEvidence};
 use crate::content_digest::{ContentDigests, ContentHasher};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+#[cfg(all(unix, not(coverage)))]
+use std::process::Command;
 
 pub const EXACT_DUPLICATE_AUDIT_VERSION: u32 = 1;
 pub const DEFAULT_MAX_ENTRIES: usize = 200_000;
@@ -129,7 +131,30 @@ pub struct ExactDuplicateAuditSummary {
     pub requires_human_canonical_selection: bool,
     pub automatic_delete_allowed: bool,
     pub mutation_performed: bool,
+    pub reclaim_plan_fingerprint: Option<String>,
+    pub exact_reclaim_approval_phrase: Option<String>,
+    pub canonical_selection_policy: String,
+    pub quality_equivalence_basis: String,
     pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactDuplicateReclaimExecution {
+    pub schema_version: u32,
+    pub audit_fingerprint: String,
+    pub reclaim_plan_fingerprint: String,
+    pub candidate_file_count: usize,
+    pub removed_file_count: usize,
+    pub active_file_count: usize,
+    pub failed_file_count: usize,
+    pub skipped_file_count: usize,
+    pub failure_reasons: Vec<String>,
+    pub removed_allocated_bytes_upper_bound: u64,
+    pub evidence_complete: bool,
+    pub executed: bool,
+    pub executed_at_ms: u64,
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +180,15 @@ fn valid_relative_path(path: &Path) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn is_managed_photo_library(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
 }
 
 fn system_time_ms(value: std::io::Result<std::time::SystemTime>) -> u64 {
@@ -255,10 +289,15 @@ fn metadata_fingerprint(metadata: &ExactDuplicateProductionMetadata) -> String {
 
 #[cfg(unix)]
 fn storage_identity_fingerprint(observation: &FileObservation) -> Option<String> {
+    storage_identity_fingerprint_from_metadata(observation.device, observation.inode)
+}
+
+#[cfg(unix)]
+fn storage_identity_fingerprint_from_metadata(device: u64, inode: u64) -> Option<String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-exact-duplicate-storage-identity-v1\0");
-    hash_value(&mut hasher, &observation.device.to_le_bytes());
-    hash_value(&mut hasher, &observation.inode.to_le_bytes());
+    hash_value(&mut hasher, &device.to_le_bytes());
+    hash_value(&mut hasher, &inode.to_le_bytes());
     Some(hasher.finalize().to_hex().to_string())
 }
 
@@ -393,6 +432,428 @@ fn audit_fingerprint(
         hash_value(&mut hasher, cluster.cluster_fingerprint.as_bytes());
     }
     hasher.finalize().to_hex().to_string()
+}
+
+fn canonical_member(cluster: &ExactDuplicateAuditCluster) -> &ExactDuplicateAuditMember {
+    cluster
+        .members
+        .iter()
+        .min_by_key(|member| {
+            (
+                !member.production_metadata.metadata_probe_complete,
+                member
+                    .production_metadata
+                    .embedded_production_time_ms
+                    .is_none(),
+                member.filesystem_created_ms == 0,
+                member.filesystem_created_ms,
+                member.relative_path.as_str(),
+            )
+        })
+        .expect("duplicate clusters always contain at least two members")
+}
+
+fn reclaim_plan_fingerprint(report: &ExactDuplicateAuditReport) -> Option<String> {
+    (report.evidence_complete && !report.clusters.is_empty()).then(|| {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"disksage-exact-duplicate-reclaim-v1\0");
+        hash_value(&mut hasher, report.audit_fingerprint.as_bytes());
+        for cluster in &report.clusters {
+            hash_value(&mut hasher, cluster.cluster_fingerprint.as_bytes());
+            hash_value(
+                &mut hasher,
+                canonical_member(cluster).member_fingerprint.as_bytes(),
+            );
+        }
+        hasher.finalize().to_hex().to_string()
+    })
+}
+
+pub fn exact_duplicate_reclaim_approval_phrase(
+    report: &ExactDuplicateAuditReport,
+) -> Option<String> {
+    let fingerprint = reclaim_plan_fingerprint(report)?;
+    let candidates = report
+        .clusters
+        .iter()
+        .map(|cluster| cluster.file_count.saturating_sub(1))
+        .sum::<usize>();
+    Some(format!(
+        "DiskSage exact duplicate reclaim {candidates} {} 승인 {fingerprint}",
+        report.logical_redundant_bytes
+    ))
+}
+
+#[cfg(unix)]
+fn allocated_bytes(metadata: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn allocated_bytes(metadata: &Metadata) -> u64 {
+    metadata.len()
+}
+
+#[cfg(all(unix, not(coverage)))]
+fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+    let mut active = BTreeSet::new();
+    let candidate_identities: BTreeMap<(u64, u64), &PathBuf> = paths
+        .iter()
+        .filter_map(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .map(|metadata| (unix_identity(&metadata), path))
+        })
+        .collect();
+    let descriptors = std::fs::read_dir("/dev/fd")
+        .map_err(|_| "duplicate-reclaim-active-use-fd-unavailable".to_string())?;
+    for descriptor in descriptors.flatten() {
+        if let Ok(metadata) = File::open(descriptor.path()).and_then(|file| file.metadata()) {
+            if let Some(path) = candidate_identities.get(&unix_identity(&metadata)) {
+                active.insert((*path).clone());
+            }
+        }
+    }
+    for chunk in paths.chunks(64) {
+        let mut command = Command::new("lsof");
+        command.args(["-F", "pn", "--"]);
+        command.args(chunk);
+        let result = command
+            .output()
+            .map_err(|_| "duplicate-reclaim-active-use-lsof-unavailable".to_string())?;
+        if !matches!(result.status.code(), Some(0) | Some(1))
+            || result.stdout.len() > 2 * 1024 * 1024
+        {
+            return Err("duplicate-reclaim-active-use-lsof-incomplete".into());
+        }
+        for field in result.stdout.split(|byte| *byte == b'\n') {
+            let Some(path) = field.strip_prefix(b"n") else {
+                continue;
+            };
+            if let Some(candidate) = chunk
+                .iter()
+                .find(|candidate| candidate.as_os_str().as_encoded_bytes() == path)
+            {
+                active.insert(candidate.clone());
+            }
+        }
+    }
+    let ps = Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .map_err(|_| "duplicate-reclaim-active-use-ps-unavailable".to_string())?;
+    if !ps.status.success() || ps.stdout.len() > 2 * 1024 * 1024 {
+        return Err("duplicate-reclaim-active-use-ps-incomplete".into());
+    }
+    let commands = String::from_utf8(ps.stdout)
+        .map_err(|_| "duplicate-reclaim-active-use-ps-invalid".to_string())?;
+    for path in paths {
+        if path.to_str().is_some_and(|path| commands.contains(path)) {
+            active.insert(path.clone());
+        }
+    }
+    Ok(active)
+}
+
+#[cfg(any(not(unix), coverage))]
+fn active_duplicate_candidates(_paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+    Err("duplicate-reclaim-active-use-unsupported-platform".into())
+}
+
+#[cfg(unix)]
+fn preserve_staged_candidate(
+    original: &Path,
+    staged: &Path,
+    staging_token: u64,
+) -> Result<(), String> {
+    if std::fs::symlink_metadata(original).is_err() {
+        return std::fs::rename(staged, original)
+            .map_err(|_| "duplicate-reclaim-recovery-failed".to_string());
+    }
+    let file_name = original
+        .file_name()
+        .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?
+        .to_string_lossy();
+    let recovery =
+        original.with_file_name(format!("{file_name}.disksage-recovery-{staging_token}"));
+    if std::fs::symlink_metadata(&recovery).is_ok() {
+        return Err("duplicate-reclaim-recovery-location-occupied".into());
+    }
+    std::fs::rename(staged, recovery)
+        .map_err(|_| "duplicate-reclaim-recovery-failed".to_string())?;
+    Err("duplicate-reclaim-recovery-preserved".into())
+}
+
+#[cfg(unix)]
+fn remove_if_storage_identity(
+    path: &Path,
+    expected_storage_identity: &str,
+    expected_logical_bytes: u64,
+    expected_content_digests: &ContentDigests,
+    staging_token: u64,
+) -> Result<(), String> {
+    if crate::safety::is_protected(path) {
+        return Err("duplicate-reclaim-protected-path".into());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
+    let (device, inode) = unix_identity(&metadata);
+    if storage_identity_fingerprint_from_metadata(device, inode).as_deref()
+        != Some(expected_storage_identity)
+    {
+        return Err("duplicate-reclaim-candidate-changed".into());
+    }
+    match active_duplicate_candidates(&[path.to_path_buf()]) {
+        Ok(active) if active.contains(path) => {
+            return Err("duplicate-reclaim-active-before-staging".into());
+        }
+        Ok(_) => {}
+        Err(error) => return Err(error),
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "duplicate-reclaim-candidate-parent-missing".to_string())?;
+    let staging_dir = parent.join(format!(
+        ".disksage-duplicate-stage-{}-{staging_token}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&staging_dir)
+        .map_err(|_| "duplicate-reclaim-staging-unavailable".to_string())?;
+    let staged = staging_dir.join(
+        path.file_name()
+            .ok_or_else(|| "duplicate-reclaim-candidate-name-missing".to_string())?,
+    );
+    if let Err(error) = std::fs::rename(path, &staged) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(format!("duplicate-reclaim-staging-failed:{error}"));
+    }
+    let staged_matches = std::fs::symlink_metadata(&staged)
+        .ok()
+        .map(|metadata| unix_identity(&metadata))
+        .and_then(|(device, inode)| storage_identity_fingerprint_from_metadata(device, inode))
+        .as_deref()
+        == Some(expected_storage_identity);
+    if !staged_matches {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return recovery.and(Err(
+            "duplicate-reclaim-candidate-changed-during-staging".into()
+        ));
+    }
+    let staged_observation = FileObservation {
+        path: staged.clone(),
+        relative_path: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        logical_bytes: expected_logical_bytes,
+        filesystem_created_ms: system_time_ms(metadata.created()),
+        filesystem_modified_ms: system_time_ms(metadata.modified()),
+        device,
+        inode,
+    };
+    if hash_stable_file(&staged_observation).as_ref() != Ok(expected_content_digests) {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return recovery.and(Err("duplicate-reclaim-candidate-content-changed".into()));
+    }
+    match active_duplicate_candidates(std::slice::from_ref(&staged)) {
+        Ok(active) if active.contains(&staged) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err("duplicate-reclaim-active-during-staging".into()));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err(error));
+        }
+    }
+    if let Err(error) = std::fs::remove_file(&staged) {
+        let recovery = preserve_staged_candidate(path, &staged, staging_token);
+        let _ = std::fs::remove_dir(&staging_dir);
+        if let Err(recovery_error) = recovery {
+            return Err(recovery_error);
+        }
+        return Err(format!("duplicate-reclaim-delete-failed:{error}"));
+    }
+    let _ = std::fs::remove_dir(&staging_dir);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn remove_if_storage_identity(
+    _path: &Path,
+    _expected_storage_identity: &str,
+    _expected_logical_bytes: u64,
+    _expected_content_digests: &ContentDigests,
+    _staging_token: u64,
+) -> Result<(), String> {
+    Err("duplicate-reclaim-permanent-delete-unsupported-platform".into())
+}
+
+fn removal_failure_code(error: &str) -> String {
+    error.split(':').next().unwrap_or(error).to_string()
+}
+
+/// Permanently remove only freshly re-hashed members of exact-content clusters while retaining
+/// one provenance-preferred, byte-identical canonical member in every cluster.
+#[cfg(not(coverage))]
+pub fn execute_exact_duplicate_reclaim(
+    source_root: &Path,
+    min_bytes: u64,
+    max_entries: usize,
+    approved_audit_fingerprint: &str,
+    confirmation_phrase: &str,
+    rationale: &str,
+    executed_at_ms: u64,
+) -> Result<ExactDuplicateReclaimExecution, String> {
+    let report =
+        collect_exact_duplicate_audit(source_root, executed_at_ms, min_bytes, max_entries)?;
+    execute_exact_duplicate_reclaim_from_report(
+        source_root,
+        &report,
+        approved_audit_fingerprint,
+        confirmation_phrase,
+        rationale,
+        executed_at_ms,
+    )
+}
+
+/// Execute an approved immutable private report by freshly revalidating only its exact candidates.
+/// Unrelated additions or changes elsewhere in the live source tree cannot expand the approved set.
+#[cfg(not(coverage))]
+pub fn execute_exact_duplicate_reclaim_from_report(
+    source_root: &Path,
+    report: &ExactDuplicateAuditReport,
+    approved_audit_fingerprint: &str,
+    confirmation_phrase: &str,
+    rationale: &str,
+    executed_at_ms: u64,
+) -> Result<ExactDuplicateReclaimExecution, String> {
+    if rationale.trim() != rationale || rationale.is_empty() || rationale.chars().count() > 1_000 {
+        return Err("duplicate-reclaim-rationale-invalid".into());
+    }
+    if !exact_duplicate_audit_integrity_valid(&report) || !report.evidence_complete {
+        return Err("duplicate-reclaim-evidence-incomplete".into());
+    }
+    if report.audit_fingerprint != approved_audit_fingerprint {
+        return Err("duplicate-reclaim-audit-fingerprint-mismatch".into());
+    }
+    let plan_fingerprint = reclaim_plan_fingerprint(&report)
+        .ok_or_else(|| "duplicate-reclaim-empty-candidate-set".to_string())?;
+    if exact_duplicate_reclaim_approval_phrase(&report).as_deref() != Some(confirmation_phrase) {
+        return Err("duplicate-reclaim-confirmation-mismatch".into());
+    }
+
+    let canonical_root = std::fs::canonicalize(source_root)
+        .map_err(|_| "duplicate-reclaim-root-unavailable".to_string())?;
+    if canonical_root.to_str() != Some(report.source_root.as_str())
+        || executed_at_ms < report.observed_at_ms
+    {
+        return Err("duplicate-reclaim-source-scope-mismatch".into());
+    }
+    let candidate_file_count = report
+        .clusters
+        .iter()
+        .map(|cluster| cluster.file_count.saturating_sub(1))
+        .sum::<usize>();
+    let mut verified = Vec::with_capacity(candidate_file_count);
+    for cluster in &report.clusters {
+        let retained = canonical_member(cluster).member_fingerprint.as_str();
+        for expected in &cluster.members {
+            let relative = Path::new(&expected.relative_path);
+            if !valid_relative_path(relative) {
+                return Err("duplicate-reclaim-relative-path-unsafe".into());
+            }
+            let path = canonical_root.join(relative);
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
+            let observation = observe_file(&canonical_root, path.clone(), metadata.clone())
+                .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
+            let digests = hash_stable_file(&observation)?;
+            if digests != cluster.content_digests
+                || observation.relative_path != expected.relative_path
+                || observation.logical_bytes != expected.logical_bytes
+                || observation.filesystem_created_ms != expected.filesystem_created_ms
+                || observation.filesystem_modified_ms != expected.filesystem_modified_ms
+                || storage_identity_fingerprint(&observation)
+                    != expected.storage_identity_fingerprint
+            {
+                return Err("duplicate-reclaim-candidate-changed".into());
+            }
+            if expected.member_fingerprint != retained {
+                verified.push((
+                    path,
+                    allocated_bytes(&metadata),
+                    expected.logical_bytes,
+                    cluster.content_digests.clone(),
+                    expected
+                        .storage_identity_fingerprint
+                        .clone()
+                        .ok_or_else(|| "duplicate-reclaim-storage-identity-missing".to_string())?,
+                ));
+            }
+        }
+    }
+    let active = active_duplicate_candidates(
+        &verified
+            .iter()
+            .map(|(path, _, _, _, _)| path.clone())
+            .collect::<Vec<_>>(),
+    )?;
+    let removable = verified
+        .into_iter()
+        .filter(|(path, _, _, _, _)| !active.contains(path))
+        .collect::<Vec<_>>();
+
+    let mut removed_file_count = 0usize;
+    let mut removed_allocated_bytes_upper_bound = 0u64;
+    let mut failure_reasons = BTreeSet::new();
+    for (index, (path, bytes, logical_bytes, content_digests, storage_identity)) in
+        removable.into_iter().enumerate()
+    {
+        match remove_if_storage_identity(
+            &path,
+            &storage_identity,
+            logical_bytes,
+            &content_digests,
+            executed_at_ms.saturating_add(index as u64),
+        ) {
+            Ok(()) => {
+                removed_file_count = removed_file_count.saturating_add(1);
+                removed_allocated_bytes_upper_bound =
+                    removed_allocated_bytes_upper_bound.saturating_add(bytes);
+            }
+            Err(error) => {
+                failure_reasons.insert(removal_failure_code(&error));
+            }
+        }
+    }
+    let active_file_count = active.len();
+    let failed_file_count = candidate_file_count
+        .saturating_sub(active_file_count)
+        .saturating_sub(removed_file_count);
+    let skipped_file_count = candidate_file_count.saturating_sub(removed_file_count);
+    Ok(ExactDuplicateReclaimExecution {
+        schema_version: EXACT_DUPLICATE_AUDIT_VERSION,
+        audit_fingerprint: report.audit_fingerprint.clone(),
+        reclaim_plan_fingerprint: plan_fingerprint,
+        candidate_file_count,
+        removed_file_count,
+        active_file_count,
+        failed_file_count,
+        skipped_file_count,
+        failure_reasons: failure_reasons.into_iter().collect(),
+        removed_allocated_bytes_upper_bound,
+        evidence_complete: skipped_file_count == 0,
+        executed: true,
+        executed_at_ms,
+        rationale: rationale.into(),
+    })
 }
 
 #[cfg(unix)]
@@ -530,8 +991,9 @@ fn member(
 
 /// Recursively collect exact duplicate evidence without following symlinks or mutating files.
 ///
-/// Filesystem timestamps are stability evidence only. The audit deliberately does not assign a
-/// production date or choose a canonical copy because path context may carry distinct lineage.
+/// Filesystem timestamps are stability evidence only. The audit records production evidence but
+/// remains read-only; the separately approved reclaim path retains one byte-identical canonical
+/// member and revalidates every candidate before deletion.
 #[cfg(not(coverage))]
 pub fn collect_exact_duplicate_audit(
     source_root: &Path,
@@ -550,6 +1012,9 @@ pub fn collect_exact_duplicate_audit(
     }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
+    if crate::safety::is_explicitly_protected(&canonical_root) {
+        return Err("duplicate-audit-root-explicitly-protected".into());
+    }
     if canonical_root.to_str().is_none() {
         return Err("duplicate-audit-root-non-unicode".into());
     }
@@ -557,6 +1022,9 @@ pub fn collect_exact_duplicate_audit(
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
     if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
         return Err("duplicate-audit-root-unsafe".into());
+    }
+    if is_managed_photo_library(&canonical_root) {
+        return Err("duplicate-audit-root-system-managed-photo-library".into());
     }
 
     let mut evidence_complete = true;
@@ -609,6 +1077,13 @@ pub fn collect_exact_duplicate_audit(
             }
             let path = entry.path();
             if file_type.is_dir() {
+                if is_managed_photo_library(&path) {
+                    increment_issue(
+                        &mut issue_counts,
+                        "duplicate-audit-system-managed-photo-library-excluded",
+                    );
+                    continue;
+                }
                 if depth >= MAX_DEPTH {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "duplicate-audit-depth-limit-reached");
@@ -661,7 +1136,7 @@ pub fn collect_exact_duplicate_audit(
             continue;
         }
         let mut by_digest =
-            BTreeMap::<(String, String, String), Vec<ExactDuplicateAuditMember>>::new();
+            BTreeMap::<(String, String, String), Vec<(FileObservation, ContentDigests)>>::new();
         for observation in size_group {
             match hash_stable_file(&observation) {
                 Ok(digests) => {
@@ -671,13 +1146,10 @@ pub fn collect_exact_duplicate_audit(
                         digests.sha256.clone(),
                         digests.quick_xor_base64.clone(),
                     );
-                    match member(&observation, &digests) {
-                        Ok(member) => by_digest.entry(key).or_default().push(member),
-                        Err(reason) => {
-                            evidence_complete = false;
-                            increment_issue(&mut issue_counts, &reason);
-                        }
-                    }
+                    by_digest
+                        .entry(key)
+                        .or_default()
+                        .push((observation, digests));
                 }
                 Err(reason) => {
                     evidence_complete = false;
@@ -685,7 +1157,20 @@ pub fn collect_exact_duplicate_audit(
                 }
             }
         }
-        for ((blake3, sha256, quick_xor_base64), mut members) in by_digest {
+        for ((blake3, sha256, quick_xor_base64), observations) in by_digest {
+            if observations.len() < 2 {
+                continue;
+            }
+            let mut members = Vec::with_capacity(observations.len());
+            for (observation, digests) in observations {
+                match member(&observation, &digests) {
+                    Ok(member) => members.push(member),
+                    Err(reason) => {
+                        evidence_complete = false;
+                        increment_issue(&mut issue_counts, &reason);
+                    }
+                }
+            }
             if members.len() < 2 {
                 continue;
             }
@@ -901,6 +1386,7 @@ pub fn exact_duplicate_audit_integrity_valid(report: &ExactDuplicateAuditReport)
 pub fn summarize_exact_duplicate_audit(
     report: &ExactDuplicateAuditReport,
 ) -> ExactDuplicateAuditSummary {
+    let reclaim_plan_fingerprint = reclaim_plan_fingerprint(report);
     ExactDuplicateAuditSummary {
         schema_version: report.schema_version,
         output_mode: "exact-duplicate-audit-summary".into(),
@@ -931,6 +1417,11 @@ pub fn summarize_exact_duplicate_audit(
         requires_human_canonical_selection: report.cluster_count > 0,
         automatic_delete_allowed: false,
         mutation_performed: false,
+        reclaim_plan_fingerprint,
+        exact_reclaim_approval_phrase: exact_duplicate_reclaim_approval_phrase(report),
+        canonical_selection_policy:
+            "exact-content-quality-tie>embedded-provenance>oldest-created>relative-path".into(),
+        quality_equivalence_basis: "blake3+sha256+quickxor exact encoded bytes".into(),
         notices: vec![
             "read-only-no-file-created-modified-renamed-or-deleted".into(),
             "content-hashes-and-relative-paths-redacted-from-summary".into(),
@@ -939,7 +1430,8 @@ pub fn summarize_exact_duplicate_audit(
             "logical-redundant-bytes-are-not-verified-physical-reclaimable-bytes".into(),
             "identical-content-does-not-prove-identical-lineage-context".into(),
             "canonical-copy-selection-requires-private-metadata-review".into(),
-            "no-delete-approval-created".into(),
+            "no-automatic-delete-approval-created".into(),
+            "reclaim-still-requires-exact-human-approval-and-fresh-rehash".into(),
         ],
     }
 }
@@ -984,6 +1476,137 @@ mod tests {
         );
         assert_eq!(summary.physical_reclaimable_bytes, None);
         assert!(summary.requires_human_canonical_selection);
+        assert!(summary.reclaim_plan_fingerprint.is_some());
+        assert!(summary.exact_reclaim_approval_phrase.is_some());
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn exact_reclaim_keeps_one_byte_identical_canonical_member() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.bin"), b"same exact content").unwrap();
+        std::fs::write(root.path().join("b.bin"), b"same exact content").unwrap();
+        let plan = collect_exact_duplicate_audit(root.path(), 42, 1, 100).unwrap();
+        let phrase = exact_duplicate_reclaim_approval_phrase(&plan).unwrap();
+        std::fs::write(root.path().join("unrelated.bin"), b"new unrelated content").unwrap();
+        let execution = execute_exact_duplicate_reclaim_from_report(
+            root.path(),
+            &plan,
+            &plan.audit_fingerprint,
+            &phrase,
+            "operator reviewed exact byte-identical copies",
+            43,
+        )
+        .unwrap();
+        assert_eq!(execution.candidate_file_count, 1);
+        assert_eq!(execution.removed_file_count, 1);
+        assert_eq!(execution.active_file_count, 0);
+        assert_eq!(execution.failed_file_count, 0);
+        assert!(execution.failure_reasons.is_empty());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn exact_reclaim_fails_before_delete_when_retained_member_disappears() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.bin"), b"same exact content").unwrap();
+        std::fs::write(root.path().join("b.bin"), b"same exact content").unwrap();
+        let plan = collect_exact_duplicate_audit(root.path(), 42, 1, 100).unwrap();
+        let retained = canonical_member(&plan.clusters[0]).relative_path.clone();
+        std::fs::remove_file(root.path().join(retained)).unwrap();
+        let phrase = exact_duplicate_reclaim_approval_phrase(&plan).unwrap();
+        assert!(execute_exact_duplicate_reclaim_from_report(
+            root.path(),
+            &plan,
+            &plan.audit_fingerprint,
+            &phrase,
+            "operator reviewed exact byte-identical copies",
+            43,
+        )
+        .is_err());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_bound_remove_preserves_replacement_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement bytes").unwrap();
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            1,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.as_str(),
+            "duplicate-reclaim-candidate-changed" | "duplicate-reclaim-candidate-content-changed"
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
+        assert_eq!(
+            removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
+            "duplicate-reclaim-delete-failed"
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn identity_bound_remove_preserves_open_candidate_after_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
+        let open_handle = File::open(&path).unwrap();
+
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            2,
+        )
+        .unwrap_err();
+        drop(open_handle);
+
+        assert!(!error.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), b"approved bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_candidate_is_surfaced_when_original_name_is_occupied() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("duplicate.bin");
+        let staged = root.path().join(".hidden-stage");
+        std::fs::write(&original, b"replacement bytes").unwrap();
+        std::fs::write(&staged, b"approved bytes").unwrap();
+
+        assert_eq!(
+            preserve_staged_candidate(&original, &staged, 77).unwrap_err(),
+            "duplicate-reclaim-recovery-preserved"
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), b"replacement bytes");
+        assert_eq!(
+            std::fs::read(root.path().join("duplicate.bin.disksage-recovery-77")).unwrap(),
+            b"approved bytes"
+        );
+        assert!(!staged.exists());
     }
 
     #[test]
@@ -1046,6 +1669,30 @@ mod tests {
         assert_eq!(report.file_count, 1);
         assert_eq!(report.cluster_count, 0);
         assert!(exact_duplicate_audit_integrity_valid(&report));
+    }
+
+    #[test]
+    fn managed_photo_libraries_are_never_traversed() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("Photos Library.photoslibrary");
+        std::fs::create_dir(&library).unwrap();
+        std::fs::write(root.path().join("outside.bin"), b"same exact content").unwrap();
+        std::fs::write(library.join("database.bin"), b"same exact content").unwrap();
+
+        let report = collect_exact_duplicate_audit(root.path(), 42, 1, 100).unwrap();
+
+        assert!(report.evidence_complete);
+        assert_eq!(report.file_count, 1);
+        assert_eq!(report.cluster_count, 0);
+        assert_eq!(
+            report.issue_counts["duplicate-audit-system-managed-photo-library-excluded"],
+            1
+        );
+        assert!(exact_duplicate_audit_integrity_valid(&report));
+        assert_eq!(
+            collect_exact_duplicate_audit(&library, 42, 1, 100).unwrap_err(),
+            "duplicate-audit-root-system-managed-photo-library"
+        );
     }
 
     #[test]
