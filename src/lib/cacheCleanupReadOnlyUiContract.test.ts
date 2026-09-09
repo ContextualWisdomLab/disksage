@@ -16,6 +16,6 @@ describe("cache cleanup fail-closed UX", () => {
     expect(cleanup).toContain("cleanCacheContents");
     expect(cleanup).not.toContain("selectedRules");
     expect(cleanup).toContain('role="status"');
-    expect(cleanup).toContain("객체 지문·크기·수정시각");
+    expect(cleanup).toContain("파일 정보·크기·수정 시각");
   });
 });
