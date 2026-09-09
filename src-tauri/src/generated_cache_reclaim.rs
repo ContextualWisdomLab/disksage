@@ -26,6 +26,9 @@ pub enum RegenerationContract {
     PlaywrightBrowserDownload,
     /// Legacy temporary Cargo candidate shape. This is not producer or regeneration proof.
     DiskSageTemporaryCargoTarget,
+    /// Node.js bytecode cache at the exact per-user macOS temporary-directory location.
+    /// Node regenerates these artifacts while loading JavaScript modules.
+    NodeCompileCache,
     TemporaryGitWorkspace,
 }
 
@@ -123,6 +126,8 @@ pub struct GeneratedCachePlan {
     pub content_fingerprint: String,
     pub activity: GeneratedCacheActivityEvidence,
     pub blockers: Vec<String>,
+    /// Plain-language next step shown separately from audit-only blocker codes.
+    pub customer_next_action: String,
     pub observed_at_ms: u64,
     pub plan_fingerprint: String,
     pub exact_approval_phrase: String,
@@ -232,6 +237,7 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
         .into_iter()
         .find_map(|(candidate, contract)| (path == candidate).then_some(contract))
         .or_else(|| disksage_temporary_cargo_target(path))
+        .or_else(|| node_compile_cache(path))
         .or_else(|| {
             #[cfg(unix)]
             {
@@ -243,6 +249,116 @@ pub fn regeneration_contract(path: &Path, home: &Path) -> Option<RegenerationCon
                 None
             }
         })
+}
+
+fn node_compile_cache(path: &Path) -> Option<RegenerationContract> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        (path == std::env::temp_dir().join("node-compile-cache"))
+            .then_some(RegenerationContract::NodeCompileCache)
+    }
+}
+
+fn parse_node_runtime_processes(output: &[u8], own_pid: u32, limit: usize) -> Option<Vec<u32>> {
+    let output = std::str::from_utf8(output).ok()?;
+    let mut pids = Vec::new();
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next() else {
+            continue;
+        };
+        let pid = pid.parse::<u32>().ok()?;
+        let executable = fields.next()?;
+        let name = Path::new(executable).file_name()?.to_str()?;
+        if pid != own_pid && matches!(name, "node" | "nodejs") {
+            if pids.len() == limit {
+                return None;
+            }
+            pids.push(pid);
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    Some(pids)
+}
+
+#[cfg(target_os = "macos")]
+fn node_runtime_processes() -> Result<Vec<u32>, String> {
+    let mut child = Command::new("ps")
+        .args(["-axo", "pid=,comm="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|_| "generated-cache-node-process-probe-spawn-failed".to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|_| "generated-cache-node-process-probe-output-failed")?;
+                if output.stdout.len() > 64 * 1024 {
+                    return Err("generated-cache-node-process-probe-output-bounded".into());
+                }
+                return parse_node_runtime_processes(&output.stdout, std::process::id(), 128)
+                    .ok_or_else(|| "generated-cache-node-process-probe-incomplete".into());
+            }
+            Ok(Some(_)) => return Err("generated-cache-node-process-probe-failed".into()),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("generated-cache-node-process-probe-timeout".into());
+            }
+            Err(_) => return Err("generated-cache-node-process-probe-wait-failed".into()),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn node_runtime_processes() -> Result<Vec<u32>, String> {
+    Err("generated-cache-node-process-probe-unsupported-platform".into())
+}
+
+fn merge_node_runtime_evidence(
+    contract: &RegenerationContract,
+    evidence: &mut GeneratedCacheActivityEvidence,
+) {
+    if !matches!(contract, RegenerationContract::NodeCompileCache) {
+        return;
+    }
+    match node_runtime_processes() {
+        Ok(pids) => {
+            evidence.open_pids.extend(pids);
+            evidence.open_pids.sort_unstable();
+            evidence.open_pids.dedup();
+        }
+        Err(_) => evidence.evidence_complete = false,
+    }
+}
+
+fn customer_next_action(contract: &RegenerationContract, blockers: &[String]) -> String {
+    if blockers.iter().any(|blocker| blocker == "process-active")
+        && matches!(contract, RegenerationContract::NodeCompileCache)
+    {
+        "Node 및 MCP 작업을 마친 뒤 앱을 닫고 다시 검사하세요. 작업 중에는 캐시를 그대로 유지하세요."
+    } else if blockers
+        .iter()
+        .any(|blocker| blocker == "active-use-evidence-incomplete")
+    {
+        "검사를 다시 실행하세요. 상태를 확인할 수 있을 때까지 캐시를 유지하세요."
+    } else if blockers.is_empty() {
+        "검사 결과를 확인한 뒤 제거를 승인하면 공간을 확보할 수 있습니다."
+    } else {
+        "표시된 사용 중인 작업을 마친 뒤 다시 검사하세요. 그전까지 파일을 유지하세요."
+    }
+    .into()
 }
 
 fn disksage_temporary_cargo_target(path: &Path) -> Option<RegenerationContract> {
@@ -489,6 +605,7 @@ pub fn plan_with_evidence(
         .update(&serde_json::to_vec(&immediate_parent).map_err(|_| "generated-cache-plan-encode")?);
     hasher.update(&serde_json::to_vec(&activity).map_err(|_| "generated-cache-plan-encode")?);
     let plan_fingerprint = hasher.finalize().to_hex().to_string();
+    let customer_next_action = customer_next_action(&contract, &blockers);
     Ok(GeneratedCachePlan {
         immediate_parent,
         schema_version: GENERATED_CACHE_SCHEMA_VERSION,
@@ -499,6 +616,7 @@ pub fn plan_with_evidence(
         content_fingerprint,
         activity,
         blockers,
+        customer_next_action,
         observed_at_ms,
         exact_approval_phrase: format!("DiskSage generated cache 제거 승인 {plan_fingerprint}"),
         plan_fingerprint,
@@ -557,6 +675,7 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         git_worktree_registered: false,
         git_dirty: false,
     };
+    merge_node_runtime_evidence(&contract, &mut evidence);
     if matches!(contract, RegenerationContract::TemporaryGitWorkspace) {
         match bounded_git(
             path,
@@ -584,6 +703,16 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         return Err("generated-cache-parent-identity-changed".into());
     }
     let final_active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
+    let mut final_node_evidence = GeneratedCacheActivityEvidence {
+        evidence_complete: true,
+        open_pids: Vec::new(),
+        tool_lock_paths: Vec::new(),
+        live_cwd_present: false,
+        git_common_dir: None,
+        git_worktree_registered: false,
+        git_dirty: false,
+    };
+    merge_node_runtime_evidence(&contract, &mut final_node_evidence);
     if !final_active.assessed || !final_active.evidence_complete {
         if !plan
             .blockers
@@ -602,12 +731,25 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
         plan.activity.open_pids.sort_unstable();
         plan.activity.open_pids.dedup();
     }
+    if !final_node_evidence.evidence_complete {
+        plan.activity.evidence_complete = false;
+        plan.blockers.push("active-use-evidence-incomplete".into());
+    }
+    if !final_node_evidence.open_pids.is_empty() {
+        plan.activity
+            .open_pids
+            .extend(final_node_evidence.open_pids);
+        plan.activity.open_pids.sort_unstable();
+        plan.activity.open_pids.dedup();
+        plan.blockers.push("process-active".into());
+    }
     if !plan.blockers.is_empty() {
         // Any post-hash activity makes this plan non-executable. Its approval phrase is retained
         // only for stable output; approve() rejects every blocker.
         plan.blockers.sort();
         plan.blockers.dedup();
     }
+    plan.customer_next_action = customer_next_action(&plan.contract, &plan.blockers);
     Ok(plan)
 }
 
@@ -681,6 +823,48 @@ fn validate_execution(
     Ok(())
 }
 
+pub fn remove_regenerable_root(path: &Path, home: &Path) -> Result<(), String> {
+    if deny_boundary(path)
+        || matches!(
+            regeneration_contract(path, home),
+            None | Some(RegenerationContract::TemporaryGitWorkspace)
+        )
+    {
+        return Err("generated-cache-removal-boundary-denied".into());
+    }
+    std::fs::remove_dir_all(path).map_err(|_| "generated-cache-remove-failed".into())
+}
+
+fn restore_staged_root(
+    path: &Path,
+    staged: &Path,
+    staging: &Path,
+    plan_fingerprint: &str,
+) -> Result<(), String> {
+    if path.exists() {
+        let replacement = std::fs::symlink_metadata(path)
+            .map_err(|_| "generated-cache-replacement-metadata-unavailable")?;
+        if !replacement.is_dir() || replacement.file_type().is_symlink() {
+            return Err("generated-cache-replacement-boundary-unsafe".into());
+        }
+        let preserved = path.join(format!(
+            ".disksage-preserved-approved-cache-{}",
+            &plan_fingerprint[..16]
+        ));
+        if preserved.exists() {
+            return Err("generated-cache-recovery-location-occupied".into());
+        }
+        // A producer may recreate the approved root after staging. Keep that live replacement in
+        // place and move the approved tree beneath it, so neither tree is overwritten and the next
+        // exact-root audit observes both instead of leaving hidden staging data behind.
+        std::fs::rename(staged, preserved)
+            .map_err(|_| "generated-cache-staging-preserve-failed")?;
+    } else {
+        std::fs::rename(staged, path).map_err(|_| "generated-cache-staging-restore-failed")?;
+    }
+    std::fs::remove_dir(staging).map_err(|_| "generated-cache-staging-cleanup-failed".into())
+}
+
 /// Atomically stage and permanently remove the exact approved cache object.
 pub fn stage_and_remove_regenerable_root(
     plan: &GeneratedCachePlan,
@@ -723,14 +907,14 @@ pub fn stage_and_remove_regenerable_root(
         let _ = std::fs::remove_dir(&staging);
         return Err(format!("generated-cache-staging-rename-failed:{error}"));
     }
-    let restore = || {
-        if !path.exists() {
-            std::fs::rename(&staged, path).map_err(|_| "generated-cache-staging-restore-failed")?;
-        }
-        std::fs::remove_dir(&staging).map_err(|_| "generated-cache-staging-cleanup-failed")
-    };
+    let restore = || restore_staged_root(path, &staged, &staging, &plan.plan_fingerprint);
     let staged_result = (|| {
         require_inactive_immediate_parent(path, &plan.immediate_parent)?;
+        if matches!(plan.contract, RegenerationContract::NodeCompileCache)
+            && node_runtime_processes().map_or(true, |pids| !pids.is_empty())
+        {
+            return Err("generated-cache-staged-active-use".to_string());
+        }
         let active = crate::git_worktree::active_use_evidence_with_command_path(
             &staged, path, 5_000, 128, true,
         );
@@ -748,6 +932,11 @@ pub fn stage_and_remove_regenerable_root(
         if !active_after_hash.assessed
             || !active_after_hash.evidence_complete
             || active_after_hash.active
+        {
+            return Err("generated-cache-staged-active-use".into());
+        }
+        if matches!(plan.contract, RegenerationContract::NodeCompileCache)
+            && node_runtime_processes().map_or(true, |pids| !pids.is_empty())
         {
             return Err("generated-cache-staged-active-use".into());
         }
@@ -903,6 +1092,48 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn node_compile_cache_contract_is_exact_and_runtime_parser_is_bounded() {
+        let root = std::env::temp_dir().join("node-compile-cache");
+        assert_eq!(
+            regeneration_contract(&root, Path::new("/Users/test")),
+            Some(RegenerationContract::NodeCompileCache)
+        );
+        assert_ne!(
+            regeneration_contract(
+                &std::env::temp_dir().join("node-compile-cache-customer"),
+                Path::new("/Users/test")
+            ),
+            Some(RegenerationContract::NodeCompileCache)
+        );
+        assert_eq!(
+            parse_node_runtime_processes(b" 41 /usr/local/bin/node\n 42 python3\n", 99, 8),
+            Some(vec![41])
+        );
+        assert_eq!(
+            parse_node_runtime_processes(b" 41 node\n 42 nodejs\n", 99, 1),
+            None
+        );
+        assert_eq!(
+            parse_node_runtime_processes(b"\n 41 node\n", 99, 8),
+            Some(vec![41])
+        );
+    }
+
+    #[test]
+    fn customer_copy_explains_the_next_action_without_audit_codes() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join(".cache/uv");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut evidence = inactive();
+        evidence.evidence_complete = false;
+        let plan = plan_with_evidence(&root, home, evidence, 1).unwrap();
+        assert!(plan.customer_next_action.contains("다시 실행"));
+        assert!(!plan.customer_next_action.contains("active-use"));
     }
 
     #[cfg(target_os = "macos")]
@@ -1170,6 +1401,32 @@ mod tests {
                 &plan.plan_fingerprint[..16]
             ))
             .exists());
+    }
+
+    #[test]
+    fn recreated_root_keeps_live_replacement_and_approved_tree_visible() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("node-compile-cache");
+        let staging = temp.path().join(".disksage-generated-cache-staging-test");
+        let staged = staging.join("node-compile-cache");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("approved-cache"), b"approved").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("live-replacement"), b"live").unwrap();
+        let fingerprint = "a".repeat(64);
+
+        restore_staged_root(&root, &staged, &staging, &fingerprint).unwrap();
+
+        assert_eq!(std::fs::read(root.join("live-replacement")).unwrap(), b"live");
+        assert_eq!(
+            std::fs::read(
+                root.join(".disksage-preserved-approved-cache-aaaaaaaaaaaaaaaa")
+                    .join("approved-cache")
+            )
+            .unwrap(),
+            b"approved"
+        );
+        assert!(!staging.exists());
     }
 
     #[test]
