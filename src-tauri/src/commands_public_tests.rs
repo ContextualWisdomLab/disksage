@@ -365,6 +365,7 @@ fn move_execution_journaling_and_undo_form_one_reversible_flow() {
         src: source.to_string_lossy().into_owned(),
         dst: destination.to_string_lossy().into_owned(),
         class_id: "test-class".into(),
+        ..MovePlan::default()
     };
     let executed = execute_moves_inner(std::slice::from_ref(&plan), &journal, 100);
     assert_eq!(executed.len(), 1);
@@ -391,6 +392,7 @@ fn move_execution_journaling_and_undo_form_one_reversible_flow() {
         src: temp.path().join("missing.txt").to_string_lossy().into_owned(),
         dst: temp.path().join("never-created.txt").to_string_lossy().into_owned(),
         class_id: "test-class".into(),
+        ..MovePlan::default()
     };
     let failed = execute_moves_inner(&[missing], &journal, 103);
     assert_eq!(failed.len(), 1);
