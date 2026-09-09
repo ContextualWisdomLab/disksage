@@ -87,7 +87,7 @@ fn retained_primary_worktree_is_preserved_with_privacy_safe_public_summary() {
     .unwrap();
 
     assert_eq!(report.schema_kind, GIT_WORKTREE_AUDIT_SCHEMA_KIND);
-    assert_eq!(report.version, 2);
+    assert_eq!(report.version, 4);
     assert_eq!(report.generated_at_ms, 123);
     assert_eq!(report.retention_references.len(), 1);
     assert_eq!(report.retention_reference_set_fingerprint.len(), 64);
