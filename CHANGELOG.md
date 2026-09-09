@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a macOS-only Parallels stopped-VM reclaim flow that binds bounded native evidence, canonical
+  bundle/disk and executable identities, empty snapshots, allocated bytes, active-use state, and the
+  native estimate. Compact execution requires a fresh exact human approval, revalidates every gate,
+  never uses `--force`, and records observed disk and volume changes without deleting snapshots or
+  moving VM data.
+- Bind that plan to the provider-reported configured disk inventory, record the exact snapshot count
+  when available, and turn an empty native snapshot response into a keep-local rescan plan instead
+  of permitting compaction or losing the diagnostic receipt.
+
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

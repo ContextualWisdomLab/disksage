@@ -20,6 +20,7 @@ const operationalAssetNames = [
   'disksage-duplicate-audit-windows-x86_64.exe',
   'disksage-cloud-plan-macos-arm64',
   'disksage-duplicate-audit-macos-arm64',
+  'disksage-parallels-disk-reclaim-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 repository file from the source-controlled project root. */
@@ -154,7 +155,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
     expect(attestJob).toContain('disksage.spdx.json');
-    expect(attestJob).toContain('expected exactly 18 regular files');
+    expect(attestJob).toContain('expected exactly 20 regular files');
     expect(attestJob).toContain('require_exactly_one_file "$required_name"');
     expect(attestJob).toContain('require_exactly_one_file "$required_name.sha256"');
 

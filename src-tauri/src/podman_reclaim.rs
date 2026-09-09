@@ -786,7 +786,13 @@ pub fn prune_dangling_images(
         .map(|snapshot| snapshot.available_bytes);
     let output = command_capture(
         podman_bin,
-        &["--connection", requested_machine, "image", "prune", "--force"],
+        &[
+            "--connection",
+            requested_machine,
+            "image",
+            "prune",
+            "--force",
+        ],
         PODMAN_PRUNE_TIMEOUT,
         "podman-prune-dangling-images",
     )?;
@@ -796,13 +802,11 @@ pub fn prune_dangling_images(
         .unwrap_or(executed_at_ms);
     let after_available_bytes = std::env::current_dir()
         .ok()
-        .and_then(|path| {
-            crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok()
-        })
+        .and_then(|path| crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok())
         .map(|snapshot| snapshot.available_bytes);
-    let observed_available_gain_bytes = before_available_bytes.zip(after_available_bytes).and_then(
-        |(before, after)| after.checked_sub(before),
-    );
+    let observed_available_gain_bytes = before_available_bytes
+        .zip(after_available_bytes)
+        .and_then(|(before, after)| after.checked_sub(before));
     Ok(PodmanDanglingImagePruneExecution {
         schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
         candidate_set_sha256: evidence.candidate_set_sha256,
@@ -1158,14 +1162,12 @@ mod tests {
         );
         let tagged = r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["localhost/keep:latest"],"Containers":0,"Size":200}]"#;
         let (_, _, tagged_candidates) = parse_unused_image_candidates(tagged).unwrap();
-        let tagged_evidence =
-            summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
+        let tagged_evidence = summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
         assert_eq!(tagged_evidence.unused_untagged_records, 0);
         assert_eq!(tagged_evidence.unused_tagged_records, 1);
         let digest_only = r#"[{"Id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","RepoTags":null,"RepoDigests":["docker.io/library/python@sha256:abc"],"Names":["docker.io/library/python@sha256:abc"],"Containers":0,"Size":200}]"#;
         let (_, _, digest_candidates) = parse_unused_image_candidates(digest_only).unwrap();
-        let digest_evidence =
-            summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
+        let digest_evidence = summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
         assert_eq!(digest_evidence.unused_untagged_records, 0);
         assert_eq!(digest_evidence.unused_tagged_records, 1);
     }
