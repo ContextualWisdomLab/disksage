@@ -578,6 +578,23 @@ pub fn unavailable_capacity_from_error(
     unavailable_capacity(provider, observed_at_ms, reason)
 }
 
+/// Allow personal desktop-client copies when the native sync application is running but DiskSage
+/// has no separate OAuth quota connection. This is intentionally copy-only: provider sync
+/// attestation remains mandatory before any source eviction.
+pub fn native_personal_client_copy_capacity_exception(
+    provider: CloudProvider,
+    account_scope: CloudAccountScope,
+    client_runtime_observed: bool,
+    snapshot: &CloudCapacitySnapshot,
+) -> bool {
+    provider != CloudProvider::Icloud
+        && account_scope == CloudAccountScope::Personal
+        && client_runtime_observed
+        && snapshot.provider == provider
+        && snapshot.evidence_kind == CapacityEvidenceKind::Unavailable
+        && snapshot.unavailable_reason.as_deref() == Some("provider-oauth-connection-missing")
+}
+
 pub fn assess_capacity(
     snapshot: CloudCapacitySnapshot,
     requested_bytes: u64,
@@ -739,6 +756,44 @@ mod tests {
             provider_capacity_url(CloudProvider::Icloud).unwrap_err(),
             "icloud-quota-api-unavailable"
         );
+    }
+
+    #[test]
+    fn personal_native_client_exception_never_authorizes_eviction_or_non_oauth_failures() {
+        let snapshot = unavailable_capacity(
+            CloudProvider::GoogleDrive,
+            1,
+            "provider-oauth-connection-missing",
+        );
+        assert!(native_personal_client_copy_capacity_exception(
+            CloudProvider::GoogleDrive,
+            CloudAccountScope::Personal,
+            true,
+            &snapshot,
+        ));
+        assert!(!native_personal_client_copy_capacity_exception(
+            CloudProvider::GoogleDrive,
+            CloudAccountScope::Organization,
+            true,
+            &snapshot,
+        ));
+        assert!(!native_personal_client_copy_capacity_exception(
+            CloudProvider::GoogleDrive,
+            CloudAccountScope::Personal,
+            false,
+            &snapshot,
+        ));
+        let api_failure = unavailable_capacity(
+            CloudProvider::GoogleDrive,
+            1,
+            "cloud-capacity-provider-api-unavailable",
+        );
+        assert!(!native_personal_client_copy_capacity_exception(
+            CloudProvider::GoogleDrive,
+            CloudAccountScope::Personal,
+            true,
+            &api_failure,
+        ));
     }
 
     #[test]

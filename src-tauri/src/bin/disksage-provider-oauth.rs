@@ -1,8 +1,8 @@
-//! Headless OAuth lifecycle for read-only OneDrive and Google Drive evidence.
+//! Headless OAuth lifecycle for OneDrive and Google Drive evidence and explicit API uploads.
 //!
 //! Refresh tokens remain in the operating-system credential store. This command emits only
-//! non-secret connection descriptors and provider capacity evidence; it never performs a cloud
-//! file write or source eviction.
+//! non-secret connection descriptors and provider capacity evidence; this command itself never
+//! performs a cloud file write or source eviction.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
@@ -39,6 +39,7 @@ struct Args {
     cloud_root: Option<PathBuf>,
     client_id: Option<String>,
     manual_browser: bool,
+    write_access: bool,
 }
 
 #[cfg(not(coverage))]
@@ -92,7 +93,7 @@ fn usage() -> String {
         "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] ",
         "[--connections ABSOLUTE_PATH] ",
         "(--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID ",
-        "[--manual-browser] | --verify-capacity --cloud-root ABSOLUTE_PATH | ",
+        "[--manual-browser] [--write-access] | --verify-capacity --cloud-root ABSOLUTE_PATH | ",
         "--disconnect --cloud-root ABSOLUTE_PATH)"
     )
     .into()
@@ -134,6 +135,7 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
     let mut cloud_root = None;
     let mut client_id = None;
     let mut manual_browser = false;
+    let mut write_access = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -142,6 +144,7 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
             "--verify-capacity" => actions.push(Action::VerifyCapacity),
             "--disconnect" => actions.push(Action::Disconnect),
             "--manual-browser" => manual_browser = true,
+            "--write-access" => write_access = true,
             "--home" => {
                 if home
                     .replace(PathBuf::from(value(args, &mut index, "--home")?))
@@ -201,8 +204,8 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
 
     match action {
         Action::List => {
-            if cloud_root.is_some() || client_id.is_some() || manual_browser {
-                return Err("--list does not accept root, client, or browser arguments".into());
+            if cloud_root.is_some() || client_id.is_some() || manual_browser || write_access {
+                return Err("--list does not accept root, client, browser, or write arguments".into());
             }
         }
         Action::Connect => {
@@ -211,7 +214,7 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
             }
         }
         Action::VerifyCapacity | Action::Disconnect => {
-            if cloud_root.is_none() || client_id.is_some() || manual_browser {
+            if cloud_root.is_none() || client_id.is_some() || manual_browser || write_access {
                 return Err(
                     "capacity verification and disconnect require only --cloud-root".into(),
                 );
@@ -226,6 +229,7 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
         cloud_root,
         client_id,
         manual_browser,
+        write_access,
     })
 }
 
@@ -318,9 +322,13 @@ fn execute(args: Args) -> Result<Output, String> {
                 .client_id
                 .as_deref()
                 .ok_or_else(|| "--client-id is required".to_string())?;
-            let pending = provider_oauth::prepare_authorization(root.provider, client_id)?;
+            let pending = provider_oauth::prepare_authorization_with_write_access(
+                root.provider,
+                client_id,
+                args.write_access,
+            )?;
             if args.manual_browser {
-                eprintln!("Open this read-only provider authorization URL in a browser:");
+                eprintln!("Open this provider authorization URL in a browser:");
                 eprintln!("{}", pending.authorization_url());
             } else {
                 open_system_browser(pending.authorization_url())?;
@@ -426,6 +434,7 @@ mod tests {
         assert!(parsed.cloud_root.is_none());
         assert!(parsed.client_id.is_none());
         assert!(!parsed.manual_browser);
+        assert!(!parsed.write_access);
     }
 
     #[test]
@@ -449,6 +458,7 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.action, Action::Connect);
         assert!(parsed.manual_browser);
+        assert!(!parsed.write_access);
         assert_eq!(parsed.connections, connections);
         assert!(parse_args(
             &strings(&["--connect", "--cloud-root", "relative", "--client-id", "id"]),
@@ -464,6 +474,19 @@ mod tests {
             Some(home),
         )
         .is_err());
+        let write = parse_args(
+            &[
+                "--connect".into(),
+                "--cloud-root".into(),
+                cloud_root.to_string_lossy().into_owned(),
+                "--client-id".into(),
+                "12345678-1234-4abc-8def-1234567890ab".into(),
+                "--write-access".into(),
+            ],
+            Some(absolute_home()),
+        )
+        .unwrap();
+        assert!(write.write_access);
     }
 
     #[test]
@@ -474,6 +497,7 @@ mod tests {
         assert!(parse_args(&[], home.clone()).is_err());
         assert!(parse_args(&strings(&["--list", "--disconnect"]), home.clone()).is_err());
         assert!(parse_args(&strings(&["--list", "--manual-browser"]), home.clone()).is_err());
+        assert!(parse_args(&strings(&["--list", "--write-access"]), home.clone()).is_err());
         assert!(parse_args(
             &[
                 "--verify-capacity".into(),
@@ -489,8 +513,18 @@ mod tests {
             &[
                 "--disconnect".into(),
                 "--cloud-root".into(),
-                root,
+                root.clone(),
                 "--manual-browser".into(),
+            ],
+            home.clone(),
+        )
+        .is_err());
+        assert!(parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--cloud-root".into(),
+                root,
+                "--write-access".into(),
             ],
             home,
         )

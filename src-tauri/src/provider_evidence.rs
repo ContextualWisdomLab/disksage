@@ -3,6 +3,7 @@
 //! Provider status is time-sensitive. A successful check must therefore be persisted before a
 //! later source-eviction step can proceed, rather than surviving only in terminal or UI output.
 
+use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{ProviderSyncEvidence, SyncEvidenceKind};
 use std::path::Path;
 
@@ -14,6 +15,8 @@ use std::path::PathBuf;
 pub const PROVIDER_EVIDENCE_RECORD_VERSION: u32 = 1;
 #[cfg(not(coverage))]
 const MAX_PROVIDER_EVIDENCE_RECORD_BYTES: u64 = 64 * 1024;
+#[cfg(not(coverage))]
+pub const MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT: usize = 128;
 const MAX_EVIDENCE_ID_BYTES: usize = 1_024;
 const MAX_DESTINATION_BYTES: usize = 32 * 1024;
 
@@ -55,6 +58,11 @@ fn validate_evidence(evidence: &ProviderSyncEvidence) -> Result<(), String> {
     {
         return Err("provider-evidence-id-invalid".into());
     }
+    if !evidence.sync_state.is_unknown()
+        && evidence.sync_complete != evidence.sync_state.is_complete()
+    {
+        return Err("provider-evidence-sync-state-mismatch".into());
+    }
     match (evidence.kind, &evidence.remote_content) {
         (SyncEvidenceKind::ProviderNativeStatus, None)
         | (SyncEvidenceKind::ProviderApi, Some(_)) => Ok(()),
@@ -90,7 +98,9 @@ pub fn create_sync_evidence_record(
     })
 }
 
-pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Result<(), String> {
+fn validate_sync_evidence_record_compat(
+    record: &ProviderSyncEvidenceRecord,
+) -> Result<(), String> {
     if record.version != PROVIDER_EVIDENCE_RECORD_VERSION {
         return Err("provider-evidence-record-version-unsupported".into());
     }
@@ -99,6 +109,19 @@ pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Res
         || record.record_id != record_id_for(record.version, &record.evidence)?
     {
         return Err("provider-evidence-record-integrity-mismatch".into());
+    }
+    Ok(())
+}
+
+/// Validate evidence for current authorization decisions.
+///
+/// Historical records that predate `sync_state` remain readable through
+/// `read_immutable_sync_evidence`, but an omitted/unknown explicit state can never authorize a
+/// destructive source-eviction permit even when the legacy `sync_complete` bit is true.
+pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Result<(), String> {
+    validate_sync_evidence_record_compat(record)?;
+    if record.evidence.sync_complete && record.evidence.sync_state.is_unknown() {
+        return Err("provider-sync-incomplete".into());
     }
     Ok(())
 }
@@ -120,13 +143,99 @@ fn secure_evidence_directory(path: &Path) -> Result<(), String> {
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("provider-evidence-directory-unsafe".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("provider-evidence-directory-writable-by-others".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn remove_retained_evidence_file(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let original_permissions = {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "provider-evidence-retention-metadata-failed".to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("provider-evidence-retention-file-unsafe".into());
+        }
+        let original = metadata.permissions();
+        let mut writable = original.clone();
+        writable.set_readonly(false);
+        std::fs::set_permissions(path, writable)
+            .map_err(|_| "provider-evidence-retention-permissions-failed".to_string())?;
+        original
+    };
+
+    if std::fs::remove_file(path).is_err() {
+        #[cfg(windows)]
+        let _ = std::fs::set_permissions(path, original_permissions);
+        return Err("provider-evidence-retention-delete-failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn prune_receipt_evidence_history(
+    directory: &Path,
+    receipt_id: &str,
+    protected_record_id: &str,
+) -> Result<(), String> {
+    let prefix = format!("{receipt_id}-");
+    let mut records = Vec::<(u64, String, PathBuf)>::new();
+    for entry in std::fs::read_dir(directory)
+        .map_err(|_| "provider-evidence-retention-read-failed".to_string())?
+    {
+        let entry = entry.map_err(|_| "provider-evidence-retention-read-failed".to_string())?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix)
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let Ok(record) = read_immutable_sync_evidence(&path) else {
+            continue;
+        };
+        if record.evidence.receipt_id != receipt_id {
+            continue;
+        }
+        records.push((
+            record.evidence.confirmed_at_ms,
+            record.record_id,
+            path,
+        ));
+    }
+    if records.len() <= MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT {
+        return Ok(());
+    }
+    records.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
+    let prune_count = records.len() - MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT;
+    for (_, _, path) in records
+        .into_iter()
+        .filter(|(_, record_id, _)| record_id.as_str() != protected_record_id)
+        .take(prune_count)
+    {
+        remove_retained_evidence_file(&path)?;
+    }
+    #[cfg(unix)]
+    std::fs::File::open(directory)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|_| "provider-evidence-retention-directory-sync-failed".to_string())?;
     Ok(())
 }
 
 /// Persist the full provider claim before it is used to authorize source eviction.
 ///
 /// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
-/// integrity digest. Existing evidence is never overwritten.
+/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain a
+/// bounded per-receipt history while preserving the just-written immutable record even if the
+/// local clock moves backwards.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,
@@ -140,9 +249,14 @@ pub fn write_immutable_sync_evidence(
     if encoded.len() as u64 > MAX_PROVIDER_EVIDENCE_RECORD_BYTES {
         return Err("provider-evidence-record-too-large".into());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|_| "provider-evidence-record-create-failed".to_string())?;
     let result = (|| -> Result<(), String> {
@@ -160,7 +274,7 @@ pub fn write_immutable_sync_evidence(
         }
         #[cfg(not(unix))]
         permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
+        file.set_permissions(permissions)
             .map_err(|_| "provider-evidence-record-permissions-failed".to_string())?;
         #[cfg(unix)]
         std::fs::File::open(directory)
@@ -172,6 +286,16 @@ pub fn write_immutable_sync_evidence(
         drop(file);
         let _ = std::fs::remove_file(&path);
         return Err(error);
+    }
+    drop(file);
+    if let Err(_error) = prune_receipt_evidence_history(
+        directory,
+        &record.evidence.receipt_id,
+        &record.record_id,
+    ) {
+        // Retention is maintenance, not part of the attestation's authority. Keep the
+        // fsynced record so a transient directory/read/delete failure cannot discard valid proof;
+        // the next reconciliation pass can retry bounded pruning.
     }
     Ok((record, path))
 }
@@ -234,11 +358,88 @@ pub fn read_immutable_sync_evidence(path: &Path) -> Result<ProviderSyncEvidenceR
     }
     let record: ProviderSyncEvidenceRecord = serde_json::from_slice(&encoded)
         .map_err(|_| "provider-evidence-record-json-invalid".to_string())?;
-    validate_sync_evidence_record(&record)?;
+    validate_sync_evidence_record_compat(&record)?;
     if path.file_name().and_then(|name| name.to_str()) != Some(record_filename(&record).as_str()) {
         return Err("provider-evidence-record-filename-id-mismatch".into());
     }
     Ok(record)
+}
+
+/// Recover the latest API object id already bound to a receipt.
+///
+/// This is only a locator hint for the next authenticated re-check; the remote response and local
+/// source hash still have to pass the normal attestation gates. Invalid or unrelated records are
+/// ignored so a damaged evidence file cannot turn into an upload target.
+#[cfg(not(coverage))]
+pub fn latest_api_object_id(
+    directory: &Path,
+    receipt_id: &str,
+    provider: CloudProvider,
+) -> Option<String> {
+    if !valid_hex64(receipt_id) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(directory).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return None;
+        }
+    }
+    let prefix = format!("{receipt_id}-");
+    let mut latest: Option<(u64, String, String)> = None;
+    // Retention bounds valid records per receipt. Filter before reading so unrelated receipts do
+    // not consume a global directory window; scanning the complete prefix also recovers a valid
+    // record if an interrupted retention pass temporarily left extra files behind.
+    for path in std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&prefix)
+                        && path.extension().and_then(|value| value.to_str()) == Some("json")
+                })
+        })
+    {
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        debug_assert!(name.starts_with(&prefix));
+        let Ok(record) = read_immutable_sync_evidence(&path) else {
+            continue;
+        };
+        if record.evidence.receipt_id != receipt_id
+            || record.evidence.provider != provider
+            || record.evidence.kind != SyncEvidenceKind::ProviderApi
+        {
+            continue;
+        }
+        let Some(remote) = record.evidence.remote_content.as_ref() else {
+            continue;
+        };
+        if remote.object_id.trim().is_empty() {
+            continue;
+        }
+        let candidate = (
+            record.evidence.confirmed_at_ms,
+            record.record_id.clone(),
+            remote.object_id.clone(),
+        );
+        if latest
+            .as_ref()
+            .is_none_or(|current| (candidate.0, candidate.1.as_str()) > (current.0, current.1.as_str()))
+        {
+            latest = Some(candidate);
+        }
+    }
+    latest.map(|(_, _, object_id)| object_id)
 }
 
 #[cfg(test)]
@@ -258,6 +459,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: format!("provider-api:{}", "c".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: Some(RemoteContentProof {
                 object_id: "remote-id".into(),
                 revision: "revision-1".into(),
@@ -283,6 +485,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_unknown_complete_record_remains_compatible_but_cannot_authorize() {
+        let mut legacy = evidence();
+        legacy.sync_state = crate::cloud_transfer::ProviderSyncState::Unknown;
+        let record = create_sync_evidence_record(&legacy).unwrap();
+        validate_sync_evidence_record_compat(&record).unwrap();
+        assert_eq!(
+            validate_sync_evidence_record(&record).unwrap_err(),
+            "provider-sync-incomplete"
+        );
+    }
+
+    #[test]
     fn record_rejects_unsafe_or_incomplete_shapes() {
         let mut unsafe_evidence = evidence();
         unsafe_evidence.receipt_id = "../receipt".into();
@@ -300,6 +514,35 @@ mod tests {
         let mut value = serde_json::to_value(record).unwrap();
         value["evidence"]["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ProviderSyncEvidenceRecord>(value).is_err());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn latest_api_object_id_is_read_from_valid_immutable_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
+        assert_eq!(
+            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            Some("remote-id".into())
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn latest_api_object_id_ignores_unrelated_receipts_before_global_window() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..4_096 {
+            std::fs::write(
+                temp.path().join(format!("{}-{index:020}-unrelated.json", "b".repeat(64))),
+                b"unrelated",
+            )
+            .unwrap();
+        }
+        let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
+        assert_eq!(
+            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            Some("remote-id".into())
+        );
     }
 
     #[cfg(not(coverage))]

@@ -1,0 +1,374 @@
+//! Bounded restart requests for desktop provider clients.
+//!
+//! This is a recovery action, not a copy or eviction authority.  It only targets the two
+//! user-space desktop clients whose process names are already observed by `provider_client_runtime`.
+
+use crate::cloud::CloudProvider;
+use serde::{Deserialize, Serialize};
+
+pub const PROVIDER_RECOVERY_SCHEMA_VERSION: u32 = 1;
+const FINDER_COPY_CANCEL_SCRIPT: &str = "tell application \"Finder\" to activate\ntell application \"System Events\" to tell process \"Finder\" to key code 53\n";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRecoveryOutput {
+    pub schema_version: u32,
+    pub provider: CloudProvider,
+    pub action: String,
+    pub pre_runtime_observed: bool,
+    pub quit_requested: bool,
+    pub launch_requested: bool,
+    pub post_runtime_observed: Option<bool>,
+    pub blockers: Vec<String>,
+    pub cloud_write_executed: bool,
+    pub source_eviction_executed: bool,
+}
+
+pub fn recovery_supported(provider: CloudProvider) -> bool {
+    matches!(
+        provider,
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive
+    )
+}
+
+fn post_runtime_blockers(runtime_observed: Option<bool>) -> Vec<String> {
+    match runtime_observed {
+        Some(true) => Vec::new(),
+        Some(false) => vec!["provider-client-runtime-not-observed-after-restart".into()],
+        None => vec!["provider-client-runtime-evidence-unavailable-after-restart".into()],
+    }
+}
+
+/// Request Finder to cancel its active copy/materialization dialog without touching any provider
+/// daemon, cloud object, or source file. The fixed AppleScript sends only Escape; it accepts no
+/// user-provided script, path, or process identifier.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn cancel_finder_copy() -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err("finder-copy-cancel-platform-unsupported".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ok = run_bounded(
+            Path::new("/usr/bin/osascript"),
+            &["-e", FINDER_COPY_CANCEL_SCRIPT],
+        )
+        .map_err(|error| {
+            match error.as_str() {
+                "provider-recovery-command-spawn-failed" => "finder-copy-cancel-spawn-failed",
+                "provider-recovery-command-timeout" => "finder-copy-cancel-timeout",
+                "provider-recovery-command-wait-failed" => "finder-copy-cancel-wait-failed",
+                _ => "finder-copy-cancel-command-failed",
+            }
+            .to_string()
+        })?;
+        if ok {
+            Ok(())
+        } else {
+            Err("finder-copy-cancel-command-failed".into())
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+use std::path::{Path, PathBuf};
+#[cfg(not(coverage))]
+use std::process::{Command, Stdio};
+#[cfg(not(coverage))]
+use std::time::{Duration, Instant};
+
+#[cfg(not(coverage))]
+fn app_spec(provider: CloudProvider) -> Option<(&'static str, &'static str)> {
+    match provider {
+        CloudProvider::Onedrive => Some(("OneDrive", "com.microsoft.OneDrive")),
+        CloudProvider::GoogleDrive => Some(("Google Drive", "com.google.drivefs")),
+        CloudProvider::Icloud => None,
+    }
+}
+
+#[cfg(not(coverage))]
+fn app_name(provider: CloudProvider) -> Option<&'static str> {
+    app_spec(provider).map(|(name, _)| name)
+}
+
+#[cfg(not(coverage))]
+#[cfg(target_os = "macos")]
+fn verified_bundle(path: &Path, expected_bundle_id: &str) -> bool {
+    let info = path.join("Contents/Info.plist");
+    let Ok(metadata) = std::fs::symlink_metadata(&info) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    let Ok(plist) = plist::Value::from_file(&info) else {
+        return false;
+    };
+    plist
+        .as_dictionary()
+        .and_then(|dictionary| dictionary.get("CFBundleIdentifier"))
+        .and_then(plist::Value::as_string)
+        == Some(expected_bundle_id)
+}
+
+#[cfg(not(coverage))]
+#[cfg(not(target_os = "macos"))]
+fn verified_bundle(_path: &Path, _expected_bundle_id: &str) -> bool {
+    false
+}
+
+#[cfg(not(coverage))]
+fn app_path(provider: CloudProvider) -> Result<PathBuf, String> {
+    let (name, bundle_id) =
+        app_spec(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
+    let mut candidates = vec![PathBuf::from("/Applications").join(format!("{name}.app"))];
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(
+            PathBuf::from(home)
+                .join("Applications")
+                .join(format!("{name}.app")),
+        );
+    }
+    candidates
+        .into_iter()
+        .find(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false)
+                && verified_bundle(path, bundle_id)
+        })
+        .ok_or_else(|| "provider-recovery-client-app-not-found".to_string())
+}
+
+#[cfg(not(coverage))]
+fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "provider-recovery-command-spawn-failed".to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider-recovery-command-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider-recovery-command-wait-failed".into());
+            }
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+fn runtime_observation(provider: CloudProvider, observed_at_ms: u64) -> Option<bool> {
+    crate::provider_client_runtime::collect_provider_client_runtime(provider, observed_at_ms)
+        .runtime_observed
+}
+
+#[cfg(not(coverage))]
+fn require_runtime_observation(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+) -> Result<bool, String> {
+    runtime_observation(provider, observed_at_ms)
+        .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())
+}
+
+#[cfg(not(coverage))]
+fn request_quit(app: &str) -> Result<(), String> {
+    // The app name is selected from the fixed provider map above; no user path or shell is parsed.
+    let script = format!("tell application \"{app}\" to quit");
+    let ok = run_bounded(Path::new("/usr/bin/osascript"), &["-e", script.as_str()])?;
+    // AppleScript returns non-zero when the app was already absent. The subsequent runtime
+    // observation is authoritative; unavailable evidence must never be treated as process absence.
+    let provider = if app == "OneDrive" {
+        CloudProvider::Onedrive
+    } else {
+        CloudProvider::GoogleDrive
+    };
+    if !ok && require_runtime_observation(provider, 0)? {
+        return Err("provider-recovery-quit-request-failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn request_graceful_term(app: &str) -> Result<(), String> {
+    // `app` comes only from the fixed provider map. SIGTERM is a graceful request; SIGKILL is
+    // intentionally never used because an active desktop client may still be flushing state.
+    let ok = run_bounded(Path::new("/usr/bin/killall"), &["-TERM", "--", app])?;
+    let provider = if app == "OneDrive" {
+        CloudProvider::Onedrive
+    } else {
+        CloudProvider::GoogleDrive
+    };
+    if !ok && require_runtime_observation(provider, 0)? {
+        return Err("provider-recovery-graceful-term-failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+/// Request a bounded restart of a user-space provider client.
+///
+/// iCloud is deliberately rejected because its daemon is system-managed.  A successful return
+/// only proves that quit/launch requests completed; `post_runtime_observed` is the fresh local
+/// process observation and never proves authentication, remote capacity, upload, or eviction.
+pub fn recover_provider_client(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+) -> Result<ProviderRecoveryOutput, String> {
+    recover_provider_client_with_options(provider, observed_at_ms, false)
+}
+
+#[cfg(not(coverage))]
+/// Request a bounded provider restart, optionally escalating a failed AppleScript quit to an
+/// explicit, graceful SIGTERM of the fixed verified desktop client.
+pub fn recover_provider_client_with_options(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+    allow_graceful_term: bool,
+) -> Result<ProviderRecoveryOutput, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (provider, observed_at_ms);
+        return Err("provider-recovery-platform-unsupported".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let app =
+            app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
+        let path = app_path(provider)?;
+        let pre_runtime_observed = require_runtime_observation(provider, observed_at_ms)?;
+        if let Err(quit_error) = request_quit(app) {
+            if !allow_graceful_term {
+                return Err(quit_error);
+            }
+            request_graceful_term(app)?;
+        }
+
+        let quit_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let runtime_observed = require_runtime_observation(provider, observed_at_ms)?;
+            if !runtime_observed {
+                break;
+            }
+            if Instant::now() >= quit_deadline {
+                return Err("provider-recovery-quit-timeout".into());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        let path_string = path
+            .to_str()
+            .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
+        if !run_bounded(Path::new("/usr/bin/open"), &["-a", path_string])? {
+            return Err("provider-recovery-launch-failed".into());
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        let post_runtime_observed = runtime_observation(provider, observed_at_ms);
+        let blockers = post_runtime_blockers(post_runtime_observed);
+        Ok(ProviderRecoveryOutput {
+            schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+            provider,
+            action: if allow_graceful_term {
+                "restart-provider-client-with-graceful-term".into()
+            } else {
+                "restart-provider-client".into()
+            },
+            pre_runtime_observed,
+            quit_requested: true,
+            launch_requested: true,
+            post_runtime_observed,
+            blockers,
+            cloud_write_executed: false,
+            source_eviction_executed: false,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_user_space_clients_are_recoverable() {
+        assert!(recovery_supported(CloudProvider::Onedrive));
+        assert!(recovery_supported(CloudProvider::GoogleDrive));
+        assert!(!recovery_supported(CloudProvider::Icloud));
+    }
+
+    #[test]
+    fn finder_copy_cancel_script_keeps_two_statements() {
+        assert_eq!(
+            FINDER_COPY_CANCEL_SCRIPT.lines().collect::<Vec<_>>(),
+            vec![
+                "tell application \"Finder\" to activate",
+                "tell application \"System Events\" to tell process \"Finder\" to key code 53",
+            ]
+        );
+    }
+
+    #[test]
+    fn recovery_output_cannot_claim_data_mutation() {
+        let json = serde_json::to_value(ProviderRecoveryOutput {
+            schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+            provider: CloudProvider::Onedrive,
+            action: "restart-provider-client".into(),
+            pre_runtime_observed: true,
+            quit_requested: true,
+            launch_requested: true,
+            post_runtime_observed: Some(true),
+            blockers: Vec::new(),
+            cloud_write_executed: false,
+            source_eviction_executed: false,
+        })
+        .unwrap();
+        assert_eq!(json["cloud_write_executed"], false);
+        assert_eq!(json["source_eviction_executed"], false);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(coverage)))]
+    #[test]
+    fn unavailable_runtime_evidence_is_not_process_absence() {
+        assert_eq!(
+            require_runtime_observation(CloudProvider::Onedrive, 0).unwrap_err(),
+            "provider-recovery-runtime-evidence-unavailable"
+        );
+    }
+
+    #[test]
+    fn post_restart_blockers_preserve_unavailable_runtime_evidence() {
+        assert!(post_runtime_blockers(Some(true)).is_empty());
+        assert_eq!(
+            post_runtime_blockers(Some(false)),
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
+        assert_eq!(
+            post_runtime_blockers(None),
+            vec!["provider-client-runtime-evidence-unavailable-after-restart"]
+        );
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(coverage)))]
+    #[test]
+    fn finder_copy_cancel_is_explicitly_unsupported_off_macos() {
+        assert_eq!(
+            cancel_finder_copy().unwrap_err(),
+            "finder-copy-cancel-platform-unsupported"
+        );
+    }
+}

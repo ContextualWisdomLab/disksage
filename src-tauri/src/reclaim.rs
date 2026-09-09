@@ -379,20 +379,18 @@ fn scan_root(
     } else {
         let filtered_entries = Arc::new(AtomicU64::new(0));
         let filtered_entries_for_walk = Arc::clone(&filtered_entries);
-        let walker = jwalk::WalkDir::new(root)
+        let walker = walkdir::WalkDir::new(root)
             .follow_links(false)
-            .skip_hidden(false)
-            .process_read_dir(move |_depth, _path, _state, children| {
-                children.retain(|entry| {
-                    let keep = entry
-                        .as_ref()
-                        .map(crate::scanner::keep_entry)
-                        .unwrap_or(true);
-                    if !keep {
-                        filtered_entries_for_walk.fetch_add(1, Ordering::Relaxed);
-                    }
-                    keep
-                });
+            .into_iter()
+            .filter_entry(move |entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                let keep = crate::scanner::keep_entry(entry);
+                if !keep {
+                    filtered_entries_for_walk.fetch_add(1, Ordering::Relaxed);
+                }
+                keep
             });
 
         for entry in walker {
@@ -408,10 +406,6 @@ fn scan_root(
                         local.skipped = local.skipped.saturating_add(1);
                         totals.skipped = totals.skipped.saturating_add(1);
                     }
-                }
-                if entry.read_children_error.is_some() {
-                    local.skipped = local.skipped.saturating_add(1);
-                    totals.skipped = totals.skipped.saturating_add(1);
                 }
             } else if entry.file_type().is_file() {
                 match entry.metadata() {

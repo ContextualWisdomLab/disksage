@@ -2,10 +2,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::io;
-use std::path::Path;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 pub const LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 pub const LOCAL_VOLUME_COMPARISON_SCHEMA_VERSION: u32 = 1;
+pub const LOCAL_VOLUME_EVIDENCE_DIRECTORY: &str = "volume-pressure-evidence";
+const MAX_PERSISTED_SNAPSHOTS: usize = 128;
+const MAX_PERSISTED_SNAPSHOT_BYTES: usize = 64 * 1024;
+/// Keep enough local space for File Provider staging and filesystem metadata while copying one
+/// candidate. This is separate from remote cloud capacity and is checked again at the mutation
+/// boundary.
+pub const LOCAL_COPY_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 const LIMITATIONS: [&str; 3] = [
     "shared-filesystem-concurrency-unattributed",
@@ -95,6 +103,125 @@ pub fn snapshot_volume(path: &Path, observed_at_ms: u64) -> Result<LocalVolumeSn
         stats.allocation_granularity(),
         observed_at_ms,
     )
+}
+
+/// Persist one path-free capacity observation for later incident comparison.
+///
+/// The record is create-only, read-only, fsynced, and named by its observation time and content
+/// fingerprint. Retention is bounded and only files matching DiskSage's own record shape are
+/// pruned; provider databases, user files, and unrelated app-data entries are never touched.
+pub fn write_snapshot_evidence(
+    app_data_dir: &Path,
+    snapshot: &LocalVolumeSnapshot,
+) -> Result<PathBuf, String> {
+    validate_snapshot(snapshot)?;
+    let directory = snapshot_evidence_directory(app_data_dir)?;
+    let path = directory.join(format!(
+        "{:020}-{}.json",
+        snapshot.observed_at_ms, snapshot.evidence_fingerprint
+    ));
+    let encoded = serde_json::to_vec_pretty(snapshot)
+        .map_err(|_| "local-volume-evidence-encode-failed".to_string())?;
+    if encoded.len() > MAX_PERSISTED_SNAPSHOT_BYTES {
+        return Err("local-volume-evidence-too-large".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "local-volume-evidence-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "local-volume-evidence-write-failed".to_string())?;
+        #[cfg(not(unix))]
+        file.set_len(encoded.len() as u64)
+            .map_err(|_| "local-volume-evidence-write-failed".to_string())?;
+        #[cfg(unix)]
+        std::fs::File::open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "local-volume-evidence-directory-sync-failed".to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    prune_snapshot_evidence(&directory)?;
+    Ok(path)
+}
+
+fn snapshot_evidence_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
+    if !app_data_dir.is_absolute()
+        || app_data_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("local-volume-evidence-parent-invalid".into());
+    }
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "local-volume-evidence-parent-create-failed".to_string())?;
+    let parent = std::fs::symlink_metadata(app_data_dir)
+        .map_err(|_| "local-volume-evidence-parent-unavailable".to_string())?;
+    if parent.file_type().is_symlink() || !parent.is_dir() {
+        return Err("local-volume-evidence-parent-unsafe".into());
+    }
+    let directory = app_data_dir.join(LOCAL_VOLUME_EVIDENCE_DIRECTORY);
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "local-volume-evidence-directory-create-failed".to_string())?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .map_err(|_| "local-volume-evidence-directory-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("local-volume-evidence-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| "local-volume-evidence-directory-permissions-failed".to_string())?;
+    }
+    Ok(directory)
+}
+
+fn is_snapshot_record_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some((timestamp, fingerprint)) = stem.split_once('-') else {
+        return false;
+    };
+    timestamp.len() == 20
+        && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        && is_lower_hex_64(fingerprint)
+}
+
+fn prune_snapshot_evidence(directory: &Path) -> Result<(), String> {
+    let mut records = std::fs::read_dir(directory)
+        .map_err(|_| "local-volume-evidence-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            is_snapshot_record_name(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.0.cmp(&right.0));
+    while records.len() > MAX_PERSISTED_SNAPSHOTS {
+        let (_, path) = records.remove(0);
+        std::fs::remove_file(path).map_err(|_| "local-volume-evidence-retention-failed")?;
+    }
+    Ok(())
+}
+
+pub fn has_copy_headroom(available_bytes: u64, candidate_bytes: u64) -> bool {
+    candidate_bytes
+        .checked_add(LOCAL_COPY_RESERVE_BYTES)
+        .is_some_and(|required| available_bytes >= required)
 }
 
 pub fn validate_snapshot(snapshot: &LocalVolumeSnapshot) -> Result<(), String> {
@@ -377,6 +504,13 @@ mod tests {
     }
 
     #[test]
+    fn copy_headroom_requires_candidate_and_reserve_without_overflow() {
+        assert!(has_copy_headroom(LOCAL_COPY_RESERVE_BYTES + 10, 10));
+        assert!(!has_copy_headroom(LOCAL_COPY_RESERVE_BYTES + 9, 10));
+        assert!(!has_copy_headroom(u64::MAX, u64::MAX));
+    }
+
+    #[test]
     fn snapshot_is_path_redacted_and_integrity_bound() {
         let mut value = snapshot(10_000, 2_000, 1_500, 10);
         let encoded = serde_json::to_string(&value).unwrap();
@@ -481,5 +615,55 @@ mod tests {
         assert!(validate_snapshot(&live).is_ok());
         let encoded = serde_json::to_string(&live).unwrap();
         assert!(!encoded.contains(&temp.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn snapshot_evidence_is_immutable_path_free_and_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let unrelated = temp
+            .path()
+            .join(LOCAL_VOLUME_EVIDENCE_DIRECTORY)
+            .join("keep.txt");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        std::fs::write(&unrelated, b"unrelated").unwrap();
+
+        let first = snapshot(10_000, 2_000, 1_500, 1);
+        let first_path = write_snapshot_evidence(temp.path(), &first).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<LocalVolumeSnapshot>(&std::fs::read(&first_path).unwrap())
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            write_snapshot_evidence(temp.path(), &first).unwrap_err(),
+            "local-volume-evidence-create-failed"
+        );
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated");
+
+        for observed_at_ms in 2..=129 {
+            write_snapshot_evidence(temp.path(), &snapshot(10_000, 2_000, 1_500, observed_at_ms))
+                .unwrap();
+        }
+        let records = std::fs::read_dir(temp.path().join(LOCAL_VOLUME_EVIDENCE_DIRECTORY))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(is_snapshot_record_name)
+            })
+            .count();
+        assert_eq!(records, MAX_PERSISTED_SNAPSHOTS);
+        assert!(!first_path.exists());
+    }
+
+    #[test]
+    fn snapshot_evidence_rejects_relative_parent() {
+        let snapshot = snapshot(10_000, 2_000, 1_500, 1);
+        assert_eq!(
+            write_snapshot_evidence(Path::new("relative"), &snapshot).unwrap_err(),
+            "local-volume-evidence-parent-invalid"
+        );
     }
 }

@@ -10,10 +10,10 @@ function readSource(path: string): string {
 }
 
 describe("cache cleanup destructive authority", () => {
-  it("fails closed until recycling is bound to the validated filesystem object", () => {
+  it("uses the identity-bound recycle primitive", () => {
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
 
-    expect(backend).not.toContain("safety::trash_delete(&display_path");
-    expect(backend).toContain("cache-cleanup-atomic-trash-unavailable");
+    expect(backend).toContain("safety::trash_delete_if_identity(");
+    expect(backend).toContain("cache-cleanup-targets-stale");
   });
 });

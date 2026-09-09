@@ -26,6 +26,13 @@ pub struct DevArtifact {
     pub age_days: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DevArtifactCleanResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: String,
+}
+
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
 const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
@@ -33,6 +40,7 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
+    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -74,12 +82,10 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     }
     manifest.object_id = root_object_id.unwrap_or_default();
     let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
-            children.retain(|r| r.as_ref().map(scanner::keep_entry).unwrap_or(true));
-        });
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
 
     for entry in walker {
         if Instant::now() >= deadline || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
@@ -91,14 +97,10 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
             manifest.scan_complete = false;
             continue;
         };
-        if entry.read_children_error.is_some() {
-            manifest.skipped = manifest.skipped.saturating_add(1);
-            manifest.scan_complete = false;
-        }
         let entry_path = entry.path();
         let relative = entry_path
             .strip_prefix(root)
-            .unwrap_or(entry_path.as_path())
+            .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
         let relative = if relative.is_empty() { "." } else { &relative };
@@ -170,7 +172,7 @@ fn metadata_fingerprint(records: &[String]) -> String {
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
-/// 2패스로 나눈 이유: jwalk는 병렬로 디렉토리를 순회해 부모/자식 방문 순서를
+/// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
 /// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
 /// 도중 걸러내면, 중첩 node_modules의 자식이 부모보다 먼저 방문될 경우 둘 다
 /// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
@@ -178,12 +180,12 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
+        .into_iter()
+        .filter_entry(|entry| {
             // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            children.retain(|r| r.as_ref().map(scanner::keep_entry).unwrap_or(true));
+            entry.depth() == 0 || scanner::keep_entry(entry)
         });
 
     for entry in walker {
@@ -197,7 +199,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
-            candidates.push(path);
+            candidates.push(path.to_path_buf());
         }
     }
 
@@ -247,6 +249,68 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
+/// Re-scan and move only unchanged development artifacts to OS Trash.
+///
+/// The request manifest is deliberately compared against a fresh bounded scan. A path match is
+/// not sufficient because a recreated `target` or `node_modules` directory could otherwise cause
+/// an unrelated artifact to be removed.
+pub fn clean_artifacts(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<DevArtifactCleanResult> {
+    let current = find_artifacts(root, min_age_days, now_ms);
+    requests
+        .iter()
+        .map(|request| {
+            let matches = current.iter().find(|candidate| {
+                candidate.path == request.path
+                    && candidate.kind == request.kind
+                    && candidate.project == request.project
+                    && candidate.bytes == request.bytes
+                    && candidate.files == request.files
+                    && candidate.skipped == request.skipped
+                    && candidate.scan_complete
+                    && request.scan_complete
+                    && request.skipped == 0
+                    && candidate.fingerprint == request.fingerprint
+                    && !request.object_id.is_empty()
+                    && candidate.object_id == request.object_id
+                    && candidate.age_days >= request.age_days
+            });
+
+            if matches.is_none() {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+                };
+            }
+
+            match crate::safety::trash_delete_if_identity(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(error) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.to_string(),
+                },
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +351,20 @@ mod tests {
     }
 
     #[test]
+    fn finds_regenerable_codegraph_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("repo/.codegraph");
+        fs::create_dir_all(&index).unwrap();
+        fs::write(index.join("db"), b"generated").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(found.iter().any(|artifact| {
+            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
+        }));
+    }
+
+    #[test]
     fn respects_min_age() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
@@ -310,5 +388,26 @@ mod tests {
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
 
         assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
+    }
+
+    #[test]
+    fn cleanup_fails_closed_when_artifact_identity_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "app", "package.json", "node_modules");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        assert_eq!(candidates.len(), 1);
+        let journal = tmp.path().join("journal.jsonl");
+        let original = tmp.path().join("original-node-modules");
+        let live = tmp.path().join("app/node_modules");
+        std::fs::rename(&live, &original).unwrap();
+        std::fs::create_dir(&live).unwrap();
+        std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("changed"));
+        assert!(live.exists());
+        assert!(original.exists());
+        assert!(!journal.exists(), "stale identity must not create a journal");
     }
 }

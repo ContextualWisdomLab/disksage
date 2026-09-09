@@ -1,4 +1,8 @@
-//! Read-only ZIP-to-Git-tree proof. Archive entries are streamed and never extracted.
+//! Read-only ZIP-to-Git-tree proof.
+//!
+//! Archive entries are streamed and never extracted. The command computes deterministic Git-tree
+//! evidence, optionally verifies one expected tree or a content-subset relation, and never mutates
+//! either archive or the local filesystem.
 
 use std::path::PathBuf;
 
@@ -6,18 +10,25 @@ use disksage_lib::archive_git_tree::{
     compare_zip_content_inclusion, inspect_zip_git_tree_with_mode, ArchiveTreeRootMode,
 };
 
+/// Parsed arguments for one archive-tree inspection or subset proof.
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
+    /// ZIP archive whose content tree will be inspected.
     zip: PathBuf,
+    /// Optional expected 40-character Git tree identifier.
     expected_tree: Option<String>,
+    /// Optional archive that must contain every content item from `zip`.
     superset_zip: Option<PathBuf>,
+    /// Whether to retain a shared archive root directory in the computed tree.
     keep_top_level: bool,
 }
 
+/// Returns the stable command synopsis used by help and bounded validation failures.
 fn usage() -> &'static str {
     "DiskSage archive proof: usage: disksage-archive-tree --zip PATH [--expected-tree HEX40 | --prove-subset-of PATH] [--keep-top-level]"
 }
 
+/// Returns the required value after one known option and advances the parser index.
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -25,6 +36,7 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
+/// Parses bounded UTF-8 command arguments without reflecting unknown payloads.
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut zip = None;
     let mut expected_tree = None;
@@ -40,7 +52,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--keep-top-level" => keep_top_level = true,
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("archive-tree-unknown-argument".into()),
         }
         index += 1;
     }
@@ -55,8 +67,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
+/// Reads process arguments, performs the requested read-only proof, and prints JSON evidence.
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "archive-tree-argument-invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let root_mode = if args.keep_top_level {
         ArchiveTreeRootMode::KeepTopLevel
@@ -86,6 +110,7 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Runs the CLI and returns exit code 2 for bounded validation or proof failures.
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");

@@ -1,0 +1,128 @@
+[
+  {
+    "itemType": "webpage",
+    "title": "Zotero Local API",
+    "creators": [
+      { "creatorType": "author", "name": "Zotero Documentation" }
+    ],
+    "date": "2026-07-29",
+    "url": "https://www.zotero.org/support/dev/web_api/v3/local_api",
+    "extra": "APA 7: Zotero Documentation. (2026, July 29). Zotero Local API."
+  },
+  {
+    "itemType": "webpage",
+    "title": "Zotero Web API File Uploads",
+    "creators": [
+      { "creatorType": "author", "name": "Zotero Documentation" }
+    ],
+    "date": "2026-07-29",
+    "url": "https://www.zotero.org/support/dev/web_api/v3/file_upload",
+    "extra": "APA 7: Zotero Documentation. (2026, July 29). Zotero Web API file uploads."
+  },
+  {
+    "itemType": "report",
+    "title": "OWL 2 Web Ontology Language: Profiles (Second Edition)",
+    "creators": [
+      { "creatorType": "author", "name": "World Wide Web Consortium" }
+    ],
+    "date": "2012-12-11",
+    "url": "https://www.w3.org/TR/owl2-profiles/",
+    "extra": "APA 7: Motik, B., Cuenca Grau, B., Horrocks, I., Wu, Z., Fokoue, A., & Lutz, C. (Eds.). (2012). OWL 2 Web Ontology Language: Profiles (2nd ed.). W3C Recommendation."
+  },
+  {
+    "itemType": "report",
+    "title": "Security and Privacy Controls for Information Systems and Organizations",
+    "creators": [
+      { "creatorType": "author", "name": "Joint Task Force" }
+    ],
+    "date": "2020",
+    "DOI": "10.6028/NIST.SP.800-53r5",
+    "url": "https://doi.org/10.6028/NIST.SP.800-53r5",
+    "extra": "APA 7: Joint Task Force. (2020). Security and privacy controls for information systems and organizations (NIST SP 800-53 Rev. 5). National Institute of Standards and Technology."
+  },
+  {
+    "itemType": "report",
+    "title": "PROV-O: The PROV Ontology",
+    "creators": [
+      { "creatorType": "editor", "firstName": "Timothy", "lastName": "Lebo" },
+      { "creatorType": "editor", "firstName": "Satya", "lastName": "Sahoo" },
+      { "creatorType": "editor", "firstName": "Deborah", "lastName": "McGuinness" }
+    ],
+    "date": "2013-04-30",
+    "url": "https://www.w3.org/TR/prov-o/",
+    "extra": "APA 7: Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). PROV-O: The PROV ontology. W3C Recommendation."
+  },
+  {
+    "itemType": "report",
+    "title": "Data Catalog Vocabulary (DCAT) - Version 3",
+    "creators": [
+      { "creatorType": "editor", "firstName": "Riccardo", "lastName": "Albertoni" },
+      { "creatorType": "editor", "firstName": "David", "lastName": "Browning" },
+      { "creatorType": "editor", "firstName": "Simon J", "lastName": "Cox" },
+      { "creatorType": "editor", "firstName": "Alejandra", "lastName": "Gonzalez Beltran" },
+      { "creatorType": "editor", "firstName": "Andrea", "lastName": "Perego" },
+      { "creatorType": "editor", "firstName": "Peter", "lastName": "Winstanley" }
+    ],
+    "date": "2024-08-22",
+    "url": "https://www.w3.org/TR/vocab-dcat-3/",
+    "extra": "APA 7: Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P. (Eds.). (2024). Data Catalog Vocabulary (DCAT) - Version 3. W3C Recommendation."
+  },
+  {
+    "itemType": "report",
+    "title": "DCMI Metadata Terms",
+    "creators": [
+      { "creatorType": "author", "name": "DCMI Usage Board" }
+    ],
+    "date": "2020-01-20",
+    "url": "https://www.dublincore.org/specifications/dublin-core/dcmi-terms/2020-01-20/",
+    "extra": "APA 7: DCMI Usage Board. (2020). DCMI Metadata Terms. DCMI Recommendation."
+  },
+  {
+    "itemType": "journalArticle",
+    "title": "A Comprehensive Survey on the State-of-the-art Data Provenance Approaches for Security Enforcement",
+    "creators": [
+      { "creatorType": "author", "firstName": "Md Morshed", "lastName": "Alam" },
+      { "creatorType": "author", "firstName": "Weichao", "lastName": "Wang" }
+    ],
+    "date": "2021",
+    "DOI": "10.3233/JCS-200108",
+    "url": "https://arxiv.org/abs/2107.01678",
+    "publicationTitle": "Journal of Computer Security",
+    "volume": "29",
+    "issue": "4",
+    "pages": "423-446",
+    "extra": "APA 7: Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance approaches for security enforcement. Journal of Computer Security, 29(4), 423–446. https://doi.org/10.3233/JCS-200108"
+  },
+  {
+    "itemType": "report",
+    "title": "Security Guidelines for Storage Infrastructure",
+    "creators": [
+      { "creatorType": "author", "firstName": "Ramaswamy", "lastName": "Chandramouli" },
+      { "creatorType": "author", "firstName": "Doron", "lastName": "Pinhas" }
+    ],
+    "date": "2020-10-26",
+    "institution": "National Institute of Standards and Technology",
+    "reportNumber": "SP 800-209",
+    "DOI": "10.6028/NIST.SP.800-209",
+    "url": "https://csrc.nist.gov/pubs/sp/800/209/final",
+    "extra": "APA 7: Chandramouli, R., & Pinhas, D. (2020). Security guidelines for storage infrastructure (NIST SP 800-209). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-209"
+  },
+  {
+    "itemType": "conferencePaper",
+    "title": "Why and Where: A Characterization of Data Provenance",
+    "creators": [
+      { "creatorType": "author", "firstName": "Peter", "lastName": "Buneman" },
+      { "creatorType": "author", "firstName": "Sanjeev", "lastName": "Khanna" },
+      { "creatorType": "author", "firstName": "Wang-Chiew", "lastName": "Tan" }
+    ],
+    "date": "2001",
+    "conferenceName": "8th International Conference on Database Theory (ICDT 2001)",
+    "proceedingsTitle": "Database Theory — ICDT 2001",
+    "publisher": "Springer",
+    "place": "London, UK",
+    "pages": "316-330",
+    "DOI": "10.1007/3-540-44503-X_20",
+    "url": "https://www.research.ed.ac.uk/files/16509989/Why_and_Where_A_Characterization_of_Data_Provenance.pdf",
+    "extra": "APA 7: Buneman, P., Khanna, S., & Tan, W.-C. (2001). Why and where: A characterization of data provenance. In A. D. Bossi (Ed.), Database Theory — ICDT 2001 (pp. 316–330). Springer. https://doi.org/10.1007/3-540-44503-X_20"
+  }
+]

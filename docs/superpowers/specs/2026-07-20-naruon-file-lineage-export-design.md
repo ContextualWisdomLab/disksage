@@ -14,9 +14,10 @@ email schema would either discard these facts or weaken its fail-closed validato
 
 ## Decision
 
-DiskSage exports a distinct `disksage.file-lineage` schema version 1 from an immutable v3 copy
-receipt. The optional provider evidence record must also pass its immutable filename and digest
-checks and bind the same receipt, provider, destination, byte count, and BLAKE3 hash.
+DiskSage exports a distinct `disksage.file-lineage` schema version 3 from an immutable v3 copy
+receipt. Naruon keeps v1/v2 readable with deterministic legacy defaults. The optional provider
+evidence record must also pass its immutable filename and digest checks and bind the same receipt,
+provider, destination, byte count, and BLAKE3 hash.
 
 The export includes:
 

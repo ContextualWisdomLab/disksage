@@ -35,17 +35,34 @@ const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
 #[cfg(not(coverage))]
+const MACOS_METADATA_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(not(coverage))]
 const EXIFTOOL_BATCH_SIZE: usize = 32;
 #[cfg(not(coverage))]
-const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
+const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const EXIFTOOL_BATCH_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+#[cfg(not(coverage))]
+// ponytail: cap detailed probes per plan; expand only with an asynchronous per-file budget.
+const MAX_METADATA_PROBE_FILES: usize = 32;
+#[cfg(not(coverage))]
+const METADATA_PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(not(coverage))]
+pub const ARCHIVE_SCAN_MAX_ENTRIES: u64 = 100_000;
+#[cfg(not(coverage))]
+pub const ARCHIVE_SCAN_MAX_DURATION: Duration = Duration::from_secs(10);
 #[cfg(not(coverage))]
 const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
 #[cfg(not(coverage))]
 const MAX_ZIP_CONTEXT_NAMES: usize = 16;
 #[cfg(not(coverage))]
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_METADATA_ENTRIES: usize = 4_096;
+#[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_METADATA_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_HEADER_BYTES: usize = 64 * 1024;
 #[cfg(not(coverage))]
 const INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES: usize = 1024 * 1024;
 #[cfg(not(coverage))]
@@ -145,6 +162,7 @@ pub enum ArchiveKind {
     Backup,
     Creative,
     IncompleteDownload,
+    SensitiveConfig,
 }
 
 impl ArchiveKind {
@@ -157,6 +175,7 @@ impl ArchiveKind {
             Self::Backup => "backups",
             Self::Creative => "creative",
             Self::IncompleteDownload => "incomplete-downloads",
+            Self::SensitiveConfig => "sensitive-config",
         }
     }
 }
@@ -211,18 +230,19 @@ impl Default for CloudPlanOptions {
 
 /// Immutable, process-local evidence prepared once for one source corpus.
 ///
-/// Content metadata and duplicate digests are destination-independent and expensive to collect.
-/// A snapshot lets callers derive several destination plans without re-running probes or reading
-/// source content again. Destination existence, account scope, review fingerprints, capacity, and
-/// provider sync state are deliberately not cached.
+/// Content metadata is destination-independent and expensive to collect. A snapshot lets callers
+/// derive several destination plans without re-running probes. Destination existence, account
+/// scope, review fingerprints, capacity, provider sync state, and content digests are deliberately
+/// evaluated for each final destination-specific candidate set.
 #[derive(Debug, Clone)]
 pub struct CloudSourceSnapshot {
     source_root: PathBuf,
     prepared_at_ms: u64,
     options: CloudPlanOptions,
     files: Vec<FileFact>,
-    #[cfg(not(coverage))]
-    duplicate_digests: BTreeMap<PathBuf, Result<ContentDigests, String>>,
+    source_scan_complete: bool,
+    source_scan_visited_entries: u64,
+    source_scan_stop_reasons: Vec<String>,
     #[cfg(not(coverage))]
     verified_regular_files: BTreeSet<PathBuf>,
 }
@@ -235,6 +255,20 @@ impl CloudSourceSnapshot {
     pub fn candidate_bytes(&self) -> u64 {
         self.files.iter().map(|file| file.bytes).sum()
     }
+}
+
+/// Bounded result of the source-tree walk used by the cloud planner.
+///
+/// An incomplete walk is evidence that the candidate set is not exhaustive. The planner keeps
+/// the observed files for diagnosis but marks every resulting candidate blocked, so a partial
+/// scan can never become a copy or eviction approval.
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveFileCollection {
+    pub files: Vec<FileFact>,
+    pub visited_entries: u64,
+    pub complete: bool,
+    pub stop_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -281,7 +315,170 @@ pub struct CloudPlanReport {
     pub exact_duplicates: ExactDuplicateSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity: Option<crate::provider_capacity::CloudCapacityAssessment>,
+    /// Native source-volume pressure observed while preparing this plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_volume: Option<crate::volume_pressure::LocalVolumeSnapshot>,
+    /// Path-free freshness/integrity comparison of the observations used before a native copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_copy_evidence: Option<PreCopyEvidenceCohort>,
     pub notices: Vec<String>,
+}
+
+pub const PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION: u32 = 1;
+pub const PRE_COPY_EVIDENCE_MAX_SKEW_MS: u64 = 5 * 60 * 1000;
+const PRE_COPY_EVIDENCE_REQUIRED_STREAMS: [&str; 3] = [
+    "icloud-sync-health-evidence",
+    "provider-client-runtime-evidence",
+    "volume-pressure-evidence",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreCopyEvidenceObservation {
+    pub stream: String,
+    pub observed_at_ms: u64,
+    pub evidence_complete: bool,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreCopyEvidenceCohort {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub observations: Vec<PreCopyEvidenceObservation>,
+    pub complete: bool,
+    pub blockers: Vec<String>,
+    pub cohort_fingerprint: String,
+}
+
+fn valid_evidence_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn cohort_fingerprint(cohort: &PreCopyEvidenceCohort) -> String {
+    let mut unsigned = cohort.clone();
+    unsigned.cohort_fingerprint.clear();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.pre-copy-evidence-cohort\0v1\0");
+    for observation in &unsigned.observations {
+        for value in [
+            observation.stream.as_bytes(),
+            &observation.observed_at_ms.to_le_bytes(),
+            &[observation.evidence_complete as u8],
+            observation.fingerprint.as_bytes(),
+        ] {
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value);
+        }
+    }
+    for blocker in &unsigned.blockers {
+        hasher.update(&(blocker.len() as u64).to_le_bytes());
+        hasher.update(blocker.as_bytes());
+    }
+    hasher.update(&unsigned.observed_at_ms.to_le_bytes());
+    hasher.update(&[unsigned.complete as u8]);
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Compare the bounded observations that precede a native provider copy.
+///
+/// This is deliberately a freshness/integrity cohort, not a cloud-sync assertion. Any missing,
+/// incomplete, duplicated, malformed, or materially skewed stream remains blocked.
+pub fn compare_pre_copy_evidence(
+    mut observations: Vec<PreCopyEvidenceObservation>,
+) -> PreCopyEvidenceCohort {
+    observations.sort_by(|left, right| left.stream.cmp(&right.stream));
+    let mut blockers = Vec::new();
+    let mut previous_stream: Option<&str> = None;
+    let mut minimum = u64::MAX;
+    let mut maximum = 0_u64;
+    for observation in &observations {
+        if observation.stream.is_empty()
+            || !observation
+                .stream
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            blockers.push("pre-copy-evidence-stream-name-invalid".into());
+        }
+        if previous_stream == Some(observation.stream.as_str()) {
+            blockers.push("pre-copy-evidence-stream-duplicate".into());
+        }
+        previous_stream = Some(observation.stream.as_str());
+        if observation.observed_at_ms == 0 {
+            blockers.push("pre-copy-evidence-observation-time-invalid".into());
+        } else {
+            minimum = minimum.min(observation.observed_at_ms);
+            maximum = maximum.max(observation.observed_at_ms);
+        }
+        if !valid_evidence_fingerprint(&observation.fingerprint) {
+            blockers.push("pre-copy-evidence-fingerprint-invalid".into());
+        }
+        if !observation.evidence_complete {
+            blockers.push(format!(
+                "pre-copy-evidence-stream-incomplete-{}",
+                observation.stream
+            ));
+        }
+    }
+    for required_stream in PRE_COPY_EVIDENCE_REQUIRED_STREAMS {
+        if !observations
+            .iter()
+            .any(|observation| observation.stream == required_stream)
+        {
+            blockers.push(format!(
+                "pre-copy-evidence-stream-missing-{required_stream}"
+            ));
+        }
+    }
+    for observation in &observations {
+        if !PRE_COPY_EVIDENCE_REQUIRED_STREAMS.contains(&observation.stream.as_str()) {
+            blockers.push("pre-copy-evidence-stream-unexpected".into());
+        }
+    }
+    if observations.is_empty() {
+        blockers.push("pre-copy-evidence-cohort-empty".into());
+    }
+    if minimum != u64::MAX && maximum.saturating_sub(minimum) > PRE_COPY_EVIDENCE_MAX_SKEW_MS {
+        blockers.push("pre-copy-evidence-observation-time-skew".into());
+    }
+    blockers.sort();
+    blockers.dedup();
+    let mut cohort = PreCopyEvidenceCohort {
+        schema_version: PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION,
+        observed_at_ms: maximum,
+        observations,
+        complete: blockers.is_empty(),
+        blockers,
+        cohort_fingerprint: String::new(),
+    };
+    cohort.cohort_fingerprint = cohort_fingerprint(&cohort);
+    cohort
+}
+
+/// Require the exact cohort produced by the current iCloud plan before a native copy mutates the
+/// destination. Recompute the fingerprint so a serialized or caller-provided cohort cannot bypass
+/// the fail-closed gate.
+pub fn require_pre_copy_evidence_cohort(
+    cohort: Option<&PreCopyEvidenceCohort>,
+) -> Result<(), String> {
+    let cohort = cohort.ok_or_else(|| "pre-copy-evidence-cohort-unavailable".to_string())?;
+    if cohort.schema_version != PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION {
+        return Err("pre-copy-evidence-cohort-schema-unsupported".into());
+    }
+    let recomputed = compare_pre_copy_evidence(cohort.observations.clone());
+    if recomputed.cohort_fingerprint != cohort.cohort_fingerprint
+        || recomputed.observed_at_ms != cohort.observed_at_ms
+        || recomputed.complete != cohort.complete
+        || recomputed.blockers != cohort.blockers
+    {
+        return Err("pre-copy-evidence-cohort-integrity-invalid".into());
+    }
+    if !cohort.complete || !cohort.blockers.is_empty() {
+        return Err("pre-copy-evidence-cohort-blocked".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -395,6 +592,8 @@ fn directory_access_issue(path: &Path) -> Option<String> {
 
 #[cfg(all(not(coverage), target_os = "macos"))]
 fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
+    use std::os::unix::process::CommandExt;
+
     let metadata = std::fs::metadata(path).map_err(|error| access_issue_for_error(&error))?;
     if !metadata.is_dir() {
         return Err("not-a-directory".into());
@@ -416,18 +615,39 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
         return Err("read-dir-helper-unavailable".into());
     }
 
-    let mut child = Command::new(find)
+    let mut command = Command::new(find);
+    command
         .arg(path)
         .args(action)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider paths can leave helper descendants holding stdout after the leader exits.
+    // Keep the helper in its own group so timeout cleanup closes the pipe and joins promptly.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "read-dir-helper-failed".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "read-dir-helper-failed".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("read-dir-helper-failed".into());
+        }
+    };
     let reader = std::thread::spawn(move || {
         let mut output = Vec::new();
         stdout
@@ -444,12 +664,14 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
                 return Err("read-dir-timeout".into());
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
@@ -457,6 +679,9 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
             }
         }
     };
+    // The leader may have exited while a descendant still owns the pipe; close the private group
+    // before joining the reader so a successful probe cannot hang on inherited stdout.
+    kill_group();
     let output = reader
         .join()
         .map_err(|_| "read-dir-helper-failed".to_string())?
@@ -822,6 +1047,9 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
+    if is_sensitive_config_path(path) {
+        return Some(ArchiveKind::SensitiveConfig);
+    }
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
         "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb" | "odt"
@@ -844,6 +1072,30 @@ fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         _ if multipart_archive_part(path).is_some() => Some(ArchiveKind::Archive),
         _ => None,
     }
+}
+
+/// Classify credential-bearing names without opening the file. These entries stay visible in a
+/// plan for diagnosis, but the shared source blocker prevents metadata probing, cloud copy, and
+/// source eviction.
+fn is_sensitive_config_path(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    let env_secret = (file_name == ".env" || file_name.starts_with(".env."))
+        && !matches!(
+            file_name.as_str(),
+            ".env.example" | ".env.sample" | ".env.template"
+        );
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    env_secret
+        || matches!(extension.as_str(), "key" | "pem" | "p12" | "pfx")
+        || file_name.contains("credential")
+        || file_name.contains("private_key")
+        || file_name.contains("private-key")
 }
 
 fn multipart_archive_part(path: &Path) -> Option<(String, u32)> {
@@ -884,54 +1136,143 @@ fn millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn metadata_is_dataless(metadata: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+
+    const SF_DATALESS: u32 = 0x4000_0000;
+    metadata.st_flags() & SF_DATALESS != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn metadata_is_dataless(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+pub(crate) fn source_content_is_dataless(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata_is_dataless(&metadata))
+        .unwrap_or(false)
+}
+
 /// Collect only archive-shaped regular files while pruning cloud roots and regenerable trees
 /// before descent. Symlinks/reparse points are rejected by the shared scanner guard.
+///
+/// The walk is deliberately bounded. A partial source tree is useful diagnostic evidence but is
+/// never eligible for copy because `plan_cloud_archive_from_snapshot` carries the incomplete-scan
+/// blocker into every candidate.
+#[cfg(not(coverage))]
+pub fn collect_archive_files_bounded(
+    root: &Path,
+    excluded_roots: &[PathBuf],
+    max_entries: u64,
+    max_duration: Duration,
+) -> ArchiveFileCollection {
+    if path_inside_managed_file_provider_storage(root) {
+        return ArchiveFileCollection {
+            files: Vec::new(),
+            visited_entries: 0,
+            complete: false,
+            stop_reasons: vec!["source-scan-managed-file-provider-root".into()],
+        };
+    }
+    let excluded = excluded_roots.to_vec();
+    let mut files = Vec::new();
+    let mut visited_entries = 0_u64;
+    let mut stop_reasons = Vec::new();
+    let started = Instant::now();
+    let max_entries = max_entries.max(1);
+    let max_duration = max_duration.max(Duration::from_millis(1));
+    let mut complete = true;
+    let walker = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let path = entry.path();
+            if excluded.iter().any(|cloud| path.starts_with(cloud)) {
+                return false;
+            }
+            if entry.file_type().is_dir()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map(pruned_directory)
+                    .unwrap_or(true)
+            {
+                return false;
+            }
+            crate::scanner::keep_entry(entry)
+        });
+    for result in walker {
+        if visited_entries >= max_entries {
+            complete = false;
+            stop_reasons.push("source-scan-entry-limit".into());
+            break;
+        }
+        if started.elapsed() >= max_duration {
+            complete = false;
+            stop_reasons.push("source-scan-time-limit".into());
+            break;
+        }
+        visited_entries = visited_entries.saturating_add(1);
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => {
+                complete = false;
+                if !stop_reasons.iter().any(|reason| reason == "source-scan-entry-error") {
+                    stop_reasons.push("source-scan-entry-error".into());
+                }
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() || archive_kind(&entry.path()).is_none() {
+            continue;
+        }
+        let Some(metadata) = entry.metadata().ok() else {
+            complete = false;
+            if !stop_reasons
+                .iter()
+                .any(|reason| reason == "source-scan-metadata-error")
+            {
+                stop_reasons.push("source-scan-metadata-error".into());
+            }
+            continue;
+        };
+        files.push(FileFact {
+            path: entry.path().to_path_buf(),
+            bytes: metadata.len(),
+            created_ms: millis(metadata.created()),
+            modified_ms: millis(metadata.modified()),
+            content_metadata: ContentMetadata::default(),
+        });
+    }
+    stop_reasons.sort();
+    stop_reasons.dedup();
+    if !stop_reasons.is_empty() {
+        complete = false;
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    ArchiveFileCollection {
+        files,
+        visited_entries,
+        complete,
+        stop_reasons,
+    }
+}
+
+/// Collect archive files using the production source-scan bounds.
 #[cfg(not(coverage))]
 pub fn collect_archive_files(root: &Path, excluded_roots: &[PathBuf]) -> Vec<FileFact> {
-    let excluded = excluded_roots.to_vec();
-    let mut files: Vec<FileFact> = jwalk::WalkDir::new(root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(move |_depth, _path, _state, children| {
-            children.retain(|result| {
-                result
-                    .as_ref()
-                    .map(|entry| {
-                        let path = entry.path();
-                        if excluded.iter().any(|cloud| path.starts_with(cloud)) {
-                            return false;
-                        }
-                        if entry.file_type().is_dir()
-                            && entry
-                                .file_name()
-                                .to_str()
-                                .map(pruned_directory)
-                                .unwrap_or(true)
-                        {
-                            return false;
-                        }
-                        crate::scanner::keep_entry(entry)
-                    })
-                    .unwrap_or(true)
-            });
-        })
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file() && archive_kind(&entry.path()).is_some())
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            let path = entry.path();
-            Some(FileFact {
-                path,
-                bytes: metadata.len(),
-                created_ms: millis(metadata.created()),
-                modified_ms: millis(metadata.modified()),
-                content_metadata: ContentMetadata::default(),
-            })
-        })
-        .collect();
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    files
+    collect_archive_files_bounded(
+        root,
+        excluded_roots,
+        ARCHIVE_SCAN_MAX_ENTRIES,
+        ARCHIVE_SCAN_MAX_DURATION,
+    )
+    .files
 }
 
 /// Gregorian civil date from whole days since Unix epoch. The arithmetic is the
@@ -1335,6 +1676,7 @@ enum MetadataProbeFailure {
     Spawn,
     Wait,
     Timeout,
+    FileLimit,
     Exit,
     Read,
     OutputTooLarge,
@@ -1348,6 +1690,7 @@ impl MetadataProbeFailure {
             Self::Spawn => "spawn-failed",
             Self::Wait => "wait-failed",
             Self::Timeout => "timeout",
+            Self::FileLimit => "file-limit-exceeded",
             Self::Exit => "nonzero-exit",
             Self::Read => "output-read-failed",
             Self::OutputTooLarge => "output-limit-exceeded",
@@ -1516,7 +1859,11 @@ fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
     where_froms
         .args(["-px", "com.apple.metadata:kMDItemWhereFroms"])
         .arg(path);
-    if let Ok(output) = run_metadata_command(where_froms) {
+    if let Ok(output) = run_metadata_command_with_limits(
+        where_froms,
+        MACOS_METADATA_PROBE_TIMEOUT,
+        METADATA_PROBE_OUTPUT_LIMIT,
+    ) {
         if let Some(bytes) = decode_hex_ascii(&output) {
             if let Ok(plist::Value::Array(values)) =
                 plist::Value::from_reader(std::io::Cursor::new(bytes))
@@ -1540,7 +1887,11 @@ fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
 
     let mut quarantine = local_command("xattr");
     quarantine.args(["-p", "com.apple.quarantine"]).arg(path);
-    if let Ok(output) = run_metadata_command(quarantine) {
+    if let Ok(output) = run_metadata_command_with_limits(
+        quarantine,
+        MACOS_METADATA_PROBE_TIMEOUT,
+        METADATA_PROBE_OUTPUT_LIMIT,
+    ) {
         if let Some((acquired_seconds, agent)) =
             quarantine_record(&String::from_utf8_lossy(&output))
         {
@@ -2332,8 +2683,15 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
     let mut unsafe_path_entries = 0u64;
     let mut top_level_names = BTreeSet::new();
     let mut content_classes = BTreeSet::new();
+    let mut email_entry_count = 0usize;
+    let mut email_scanned_count = 0usize;
+    let mut email_header_bytes = 0u64;
+    let mut email_header_parse_failures = 0usize;
+    let mut email_scan_bounded = false;
+    let mut earliest_email_date_ms = None;
+    let mut latest_email_date_ms = None;
     for index in 0..entry_count {
-        let entry = match archive.by_index_raw(index) {
+        let mut entry = match archive.by_index(index) {
             Ok(entry) => entry,
             Err(_) => {
                 add_evidence(
@@ -2401,6 +2759,60 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
+        if extension == "eml" {
+            content_classes.insert("email");
+            email_entry_count = email_entry_count.saturating_add(1);
+            let remaining = MAX_ZIP_EMAIL_METADATA_BYTES.saturating_sub(email_header_bytes);
+            if email_scanned_count >= MAX_ZIP_EMAIL_METADATA_ENTRIES || remaining == 0 {
+                email_scan_bounded = true;
+            } else {
+                let read_limit = MAX_ZIP_EMAIL_HEADER_BYTES.min(remaining as usize);
+                let mut header = Vec::with_capacity(read_limit.saturating_add(1));
+                let read_result = entry
+                    .by_ref()
+                    .take((read_limit.saturating_add(1)) as u64)
+                    .read_to_end(&mut header);
+                match read_result {
+                    Ok(_) => {
+                        let truncated = header.len() > read_limit;
+                        header.truncate(read_limit);
+                        email_header_bytes = email_header_bytes
+                            .saturating_add(header.len() as u64);
+                        email_scanned_count = email_scanned_count.saturating_add(1);
+                        let email_metadata = email_metadata_from_header(
+                            &header,
+                            truncated,
+                            "embedded:zip-entry:rfc5322-header",
+                            "embedded:zip-entry:rfc5322:date",
+                            "local:metadata-probe:rust-zip-email",
+                        );
+                        if email_metadata
+                            .evidence
+                            .iter()
+                            .any(|evidence| evidence.field == "metadata-probe-warning")
+                        {
+                            email_header_parse_failures =
+                                email_header_parse_failures.saturating_add(1);
+                        }
+                        if let Some(epoch_ms) = email_metadata.production_time_ms {
+                            earliest_email_date_ms = Some(
+                                earliest_email_date_ms
+                                    .map_or(epoch_ms, |current: u64| current.min(epoch_ms)),
+                            );
+                            latest_email_date_ms = Some(
+                                latest_email_date_ms
+                                    .map_or(epoch_ms, |current: u64| current.max(epoch_ms)),
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        email_header_parse_failures =
+                            email_header_parse_failures.saturating_add(1);
+                        email_scan_bounded = true;
+                    }
+                }
+            }
+        }
         if matches!(
             extension.as_str(),
             "csv"
@@ -2495,6 +2907,64 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
             "embedded:zip-central-directory:latest-entry-modified",
             "medium",
         );
+    }
+    if email_entry_count > 0 {
+        add_evidence(
+            &mut metadata,
+            "archive-email-entry-count",
+            email_entry_count.to_string(),
+            "embedded:zip-central-directory",
+            "high",
+        );
+        add_evidence(
+            &mut metadata,
+            "archive-email-header-scanned-count",
+            email_scanned_count.to_string(),
+            "embedded:zip-entry:rfc5322-header",
+            "high",
+        );
+        add_evidence(
+            &mut metadata,
+            "archive-email-header-scanned-bytes",
+            email_header_bytes.to_string(),
+            "embedded:zip-entry:rfc5322-header",
+            "high",
+        );
+        if let Some(epoch_ms) = earliest_email_date_ms {
+            add_evidence(
+                &mut metadata,
+                "archive-earliest-email-date",
+                date_value(epoch_ms),
+                "embedded:zip-entry:rfc5322:date",
+                "high",
+            );
+        }
+        if let Some(epoch_ms) = latest_email_date_ms {
+            set_production_time(
+                &mut metadata,
+                epoch_ms,
+                "embedded:zip-entry:rfc5322:latest-date",
+                "high",
+            );
+        }
+        if email_scan_bounded {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "zip-email-header:bounded-scan-incomplete",
+                "local:metadata-probe:rust-zip-email",
+                "high",
+            );
+        }
+        if email_header_parse_failures > 0 {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("zip-email-header:parse-failures:{email_header_parse_failures}"),
+                "local:metadata-probe:rust-zip-email",
+                "high",
+            );
+        }
     }
     for name in top_level_names {
         push_context(
@@ -2918,25 +3388,17 @@ fn email_header_end(bytes: &[u8]) -> Option<usize> {
         })
 }
 
-/// Read only the bounded RFC 5322 header block. Message bodies and attachments are deliberately
+/// Parse only a bounded RFC 5322 header block. Message bodies and attachments are deliberately
 /// not parsed because the planner needs lineage metadata, not message contents.
 #[cfg(not(coverage))]
-fn email_metadata(path: &Path) -> ContentMetadata {
+fn email_metadata_from_header(
+    bytes: &[u8],
+    truncated: bool,
+    evidence_source: &str,
+    date_source: &str,
+    warning_source: &str,
+) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let source = "embedded:rfc5322-header";
-    let (bytes, truncated) = match read_bounded_prefix(path, MAX_EMAIL_HEADER_BYTES) {
-        Ok(value) => value,
-        Err(reason) => {
-            add_evidence(
-                &mut metadata,
-                "metadata-probe-warning",
-                format!("email-header:{reason}"),
-                "local:metadata-probe:rust-rfc5322",
-                "high",
-            );
-            return metadata;
-        }
-    };
     let Some(header_end) = email_header_end(&bytes) else {
         add_evidence(
             &mut metadata,
@@ -2946,7 +3408,7 @@ fn email_metadata(path: &Path) -> ContentMetadata {
             } else {
                 "email-header:header-terminator-not-found"
             },
-            "local:metadata-probe:rust-rfc5322",
+            warning_source,
             "high",
         );
         return metadata;
@@ -2957,7 +3419,7 @@ fn email_metadata(path: &Path) -> ContentMetadata {
             &mut metadata,
             "metadata-probe-warning",
             "email-header:rfc5322-parse-failed",
-            "local:metadata-probe:rust-rfc5322",
+            warning_source,
             "high",
         );
         return metadata;
@@ -2967,20 +3429,20 @@ fn email_metadata(path: &Path) -> ContentMetadata {
         &mut metadata,
         "email-header-bytes-inspected",
         header_end.to_string(),
-        "local:metadata-probe:bounded-rfc5322-header",
+        evidence_source,
         "high",
     );
     add_evidence(
         &mut metadata,
         "email-body-inspected",
         "false",
-        "local:metadata-probe:bounded-rfc5322-header",
+        evidence_source,
         "high",
     );
     if let Some(date) = message.date() {
         if let Ok(seconds) = u64::try_from(date.to_timestamp()) {
             if let Some(epoch_ms) = seconds.checked_mul(1_000) {
-                set_production_time(&mut metadata, epoch_ms, "embedded:rfc5322:date", "high");
+                set_production_time(&mut metadata, epoch_ms, date_source, "high");
             }
         }
     }
@@ -2991,14 +3453,14 @@ fn email_metadata(path: &Path) -> ContentMetadata {
     {
         let bounded = subject.chars().take(500).collect::<String>();
         metadata.title = Some(bounded.clone());
-        push_context(&mut metadata, "email-subject", &bounded, source);
+        push_context(&mut metadata, "email-subject", &bounded, evidence_source);
     }
     if let Some(thread) = message
         .thread_name()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        push_context(&mut metadata, "email-thread", thread, source);
+        push_context(&mut metadata, "email-thread", thread, evidence_source);
     }
     if let Some(author) = message
         .return_address()
@@ -3007,7 +3469,13 @@ fn email_metadata(path: &Path) -> ContentMetadata {
     {
         let bounded = author.chars().take(320).collect::<String>();
         metadata.authors.push(bounded.clone());
-        add_evidence(&mut metadata, "email-author", bounded, source, "high");
+        add_evidence(
+            &mut metadata,
+            "email-author",
+            bounded,
+            evidence_source,
+            "high",
+        );
     }
     for (field, value) in [
         ("email-message-id", message.message_id()),
@@ -3019,12 +3487,38 @@ fn email_metadata(path: &Path) -> ContentMetadata {
                 &mut metadata,
                 field,
                 value.chars().take(500).collect::<String>(),
-                source,
+                evidence_source,
                 "high",
             );
         }
     }
     metadata
+}
+
+/// Read only the bounded RFC 5322 header block from a standalone message.
+#[cfg(not(coverage))]
+fn email_metadata(path: &Path) -> ContentMetadata {
+    let (bytes, truncated) = match read_bounded_prefix(path, MAX_EMAIL_HEADER_BYTES) {
+        Ok(value) => value,
+        Err(reason) => {
+            let mut metadata = ContentMetadata::default();
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("email-header:{reason}"),
+                "local:metadata-probe:rust-rfc5322",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    email_metadata_from_header(
+        &bytes,
+        truncated,
+        "local:metadata-probe:bounded-rfc5322-header",
+        "embedded:rfc5322:date",
+        "local:metadata-probe:rust-rfc5322",
+    )
 }
 
 #[cfg(not(coverage))]
@@ -3217,6 +3711,29 @@ fn probe_content_metadata_with_general(
     path: &Path,
     prefetched_general: Option<ContentMetadata>,
 ) -> ContentMetadata {
+    probe_content_metadata_with_general_inner(path, prefetched_general, true)
+}
+
+#[cfg(not(coverage))]
+fn probe_content_metadata_for_planner(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+) -> ContentMetadata {
+    // Download origin and quarantine are useful audit context but are not production metadata.
+    // Keep them out of the planner's per-file subprocess budget so embedded/format metadata can
+    // be collected for more candidates without weakening the lineage precedence rules.
+    probe_content_metadata_with_general_inner(path, prefetched_general, false)
+}
+
+#[cfg(not(coverage))]
+fn probe_content_metadata_with_general_inner(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+    include_macos_provenance: bool,
+) -> ContentMetadata {
+    if source_content_is_dataless(path) {
+        return ContentMetadata::default();
+    }
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -3250,14 +3767,18 @@ fn probe_content_metadata_with_general(
         "docx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
         "odt" | "odp" => zipped_document_metadata(path, "meta.xml"),
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
-        | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
+        | "rds" | "sqlite" | "sqlite3" | "db" | "db3" | "sql" | "jsonl" => {
+            dataset_content_metadata(path)
+        }
         _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
         _ => ContentMetadata::default(),
     };
-    merge_metadata(
-        merge_metadata(general, format_specific),
-        macos_file_provenance_metadata(path),
-    )
+    let metadata = merge_metadata(general, format_specific);
+    if include_macos_provenance {
+        merge_metadata(metadata, macos_file_provenance_metadata(path))
+    } else {
+        metadata
+    }
 }
 
 /// Reuse the cloud planner's bounded embedded/acquisition metadata probes in read-only audit
@@ -3274,8 +3795,12 @@ fn should_probe_general_metadata(path: &Path) -> bool {
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
+        && archive_kind(path) != Some(ArchiveKind::SensitiveConfig)
         && multipart_archive_part(path).is_none()
-        && !matches!(extension.as_str(), "eml" | "aup3")
+        && !matches!(
+            extension.as_str(),
+            "eml" | "aup3" | "bak" | "db" | "db3" | "sqlite" | "sqlite3"
+        )
 }
 
 fn looks_like_coordinates(name: &str) -> bool {
@@ -3591,11 +4116,23 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if kind == ArchiveKind::SensitiveConfig || is_sensitive_config_path(path) {
+        return Some("sensitive-config-file".into());
+    }
+    if path_inside_managed_file_provider_storage(path) {
+        return Some("system-managed-file-provider-storage".into());
+    }
+    if path_inside_managed_photo_library(path) {
+        return Some("system-managed-photos-library-data".into());
+    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
     if multipart_archive_part(path).is_some() {
         return Some("multipart-archive-atomic-copy-required".into());
+    }
+    if source_content_is_dataless(path) {
+        return Some("source-content-not-local".into());
     }
     let extension = path
         .extension()
@@ -3615,14 +4152,49 @@ fn source_blocked_reason(
     None
 }
 
+/// File Provider's private storage and download staging trees are owned by macOS. Their files
+/// are implementation state, not user payloads; only a provider-aware operation may reclaim them.
+fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
+    let mut previous = String::new();
+    path.components().any(|component| {
+        let name = normalized_account_text(&component.as_os_str().to_string_lossy());
+        let managed = name == "file provider storage"
+            || (previous == "library"
+                && matches!(name.as_str(), "mobile documents" | "cloudstorage"))
+            || (previous == "application support" && name == "fileprovider");
+        previous = name;
+        managed
+    })
+}
+
+/// Photos databases are individually archive-shaped but are owned by the Photos package.
+/// Moving one member would corrupt the library; only a future package-aware operation may handle
+/// the bundle as a whole.
+fn path_inside_managed_photo_library(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = normalized_account_text(&component.as_os_str().to_string_lossy());
+        name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+    })
+}
+
 fn planner_blocked_reason(
     path: &Path,
     kind: ArchiveKind,
     metadata: &ContentMetadata,
     destination: &Path,
+    provider: CloudProvider,
+    expected_bytes: u64,
 ) -> Option<String> {
     if destination.exists() {
-        return Some("destination-exists".into());
+        return Some(
+            crate::provider_sync::existing_destination_sync_blocker(
+                provider,
+                destination,
+                expected_bytes,
+            )
+            .unwrap_or("destination-exists")
+            .into(),
+        );
     }
     source_blocked_reason(path, kind, metadata)
 }
@@ -3682,6 +4254,9 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
     if !before.is_file() {
         return Err("duplicate-content-source-not-file".into());
     }
+    if metadata_is_dataless(&before) {
+        return Err("duplicate-content-source-not-local".into());
+    }
     if before.len() != expected_bytes {
         return Err("duplicate-content-size-changed".into());
     }
@@ -3701,36 +4276,13 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
     }
     let after =
         std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
-    if after.len() != expected_bytes || millis(after.modified()) != before_modified_ms {
+    if metadata_is_dataless(&after)
+        || after.len() != expected_bytes
+        || millis(after.modified()) != before_modified_ms
+    {
         return Err("duplicate-content-source-changed".into());
     }
     Ok(hasher.finalize())
-}
-
-#[cfg(not(coverage))]
-fn prehash_duplicate_candidates(
-    files: &[FileFact],
-) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
-    let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
-    for file in files {
-        let Some(kind) = archive_kind(&file.path) else {
-            continue;
-        };
-        if source_blocked_reason(&file.path, kind, &file.content_metadata).is_none() {
-            by_size.entry(file.bytes).or_default().push(file);
-        }
-    }
-
-    let mut digests = BTreeMap::new();
-    for same_size in by_size.values().filter(|files| files.len() > 1) {
-        for file in same_size {
-            digests.insert(
-                file.path.clone(),
-                hash_duplicate_candidate(&file.path, file.bytes),
-            );
-        }
-    }
-    digests
 }
 
 #[cfg(not(coverage))]
@@ -4314,26 +4866,91 @@ pub fn prepare_cloud_archive_source(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudSourceSnapshot {
+    prepare_cloud_archive_source_with_scan(
+        files,
+        source_root,
+        now_ms,
+        options,
+        true,
+        files.len() as u64,
+        Vec::new(),
+    )
+}
+
+/// Prepare source metadata while retaining whether the bounded filesystem walk was exhaustive.
+#[cfg(not(coverage))]
+pub fn prepare_cloud_archive_source_from_collection(
+    collection: &ArchiveFileCollection,
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+) -> CloudSourceSnapshot {
+    prepare_cloud_archive_source_with_scan(
+        &collection.files,
+        source_root,
+        now_ms,
+        options,
+        collection.complete,
+        collection.visited_entries,
+        collection.stop_reasons.clone(),
+    )
+}
+
+fn prepare_cloud_archive_source_with_scan(
+    files: &[FileFact],
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+    source_scan_complete: bool,
+    source_scan_visited_entries: u64,
+    source_scan_stop_reasons: Vec<String>,
+) -> CloudSourceSnapshot {
     #[cfg(not(coverage))]
-    let batched_exiftool = {
-        let paths = files
+    let (batched_exiftool, probe_candidate_paths, selected_probe_paths, metadata_probe_started) = {
+        let mut probe_candidates = files
             .iter()
             .filter(|file| {
                 file.bytes >= options.min_size_bytes
                     && file.modified_ms > 0
                     && now_ms.saturating_sub(file.modified_ms) / DAY_MS >= options.min_age_days
                     && archive_kind(&file.path).is_some()
+                    && archive_kind(&file.path) != Some(ArchiveKind::SensitiveConfig)
                     && file
                         .path
                         .strip_prefix(source_root)
                         .is_ok_and(|relative| !relative.as_os_str().is_empty())
                     && file.content_metadata == ContentMetadata::default()
                     && file.path.is_file()
-                    && should_probe_general_metadata(&file.path)
+                    && !source_content_is_dataless(&file.path)
             })
+            .collect::<Vec<_>>();
+        probe_candidates.sort_by(|left, right| {
+            right
+                .bytes
+                .cmp(&left.bytes)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        let probe_candidate_paths = probe_candidates
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
+        probe_candidates.truncate(MAX_METADATA_PROBE_FILES);
+        let selected_probe_paths = probe_candidates
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
+        let paths = probe_candidates
+            .iter()
+            .filter(|file| should_probe_general_metadata(&file.path))
             .map(|file| file.path.clone())
             .collect::<Vec<_>>();
-        exiftool_metadata_batch(&paths)
+        let metadata_probe_started = Instant::now();
+        (
+            exiftool_metadata_batch(&paths),
+            probe_candidate_paths,
+            selected_probe_paths,
+            metadata_probe_started,
+        )
     };
 
     let mut prepared_files = Vec::new();
@@ -4363,25 +4980,42 @@ pub fn prepare_cloud_archive_source(
         #[cfg(not(coverage))]
         if file.path.is_file() {
             verified_regular_files.insert(file.path.clone());
-            if prepared.content_metadata == ContentMetadata::default() {
-                prepared.content_metadata = probe_content_metadata_with_general(
+            if prepared.content_metadata == ContentMetadata::default()
+                && selected_probe_paths.contains(&file.path)
+                && metadata_probe_started.elapsed() < METADATA_PROBE_TOTAL_TIMEOUT
+            {
+                prepared.content_metadata = probe_content_metadata_for_planner(
                     &file.path,
                     batched_exiftool.get(&file.path).cloned(),
+                );
+            } else if prepared.content_metadata == ContentMetadata::default()
+                && !source_content_is_dataless(&file.path)
+            {
+                let failure = if probe_candidate_paths.contains(&file.path)
+                    && !selected_probe_paths.contains(&file.path)
+                {
+                    MetadataProbeFailure::FileLimit
+                } else {
+                    MetadataProbeFailure::Timeout
+                };
+                add_probe_warning(
+                    &mut prepared.content_metadata,
+                    "planner",
+                    failure,
                 );
             }
         }
         prepared_files.push(prepared);
     }
 
-    #[cfg(not(coverage))]
-    let duplicate_digests = prehash_duplicate_candidates(&prepared_files);
     CloudSourceSnapshot {
         source_root: source_root.to_path_buf(),
         prepared_at_ms: now_ms,
         options,
         files: prepared_files,
-        #[cfg(not(coverage))]
-        duplicate_digests,
+        source_scan_complete,
+        source_scan_visited_entries,
+        source_scan_stop_reasons,
         #[cfg(not(coverage))]
         verified_regular_files,
     }
@@ -4399,6 +5033,8 @@ pub fn plan_cloud_archive_from_snapshot(
     let source_root = &snapshot.source_root;
     let now_ms = snapshot.prepared_at_ms;
     let options = snapshot.options;
+    let source_scan_blocker = (!snapshot.source_scan_complete)
+        .then(|| "source-scan-incomplete".to_string());
     let mut candidates = Vec::new();
     for file in files {
         let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
@@ -4482,7 +5118,18 @@ pub fn plan_cloud_archive_from_snapshot(
         let blocked_reason = if source_snapshot_stale {
             Some("source-snapshot-stale".into())
         } else {
-            planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+            source_scan_blocker
+                .clone()
+                .or_else(|| {
+                    planner_blocked_reason(
+                        &file.path,
+                        kind,
+                        &lineage_metadata,
+                        &dst,
+                        cloud_root.provider,
+                        file.bytes,
+                    )
+                })
                 .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
         };
         let source_context = relative
@@ -4608,18 +5255,51 @@ pub fn plan_cloud_archive_from_snapshot(
         candidates.push(candidate);
     }
     #[cfg(not(coverage))]
-    let exact_duplicates =
-        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests));
+    let exact_duplicates = {
+        candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
+        candidates.truncate(options.limit);
+        mark_exact_duplicate_candidates(&mut candidates, None)
+    };
     #[cfg(coverage)]
-    let exact_duplicates = ExactDuplicateSummary::default();
-    candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
-    candidates.truncate(options.limit);
+    let exact_duplicates = {
+        candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
+        candidates.truncate(options.limit);
+        ExactDuplicateSummary::default()
+    };
     let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
     let potentially_reclaimable_bytes = candidates
         .iter()
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
+    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
+    let mut notices = vec![
+        "dry-run-only".into(),
+        "cloud-quota-unverified".into(),
+        "provider-client-runtime-unverified".into(),
+        "cloud-sync-unverified".into(),
+        "full-transfer-content-hash-pending".into(),
+    ];
+    if local_volume.as_ref().is_some_and(|volume| {
+        candidates.iter().any(|candidate| {
+            !crate::volume_pressure::has_copy_headroom(volume.available_bytes, candidate.bytes)
+        })
+    }) {
+        notices.push("local-volume-headroom-insufficient".into());
+    }
+    if !snapshot.source_scan_complete {
+        notices.push("source-scan-incomplete".into());
+        notices.push(format!(
+            "source-scan-visited-entries:{}",
+            snapshot.source_scan_visited_entries
+        ));
+        notices.extend(
+            snapshot
+                .source_scan_stop_reasons
+                .iter()
+                .map(|reason| format!("source-scan-stopped:{reason}")),
+        );
+    }
     CloudPlanReport {
         cloud_root: cloud_root.clone(),
         generated_at_ms: now_ms,
@@ -4629,13 +5309,9 @@ pub fn plan_cloud_archive_from_snapshot(
         potentially_reclaimable_bytes,
         exact_duplicates,
         capacity: None,
-        notices: vec![
-            "dry-run-only".into(),
-            "cloud-quota-unverified".into(),
-            "provider-client-runtime-unverified".into(),
-            "cloud-sync-unverified".into(),
-            "full-transfer-content-hash-pending".into(),
-        ],
+        local_volume,
+        pre_copy_evidence: None,
+        notices,
     }
 }
 
@@ -4666,6 +5342,40 @@ mod tests {
             readable: true,
             access_issue: None,
         }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn folded_received_header_at_end_of_block_is_safe() {
+        let temp = tempfile::tempdir().unwrap();
+        let message_path = temp.path().join("folded-received.eml");
+        std::fs::write(
+            &message_path,
+            concat!(
+                "Date: Mon, 17 Aug 2026 12:00:00 +0000\r\n",
+                "Subject: Folded Received regression\r\n",
+                "Received: from relay.example\r\n",
+                "\tby mx.example with ESMTP\r\n",
+                "\r\n",
+                "body is deliberately outside the bounded metadata parser\r\n",
+            ),
+        )
+        .unwrap();
+
+        let metadata = probe_content_metadata_with_general(&message_path, None);
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("Folded Received regression")
+        );
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "email-header-bytes-inspected"
+                && evidence.source == "local:metadata-probe:bounded-rfc5322-header"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "email-body-inspected"
+                && evidence.value == "false"
+                && evidence.source == "local:metadata-probe:bounded-rfc5322-header"
+        }));
     }
 
     #[cfg(not(coverage))]
@@ -4719,6 +5429,7 @@ mod tests {
                 && evidence.value == "exiftool-batch:timeout"
                 && evidence.confidence == "high"
         }));
+        assert_eq!(MetadataProbeFailure::FileLimit.code(), "file-limit-exceeded");
     }
 
     #[cfg(all(not(coverage), unix))]
@@ -4973,6 +5684,170 @@ mod tests {
         assert_eq!(files[0].path, real);
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn bounded_source_scan_blocks_partial_plans() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        writable_dir(&source_root);
+        for name in ["one.pdf", "two.pdf", "three.pdf"] {
+            std::fs::write(source_root.join(name), b"pdf").unwrap();
+        }
+        let collection = collect_archive_files_bounded(
+            &source_root,
+            &[],
+            2,
+            Duration::from_secs(30),
+        );
+        assert!(!collection.complete);
+        assert!(collection
+            .stop_reasons
+            .contains(&"source-scan-entry-limit".to_string()));
+        assert!(!collection.files.is_empty());
+
+        let snapshot = prepare_cloud_archive_source_from_collection(
+            &collection,
+            &source_root,
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        let destination = source_root.join("cloud");
+        writable_dir(&destination);
+        let report = plan_cloud_archive_from_snapshot(
+            &snapshot,
+            &root(CloudProvider::Icloud, &destination),
+        );
+        assert!(report.notices.contains(&"source-scan-incomplete".to_string()));
+        assert!(report
+            .candidates
+            .iter()
+            .all(|candidate| candidate.blocked_reason.as_deref() == Some("source-scan-incomplete")));
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
+        assert_eq!(
+            report
+                .local_volume
+                .as_ref()
+                .map(|snapshot| snapshot.schema_version),
+            Some(crate::volume_pressure::LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION)
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn low_local_headroom_blocks_plan_before_copy_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let cloud_root = tmp.path().join("cloud");
+        writable_dir(&source_root);
+        writable_dir(&cloud_root);
+        let report = plan_cloud_archive(
+            &[FileFact {
+                path: source_root.join("large.zip"),
+                bytes: u64::MAX,
+                created_ms: 1,
+                modified_ms: 1,
+                content_metadata: ContentMetadata::default(),
+            }],
+            &source_root,
+            &root(CloudProvider::GoogleDrive, &cloud_root),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert!(report
+            .notices
+            .contains(&"local-volume-headroom-insufficient".to_string()));
+        assert_eq!(report.potentially_reclaimable_bytes, u64::MAX);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn bounded_source_scan_rejects_managed_file_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("Library/Mobile Documents");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::write(source_root.join("report.pdf"), b"pdf").unwrap();
+
+        let collection = collect_archive_files_bounded(
+            &source_root,
+            &[],
+            100,
+            Duration::from_secs(30),
+        );
+
+        assert!(!collection.complete);
+        assert!(collection.files.is_empty());
+        assert_eq!(
+            collection.stop_reasons,
+            vec!["source-scan-managed-file-provider-root".to_string()]
+        );
+    }
+
+    #[cfg(all(target_os = "macos", not(coverage)))]
+    #[test]
+    fn dataless_files_are_not_misreported_as_metadata_probe_timeouts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        let path = source.join("mail-backup.zip");
+        std::fs::write(&path, b"placeholder").unwrap();
+        let mark = std::process::Command::new("chflags")
+            .args(["dataless", path.to_str().unwrap()])
+            .status()
+            .unwrap();
+        if !mark.success() || !source_content_is_dataless(&path) {
+            let _ = std::process::Command::new("chflags")
+                .args(["nodataless", path.to_str().unwrap()])
+                .status();
+            return;
+        }
+
+        let file_metadata = std::fs::metadata(&path).unwrap();
+        let snapshot = prepare_cloud_archive_source(
+            &[FileFact {
+                path: path.clone(),
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata: ContentMetadata::default(),
+            }],
+            &source,
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        let report = plan_cloud_archive_from_snapshot(
+            &snapshot,
+            &root(CloudProvider::GoogleDrive, &cloud),
+        );
+        assert!(report.candidates[0]
+            .metadata_evidence
+            .iter()
+            .all(|evidence| evidence.value != "planner:timeout"));
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("source-content-not-local")
+        );
+
+        let _ = std::process::Command::new("chflags")
+            .args(["nodataless", path.to_str().unwrap()])
+            .status();
+    }
+
     #[test]
     fn civil_date_math_handles_epoch_and_leap_day() {
         assert_eq!(date_parts(0), (1970, 1, 1));
@@ -5102,6 +5977,8 @@ mod tests {
                 ArchiveKind::IncompleteDownload,
                 &metadata,
                 Path::new("/definitely/missing/disksage-destination"),
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("incomplete-download")
@@ -5332,6 +6209,63 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn zip_archive_metadata_prefers_bounded_embedded_email_dates() {
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, DateTime, ZipWriter};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mail-backup.zip");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        for (name, date, timestamp) in [
+            (
+                "mail/00000.eml",
+                "Date: Mon, 3 Aug 2026 12:34:56 +0900",
+                DateTime::from_date_and_time(2026, 6, 1, 10, 0, 0).unwrap(),
+            ),
+            (
+                "mail/00001.eml",
+                "Date: Mon, 10 Aug 2026 12:34:56 +0900",
+                DateTime::from_date_and_time(2026, 6, 1, 10, 0, 0).unwrap(),
+            ),
+        ] {
+            writer
+                .start_file(
+                    name,
+                    SimpleFileOptions::default()
+                        .compression_method(CompressionMethod::Deflated)
+                        .last_modified_time(timestamp),
+                )
+                .unwrap();
+            writer
+                .write_all(format!("{date}\r\nFrom: sender@example.com\r\n\r\nbody\n").as_bytes())
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let metadata = zip_archive_metadata(&path);
+        assert_eq!(
+            metadata.production_time_source.as_deref(),
+            Some("embedded:zip-entry:rfc5322:latest-date")
+        );
+        assert_eq!(metadata.production_time_confidence.as_deref(), Some("high"));
+        assert_eq!(date_parts(metadata.production_time_ms.unwrap()), (2026, 8, 10));
+        assert!(metadata.context.iter().any(|value| value == "archive-content-class=email"));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "archive-email-entry-count" && evidence.value == "2"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "archive-email-header-scanned-count" && evidence.value == "2"
+        }));
+        assert!(!metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.field == "metadata-probe-warning"));
+        assert!(!tmp.path().join("mail").exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn zip_archive_metadata_rejects_unreadable_index_and_default_timestamp() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("broken.zip");
@@ -5347,6 +6281,8 @@ mod tests {
                 ArchiveKind::Archive,
                 &metadata,
                 Path::new("/definitely/missing/disksage-destination"),
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("archive-index-unreadable")
@@ -5363,6 +6299,8 @@ mod tests {
                 ArchiveKind::IncompleteDownload,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("incomplete-download")
@@ -5373,6 +6311,8 @@ mod tests {
                 ArchiveKind::Archive,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("multipart-archive-atomic-copy-required")
@@ -5390,9 +6330,70 @@ mod tests {
                 ArchiveKind::Archive,
                 &metadata,
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("archive-index-unreadable")
+        );
+    }
+
+    #[test]
+    fn photos_library_members_are_non_overridable_planner_blocks() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("Pictures/Photos Library.photoslibrary/database/Photos.sqlite"),
+                ArchiveKind::Dataset,
+                &ContentMetadata::default(),
+                destination,
+                CloudProvider::Icloud,
+                0,
+            )
+            .as_deref(),
+            Some("system-managed-photos-library-data")
+        );
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("Pictures/export/Photos.sqlite"),
+                ArchiveKind::Dataset,
+                &ContentMetadata::default(),
+                destination,
+                CloudProvider::Icloud,
+                0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn file_provider_private_storage_is_non_overridable_planner_block() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        assert_eq!(
+            planner_blocked_reason(
+                &Path::new(
+                    "/Users/test/Library/Group Containers/group.com.apple.iCloudDrive/"
+                )
+                .join("File Provider Storage/DownloadStage/content.wav"),
+                ArchiveKind::Media,
+                &ContentMetadata::default(),
+                destination,
+                CloudProvider::Icloud,
+                0,
+            )
+            .as_deref(),
+            Some("system-managed-file-provider-storage")
+        );
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("/Users/test/iCloud Drive/DownloadStage/content.wav"),
+                ArchiveKind::Media,
+                &ContentMetadata::default(),
+                destination,
+                CloudProvider::Icloud,
+                0,
+            ),
+            None
         );
     }
 
@@ -5931,6 +6932,15 @@ mod tests {
             date_epoch_ms(2026, 6, 2).unwrap(),
         )
         .contains(&"embedded-metadata-probe-incomplete".to_string()));
+
+        assert!(!should_probe_general_metadata(Path::new(
+            "zotero.sqlite.1.bak",
+        )));
+        assert!(!should_probe_general_metadata(Path::new("zotero.db")));
+        assert!(!should_probe_general_metadata(Path::new("zotero.db3")));
+        assert!(!should_probe_general_metadata(Path::new("zotero.sqlite")));
+        assert!(!should_probe_general_metadata(Path::new("zotero.sqlite3")));
+        assert!(should_probe_general_metadata(Path::new("video.mov")));
     }
 
     #[cfg(not(coverage))]
@@ -6249,7 +7259,7 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
-    fn source_snapshot_reuses_probes_and_hashes_but_refreshes_destination_state() {
+    fn source_snapshot_reuses_probes_and_rehashes_final_destination_candidates() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         let google = tmp.path().join("google");
@@ -6293,7 +7303,6 @@ mod tests {
         );
 
         assert_eq!(snapshot.candidate_count(), 2);
-        assert_eq!(snapshot.duplicate_digests.len(), 2);
         let google_report =
             plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
         let onedrive_report =
@@ -6660,6 +7669,7 @@ mod tests {
             ("x.psd", ArchiveKind::Creative),
             ("x.aup3", ArchiveKind::Creative),
             ("x.crdownload", ArchiveKind::IncompleteDownload),
+            (".env.api", ArchiveKind::SensitiveConfig),
             ("x.zip.part004", ArchiveKind::Archive),
         ] {
             assert_eq!(archive_kind(Path::new(ext)), Some(expected));
@@ -6667,5 +7677,157 @@ mod tests {
         }
         assert_eq!(archive_kind(Path::new("x.zip.part04")), None);
         assert_eq!(archive_kind(Path::new("README")), None);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn sensitive_config_files_are_visible_but_never_reclaimable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in [".env.api", "credentials.json"] {
+            std::fs::write(source.join(name), b"redacted-test-fixture").unwrap();
+        }
+
+        assert_eq!(
+            archive_kind(&source.join(".env.api")),
+            Some(ArchiveKind::SensitiveConfig)
+        );
+        assert!(!should_probe_general_metadata(&source.join(".env.api")));
+        let report = plan_cloud_archive(
+            &collect_archive_files(&source, &[]),
+            &source,
+            &root(CloudProvider::Icloud, &cloud),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        assert_eq!(report.candidates.len(), 2);
+        assert!(report
+            .candidates
+            .iter()
+            .all(|candidate| candidate.blocked_reason.as_deref() == Some("sensitive-config-file")));
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
+    }
+
+    #[test]
+    fn sensitive_config_name_detection_keeps_examples_out_and_covers_key_markers() {
+        for (name, expected) in [
+            (".env", true),
+            (".env.collector", true),
+            (".env.example", false),
+            (".env.sample", false),
+            (".env.template", false),
+            ("credentials.json", true),
+            ("private-key.pem", true),
+            ("server.p12", true),
+            ("signing.key", true),
+            ("README", false),
+        ] {
+            assert_eq!(
+                is_sensitive_config_path(Path::new(name)),
+                expected,
+                "unexpected sensitive-config classification for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_is_sorted_and_fingerprinted() {
+        let cohort = compare_pre_copy_evidence(vec![
+            PreCopyEvidenceObservation {
+                stream: "icloud-sync-health-evidence".into(),
+                observed_at_ms: 1_000,
+                evidence_complete: true,
+                fingerprint: "c".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "volume-pressure-evidence".into(),
+                observed_at_ms: 900,
+                evidence_complete: true,
+                fingerprint: "a".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "provider-client-runtime-evidence".into(),
+                observed_at_ms: 950,
+                evidence_complete: true,
+                fingerprint: "b".repeat(64),
+            },
+        ]);
+        assert!(cohort.complete);
+        assert_eq!(cohort.observed_at_ms, 1_000);
+        assert_eq!(
+            cohort
+                .observations
+                .iter()
+                .map(|observation| observation.stream.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "icloud-sync-health-evidence",
+                "provider-client-runtime-evidence",
+                "volume-pressure-evidence"
+            ]
+        );
+        assert!(valid_evidence_fingerprint(&cohort.cohort_fingerprint));
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_blocks_incomplete_and_skewed_observations() {
+        let cohort = compare_pre_copy_evidence(vec![
+            PreCopyEvidenceObservation {
+                stream: "volume-pressure-evidence".into(),
+                observed_at_ms: 1,
+                evidence_complete: true,
+                fingerprint: "a".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "icloud-sync-health-evidence".into(),
+                observed_at_ms: PRE_COPY_EVIDENCE_MAX_SKEW_MS + 2,
+                evidence_complete: false,
+                fingerprint: "b".repeat(64),
+            },
+        ]);
+        assert!(!cohort.complete);
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-observation-time-skew".into()));
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-stream-incomplete-icloud-sync-health-evidence".into()));
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-stream-missing-provider-client-runtime-evidence".into()));
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_is_required_and_integrity_bound() {
+        assert_eq!(
+            require_pre_copy_evidence_cohort(None).unwrap_err(),
+            "pre-copy-evidence-cohort-unavailable"
+        );
+        let valid = compare_pre_copy_evidence(
+            PRE_COPY_EVIDENCE_REQUIRED_STREAMS
+                .iter()
+                .enumerate()
+                .map(|(index, stream)| PreCopyEvidenceObservation {
+                    stream: (*stream).into(),
+                    observed_at_ms: 100 + index as u64,
+                    evidence_complete: true,
+                    fingerprint: format!("{index:x}").repeat(64),
+                })
+                .collect(),
+        );
+        assert!(require_pre_copy_evidence_cohort(Some(&valid)).is_ok());
+        let mut tampered = valid.clone();
+        tampered.observed_at_ms += 1;
+        assert_eq!(
+            require_pre_copy_evidence_cohort(Some(&tampered)).unwrap_err(),
+            "pre-copy-evidence-cohort-integrity-invalid"
+        );
     }
 }

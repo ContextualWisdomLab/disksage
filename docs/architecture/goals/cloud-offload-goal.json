@@ -1,0 +1,53 @@
+{
+  "goal_id": "disksage-cloud-offload",
+  "status": "active",
+  "state_source": "runtime:cloud-goals/<receipt-id>-latest.json",
+  "adr_source": "runtime:cloud-adr/<receipt-id>-latest.json",
+  "states": [
+    "copy-verified",
+    "pending-provider-sync",
+    "provider-sync-confirmed",
+    "eviction-ready",
+    "source-evicted"
+  ],
+  "completion_gates": [
+    "metadata-and-lineage-bound",
+    "copy-content-verified",
+    "provider-sync-state-complete",
+    "immutable-evidence-record-valid",
+    "explicit-eviction-permit"
+  ],
+  "blocked_source_classes": [
+    "sensitive-config-file"
+  ],
+  "pre_copy_evidence_streams": [
+    "volume-pressure-evidence",
+    "provider-client-runtime-evidence",
+    "icloud-sync-health-evidence"
+  ],
+  "pre_copy_evidence_rule": "compare one canonical three-stream cohort; missing, malformed, incomplete, or skewed evidence remains blocked",
+  "pre_copy_evidence_max_skew_ms": 300000,
+  "runtime_evidence_failure_policy": "fail-closed; unavailable provider-client runtime evidence is not process absence",
+  "operator_actions": [
+    "cancel-finder-copy",
+    "plan_orphan_cleanup",
+    "clean_orphan_candidates"
+  ],
+  "lineage_relation_graph": [
+    "source",
+    "metadata-evidence",
+    "production-evidence",
+    "archive",
+    "destination",
+    "receipt",
+    "review-decision",
+    "provider-sync-state",
+    "provider-evidence",
+    "remote-object",
+    "installed-bundle-inventory",
+    "orphan-candidate",
+    "active-use-evidence"
+  ],
+  "lineage_relation_identifier_rule": "deterministic-domain-separated-digest; never a raw local or provider path",
+  "safety_invariant": "source-retained-until-an-explicit-trash-step"
+}

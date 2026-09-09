@@ -4,18 +4,15 @@
 //! fingerprint, an attributed human approval, a second matching confirmation, and a local immutable
 //! record directory.
 
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudRoot};
-#[cfg(not(coverage))]
 use disksage_lib::cloud_local_eviction::{
     approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
     write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
     IcloudLocalEvictionResult,
 };
-#[cfg(not(coverage))]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: PathBuf,
@@ -28,21 +25,24 @@ struct Args {
     record_dir: Option<PathBuf>,
 }
 
-#[cfg(not(coverage))]
 fn usage() -> &'static str {
     "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
 
-#[cfg(not(coverage))]
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-#[cfg(not(coverage))]
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "icloud-local-eviction-invalid-utf8-argument".to_string())
+}
+
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut path = None;
     let mut execute = false;
@@ -53,27 +53,60 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut record_dir = None;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--cloud-root" => {
-                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
+        match args[index].to_str() {
+            Some("--cloud-root") => {
+                if cloud_root.is_some() {
+                    return Err("--cloud-root는 한 번만 지정할 수 있음".into());
+                }
+                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
             }
-            "--path" => path = Some(PathBuf::from(value(args, &mut index, "--path")?)),
-            "--execute" => execute = true,
-            "--approved-plan-fingerprint" => {
+            Some("--path") => {
+                if path.is_some() {
+                    return Err("--path는 한 번만 지정할 수 있음".into());
+                }
+                path = Some(PathBuf::from(native_value(args, &mut index, "--path")?));
+            }
+            Some("--execute") => {
+                if execute {
+                    return Err("--execute는 한 번만 지정할 수 있음".into());
+                }
+                execute = true;
+            }
+            Some("--approved-plan-fingerprint") => {
+                if approved_plan_fingerprint.is_some() {
+                    return Err("--approved-plan-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 approved_plan_fingerprint =
-                    Some(value(args, &mut index, "--approved-plan-fingerprint")?)
+                    Some(text_value(args, &mut index, "--approved-plan-fingerprint")?)
             }
-            "--confirm-plan-fingerprint" => {
+            Some("--confirm-plan-fingerprint") => {
+                if confirm_plan_fingerprint.is_some() {
+                    return Err("--confirm-plan-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 confirm_plan_fingerprint =
-                    Some(value(args, &mut index, "--confirm-plan-fingerprint")?)
+                    Some(text_value(args, &mut index, "--confirm-plan-fingerprint")?)
             }
-            "--approved-by" => approved_by = Some(value(args, &mut index, "--approved-by")?),
-            "--rationale" => rationale = Some(value(args, &mut index, "--rationale")?),
-            "--record-dir" => {
-                record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
+            Some("--approved-by") => {
+                if approved_by.is_some() {
+                    return Err("--approved-by는 한 번만 지정할 수 있음".into());
+                }
+                approved_by = Some(text_value(args, &mut index, "--approved-by")?)
             }
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            Some("--rationale") => {
+                if rationale.is_some() {
+                    return Err("--rationale은 한 번만 지정할 수 있음".into());
+                }
+                rationale = Some(text_value(args, &mut index, "--rationale")?)
+            }
+            Some("--record-dir") => {
+                if record_dir.is_some() {
+                    return Err("--record-dir는 한 번만 지정할 수 있음".into());
+                }
+                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+            }
+            Some("--help" | "-h") => return Err(usage().into()),
+            Some(_) => return Err("icloud-local-eviction-unknown-argument".into()),
+            None => return Err("icloud-local-eviction-invalid-utf8-argument".into()),
         }
         index += 1;
     }
@@ -113,7 +146,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-#[cfg(not(coverage))]
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -121,7 +159,6 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "HOME/USERPROFILE을 찾을 수 없음".into())
 }
 
-#[cfg(not(coverage))]
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
@@ -134,7 +171,6 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     }
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct PlanOutput {
     action: &'static str,
@@ -142,7 +178,6 @@ struct PlanOutput {
     plan: IcloudLocalEvictionPlan,
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct ExecuteOutput {
     action: &'static str,
@@ -154,7 +189,6 @@ struct ExecuteOutput {
     result_record: String,
 }
 
-#[cfg(not(coverage))]
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
@@ -163,10 +197,13 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let args = parse_args(&raw)?;
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args_os(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
     let now_ms = cloud::system_now_ms();
@@ -236,16 +273,12 @@ fn run() -> Result<(), String> {
     })
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
