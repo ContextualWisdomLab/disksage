@@ -18,6 +18,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -809,7 +811,218 @@ pub(crate) fn active_use_evidence(
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WindowsFileTime {
+    low: u32,
+    high: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WindowsUniqueProcess {
+    process_id: u32,
+    process_start_time: WindowsFileTime,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WindowsRestartManagerProcessInfo {
+    process: WindowsUniqueProcess,
+    app_name: [u16; 256],
+    service_short_name: [u16; 64],
+    application_type: i32,
+    app_status: u32,
+    terminal_services_session_id: u32,
+    restartable: i32,
+}
+
+#[cfg(windows)]
+#[link(name = "Rstrtmgr")]
+extern "system" {
+    fn RmStartSession(handle: *mut u32, flags: u32, session_key: *mut u16) -> u32;
+    fn RmRegisterResources(
+        handle: u32,
+        file_count: u32,
+        file_names: *const *const u16,
+        application_count: u32,
+        applications: *const WindowsUniqueProcess,
+        service_count: u32,
+        service_names: *const *const u16,
+    ) -> u32;
+    fn RmGetList(
+        handle: u32,
+        needed: *mut u32,
+        count: *mut u32,
+        processes: *mut WindowsRestartManagerProcessInfo,
+        reboot_reasons: *mut u32,
+    ) -> u32;
+    fn RmEndSession(handle: u32) -> u32;
+}
+
+#[cfg(windows)]
+struct WindowsRestartManagerSession(u32);
+
+#[cfg(windows)]
+impl Drop for WindowsRestartManagerSession {
+    fn drop(&mut self) {
+        // SAFETY: the handle was returned by RmStartSession and is ended exactly once here.
+        unsafe { RmEndSession(self.0) };
+    }
+}
+
+fn restart_manager_evidence(
+    pids: BTreeSet<u32>,
+    max_pids: usize,
+    complete: bool,
+    error: Option<String>,
+) -> GitWorktreeActiveUseEvidence {
+    let results_truncated = pids.len() > max_pids;
+    let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
+    GitWorktreeActiveUseEvidence {
+        method: "windows-restart-manager-registered-files".into(),
+        assessed: true,
+        evidence_complete: complete && !results_truncated && error.is_none(),
+        active: !observed_pids.is_empty(),
+        observed_pids,
+        results_truncated,
+        error: error.or_else(|| results_truncated.then(|| "active-use-pid-limit".into())),
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn active_use_evidence(
+    path: &Path,
+    timeout_ms: u64,
+    max_pids: usize,
+    recursive: bool,
+) -> GitWorktreeActiveUseEvidence {
+    const ERROR_SUCCESS: u32 = 0;
+    const ERROR_MORE_DATA: u32 = 234;
+    const MAX_REGISTERED_FILES: usize = 250_000;
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut files = Vec::<Vec<u16>>::new();
+    let walker = walkdir::WalkDir::new(path)
+        .max_depth(if recursive { usize::MAX } else { 0 })
+        .follow_links(false);
+    for entry in walker {
+        if Instant::now() >= deadline || files.len() >= MAX_REGISTERED_FILES {
+            return restart_manager_evidence(
+                BTreeSet::new(),
+                max_pids,
+                false,
+                Some("active-use-file-inventory-incomplete".into()),
+            );
+        }
+        let Ok(entry) = entry else {
+            return restart_manager_evidence(
+                BTreeSet::new(),
+                max_pids,
+                false,
+                Some("active-use-file-inventory-failed".into()),
+            );
+        };
+        if entry.file_type().is_file() {
+            let mut wide: Vec<u16> = entry.path().as_os_str().encode_wide().collect();
+            wide.push(0);
+            files.push(wide);
+        }
+    }
+    if files.is_empty() {
+        return restart_manager_evidence(BTreeSet::new(), max_pids, true, None);
+    }
+    let mut handle = 0_u32;
+    let mut session_key = [0_u16; 33];
+    // SAFETY: all pointers reference writable fixed-size values required by Restart Manager.
+    let started = unsafe { RmStartSession(&mut handle, 0, session_key.as_mut_ptr()) };
+    if started != ERROR_SUCCESS {
+        return restart_manager_evidence(
+            BTreeSet::new(),
+            max_pids,
+            false,
+            Some("active-use-restart-manager-start-failed".into()),
+        );
+    }
+    let session = WindowsRestartManagerSession(handle);
+    let pointers: Vec<*const u16> = files.iter().map(|file| file.as_ptr()).collect();
+    // SAFETY: the UTF-16 buffers and pointer array remain alive for the complete call.
+    let registered = unsafe {
+        RmRegisterResources(
+            session.0,
+            pointers.len() as u32,
+            pointers.as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if registered != ERROR_SUCCESS || Instant::now() >= deadline {
+        return restart_manager_evidence(
+            BTreeSet::new(),
+            max_pids,
+            false,
+            Some("active-use-restart-manager-register-failed".into()),
+        );
+    }
+    let mut needed = 0_u32;
+    let mut count = 0_u32;
+    let mut reboot_reasons = 0_u32;
+    // SAFETY: the first call requests only the required process count and supplies a null buffer.
+    let first = unsafe {
+        RmGetList(
+            session.0,
+            &mut needed,
+            &mut count,
+            std::ptr::null_mut(),
+            &mut reboot_reasons,
+        )
+    };
+    if first == ERROR_SUCCESS && needed == 0 {
+        return restart_manager_evidence(BTreeSet::new(), max_pids, true, None);
+    }
+    if first != ERROR_MORE_DATA || needed as usize > max_pids {
+        return restart_manager_evidence(
+            BTreeSet::new(),
+            max_pids,
+            false,
+            Some("active-use-restart-manager-process-list-incomplete".into()),
+        );
+    }
+    count = needed;
+    let mut processes =
+        vec![std::mem::MaybeUninit::<WindowsRestartManagerProcessInfo>::zeroed(); count as usize];
+    // SAFETY: the buffer has exactly `count` initialized writable slots; the API reports how many
+    // entries it filled, and only that prefix is read after a successful call.
+    let second = unsafe {
+        RmGetList(
+            session.0,
+            &mut needed,
+            &mut count,
+            processes.as_mut_ptr().cast(),
+            &mut reboot_reasons,
+        )
+    };
+    if second != ERROR_SUCCESS || Instant::now() >= deadline {
+        return restart_manager_evidence(
+            BTreeSet::new(),
+            max_pids,
+            false,
+            Some("active-use-restart-manager-process-list-failed".into()),
+        );
+    }
+    let pids = processes
+        .into_iter()
+        .take(count as usize)
+        .map(|process| unsafe { process.assume_init() }.process.process_id)
+        .collect();
+    restart_manager_evidence(pids, max_pids, true, None)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn active_use_evidence(
     _path: &Path,
     _timeout_ms: u64,
@@ -2196,6 +2409,31 @@ mod tests {
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
+    }
+
+    #[test]
+    fn restart_manager_evidence_is_fail_closed_when_pid_results_exceed_cap() {
+        let evidence = restart_manager_evidence(BTreeSet::from([10, 20, 30]), 2, true, None);
+
+        assert!(evidence.active);
+        assert!(!evidence.evidence_complete);
+        assert!(evidence.results_truncated);
+        assert_eq!(evidence.observed_pids, vec![10, 20]);
+        assert_eq!(evidence.error.as_deref(), Some("active-use-pid-limit"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_manager_observes_an_open_registered_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("open-build-output.bin");
+        let _open = std::fs::File::create(&path).unwrap();
+
+        let evidence = active_use_evidence(&path, 10_000, 64, false);
+
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        assert!(evidence.observed_pids.contains(&std::process::id()));
     }
 
     fn executable_report() -> GitWorktreeAuditReport {

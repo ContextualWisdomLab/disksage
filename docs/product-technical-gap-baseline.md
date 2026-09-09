@@ -184,6 +184,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
   artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
   was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
+- The product now closes the manual generated-build-root gap behind an explicit selected-workspace
+  boundary: Cargo `target`, Node `node_modules`, and Python `.venv`/`venv` require their project
+  marker plus a recognized lockfile, complete bounded metadata and physical-allocation evidence,
+  no File Provider ancestry/placeholders or symlink escape, unchanged identity, inactive-use
+  evidence, and a fresh Trash confirmation. The observed 6.7 GiB Cargo recovery is incident context,
+  not a size or age threshold; permanent deletion remains deliberately unavailable.
 - A subsequent low-space loop used the already-catalogued regenerable pnpm store boundary: `pnpm
   store prune` removed 30,315 stale files / 602 packages (about 1.08 GB). No user files, provider
   databases, CloudDocs data, active processes, or cloud objects were touched; the product's

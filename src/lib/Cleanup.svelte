@@ -1,8 +1,10 @@
 <script lang="ts">
   import * as api from "./api";
+  import * as devArtifactApi from "./devArtifactApi";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
-  import { confirm } from "@tauri-apps/plugin-dialog";
+  import { confirm, open } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
@@ -11,11 +13,14 @@
 
   let caches: api.CacheCandidate[] = $state([]);
   let artifacts: api.DevArtifact[] = $state([]);
+  let devArtifactRoot = $state("");
   let selected: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
   let cacheRetryMessage = $state("");
+  let devArtifactApproval: devArtifactApi.DevArtifactApproval | null = $state(null);
+  let devArtifactConfirmationPhrase = $state("");
   let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
   let podmanBusy = $state(false);
   let podmanError = $state("");
@@ -36,14 +41,63 @@
     }
   }
 
+  function invalidateDevArtifactApproval() {
+    devArtifactApproval = null;
+    devArtifactConfirmationPhrase = "";
+  }
+
+  onMount(() => {
+    const timer = window.setInterval(() => {
+      if (
+        devArtifactApproval !== null
+        && !devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
+      ) {
+        invalidateDevArtifactApproval();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  });
+
   async function load() {
     loadError = "";
+    invalidateDevArtifactApproval();
     try {
       caches = await api.listCacheCandidates();
-      artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
+      artifacts = devArtifactRoot ? await api.listDevArtifacts(devArtifactRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
       loadError = String(e);
+    }
+  }
+
+  async function chooseDevArtifactRoot() {
+    if (busy) return;
+    loadError = "";
+    let chosenRoot: string | string[] | null;
+    try {
+      chosenRoot = await open({
+        directory: true,
+        multiple: false,
+        title: "정리할 개발 폴더 선택",
+      });
+    } catch (e) {
+      loadError = String(e);
+      return;
+    }
+    if (typeof chosenRoot !== "string" || chosenRoot.length === 0) return;
+
+    busy = true;
+    devArtifactRoot = chosenRoot;
+    selected = new Set();
+    invalidateDevArtifactApproval();
+    try {
+      artifacts = await api.listDevArtifacts(devArtifactRoot);
+      loadVerdicts(artifacts.map((a) => a.path));
+    } catch (e) {
+      artifacts = [];
+      loadError = String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -147,38 +201,95 @@
     return next;
   }
 
+  function toggleArtifact(path: string) {
+    selected = toggle(selected, path);
+    invalidateDevArtifactApproval();
+  }
+
+  function selectedDevArtifacts(): api.DevArtifact[] {
+    return artifacts.filter(
+      (artifact) => selected.has(artifact.path) && artifact.scan_complete && artifact.skipped === 0,
+    );
+  }
+
   let totalSelected = $derived(
     artifacts
       .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
-      .reduce((sum, artifact) => sum + artifact.bytes, 0),
+      .reduce((sum, artifact) => sum + artifact.allocated_bytes, 0),
   );
 
   let selectionCount = $derived(
     artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
+  async function reviewDevArtifactSelection() {
+    const selectedArtifacts = selectedDevArtifacts();
+    if (busy || selectedArtifacts.length === 0 || !devArtifactRoot) return;
+    busy = true;
+    loadError = "";
+    invalidateDevArtifactApproval();
+    try {
+      devArtifactApproval = await devArtifactApi.reviewDevArtifacts(devArtifactRoot, selectedArtifacts);
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function devArtifactExecutionReady(): boolean {
+    return !busy
+      && devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
+      && devArtifactConfirmationPhrase.trim() === devArtifactApproval.exact_phrase
+      && selectionCount > 0;
+  }
+
   async function executeClean() {
-    // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const selectedArtifacts = artifacts.filter(
-      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
-    );
-    if (selectedArtifacts.length === 0 || !scannedRoot) return;
+    const selectedArtifacts = selectedDevArtifacts();
+    const approval = devArtifactApproval;
+    if (
+      selectedArtifacts.length === 0
+      || !devArtifactRoot
+      || !devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())
+      || devArtifactConfirmationPhrase.trim() !== approval.exact_phrase
+    ) return;
     const summary = selectedArtifacts.map(
-      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+      (a) => `${a.path} (로컬 ${fmtBytes(a.allocated_bytes)}, ${a.files}개)`,
     );
     const okay = await confirm(
-      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
+      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (현재 로컬 사용량 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
+        "\n\n입력한 승인 문구와 선택 지문을 백엔드에서 다시 검증합니다. 휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
+    if (!devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())) {
+      invalidateDevArtifactApproval();
+      loadError = "승인 시간이 만료되었습니다. 선택 항목을 유지했으니 다시 검토해 승인 문구를 생성하세요.";
+      return;
+    }
 
     busy = true;
     try {
-      results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
+      const cleanResults = await devArtifactApi.cleanDevArtifactsBound(
+        devArtifactRoot,
+        0,
+        selectedArtifacts,
+        approval,
+        devArtifactConfirmationPhrase.trim(),
+      );
+      results = cleanResults;
+      const approvalFailure = cleanResults.some(
+        (result) => !result.ok && result.error?.includes("development-artifact-approval-"),
+      );
+      if (approvalFailure) {
+        invalidateDevArtifactApproval();
+        loadError = "승인 증거가 더 이상 유효하지 않습니다. 선택 항목을 유지했으니 다시 검토해 승인 문구를 생성하세요.";
+        return;
+      }
       selected = new Set();
+      invalidateDevArtifactApproval();
       await load();
     } catch (e) {
       loadError = String(e);
@@ -220,7 +331,11 @@
     {/each}
   </ul>
 
-  <h3>오래된 개발 아티팩트 {scannedRoot ? `(${scannedRoot}, 30일+)` : "(먼저 스캔하세요)"}</h3>
+  <h3>개발 빌드 파일 {devArtifactRoot ? `(${devArtifactRoot})` : "(개발 폴더를 선택하세요)"}</h3>
+  <p class="notice" role="status">
+    개발 빌드 파일은 전체 디스크 스캔 위치를 재귀 탐색하지 않습니다. 정리할 프로젝트 작업공간을 직접 선택한 뒤 그 안에서 다시 만들 수 있다고 확인된 Cargo·Node·Python 빌드 파일만 표시합니다. 개발 도구를 닫고 항목을 선택한 뒤 휴지통으로 보내세요.
+  </p>
+  <button onclick={chooseDevArtifactRoot} disabled={busy}>개발 폴더 선택</button>
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
@@ -229,15 +344,15 @@
             type="checkbox"
             disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
-            onchange={() => (selected = toggle(selected, a.path))}
+            onchange={() => toggleArtifact(a.path)}
           />
-          {a.kind} <em>({a.project}, {a.age_days}일)</em>
+          {a.kind} <em>({a.project})</em>
           <span class="size">
             {!a.scan_complete
               ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
-                : fmtBytes(a.bytes)}
+                : `로컬 ${fmtBytes(a.allocated_bytes)}`}
           </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
@@ -250,8 +365,28 @@
   </ul>
 
   <div class="actions">
-    <button onclick={executeClean} disabled={busy || selectionCount === 0}>
-      {busy ? "정리 중…" : `선택 항목 휴지통으로 (논리 ${fmtBytes(totalSelected)})`}
+    <button onclick={reviewDevArtifactSelection} disabled={busy || selectionCount === 0}>
+      {busy ? "검토 중…" : `선택 ${selectionCount}개 검토 및 승인 문구 생성`}
+    </button>
+    {#if devArtifactApproval}
+      <div class="typed-approval">
+        <p class="notice" role="status">
+          아래 승인 문구는 현재 선택 지문에만 유효합니다. 선택을 바꾸거나 새로고침하거나 승인 시간이 만료되면 다시 검토해야 합니다.
+        </p>
+        <code>{devArtifactApproval.exact_phrase}</code>
+        <label>
+          정확한 승인 문구 입력
+          <input
+            bind:value={devArtifactConfirmationPhrase}
+            autocomplete="off"
+            spellcheck="false"
+            disabled={busy}
+          />
+        </label>
+      </div>
+    {/if}
+    <button onclick={executeClean} disabled={!devArtifactExecutionReady()}>
+      {busy ? "정리 중…" : `검토된 선택 항목 휴지통으로 (로컬 ${fmtBytes(totalSelected)})`}
     </button>
   </div>
 
@@ -343,6 +478,11 @@
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .actions { display: grid; gap: 0.6rem; }
+  .typed-approval { display: grid; gap: 0.5rem; max-width: 100%; }
+  .typed-approval code { overflow-wrap: anywhere; }
+  .typed-approval label { display: grid; gap: 0.25rem; }
+  .typed-approval input { width: 100%; box-sizing: border-box; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
   .podman-prune { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
   .podman-prune label { display: grid; gap: 0.25rem; }

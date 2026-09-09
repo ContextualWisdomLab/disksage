@@ -407,6 +407,29 @@ pub fn trash_delete_if_identity(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
+    trash_delete_if_identity_and_validate(
+        path,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+        |_| Ok(()),
+    )
+}
+
+/// Atomically stage the reviewed object and validate its staged bytes before handing it to Trash.
+/// A failed validation restores the same object to its original path when that path remains free.
+pub fn trash_delete_if_identity_and_validate<F>(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    validate_staged: F,
+) -> Result<(), SafetyError>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -464,6 +487,16 @@ pub fn trash_delete_if_identity(
                 )),
                 Err(restore_error) => Err(SafetyError::Trash(format!(
                     "atomic staging move changed the filesystem object; {restore_error}"
+                ))),
+            };
+        }
+        if let Err(error) = validate_staged(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(format!(
+                    "staged object validation failed; nothing was trashed: {error}"
+                ))),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "staged object validation failed: {error}; {restore_error}"
                 ))),
             };
         }
@@ -881,6 +914,33 @@ mod tests {
         assert!(victim.exists(), "대체 객체는 삭제되지 않아야 함");
         assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
         assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
+    }
+
+    #[test]
+    fn staged_validation_failure_restores_the_reviewed_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let victim = tmp.path().join("generated-root");
+        std::fs::create_dir(&victim).unwrap();
+        std::fs::write(victim.join("reviewed.bin"), b"reviewed").unwrap();
+        let expected = filesystem_object_id(&victim).unwrap();
+
+        let error = trash_delete_if_identity_and_validate(
+            &victim,
+            &expected,
+            8,
+            &journal,
+            1,
+            |staged| {
+                std::fs::write(staged.join("late-build.bin"), b"late").unwrap();
+                Err("manifest-changed".into())
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("nothing was trashed"));
+        assert_eq!(std::fs::read(victim.join("reviewed.bin")).unwrap(), b"reviewed");
+        assert_eq!(std::fs::read(victim.join("late-build.bin")).unwrap(), b"late");
     }
 
     #[test]

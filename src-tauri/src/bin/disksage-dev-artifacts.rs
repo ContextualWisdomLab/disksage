@@ -1,13 +1,18 @@
 //! Bounded, identity-checked development-artifact inventory and cleanup.
 //!
-//! The default operation is read-only. `--execute` re-scans every requested artifact and moves it
-//! to OS Trash only when its path, metadata manifest, and filesystem identity still match.
+//! The default operation is read-only. Execution requires the exact selection-bound phrase and
+//! review timestamp emitted by a prior read-only plan; every requested artifact is then re-scanned
+//! before being moved to OS Trash.
 
-use disksage_lib::dev_artifacts::{clean_artifacts, find_artifacts, DevArtifactCleanResult};
+use disksage_lib::dev_artifact_approval::{
+    clean_artifacts_with_approval, review_selection, selection_fingerprint, DevArtifactApproval,
+    MAX_REVIEW_AGE_MS,
+};
+use disksage_lib::dev_artifacts::{find_artifacts, DevArtifactCleanResult};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_AGE_DAYS: u64 = 3_650;
-const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute]";
+const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute --approval-phrase EXACT_PHRASE --approved-at-ms EPOCH_MS]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -15,6 +20,8 @@ struct Args {
     min_age_days: u64,
     journal_path: PathBuf,
     execute: bool,
+    approval_phrase: Option<String>,
+    approved_at_ms: Option<u64>,
 }
 
 fn absolute_without_parent(path: &Path) -> bool {
@@ -25,7 +32,8 @@ fn absolute_without_parent(path: &Path) -> bool {
 }
 
 fn default_journal_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|path| absolute_without_parent(path))
         .ok_or_else(|| "home-directory-unavailable".to_string())?;
@@ -57,6 +65,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut min_age_days = 30;
     let mut journal_path = default_journal_path()?;
     let mut execute = false;
+    let mut approval_phrase = None;
+    let mut approved_at_ms = None;
     let mut index = 0usize;
     while index < raw.len() {
         match raw[index].as_str() {
@@ -87,6 +97,23 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 );
             }
             "--execute" => execute = true,
+            "--approval-phrase" => {
+                index += 1;
+                approval_phrase = Some(
+                    raw.get(index)
+                        .ok_or_else(|| "--approval-phrase 값이 필요함".to_string())?
+                        .clone(),
+                );
+            }
+            "--approved-at-ms" => {
+                index += 1;
+                approved_at_ms = Some(
+                    raw.get(index)
+                        .ok_or_else(|| "--approved-at-ms 값이 필요함".to_string())?
+                        .parse::<u64>()
+                        .map_err(|_| "--approved-at-ms는 정수여야 함".to_string())?,
+                );
+            }
             "--help" | "-h" => return Err(USAGE.into()),
             flag => return Err(format!("알 수 없는 인자: {flag}")),
         }
@@ -104,6 +131,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         min_age_days,
         journal_path,
         execute,
+        approval_phrase,
+        approved_at_ms,
     })
 }
 
@@ -117,23 +146,46 @@ fn now_ms() -> u64 {
 fn run(args: Args) -> Result<serde_json::Value, String> {
     let observed_at_ms = now_ms();
     let candidates = find_artifacts(&args.root, args.min_age_days, observed_at_ms);
+    let review = if candidates.is_empty() {
+        None
+    } else {
+        Some(review_selection(&args.root, &candidates, observed_at_ms)?)
+    };
     let results: Vec<DevArtifactCleanResult> = if args.execute {
+        let approval_phrase = args
+            .approval_phrase
+            .as_deref()
+            .ok_or_else(|| "development-artifact-confirmation-required".to_string())?;
+        let approved_at_ms = args
+            .approved_at_ms
+            .ok_or_else(|| "development-artifact-confirmation-required".to_string())?;
+        if candidates.is_empty() {
+            return Err("development-artifact-selection-empty".into());
+        }
         if let Some(parent) = args.journal_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|_| "development-artifact-journal-parent-create-failed".to_string())?;
         }
-        clean_artifacts(
+        let selection_fingerprint = selection_fingerprint(&args.root, &candidates)?;
+        let approval = DevArtifactApproval {
+            selection_fingerprint,
+            reviewed_at_ms: approved_at_ms,
+            expires_at_ms: approved_at_ms.saturating_add(MAX_REVIEW_AGE_MS),
+            exact_phrase: approval_phrase.to_string(),
+        };
+        clean_artifacts_with_approval(
             &candidates,
             &args.root,
             args.min_age_days,
             &args.journal_path,
             observed_at_ms,
+            &approval,
         )
     } else {
         Vec::new()
     };
     serde_json::to_value(serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "schema_kind": "disksage.dev-artifact-cleanup",
         "root": args.root,
         "min_age_days": args.min_age_days,
@@ -141,6 +193,9 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         "executed": args.execute,
         "candidate_count": candidates.len(),
         "candidates": candidates,
+        "selection_fingerprint": review.as_ref().map(|value| value.selection_fingerprint.as_str()),
+        "exact_approval_phrase": review.as_ref().map(|value| value.exact_phrase.as_str()),
+        "approval_expires_at_ms": review.as_ref().map(|value| value.expires_at_ms),
         "results": results,
         "journal_path": if args.execute { Some(args.journal_path) } else { None::<PathBuf> },
         "cloud_write_executed": false,
@@ -177,6 +232,8 @@ mod tests {
         let parsed = parse_args(&["--root".into(), root.to_string_lossy().into_owned()]).unwrap();
         assert_eq!(parsed.min_age_days, 30);
         assert!(!parsed.execute);
+        assert!(parsed.approval_phrase.is_none());
+        assert!(parsed.approved_at_ms.is_none());
         assert!(parse_args(&["--root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
             "--root".into(),
@@ -188,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_explicit_execute_and_journal() {
+    fn parser_accepts_explicit_review_authority_and_journal() {
         let root = std::env::temp_dir();
         let parsed = parse_args(&[
             "--root".into(),
@@ -198,10 +255,19 @@ mod tests {
             "--journal-path".into(),
             "/tmp/disksage-dev-artifacts-journal.jsonl".into(),
             "--execute".into(),
+            "--approval-phrase".into(),
+            "MOVE DEVELOPMENT ARTIFACTS abc TO TRASH".into(),
+            "--approved-at-ms".into(),
+            "123".into(),
         ])
         .unwrap();
         assert_eq!(parsed.min_age_days, 7);
         assert!(parsed.execute);
+        assert_eq!(parsed.approved_at_ms, Some(123));
+        assert_eq!(
+            parsed.approval_phrase.as_deref(),
+            Some("MOVE DEVELOPMENT ARTIFACTS abc TO TRASH")
+        );
         assert_eq!(
             parsed.journal_path,
             PathBuf::from("/tmp/disksage-dev-artifacts-journal.jsonl")

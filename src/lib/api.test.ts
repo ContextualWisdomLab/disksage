@@ -34,7 +34,6 @@ describe("api wrappers", () => {
       [() => api.listDevArtifacts("/repo"), "list_dev_artifacts", { root: "/repo", minAgeDays: 30 }],
       [() => api.listDevArtifacts("/repo", 7), "list_dev_artifacts", { root: "/repo", minAgeDays: 7 }],
       [() => api.cleanPaths(["/tmp/a"]), "clean_paths", { paths: ["/tmp/a"] }],
-      [() => api.cleanDevArtifacts("/repo", 30, []), "clean_dev_artifacts", { root: "/repo", minAgeDays: 30, artifacts: [] }],
       [() => api.expandCleanTargets("/tmp"), "expand_clean_targets", { dir: "/tmp" }],
       [() => api.recentOperations(), "recent_operations", { limit: 20 }],
       [() => api.recentOperations(3), "recent_operations", { limit: 3 }],
