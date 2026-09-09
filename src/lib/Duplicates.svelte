@@ -38,8 +38,8 @@
       }
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일을 확인하지 못했습니다. 스캔 범위와 저장 공간을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -77,8 +77,8 @@
       const r = await api.cleanPaths(paths);
       await scan();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일을 휴지통으로 보내지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -90,6 +90,7 @@
     중복 파일 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={scan} disabled={busy || !scannedRoot}>{busy ? "찾는 중…" : "중복 찾기"}</button>
   </h2>
+  <p class="muted">내용이 완전히 같은 사본만 자동으로 묶습니다. 해상도나 압축이 다른 사진은 자동 삭제하지 않으니 먼저 비교하세요.</p>
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
   {#if groups.length === 0 && !busy}
