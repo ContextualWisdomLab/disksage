@@ -24,8 +24,7 @@ pub enum RegenerationContract {
     HomebrewBootsnap,
     UvPackageCache,
     PlaywrightBrowserDownload,
-    /// Cargo target directory created by a DiskSage-owned test/CLI process under macOS's
-    /// per-user temporary directory. Cargo regenerates it from the source inputs.
+    /// Legacy temporary Cargo candidate shape. This is not producer or regeneration proof.
     DiskSageTemporaryCargoTarget,
     /// Node.js bytecode cache at the exact per-user macOS temporary-directory location.
     /// Node regenerates these artifacts while loading JavaScript modules.
@@ -45,9 +44,80 @@ pub struct GeneratedCacheActivityEvidence {
     pub git_dirty: bool,
 }
 
+/// Identity of the immediate directory used for staging. This is a handle veto,
+/// not evidence of exclusive ownership or absence of ancestor/sibling writers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImmediateParentIdentity {
+    pub canonical_path: String,
+    pub device: u64,
+    pub inode: u64,
+}
+
+fn immediate_parent_identity(path: &Path) -> Result<ImmediateParentIdentity, String> {
+    let parent = path.parent().ok_or("generated-cache-parent-unavailable")?;
+    let metadata =
+        std::fs::symlink_metadata(parent).map_err(|_| "generated-cache-parent-stat-failed")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("generated-cache-parent-not-real-directory".into());
+    }
+    let canonical = parent
+        .canonicalize()
+        .map_err(|_| "generated-cache-parent-canonicalize-failed")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let resolved = std::fs::symlink_metadata(&canonical)
+            .map_err(|_| "generated-cache-parent-stat-failed")?;
+        if !resolved.is_dir()
+            || resolved.dev() != metadata.dev()
+            || resolved.ino() != metadata.ino()
+        {
+            return Err("generated-cache-parent-identity-changed".into());
+        }
+        Ok(ImmediateParentIdentity {
+            canonical_path: canonical
+                .to_str()
+                .ok_or("generated-cache-parent-path-not-utf8")?
+                .into(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    Err("generated-cache-parent-identity-unsupported".into())
+}
+
+fn require_inactive_immediate_parent(
+    path: &Path,
+    expected: &ImmediateParentIdentity,
+) -> Result<(), String> {
+    if immediate_parent_identity(path)? != *expected {
+        return Err("generated-cache-parent-identity-changed".into());
+    }
+    // Nonrecursive: inspect handles to this directory, without traversing shared caches.
+    let active = crate::git_worktree::active_use_evidence(
+        Path::new(&expected.canonical_path),
+        5_000,
+        128,
+        false,
+    );
+    if !active.assessed || !active.evidence_complete {
+        return Err("generated-cache-parent-activity-incomplete".into());
+    }
+    if active.active || !active.observed_pids.is_empty() {
+        return Err("generated-cache-parent-active-use".into());
+    }
+    if immediate_parent_identity(path)? != *expected {
+        return Err("generated-cache-parent-identity-changed".into());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedCachePlan {
+    pub immediate_parent: ImmediateParentIdentity,
     pub schema_version: u32,
     pub root: String,
     pub contract: RegenerationContract,
@@ -499,7 +569,15 @@ pub fn plan_with_evidence(
     }
     let contract = regeneration_contract(path, home)
         .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
+    if matches!(contract, RegenerationContract::DiskSageTemporaryCargoTarget) {
+        // A name and empty Cargo lock do not bind retained source or identify generated contents.
+        return Err("temporary-cargo-producer-evidence-required".into());
+    }
+    let immediate_parent = immediate_parent_identity(path)?;
     let (allocated_bytes, entry_count, content_fingerprint, locks) = observe_tree(path)?;
+    if immediate_parent_identity(path)? != immediate_parent {
+        return Err("generated-cache-parent-identity-changed".into());
+    }
     activity.tool_lock_paths = locks;
     let mut blockers = Vec::new();
     if !activity.evidence_complete {
@@ -520,13 +598,16 @@ pub fn plan_with_evidence(
         blockers.push("temporary-workspace-specialized-executor-required".into());
     }
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.generated-cache-plan\0v1\0");
+    hasher.update(b"disksage.generated-cache-plan\0v2\0");
     hasher.update(path.as_os_str().to_string_lossy().as_bytes());
     hasher.update(content_fingerprint.as_bytes());
+    hasher
+        .update(&serde_json::to_vec(&immediate_parent).map_err(|_| "generated-cache-plan-encode")?);
     hasher.update(&serde_json::to_vec(&activity).map_err(|_| "generated-cache-plan-encode")?);
     let plan_fingerprint = hasher.finalize().to_hex().to_string();
     let customer_next_action = customer_next_action(&contract, &blockers);
     Ok(GeneratedCachePlan {
+        immediate_parent,
         schema_version: GENERATED_CACHE_SCHEMA_VERSION,
         root: path.to_string_lossy().into_owned(),
         contract,
@@ -580,6 +661,8 @@ fn bounded_git(path: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Collect path-free process evidence and bounded Git ownership evidence before planning.
 pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedCachePlan, String> {
+    let parent_identity = immediate_parent_identity(path)?;
+    require_inactive_immediate_parent(path, &parent_identity)?;
     let contract = regeneration_contract(path, home)
         .ok_or_else(|| "generated-cache-regeneration-contract-missing".to_string())?;
     let active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
@@ -615,6 +698,10 @@ pub fn audit(path: &Path, home: &Path, observed_at_ms: u64) -> Result<GeneratedC
     let mut plan = plan_with_evidence(path, home, evidence, observed_at_ms)?;
     // Content hashing can be long-running. Probe again afterward so the returned plan never relies
     // solely on activity evidence collected before the manifest scan.
+    require_inactive_immediate_parent(path, &parent_identity)?;
+    if plan.immediate_parent != parent_identity {
+        return Err("generated-cache-parent-identity-changed".into());
+    }
     let final_active = crate::git_worktree::active_use_evidence(path, 5_000, 128, true);
     let mut final_node_evidence = GeneratedCacheActivityEvidence {
         evidence_complete: true,
@@ -673,7 +760,10 @@ pub fn approve(
     rationale: &str,
     approved_at_ms: u64,
 ) -> Result<GeneratedCacheApproval, String> {
-    if !plan.blockers.is_empty() || phrase != plan.exact_approval_phrase {
+    if plan.schema_version != GENERATED_CACHE_SCHEMA_VERSION
+        || !plan.blockers.is_empty()
+        || phrase != plan.exact_approval_phrase
+    {
         return Err("generated-cache-approval-denied".into());
     }
     if approved_by.trim().is_empty() || rationale.trim().is_empty() {
@@ -717,7 +807,10 @@ fn validate_execution(
     fresh: &GeneratedCachePlan,
     attempted_at_ms: u64,
 ) -> Result<(), String> {
-    if approval.plan_fingerprint != plan.plan_fingerprint
+    if plan.schema_version != GENERATED_CACHE_SCHEMA_VERSION
+        || fresh.schema_version != GENERATED_CACHE_SCHEMA_VERSION
+        || fresh.immediate_parent != plan.immediate_parent
+        || approval.plan_fingerprint != plan.plan_fingerprint
         || fresh.plan_fingerprint != plan.plan_fingerprint
         || !fresh.blockers.is_empty()
         || fresh.observed_at_ms < approval.approved_at_ms
@@ -780,11 +873,15 @@ pub fn stage_and_remove_regenerable_root(
     now_ms: u64,
     approval_deadline_ms: u64,
 ) -> Result<(), String> {
-    if plan.root != path.to_string_lossy()
+    if plan.schema_version != GENERATED_CACHE_SCHEMA_VERSION
+        || plan.root != path.to_string_lossy()
         || plan.contract
             != regeneration_contract(path, home).ok_or("generated-cache-removal-boundary-denied")?
     {
         return Err("generated-cache-removal-boundary-denied".into());
+    }
+    if immediate_parent_identity(path)? != plan.immediate_parent {
+        return Err("generated-cache-parent-identity-changed".into());
     }
     let immediate = audit(path, home, now_ms)?;
     if immediate.plan_fingerprint != plan.plan_fingerprint || !immediate.blockers.is_empty() {
@@ -812,12 +909,15 @@ pub fn stage_and_remove_regenerable_root(
     }
     let restore = || restore_staged_root(path, &staged, &staging, &plan.plan_fingerprint);
     let staged_result = (|| {
+        require_inactive_immediate_parent(path, &plan.immediate_parent)?;
         if matches!(plan.contract, RegenerationContract::NodeCompileCache)
             && node_runtime_processes().map_or(true, |pids| !pids.is_empty())
         {
             return Err("generated-cache-staged-active-use".to_string());
         }
-        let active = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        let active = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active.assessed || !active.evidence_complete || active.active {
             return Err("generated-cache-staged-active-use".to_string());
         }
@@ -825,7 +925,10 @@ pub fn stage_and_remove_regenerable_root(
         if fingerprint != plan.content_fingerprint || !locks.is_empty() {
             return Err("generated-cache-staged-manifest-mismatch".into());
         }
-        let active_after_hash = crate::git_worktree::active_use_evidence(&staged, 5_000, 128, true);
+        require_inactive_immediate_parent(path, &plan.immediate_parent)?;
+        let active_after_hash = crate::git_worktree::active_use_evidence_with_command_path(
+            &staged, path, 5_000, 128, true,
+        );
         if !active_after_hash.assessed
             || !active_after_hash.evidence_complete
             || active_after_hash.active
@@ -933,6 +1036,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     fn inactive() -> GeneratedCacheActivityEvidence {
@@ -947,6 +1051,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn torch_and_homebrew_metadata_are_exact_allowlisted_contracts() {
         let temp = tempfile::tempdir().unwrap();
@@ -967,7 +1072,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn disksage_owned_temporary_cargo_target_is_regenerable_but_neighbors_are_not() {
+    fn temporary_cargo_candidate_shape_does_not_include_neighbors() {
         let temp_root = std::env::temp_dir();
         let nonce = format!("{}-{}", std::process::id(), crate::cloud::system_now_ms());
         let root = temp_root.join(format!(
@@ -1031,6 +1136,29 @@ mod tests {
         assert!(!plan.customer_next_action.contains("active-use"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_cargo_shape_cannot_authorize_unproven_contents() {
+        let fixture = tempfile::Builder::new()
+            .prefix("disksage-eviction-cli-duplicate-singletons-")
+            .tempdir()
+            .unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("debug")).unwrap();
+        std::fs::write(root.join("debug/.cargo-lock"), b"").unwrap();
+        std::fs::create_dir(root.join(".claude")).unwrap();
+        let session = root.join(".claude/session.jsonl");
+        let source = root.join("only-copy.txt");
+        std::fs::write(&session, b"synthetic retained session").unwrap();
+        std::fs::write(&source, b"synthetic retained source").unwrap();
+        assert_eq!(
+            plan_with_evidence(root, fixture.path(), inactive(), 1).unwrap_err(),
+            "temporary-cargo-producer-evidence-required"
+        );
+        assert_eq!(std::fs::read(session).unwrap(), b"synthetic retained session");
+        assert_eq!(std::fs::read(source).unwrap(), b"synthetic retained source");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn disksage_temporary_cargo_target_contract_is_unavailable_off_macos() {
@@ -1042,6 +1170,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn active_uv_playwright_and_dirty_worktree_are_retained() {
         let temp = tempfile::tempdir().unwrap();
@@ -1071,6 +1200,27 @@ mod tests {
             .contains(&"temporary-workspace-specialized-executor-required".into()));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn unsupported_parent_identity_prevents_planning_and_audit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".cache/torch");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("retained.bin"), b"retained").unwrap();
+        let expected = "generated-cache-parent-identity-unsupported";
+        assert_eq!(immediate_parent_identity(&root).unwrap_err(), expected);
+        assert_eq!(
+            plan_with_evidence(&root, temp.path(), inactive(), 1).unwrap_err(),
+            expected
+        );
+        assert_eq!(audit(&root, temp.path(), 1).unwrap_err(), expected);
+        assert_eq!(
+            std::fs::read(root.join("retained.bin")).unwrap(),
+            b"retained"
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn cache_child_symlink_is_fingerprinted_without_following_target() {
         let temp = tempfile::tempdir().unwrap();
@@ -1090,6 +1240,7 @@ mod tests {
         assert_eq!(before.entry_count, 2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn allowlisted_root_symlink_remains_denied() {
         let temp = tempfile::tempdir().unwrap();
@@ -1122,6 +1273,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn exact_approval_executes_via_seam_and_receipt_is_create_only() {
         let temp = tempfile::tempdir().unwrap();
@@ -1157,6 +1309,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn invalid_execution_never_reserves_a_receipt() {
         let temp = tempfile::tempdir().unwrap();
@@ -1175,6 +1328,7 @@ mod tests {
         assert!(!receipt_path.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn fresh_observation_must_follow_approval() {
         let temp = tempfile::tempdir().unwrap();
@@ -1195,6 +1349,7 @@ mod tests {
         assert!(execute_with(&plan, &approval, &fresh, 3, |_| Ok(())).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn manifest_detects_content_rename_and_root_replacement() {
         let temp = tempfile::tempdir().unwrap();
@@ -1228,6 +1383,7 @@ mod tests {
         assert_ne!(renamed.plan_fingerprint, replaced.plan_fingerprint);
     }
 
+    #[cfg(unix)]
     #[test]
     fn exact_cache_is_staged_rechecked_and_removed() {
         let temp = tempfile::tempdir().unwrap();

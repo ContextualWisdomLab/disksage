@@ -240,8 +240,10 @@ mod tests {
     #[test]
     fn help_is_standalone_and_plan_is_default() {
         assert_eq!(parse(&strings(&["--help"])).unwrap(), None);
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("cache");
         assert!(
-            !parse(&strings(&["--root", "/Users/test/.cache/torch"]))
+            !parse(&[OsString::from("--root"), root.into_os_string()])
                 .unwrap()
                 .unwrap()
                 .execute
