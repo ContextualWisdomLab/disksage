@@ -1153,11 +1153,16 @@
           <p class="muted">관리자 권한이나 OAuth 없이 macOS의 읽기 전용 iCloud 계정 상태를 사용합니다.</p>
         {/if}
         {#key selectedRoot}
-          <IcloudLocalEviction cloudRoot={selectedRoot} />
+          <IcloudLocalEviction cloudRoot={selectedRoot} provider="icloud" />
         {/key}
       </div>
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
+        {#if selectedRootDetails()?.provider === "onedrive"}
+          {#key selectedRoot}
+            <IcloudLocalEviction cloudRoot={selectedRoot} provider="onedrive" />
+          {/key}
+        {/if}
         {#if connectionForSelectedRoot()}
           <strong>{providerApiWriteConnected() ? "OAuth 업로드 연결" : "읽기 전용 OAuth descriptor 발견"}</strong>
           <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
@@ -1349,7 +1354,7 @@
             </label>
           </div>
           <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API로 SHA-256과 부모 폴더 체인을 My Drive 루트까지 두 차례 검증합니다. 영수증 목적지와 정확히 일치하고 검증 중 변경되지 않은 경우에만 원본 제거 허가를 생성합니다. 공유 드라이브는 아직 실패 폐쇄합니다.</p>
-          <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
+          <p class="muted">API 보완에 사용하는 연결 자격 증명은 운영체제 보안 저장소에서만 갱신하며 화면·설정·영수증에 표시하지 않습니다.</p>
         {:else if copied.receipt.provider === "onedrive"}
           <p class="muted">macOS File Provider 증거가 불완전하면 OAuth 연결을 사용해 영수증의 OneDrive 상대 경로를 직접 조회하고 QuickXorHash를 검증합니다. 임의 item ID는 받지 않습니다.</p>
         {/if}
