@@ -1,146 +1,339 @@
-use std::fs;
-use std::path::Path;
+//! Deterministic coverage for command-layer pure cores without exposing them as public crate APIs.
 
 use crate::commands::{
-    clean_dev_artifacts_inner, execute_moves_inner, list_cache_candidates_inner,
-    list_dev_artifacts_inner, list_roots, load_ontology_from, parse_move_entry, plan_organize_inner,
-    recent_operations_inner, undo_last_moves_inner,
+    clean_dev_artifacts_inner, clean_paths_inner, execute_moves_inner, list_roots,
+    load_ontology_from, node_view, parse_move_entry, undo_last_moves_inner, AppState, CleanResult,
+    EntryView, NodeView,
 };
-use crate::dev_artifacts::{DevArtifact, DevArtifactCleanRequest};
 use crate::organize::MovePlan;
+use crate::scanner::{ScanResult, ScanStats};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
-fn detected(path: &Path, kind: &str, bytes: u64, mtime_ms: u64) -> DevArtifact {
-    DevArtifact {
-        path: path.to_string_lossy().into_owned(),
-        kind: kind.into(),
-        logical_bytes: bytes,
-        allocated_bytes: bytes,
-        age_days: 0,
-        object_id: crate::filesystem_object_id(path).unwrap_or_default(),
-        mtime_ms,
-        active: false,
-        symlink: false,
-        mountpoint: false,
-        stale: true,
-        risk: "medium".into(),
-        action: "trash".into(),
-        reason: "coverage".into(),
+fn result_for(root: &Path, dir_sizes: HashMap<PathBuf, u64>) -> ScanResult {
+    ScanResult {
+        root: root.to_path_buf(),
+        dir_sizes,
+        top_files: Vec::new(),
+        stats: ScanStats::default(),
+        cancelled: false,
     }
 }
 
 #[test]
-fn cache_listing_wrapper_exercises_real_candidate_discovery() {
+fn node_view_rejects_parent_outside_and_missing_paths() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let cache = home.join(".cache").join("example");
-    fs::create_dir_all(&cache).unwrap();
-    fs::write(cache.join("artifact.bin"), b"cache-bytes").unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let result = result_for(&root, HashMap::new());
 
-    let candidates = list_cache_candidates_inner(&home).unwrap();
-    assert!(candidates.iter().any(|candidate| candidate.path == cache));
+    assert_eq!(
+        node_view(&result, &root.join(".."))
+            .err()
+            .expect("parent traversal must fail"),
+        "path outside scanned root"
+    );
+    assert_eq!(
+        node_view(&result, &temp.path().join("outside"))
+            .err()
+            .expect("outside path must fail"),
+        "path outside scanned root"
+    );
+    assert!(node_view(&result, &root.join("missing")).is_err());
 }
 
 #[test]
-fn dev_artifact_listing_wrapper_preserves_real_detector_evidence() {
+fn node_view_lists_files_and_directories_by_descending_size() {
     let temp = tempfile::tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let target = repo.join("target");
+    let root = temp.path().join("root");
+    let directory = root.join("directory");
+    let file = root.join("file.bin");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(&file, [1_u8, 2, 3, 4]).unwrap();
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&file, root.join("file-link")).unwrap();
+    }
+
+    let mut sizes = HashMap::new();
+    sizes.insert(root.clone(), 10);
+    sizes.insert(directory.clone(), 6);
+    let view = node_view(&result_for(&root, sizes), &root).unwrap();
+
+    assert_eq!(view.path, root.to_string_lossy());
+    assert_eq!(view.size, 10);
+    assert_eq!(view.entries.len(), 2);
+    assert_eq!(view.entries[0].name, "directory");
+    assert!(view.entries[0].is_dir);
+    assert_eq!(view.entries[0].size, 6);
+    assert_eq!(view.entries[1].name, "file.bin");
+    assert!(!view.entries[1].is_dir);
+    assert_eq!(view.entries[1].size, 4);
+}
+
+#[test]
+fn node_view_defaults_unmeasured_directory_sizes_without_inventing_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let unmeasured = root.join("unmeasured");
+    fs::create_dir_all(&unmeasured).unwrap();
+
+    let view = node_view(&result_for(&root, HashMap::new()), &root).unwrap();
+
+    assert_eq!(view.size, 0);
+    assert_eq!(view.entries.len(), 1);
+    assert_eq!(view.entries[0].name, "unmeasured");
+    assert!(view.entries[0].is_dir);
+    assert_eq!(view.entries[0].size, 0);
+}
+
+#[test]
+fn command_state_defaults_and_serializable_views_are_covered() {
+    let state = AppState::default();
+    assert!(state.result.lock().unwrap().is_none());
+    assert!(!state.cancel.load(Ordering::SeqCst));
+    assert!(!state.scanning.load(Ordering::SeqCst));
+    assert!(state.cloud_review.lock().is_ok());
+
+    let node = NodeView {
+        path: "/tmp/example".into(),
+        size: 7,
+        entries: vec![EntryView {
+            name: "file.bin".into(),
+            path: "/tmp/example/file.bin".into(),
+            size: 7,
+            is_dir: false,
+        }],
+    };
+    let node_json = serde_json::to_value(&node).unwrap();
+    assert_eq!(node_json["path"], "/tmp/example");
+    assert_eq!(node_json["size"], 7);
+    assert_eq!(node_json["entries"][0]["name"], "file.bin");
+    assert_eq!(node_json["entries"][0]["path"], "/tmp/example/file.bin");
+    assert_eq!(node_json["entries"][0]["size"], 7);
+    assert_eq!(node_json["entries"][0]["is_dir"], false);
+
+    let clean = CleanResult {
+        path: "/tmp/example/file.bin".into(),
+        ok: false,
+        error: "blocked".into(),
+    };
+    let clean_json = serde_json::to_value(&clean).unwrap();
+    assert_eq!(clean_json["path"], "/tmp/example/file.bin");
+    assert_eq!(clean_json["ok"], false);
+    assert_eq!(clean_json["error"], "blocked");
+}
+
+#[test]
+fn clean_paths_fail_closed_before_mutation_when_journaling_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("file.bin");
+    let directory = temp.path().join("directory");
+    let nested = directory.join("nested.bin");
+    let missing = temp.path().join("missing.bin");
+    fs::write(&file, [1_u8, 2, 3, 4]).unwrap();
+    fs::create_dir(&directory).unwrap();
+    fs::write(&nested, [5_u8, 6, 7]).unwrap();
+
+    // Passing an existing directory as the journal file makes OpenOptions fail before
+    // trash::delete can run. This exercises regular-file, recursive-directory, and missing-file
+    // accounting while proving the command core keeps every real target intact when its audit
+    // journal cannot be written.
+    let results = clean_paths_inner(
+        &[file.clone(), directory.clone(), missing.clone()],
+        temp.path(),
+        99,
+    );
+
+    assert_eq!(results.len(), 3);
+    assert!(results.iter().all(|result| !result.ok));
+    assert!(results.iter().all(|result| !result.error.is_empty()));
+    assert_eq!(results[0].path, file.to_string_lossy());
+    assert_eq!(results[1].path, directory.to_string_lossy());
+    assert_eq!(results[2].path, missing.to_string_lossy());
+    assert!(file.exists());
+    assert!(directory.exists());
+    assert!(nested.exists());
+    assert!(!missing.exists());
+
+    #[cfg(unix)]
+    {
+        // A filesystem root is rejected by the final safety guard without touching the journal.
+        let protected = clean_paths_inner(&[PathBuf::from("/")], temp.path(), 100);
+        assert_eq!(protected.len(), 1);
+        assert!(!protected[0].ok);
+        assert!(!protected[0].error.is_empty());
+    }
+}
+
+#[test]
+fn developer_artifact_cleanup_rejects_stale_manifest_and_preserves_current_object_on_journal_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("app");
+    let target = project.join("target");
     fs::create_dir_all(&target).unwrap();
-    fs::write(repo.join("Cargo.toml"), b"[package]\nname='demo'\nversion='0.1.0'\n").unwrap();
-    fs::write(target.join("artifact.bin"), b"artifact").unwrap();
+    fs::write(project.join("Cargo.toml"), b"[package]\nname = \"coverage-fixture\"\n").unwrap();
+    fs::write(target.join("artifact.bin"), b"preserve-me").unwrap();
 
-    let entries = list_dev_artifacts_inner(temp.path(), 0, u64::MAX);
-    let candidate = entries
-        .into_iter()
-        .find(|entry| entry.path == target.to_string_lossy())
-        .expect("target directory should be detected");
-    assert_eq!(candidate.kind, "rust-target");
-    assert!(!candidate.object_id.is_empty());
-    assert_eq!(candidate.action, "trash");
+    let mut requests = crate::dev_artifacts::find_artifacts(temp.path(), 0, u64::MAX);
+    assert_eq!(requests.len(), 1);
+    let current = requests.pop().unwrap();
+    assert!(current.scan_complete);
+    assert!(!current.object_id.is_empty());
+
+    let mut stale = current.clone();
+    stale.fingerprint.push('0');
+    let stale_result = clean_dev_artifacts_inner(
+        &[stale],
+        temp.path(),
+        0,
+        &temp.path().join("missing-journal-parent").join("operations.jsonl"),
+        u64::MAX,
+    );
+    assert_eq!(stale_result.len(), 1);
+    assert!(!stale_result[0].ok);
+    assert!(stale_result[0].error.contains("다시 스캔"));
+    assert!(target.exists());
+
+    // A current manifest reaches the identity-bound recycle authority. Pointing its audit journal
+    // at a nonexistent parent makes journaling fail before the staged object can be renamed, so
+    // the fixture proves the matching/error arm without relying on the host trash provider.
+    let current_result = clean_dev_artifacts_inner(
+        &[current],
+        temp.path(),
+        0,
+        &temp.path().join("missing-journal-parent").join("operations.jsonl"),
+        u64::MAX,
+    );
+    assert_eq!(current_result.len(), 1);
+    assert!(!current_result[0].ok);
+    assert!(!current_result[0].error.is_empty());
+    assert!(target.exists());
+    assert_eq!(fs::read(target.join("artifact.bin")).unwrap(), b"preserve-me");
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
-fn organize_planning_wrapper_delegates_to_real_ontology_move_planner() {
+fn developer_artifact_cleanup_recycles_current_identity_and_records_success() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let source = home.join("Downloads").join("picture.png");
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, b"png").unwrap();
-
-    let ontology = r#"
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix dm: <https://disksage.app/ontology#> .
-dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "~/Media/{class}" .
-"#;
-    let parsed = load_ontology_from(ontology).unwrap();
-    let files = vec![crate::dupes::FileEntry {
-        path: source.clone(),
-        size: 3,
-        mtime_ms: 0,
-    }];
-
-    let planned = plan_organize_inner(&files, &parsed, &home);
-    assert_eq!(planned.len(), 1);
-    assert_eq!(planned[0].src, source.to_string_lossy());
-    assert!(planned[0].dst.ends_with("Media/Image/picture.png"));
-}
-
-#[test]
-fn recent_operation_wrapper_reads_real_jsonl_and_bounds_results() {
-    let temp = tempfile::tempdir().unwrap();
-    let journal = temp.path().join("operations.jsonl");
+    let project = temp.path().join("identity-success-project");
+    let target = project.join("target");
+    fs::create_dir_all(&target).unwrap();
     fs::write(
-        &journal,
-        concat!(
-            "{\"timestamp_ms\":1,\"op\":\"move\",\"entries\":[\"one\"]}\n",
-            "{\"timestamp_ms\":2,\"op\":\"move\",\"entries\":[\"two\"]}\n",
-        ),
+        project.join("Cargo.toml"),
+        b"[package]\nname = \"identity-success-fixture\"\n",
     )
     .unwrap();
+    fs::write(target.join("artifact.bin"), b"recycle-me").unwrap();
 
-    let entries = recent_operations_inner(&journal, 1).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].timestamp_ms, 2);
-    assert_eq!(entries[0].entries, vec!["two"]);
-    assert!(recent_operations_inner(&journal, 0).unwrap().is_empty());
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut discovered = crate::dev_artifacts::find_artifacts(temp.path(), 0, now_ms);
+    assert_eq!(discovered.len(), 1);
+    let current = discovered.pop().unwrap();
+    assert!(current.scan_complete);
+    assert!(!current.object_id.is_empty());
+
+    let journal = temp.path().join("operations.jsonl");
+    let result = clean_dev_artifacts_inner(
+        &[current],
+        temp.path(),
+        0,
+        &journal,
+        now_ms,
+    );
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].ok, "{}", result[0].error);
+    assert!(result[0].error.is_empty());
+    assert!(!target.exists(), "reviewed artifact must leave its source path");
+
+    let recent = crate::safety::journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].outcome, "ok");
+    assert_eq!(recent[1].outcome, "pending");
+
+    // The identity-bound trash authority first moves the reviewed `target` into a private sibling
+    // staging directory. Match both that original parent and the item name so this cleanup can
+    // never purge unrelated user trash that happens to contain a directory named `target`.
+    let items: Vec<_> = trash::os_limited::list()
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.name == std::ffi::OsStr::new("target"))
+        .filter(|item| item.original_parent.starts_with(&project))
+        .collect();
+    assert_eq!(items.len(), 1, "exact staged fixture must be present in trash");
+    trash::os_limited::purge_all(items).unwrap();
 }
 
 #[test]
-fn clean_dev_artifacts_requires_current_detector_evidence_before_mutation() {
+fn developer_artifact_cleanup_rejects_each_mutable_request_identity_field() {
     let temp = tempfile::tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let target = repo.join("target");
+    let project = temp.path().join("app");
+    let target = project.join("target");
     fs::create_dir_all(&target).unwrap();
-    fs::write(repo.join("Cargo.toml"), b"[package]\nname='demo'\nversion='0.1.0'\n").unwrap();
+    fs::write(project.join("Cargo.toml"), b"[package]\nname = \"branch-coverage-fixture\"\n").unwrap();
     fs::write(target.join("artifact.bin"), b"stable").unwrap();
 
-    let now_ms = 1_800_000_000_000;
-    let current = list_dev_artifacts_inner(temp.path(), now_ms, u64::MAX)
-        .into_iter()
-        .find(|entry| entry.path == target.to_string_lossy())
-        .unwrap();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut discovered = crate::dev_artifacts::find_artifacts(temp.path(), 0, now_ms);
+    assert_eq!(discovered.len(), 1);
+    let current = discovered.pop().unwrap();
+    assert!(current.scan_complete);
+    assert_eq!(current.skipped, 0);
+    assert!(!current.object_id.is_empty());
 
-    let request = DevArtifactCleanRequest::from(&current);
     let mut variants = Vec::new();
 
-    let mut changed = request.clone();
-    changed.logical_bytes = changed.logical_bytes.saturating_add(1);
+    let mut changed = current.clone();
+    changed.path.push_str("-replacement");
     variants.push(changed);
 
-    let mut changed = request.clone();
-    changed.allocated_bytes = changed.allocated_bytes.saturating_add(1);
+    let mut changed = current.clone();
+    changed.kind.push_str("-replacement");
     variants.push(changed);
 
-    let mut changed = request.clone();
-    changed.mtime_ms = changed.mtime_ms.saturating_add(1);
+    let mut changed = current.clone();
+    changed.project.push_str("-replacement");
     variants.push(changed);
 
-    let mut changed = request.clone();
+    let mut changed = current.clone();
+    changed.bytes = changed.bytes.saturating_add(1);
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.files = changed.files.saturating_add(1);
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.skipped = 1;
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.scan_complete = false;
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.fingerprint.push('0');
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.object_id.clear();
+    variants.push(changed);
+
+    let mut changed = current.clone();
     changed.object_id.push_str("-replacement");
     variants.push(changed);
 
-    let mut changed = request.clone();
+    let mut changed = current.clone();
     changed.age_days = changed.age_days.saturating_add(1);
     variants.push(changed);
 
@@ -172,7 +365,6 @@ fn move_execution_journaling_and_undo_form_one_reversible_flow() {
         src: source.to_string_lossy().into_owned(),
         dst: destination.to_string_lossy().into_owned(),
         class_id: "test-class".into(),
-        ..MovePlan::default()
     };
     let executed = execute_moves_inner(std::slice::from_ref(&plan), &journal, 100);
     assert_eq!(executed.len(), 1);
@@ -199,7 +391,6 @@ fn move_execution_journaling_and_undo_form_one_reversible_flow() {
         src: temp.path().join("missing.txt").to_string_lossy().into_owned(),
         dst: temp.path().join("never-created.txt").to_string_lossy().into_owned(),
         class_id: "test-class".into(),
-        ..MovePlan::default()
     };
     let failed = execute_moves_inner(&[missing], &journal, 103);
     assert_eq!(failed.len(), 1);
