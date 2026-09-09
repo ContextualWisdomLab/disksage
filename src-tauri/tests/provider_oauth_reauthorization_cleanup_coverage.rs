@@ -4,14 +4,26 @@
 //!
 //! Reauthorization can migrate an NFC/NFD legacy connection to the canonical identifier. If
 //! deleting a legacy keyring credential fails after the canonical token has been stored, the
-//! durable document must retain a retry-visible legacy identity while preferring the canonical
-//! connection for normal use. Already-deleted legacy entries may also remain as retry handles:
-//! keyring `NoEntry` is idempotent success on the next cleanup attempt.
+//! durable document would normally retain a retry-visible legacy identity. While object-bound
+//! replacement is unavailable, that recovery publication itself must fail closed rather than
+//! overwrite the accepted canonical document through a pathname fallback.
 
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
     pub use disksage_lib::cloud::*;
+}
+
+fn private_tempdir() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    temp
 }
 
 fn unicode_google_root(decomposed: bool) -> CloudRoot {
@@ -68,8 +80,8 @@ fn google_connection(
 }
 
 #[test]
-fn failed_legacy_cleanup_restores_a_retry_visible_identity_beside_the_canonical_connection() {
-    let temp = tempfile::tempdir().unwrap();
+fn failed_legacy_cleanup_reports_unavailable_retry_publication_and_preserves_canonical_document() {
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
@@ -79,6 +91,7 @@ fn failed_legacy_cleanup_restores_a_retry_visible_identity_beside_the_canonical_
 
     let original = vec![legacy.clone()];
     save_connections(&document, std::slice::from_ref(&canonical)).unwrap();
+    let before = std::fs::read(&document).unwrap();
 
     let mut deleted = Vec::new();
     let error = cleanup_stale_authorization_credentials(
@@ -93,21 +106,22 @@ fn failed_legacy_cleanup_restores_a_retry_visible_identity_beside_the_canonical_
     )
     .unwrap_err();
 
-    assert_eq!(error, "provider-oauth-keyring-delete-failed");
-    assert_eq!(deleted, vec![legacy.connection_id.clone()]);
-    let retry_visible = load_connections(&document).unwrap();
-    assert!(retry_visible.contains(&legacy));
-    assert!(retry_visible.contains(&canonical));
     assert_eq!(
-        connection_for_root(&retry_visible, &requested_root).unwrap(),
-        canonical,
-        "normal use must continue to prefer the newly stored canonical credential while the stale identity remains available for cleanup retry"
+        error,
+        "provider-oauth-keyring-delete-and-config-recovery-failed"
     );
+    assert_eq!(deleted, vec![legacy.connection_id]);
+    assert_eq!(
+        std::fs::read(&document).unwrap(),
+        before,
+        "failed retry publication must not replace the accepted canonical document"
+    );
+    assert_eq!(load_connections(&document).unwrap(), vec![canonical]);
 }
 
 #[test]
 fn successful_legacy_cleanup_keeps_the_published_document_canonical_only() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);
@@ -135,7 +149,7 @@ fn successful_legacy_cleanup_keeps_the_published_document_canonical_only() {
 
 #[test]
 fn no_stale_identity_never_calls_the_credential_delete_boundary() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let requested_root = unicode_google_root(false);
     let canonical = google_connection(&requested_root, connection_id(&requested_root), 200);
@@ -156,7 +170,7 @@ fn no_stale_identity_never_calls_the_credential_delete_boundary() {
 
 #[test]
 fn failed_retry_visibility_publication_is_reported_separately() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
     let requested_root = unicode_google_root(false);

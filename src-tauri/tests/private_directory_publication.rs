@@ -15,26 +15,25 @@ fn set_mode(path: &std::path::Path, mode: u32) {
 }
 
 #[test]
-fn missing_private_ancestors_are_created_descriptor_relative_with_exact_modes() {
+fn missing_private_ancestors_fail_closed_until_creation_returns_object_authority() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
     let target = root.join("receipts/provider-cache/receipt.json");
 
-    write_private_bytes_create_new_with_parents(&target, b"receipt", 0o400, 0o700).unwrap();
+    let error = write_private_bytes_create_new_with_parents(&target, b"receipt", 0o400, 0o700)
+        .expect_err("pathname-only mkdirat provisioning must not grant publication authority");
 
-    assert_eq!(fs::read(&target).unwrap(), b"receipt");
-    assert_eq!(fs::metadata(root.join("receipts")).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(
-        fs::metadata(root.join("receipts/provider-cache"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
+        error,
+        "private-directory-publication-parent-provisioning-unavailable"
     );
-    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o400);
+    assert!(
+        !root.join("receipts").exists(),
+        "fail-closed provisioning must not leave a pathname-created ancestor"
+    );
+    assert!(!target.exists());
 }
 
 #[test]
@@ -60,12 +59,14 @@ fn existing_leaf_parent_must_already_be_owner_private_and_is_not_chmodded() {
 }
 
 #[test]
-fn anchor_replacement_after_parent_provision_never_receives_the_record() {
+fn anchor_replacement_after_parent_admission_never_receives_the_record() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private-root");
     let admitted = temp.path().join("admitted-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let replacement_receipt = root.join("receipts/receipt.json");
     let old_receipt = admitted.join("receipts/receipt.json");
@@ -100,6 +101,8 @@ fn post_write_anchor_replacement_invalidates_only_the_admitted_record() {
     let admitted = temp.path().join("admitted-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let replacement_receipt = root.join("receipts/receipt.json");
     let admitted_receipt = admitted.join("receipts/receipt.json");
@@ -134,6 +137,8 @@ fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
     let root = temp.path().join("private-root");
     fs::create_dir(&root).unwrap();
     set_mode(&root, 0o700);
+    fs::create_dir(root.join("receipts")).unwrap();
+    set_mode(&root.join("receipts"), 0o700);
     let target = root.join("receipts/receipt.json");
     let hook_target = target.clone();
 
@@ -151,6 +156,10 @@ fn post_write_mode_widening_fails_closed_and_invalidates_the_exact_record() {
 
     assert_eq!(error, "private-directory-publication-file-mode-drift");
     assert_eq!(fs::metadata(&target).unwrap().len(), 0);
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+        0o400
+    );
 }
 
 #[test]
@@ -180,4 +189,59 @@ fn post_write_existing_leaf_parent_mode_widening_fails_closed() {
     );
     assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
     assert_eq!(fs::metadata(&target).unwrap().len(), 0);
+}
+
+#[test]
+fn post_write_same_object_content_mutation_fails_closed_and_invalidates_exact_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipt.json");
+    let hook_target = target.clone();
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &target,
+        b"authorized",
+        0o600,
+        0o700,
+        || {},
+        move || {
+            fs::write(&hook_target, b"tampered!!").expect("mutate admitted record in place");
+        },
+    )
+    .expect_err("same-object content drift must fail closed");
+
+    assert_eq!(error, "private-directory-publication-file-content-drift");
+    let metadata = fs::metadata(&target).expect("invalidated record metadata");
+    assert_eq!(metadata.len(), 0, "failure must invalidate the exact opened record");
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+}
+
+#[test]
+fn trailing_separator_destination_is_rejected_before_hooks_or_create() {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private-root");
+    fs::create_dir(&root).unwrap();
+    set_mode(&root, 0o700);
+    let target = root.join("receipt.json");
+    let trailing = PathBuf::from(format!("{}/", target.display()));
+    let hook_calls = Cell::new(0_u8);
+
+    let error = write_private_bytes_create_new_with_parents_with_hooks(
+        &trailing,
+        b"authorized",
+        0o600,
+        0o700,
+        || hook_calls.set(hook_calls.get() + 1),
+        || hook_calls.set(hook_calls.get() + 1),
+    )
+    .expect_err("directory-looking destination authority must fail closed");
+
+    assert_eq!(error, "private-directory-publication-path-invalid");
+    assert_eq!(hook_calls.get(), 0, "invalid path authority must fail before hooks");
+    assert!(!target.exists(), "trailing separator must not normalize into a file mutation");
 }

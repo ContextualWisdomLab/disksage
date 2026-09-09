@@ -7,6 +7,8 @@
 //! boundary without widening the shipped API, opening a browser, contacting a provider, or touching
 //! the credential store.
 
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {
@@ -44,9 +46,16 @@ fn connection(id: &str, connected_at_ms: u64) -> OAuthConnection {
 }
 
 #[test]
-fn valid_publication_is_private_loadable_and_replaceable() {
+fn valid_first_publication_is_private_and_existing_replacement_fails_closed() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("first-use-app-data").join("connections.json");
+    let parent = temp.path().join("first-use-app-data");
+    std::fs::create_dir(&parent).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = parent.join("connections.json");
     let first = connection("account-a", 123);
 
     save_connections(&path, std::slice::from_ref(&first)).unwrap();
@@ -62,14 +71,25 @@ fn valid_publication_is_private_loadable_and_replaceable() {
         );
     }
 
-    let mut replacement = first;
+    let before = std::fs::read(&path).unwrap();
+    let parent = path.parent().unwrap();
+    let before_names = std::fs::read_dir(parent)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    let mut replacement = first.clone();
     replacement.connected_at_ms = 456;
-    save_connections(&path, std::slice::from_ref(&replacement)).unwrap();
     assert_eq!(
-        load_connections(&path).unwrap(),
-        vec![replacement],
-        "replacement must publish the complete new document rather than preserve stale metadata"
+        save_connections(&path, std::slice::from_ref(&replacement)).unwrap_err(),
+        "oauth-connection-document-object-bound-replacement-unavailable"
     );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(load_connections(&path).unwrap(), vec![first]);
+    let after_names = std::fs::read_dir(parent)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(after_names, before_names, "replacement refusal must not leave staging names");
 }
 
 #[cfg(unix)]

@@ -9,6 +9,10 @@
 #[test]
 fn production_reader_is_bound_to_one_open_file_object() {
     let source = include_str!("../src/provider_oauth.rs");
+    let compact_source: String = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
 
     assert!(
         !source.contains("let bytes = std::fs::read(path)"),
@@ -23,11 +27,11 @@ fn production_reader_is_bound_to_one_open_file_object() {
         "Windows connection-document open must inspect the reparse-point object instead of following it"
     );
     assert!(
-        source.contains("file.metadata()"),
+        compact_source.contains("letmetadata=file.metadata()"),
         "regular-file, permission, and size admission must come from the opened object"
     );
     assert!(
-        source.contains(".take(MAX_CONNECTION_DOCUMENT_BYTES + 1)"),
+        compact_source.contains("file.take(MAX_CONNECTION_DOCUMENT_BYTES+1)"),
         "connection-document reads must remain bounded even if the opened file grows after metadata admission"
     );
 }

@@ -2,17 +2,11 @@
 
 //! Windows durable OAuth metadata replacement must never create a delete-before-publish window.
 //!
-//! `std::fs::rename` is the cross-platform publication primitive used by DiskSage and replaces an
-//! existing regular destination on supported Windows filesystems. A separate `remove_file(path)`
-//! before that call destroys the last known-good connection document if replacement then fails.
-//! Keep the production writer on one replacement primitive and preserve the old document until the
-//! new temporary document is ready to replace it.
-
-include!("../src/provider_oauth.rs");
-
-mod cloud {
-    pub use disksage_lib::cloud::*;
-}
+//! `std::fs::rename` is the cross-platform publication primitive used by this historical contract
+//! and replaces an existing regular destination on supported Windows filesystems. A separate
+//! `remove_file(path)` before that call destroys the last known-good connection document if
+//! replacement then fails. Keep the regression source-only so it does not duplicate private OAuth
+//! production modules in the integration-test crate.
 
 #[test]
 fn production_writer_does_not_predelete_the_durable_destination() {

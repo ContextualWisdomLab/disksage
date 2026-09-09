@@ -9,6 +9,8 @@
 #![cfg(not(coverage))]
 #![allow(dead_code, unused_imports)]
 
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {

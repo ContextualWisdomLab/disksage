@@ -7,6 +7,8 @@
 //! bounds are exercised without opening a listener, contacting a provider, touching the keyring,
 //! or publishing durable OAuth metadata.
 
+#[path = "../src/private_directory_publication.rs"]
+mod private_directory_publication;
 include!("../src/provider_oauth.rs");
 
 mod cloud {

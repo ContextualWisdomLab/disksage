@@ -1,8 +1,8 @@
-//! Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
-//!
-//! DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
-//! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
-//! access tokens live only long enough to perform one bounded provider operation.
+// Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
+//
+// DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
+// hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
+// access tokens live only long enough to perform one bounded provider operation.
 
 use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -404,6 +404,16 @@ fn open_connection_document(path: &Path) -> Result<Option<std::fs::File>, String
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
             Err("oauth-connection-document-not-regular-file".into())
         }
+        #[cfg(unix)]
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                    Err("oauth-connection-document-not-regular-file".into())
+                }
+                Ok(_) => Err("oauth-connection-document-unreadable".into()),
+                Err(_) => Err("oauth-connection-document-unavailable".into()),
+            }
+        }
         Err(_) => Err("oauth-connection-document-unavailable".into()),
     }
 }
@@ -430,7 +440,7 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        if metadata.permissions().mode() & 0o7777 != 0o600 {
             return Err("oauth-connection-document-permissions-unsafe".into());
         }
     }
@@ -459,28 +469,18 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     Ok(document.connections)
 }
 
-fn map_connection_publication_error(
-    error: crate::object_bound_publication::ObjectBoundReplaceError,
-) -> String {
-    use crate::object_bound_publication::ObjectBoundReplaceError as Error;
+fn write_connection_document_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    crate::private_directory_publication::write_private_bytes_create_new_with_parents(
+        path, encoded, 0o600, 0o700,
+    )
+}
 
-    let code = match error {
-        Error::ParentMissing | Error::ParentUnavailable => "oauth-connection-directory-unavailable",
-        Error::ParentUnsafe => "oauth-connection-directory-unsafe",
-        Error::ParentWritableByOthers => "oauth-connection-directory-writable-by-others",
-        Error::ParentIdentityDrift => "oauth-connection-directory-identity-drift",
-        Error::NameInvalid => "oauth-connection-document-path-invalid",
-        Error::TargetUnsafe => "oauth-connection-document-not-regular-file",
-        Error::TargetUnavailable | Error::RenameFailed => "oauth-connection-document-replace-failed",
-        Error::TemporaryCreateFailed => "oauth-connection-document-create-failed",
-        Error::ModeInvalid => "oauth-connection-document-permissions-unsafe",
-        Error::WriteFailed => "oauth-connection-document-write-failed",
-        Error::CleanupFailed => "oauth-connection-document-cleanup-failed",
-        Error::DirectorySyncFailed => "oauth-connection-directory-sync-failed",
-        Error::PostPublishParentIdentityDrift => "oauth-connection-document-publication-uncertain",
-        Error::UnsupportedPlatform => "oauth-connection-document-object-bound-publication-unavailable",
-    };
-    code.into()
+fn map_connection_create_new_error(error: String) -> String {
+    if error == "private-directory-publication-unsupported" {
+        "oauth-connection-document-object-bound-publication-unavailable".into()
+    } else {
+        format!("oauth-connection-document-create-failed:{error}")
+    }
 }
 
 fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), String> {
@@ -502,15 +502,17 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     }
     let parent = connection_document_parent(path);
     validate_connection_document_parent(parent, true)?;
-    std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
-    validate_connection_document_parent(parent, false)?;
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err("oauth-connection-document-not-regular-file".into());
         }
+        Ok(_) => {
+            return Err("oauth-connection-document-object-bound-replacement-unavailable".into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("oauth-connection-document-unavailable".into()),
     }
-    crate::object_bound_publication::replace_object_bound_bytes(path, &encoded, 0o600)
-        .map_err(map_connection_publication_error)
+    write_connection_document_create_new(path, &encoded).map_err(map_connection_create_new_error)
 }
 
 pub fn connection_for_root(
@@ -1414,6 +1416,15 @@ mod tests {
 
     #[test]
     fn connection_document_round_trips_and_rejects_tampering() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        #[cfg(unix)]
+        let temp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        #[cfg(not(unix))]
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("connections.json");
         let connections = vec![
