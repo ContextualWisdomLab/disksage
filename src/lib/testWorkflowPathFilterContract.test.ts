@@ -83,6 +83,13 @@ describe("test workflow path-filter contract", () => {
     );
     expect(workflow).toContain("& .\\target\\agent-state-guard.exe --nocapture");
   });
+
+  it("runs the provider OAuth Windows process contract when that owner source is present", () => {
+    expect(workflow).toContain("Test-Path 'src-tauri/tests/provider_oauth_cli_process.rs'");
+    expect(workflow).toContain(
+      "cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process",
+    );
+  });
 });
 
 // Exercise the canonical shell admission without compiling or faking Rust test results.
