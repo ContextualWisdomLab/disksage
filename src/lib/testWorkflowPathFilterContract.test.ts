@@ -96,6 +96,13 @@ describe("test workflow path-filter contract", () => {
       "cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process",
     );
   });
+
+  it("isolates Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
+    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(2);
+    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(2);
+    expect(workflow).not.toContain("AllowInsecureRepositories");
+    expect(workflow).not.toContain("--allow-unauthenticated");
+  });
 });
 
 // Exercise the canonical shell admission without compiling or faking Rust test results.
