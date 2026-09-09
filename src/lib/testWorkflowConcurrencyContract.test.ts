@@ -16,12 +16,12 @@ describe('Test workflow supersession', () => {
   it('cancels only obsolete first-attempt pull-request work without making reruns self-cancel', () => {
     const workflow = readTestWorkflow();
     const concurrencyStart = workflow.indexOf('concurrency:');
-    const permissionsStart = workflow.indexOf('permissions:');
+    const jobsStart = workflow.indexOf('jobs:');
 
     expect(concurrencyStart).toBeGreaterThanOrEqual(0);
-    expect(permissionsStart).toBeGreaterThan(concurrencyStart);
+    expect(jobsStart).toBeGreaterThan(concurrencyStart);
 
-    const concurrencyBlock = workflow.slice(concurrencyStart, permissionsStart);
+    const concurrencyBlock = workflow.slice(concurrencyStart, jobsStart);
     expect(concurrencyBlock).toContain(
       'group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}',
     );
