@@ -355,7 +355,7 @@ fn observe_full_text(path: &Path) -> Result<FullTextObservation, String> {
     Ok(FullTextObservation {
         path: path.to_path_buf(),
         bytes: metadata.len(),
-        md5_hex: format!("{:x}", digest.finalize()),
+        md5_hex: digest.finalize().iter().map(|b| format!("{b:02x}")).collect(),
         filename,
         mtime_ms,
         content_type,
