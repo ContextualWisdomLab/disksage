@@ -71,6 +71,16 @@ fn now_ms() -> Result<u64, String> {
     u64::try_from(value).map_err(|_| "system-time-overflow".into())
 }
 
+#[cfg(target_os = "macos")]
+fn current_user_uid() -> Result<u32, String> {
+    Ok(unsafe { libc::getuid() })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_user_uid() -> Result<u32, String> {
+    Err("icloud-recovery-platform-unsupported".into())
+}
+
 fn read_plan(path: &Path) -> Result<IcloudFileProviderRecoveryPlan, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "icloud-recovery-plan-unavailable".to_string())?;
@@ -104,7 +114,7 @@ fn run() -> Result<(), String> {
         serde_json::to_value(plan_icloud_file_provider_recovery(
             &health,
             daemon,
-            unsafe { libc::getuid() },
+            current_user_uid()?,
             now,
         ))
     }
