@@ -45,13 +45,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
 - Return the candidate-specific cloud copy approval action, exact confirmation phrase, and maximum approval age from the Rust plan contract; the frontend only displays and submits that backend-authored phrase and fails closed when it is missing or does not match the candidate action.
 - Align the frontend toolchain on Vite 8.2 and `@sveltejs/vite-plugin-svelte` 7.2 so the declared peer dependency graph is installable and reproducible.
-- Declare the supported Node.js runtime floor as Node.js 20.19 or Node.js 22.12 and later, matching Vite 8 requirements.
-- Pin the primary test workflow to Node.js 20.19.0 so the minimum supported runtime is continuously verified.
+- Raise the supported Node.js runtime floor to 22.12 and pin test and release workflows to
+  Node.js 22.12.0, matching Vitest 5 after Node.js 20 reached end-of-life.
 - Document the iCloud batch operation's local-only versus path-free shareable evidence boundary and map its fail-closed controls to NIST SP 800-53 Release 5.2.0, ISO/IEC 27040:2024, and primary secure-design literature with APA 7th references and deterministic documentation contract tests.
 - Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
 ### Fixed
 
+- Invoke the installed Tauri CLI entry point directly in CPU and GPU release
+  builds, preventing Windows npm argument forwarding from dropping the
+  `--features` flag while retaining its value as an invalid positional argument.
+- Refresh the Vite/PostCSS transitive `nanoid` lock entry to 3.3.18, removing
+  GHSA-2v37-7h3g-55p8 without adding a direct dependency or override.
+- Keep the Vitest runner and V8 coverage provider on the same 5.0.0 release,
+  preventing deterministic `npm ci` peer-resolution failure in test and release jobs.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute

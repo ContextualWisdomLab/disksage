@@ -7,6 +7,43 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-09-08 exact-head CI RCA
+
+- PR #349 head `49827c3e63361ba2909e34240ff350912221ea45` upgraded `vitest` to
+  5.0.0 while retaining `@vitest/coverage-v8` 4.1.11. Test run `34100921310`
+  and all three release jobs in run `34100921342` therefore failed before
+  JavaScript execution at `npm ci`: the coverage provider requires the exact
+  Vitest 4.1.11 peer. The repair aligns both packages on 5.0.0 and regenerates
+  the lockfile without `--force` or `--legacy-peer-deps`. Vitest 5 requires
+  Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`, while this branch still declared
+  and exercised Node.js 20.19.0. Because Node.js 20 reached end-of-life on
+  2026-04-30, the same repair raises the declared floor and all test/release
+  jobs to Node.js 22.12.0 rather than preserving an unsupported runtime.
+  Successor hosted checks remain authoritative; this local repair does not
+  transfer predecessor results or authorize release. See Node.js Release
+  Working Group. (2026). *Node.js release schedule*.
+  https://github.com/nodejs/Release#release-schedule
+- The repaired dependency tree then exposed `nanoid` 3.3.17 through
+  `vite → postcss → nanoid`. `npm audit --json` reported
+  GHSA-2v37-7h3g-55p8 (`<3.3.18`, high severity, CWE-835) because a zero-size
+  custom generator can loop indefinitely. The smallest owner-side repair
+  refreshes only the existing transitive lock entry to 3.3.18; it does not add
+  a direct dependency, an override, an exclusion, or an audit bypass. See
+  GitHub. (2026). *nanoid: custom generators can loop indefinitely when size
+  is zero*. https://github.com/advisories/GHSA-2v37-7h3g-55p8
+- PR #349 successor head `3fc9ca427fe5c2d47676c62d5acd8aa9e3788380`
+  then exposed a Windows-only release invocation defect. In exact-head Release
+  run `34185620046`, Linux job `101933323953` and macOS job `101933323793`
+  preserved `tauri build --features llm-engine` and completed successfully.
+  Windows job `101933324113` instead logged `tauri build llm-engine`, then
+  Cargo rejected the retained value as an unexpected positional argument. The
+  root cause is npm script argument forwarding dropping `--features` on this
+  Windows runtime, not Tauri, Rust, WiX, or the Vitest dependency update. The
+  repair invokes the installed `@tauri-apps/cli/tauri.js` entry point directly
+  for both CPU and GPU release paths and regression-tests that neither path can
+  return to the affected `npm run tauri -- build ...` form. Successor hosted
+  checks remain authoritative.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
