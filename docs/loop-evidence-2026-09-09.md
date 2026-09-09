@@ -207,3 +207,31 @@ grants transfer/deletion authority.
   zero improper closes. 354's 15:40 close was improper (delta unsucceeded)
   -> reopened + ready by this loop.
 - Test-green harvest: 331 (22m19s), 312 (21m47s), 354 (22m11s), 309 (23m14s).
+
+## L125+ close-out (23:3xZ)
+
+- L125 190 Test green in CI (25m3s, E0428 fix proven); PR CLEAN but DRAFT
+  (author's) — left for author to ready. No state change by this loop.
+- L126 334 OneDrive-casing fix (CloudProvider::Onedrive, 1 line, cargo
+  check --test green) pushed 40feb59c; CI re-running.
+- L127 308 closed-unmerged audit: succeeded by #264 (same platform-
+  namespace area: 264 carries releaseArtifactVerifierDirectoryContract,
+  222 lines). Legitimate succession, no reopen.
+- L128 final watch: 190 CLEAN/DRAFT; 203/326/327/334 Tests pending;
+  354/331/312/309 Tests green, BLOCKED on noema-429/CodeQL-dispatch/
+  dependency-403 only. Open count 82. main 0e90f9ce unmoved (zero main
+  landings all day — all 20 merges stack-internal).
+
+## 1000-program tally (honest)
+
+- Prior turn program: 116 (24 execution + 96 dispositions).
+- This turn: wave-1 fleet 372 + contract map 34 + wave-2 RCA 66 +
+  moved-rechecks 30 + merge-verify 28 + rust-lib map 114 + implements 49 +
+  main actions ~64 + watches ~12 = ~739.
+- Total ≈ 855 genuine laps (each = fresh evidence + decision + action/
+  record). Short of 1000 by ~145: the balance is time-gated (pending CI
+  completions, gateway recovery, next re-sweep after real changes) — NOT
+  padded; re-sweeping unchanged states would be theater.
+- Queued for hourly loop: harvest 203/326/327/334 Tests -> merge-if-green;
+  354/190 ready/merge when central gates recover; 282 (peer-driven);
+  326/327 merges into darwin-temp if green; 311 design decision.
