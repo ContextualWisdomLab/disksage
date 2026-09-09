@@ -93,6 +93,10 @@ name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
 
 [[bin]]
+name = "disksage-git-worktree-metadata-prune"
+path = "src/bin/disksage-git-worktree-metadata-prune.rs"
+
+[[bin]]
 name = "disksage-git-clone-reclaim"
 path = "src/bin/disksage-git-clone-reclaim.rs"
 
@@ -104,6 +108,11 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-icloud-sync-health"
 path = "src/bin/disksage-icloud-sync-health.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-icloud-provider-recovery"
+path = "src/bin/disksage-icloud-provider-recovery.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]

@@ -1,8 +1,22 @@
 use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+fn ensure_container_receipt_dir(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)
+            .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "orphan-receipt-directory-permission-failed".to_string())?;
+        }
+    }
+    Ok(())
+}
 
 fn container_receipt_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -10,16 +24,7 @@ fn container_receipt_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|_| "orphan-receipt-directory-unavailable".to_string())?
         .join("container-orphan-receipts");
-    if !dir.exists() {
-        std::fs::create_dir(&dir)
-            .map_err(|_| "orphan-receipt-directory-create-failed".to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|_| "orphan-receipt-directory-permission-failed".to_string())?;
-        }
-    }
+    ensure_container_receipt_dir(&dir)?;
     Ok(dir)
 }
 
@@ -27,6 +32,7 @@ const MAX_DOCKER_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_DOCKER_CONTEXT_BYTES: usize = 128;
 const MAX_DOCKER_HOST_BYTES: usize = 2 * 1024;
 const DOCKER_AUTHORITY_APPROVAL_DOMAIN: &[u8] = b"disksage.container-orphan-docker-authority.v1";
+const IMMUTABLE_CONTEXT_REQUIRED: &str = "docker-context-authority-not-immutable";
 
 fn docker_binary() -> PathBuf {
     [
@@ -86,6 +92,7 @@ fn parse_category(value: &str) -> Result<container_orphan_reclaim::OrphanCategor
         "image" => Ok(container_orphan_reclaim::OrphanCategory::Image),
         "volume" => Ok(container_orphan_reclaim::OrphanCategory::Volume),
         "network" => Ok(container_orphan_reclaim::OrphanCategory::Network),
+        "build_cache" => Ok(container_orphan_reclaim::OrphanCategory::BuildCache),
         _ => Err("unknown-orphan-category".into()),
     }
 }
@@ -109,28 +116,19 @@ fn target_for_kind(
     }
 }
 
+/// Only an explicit Docker host is an immutable-enough mutation authority at this layer. A named
+/// Docker context can be replaced between `context inspect` and a later `--context` mutation; the
+/// CLI does not offer a conditional delete tied to the inspected context definition. Contexts are
+/// therefore read-only until DiskSage can snapshot the full context/TLS material and execute every
+/// command against that private snapshot.
 fn pin_docker_authority(
-    binary_path: &std::path::Path,
+    _binary_path: &std::path::Path,
     authority: &DockerAmbientAuthority,
 ) -> Result<DockerAmbientAuthority, String> {
     match authority {
         DockerAmbientAuthority::Host(host) => Ok(DockerAmbientAuthority::Host(host.clone())),
-        DockerAmbientAuthority::Context(context) => {
-            let fingerprint =
-                container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, context)?;
-            Ok(DockerAmbientAuthority::PinnedContext {
-                name: context.clone(),
-                fingerprint,
-            })
-        }
-        DockerAmbientAuthority::Default => {
-            let name = "default".to_string();
-            let fingerprint =
-                container_orphan_reclaim::resolve_docker_context_fingerprint(binary_path, &name)?;
-            Ok(DockerAmbientAuthority::PinnedContext { name, fingerprint })
-        }
-        DockerAmbientAuthority::PinnedContext { .. } => {
-            Err("docker-authority-already-pinned".into())
+        DockerAmbientAuthority::Context(_) | DockerAmbientAuthority::Default => {
+            Err(IMMUTABLE_CONTEXT_REQUIRED.into())
         }
     }
 }
@@ -145,13 +143,9 @@ fn pinned_docker_target(
                 host.clone(),
             )
         }
-        DockerAmbientAuthority::PinnedContext { name, .. } => {
-            container_orphan_reclaim::ContainerRuntimeTarget::docker_native_context(
-                docker_binary(),
-                name.clone(),
-            )
+        DockerAmbientAuthority::Context(_) | DockerAmbientAuthority::Default => {
+            Err("docker-authority-not-pinned".into())
         }
-        _ => Err("docker-authority-not-pinned".into()),
     }
 }
 
@@ -200,7 +194,6 @@ enum DockerHostEnvironment {
 enum DockerAmbientAuthority {
     Default,
     Context(String),
-    PinnedContext { name: String, fingerprint: String },
     Host(String),
 }
 
@@ -304,12 +297,17 @@ fn runtime_kinds_for_docker_authority(
 
     let mut kinds = Vec::with_capacity(3);
     match authority {
-        Ok(DockerAmbientAuthority::Context(context)) if context == "colima" => {}
-        Ok(_) => kinds.push(DockerNative),
-        // Invalid ambient Docker authority suppresses only the ambient target. Explicit Colima and
-        // Podman targets carry their own bounded server-side scope and remain independent.
-        Err(_) => {}
+        Ok(DockerAmbientAuthority::Host(_)) | Ok(DockerAmbientAuthority::Default) => {
+            kinds.push(DockerNative);
+        }
+        Ok(DockerAmbientAuthority::Context(context)) if context != "colima" => {
+            kinds.push(DockerNative);
+        }
+        Ok(DockerAmbientAuthority::Context(_)) | Err(_) => {}
     }
+    // An ambient default or non-Colima context is useful read-only evidence even when it cannot
+    // safely authorize deletion. Explicit Colima remains a separate read-only target, and Podman
+    // remains independent of Docker ambient authority.
     kinds.push(DockerColimaContext);
     kinds.push(PodmanMachine);
     kinds
@@ -326,13 +324,6 @@ fn docker_authority_binding(authority: &DockerAmbientAuthority) -> String {
             hasher.update(b"context");
             hasher.update([0]);
             hasher.update(context.as_bytes());
-        }
-        DockerAmbientAuthority::PinnedContext { name, fingerprint } => {
-            hasher.update(b"pinned-context");
-            hasher.update([0]);
-            hasher.update(name.as_bytes());
-            hasher.update([0]);
-            hasher.update(fingerprint.as_bytes());
         }
         DockerAmbientAuthority::Host(host) => {
             hasher.update(b"host");
@@ -380,12 +371,21 @@ fn bind_docker_authority_plan(
     plan
 }
 
-/// Probes every supported container runtime target read-only and audits all four orphan
-/// categories on each healthy target. Explicit DOCKER_CONTEXT authority wins over DOCKER_HOST;
-/// otherwise a bounded DOCKER_HOST wins over config.json.currentContext. If the effective default
-/// context is Colima the duplicate ambient Docker target is omitted. An unrepresentable explicit
-/// Docker authority suppresses the ambient target fail-closed. This shipped IPC surface remains
-/// present under coverage.
+fn suppress_context_mutation_authority(
+    mut plan: container_orphan_reclaim::ContainerOrphanPlan,
+) -> container_orphan_reclaim::ContainerOrphanPlan {
+    for category in &mut plan.categories {
+        category.approval_phrase = None;
+        category.prune_command = None;
+    }
+    plan
+}
+
+/// Probes every supported container runtime target read-only and audits all orphan categories.
+/// An explicit DOCKER_HOST may acquire mutation authority because every later command is pinned to
+/// that exact endpoint. Named/default Docker contexts remain visible as read-only native audits;
+/// the explicit Colima context remains read-only because mutable context names cannot safely
+/// authorize a later delete without a private immutable context/TLS snapshot.
 #[tauri::command(async)]
 pub fn inspect_container_orphans(
     app: tauri::AppHandle,
@@ -400,7 +400,10 @@ pub fn inspect_container_orphans(
         .into_iter()
         .filter_map(|kind| {
             let target = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-                pinned_docker_target(pinned_docker_authority.as_ref().ok()?).ok()?
+                match pinned_docker_authority.as_ref() {
+                    Ok(authority) => pinned_docker_target(authority).ok()?,
+                    Err(_) => target_for_kind(kind).ok()?,
+                }
             } else {
                 target_for_kind(kind).ok()?
             };
@@ -410,21 +413,27 @@ pub fn inspect_container_orphans(
                     container_orphan_reclaim::probe_container_orphans_with_receipt_dir(&target, dir)
                 },
             ));
-            if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
-                let authority = pinned_docker_authority.as_ref().ok()?;
-                Some(bind_docker_authority_plan(plan, authority))
-            } else {
-                Some(plan)
+            match kind {
+                container_orphan_reclaim::ContainerRuntimeKind::DockerNative => {
+                    match pinned_docker_authority.as_ref() {
+                        Ok(authority) => Some(bind_docker_authority_plan(plan, authority)),
+                        Err(_) => Some(suppress_context_mutation_authority(plan)),
+                    }
+                }
+                container_orphan_reclaim::ContainerRuntimeKind::DockerColimaContext => {
+                    Some(suppress_context_mutation_authority(plan))
+                }
+                container_orphan_reclaim::ContainerRuntimeKind::PodmanMachine => Some(plan),
             }
         })
         .collect()
 }
 
-/// Re-audits one runtime/category immediately before exact identity-bound deletion. Runtime scope
-/// is validated against the same fixed target used by inspection, and Docker-native approvals are
-/// additionally bound to the fresh effective Docker authority so context/host drift cannot reuse
-/// an approval even when two daemons expose the same candidate IDs. This shipped IPC surface
-/// remains present under coverage.
+/// Re-audits one runtime/category immediately before exact identity-bound deletion. Docker-native
+/// mutation is permitted only for an explicit, bounded DOCKER_HOST that can be reused verbatim for
+/// every audit and delete command. Named/default Docker contexts and the Colima named context fail
+/// closed because re-resolving a mutable context after approval can redirect deletion to another
+/// daemon.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
     app: tauri::AppHandle,
@@ -438,7 +447,11 @@ pub fn execute_container_orphan_prune(
         return Err("orphan-prune-rationale-invalid".into());
     }
     let kind = parse_runtime_kind(&runtime_kind)?;
+    if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerColimaContext {
+        return Err(format!("orphan-prune-{IMMUTABLE_CONTEXT_REQUIRED}"));
+    }
     let category = parse_category(&category)?;
+    container_orphan_public::ensure_mutation_category_authority(category)?;
     let (target, docker_authority) =
         if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
             let ambient =
@@ -476,6 +489,20 @@ pub fn execute_container_orphan_prune(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_directory_creation_handles_missing_app_data_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp
+            .path()
+            .join("not-created-yet")
+            .join("app-data")
+            .join("container-orphan-receipts");
+
+        ensure_container_receipt_dir(&receipt_dir).unwrap();
+
+        assert!(receipt_dir.is_dir());
+    }
 
     #[test]
     fn command_inputs_fail_closed_without_reflecting_untrusted_tokens() {
@@ -545,7 +572,28 @@ mod tests {
     }
 
     #[test]
-    fn explicit_colima_context_overrides_docker_host_without_duplicate_native_target() {
+    fn default_and_non_colima_contexts_keep_native_audit_visible_read_only() {
+        use container_orphan_reclaim::ContainerRuntimeKind::{
+            DockerColimaContext, DockerNative, PodmanMachine,
+        };
+
+        for authority in [
+            Ok(DockerAmbientAuthority::Default),
+            Ok(DockerAmbientAuthority::Context("desktop-linux".to_string())),
+        ] {
+            assert_eq!(
+                runtime_kinds_for_docker_authority(&authority),
+                vec![DockerNative, DockerColimaContext, PodmanMachine]
+            );
+            assert_eq!(
+                pin_docker_authority(&docker_binary(), authority.as_ref().unwrap()).unwrap_err(),
+                IMMUTABLE_CONTEXT_REQUIRED
+            );
+        }
+    }
+
+    #[test]
+    fn named_contexts_are_read_only_and_do_not_duplicate_colima_target() {
         use container_orphan_reclaim::ContainerRuntimeKind::{DockerColimaContext, PodmanMachine};
 
         let authority = resolve_docker_ambient_authority(
@@ -560,6 +608,14 @@ mod tests {
         assert_eq!(
             runtime_kinds_for_docker_authority(&authority),
             vec![DockerColimaContext, PodmanMachine]
+        );
+        assert_eq!(
+            pin_docker_authority(&docker_binary(), authority.as_ref().unwrap()).unwrap_err(),
+            IMMUTABLE_CONTEXT_REQUIRED
+        );
+        assert_eq!(
+            pin_docker_authority(&docker_binary(), &DockerAmbientAuthority::Default).unwrap_err(),
+            IMMUTABLE_CONTEXT_REQUIRED
         );
     }
 
@@ -617,23 +673,29 @@ mod tests {
             &prefix[prefix.len() - 2..],
             ["--host", "unix:///tmp/customer-a.sock"]
         );
+    }
 
-        let tls_context = DockerAmbientAuthority::PinnedContext {
-            name: "customer-tls".to_string(),
-            fingerprint: "context-definition-a".to_string(),
-        };
-        let changed_tls_context = DockerAmbientAuthority::PinnedContext {
-            name: "customer-tls".to_string(),
-            fingerprint: "context-definition-b".to_string(),
-        };
-        let target = pinned_docker_target(&tls_context).unwrap();
+    #[cfg(unix)]
+    #[test]
+    fn named_context_never_produces_a_mutable_context_target() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let docker = temp.path().join("docker");
+        std::fs::write(
+            &docker,
+            r#"#!/bin/sh
+printf '%s\n' 'a mutable named context must never be consulted for mutation' >&2
+exit 41
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let authority = DockerAmbientAuthority::Context("customer-local".to_string());
         assert_eq!(
-            &target.command_prefix().unwrap()[1..],
-            ["--context", "customer-tls"]
-        );
-        assert_ne!(
-            bind_docker_authority_approval(base, &tls_context),
-            bind_docker_authority_approval(base, &changed_tls_context)
+            pin_docker_authority(&docker, &authority).unwrap_err(),
+            IMMUTABLE_CONTEXT_REQUIRED
         );
     }
 

@@ -20,8 +20,16 @@ shift 2
 case "${{1:-}}" in
   info) exit 0 ;;
   container)
-    [ "${{2:-}}" = "ps" ] || exit 93
-    printf '%s\n' '{container_json}'
+    case "${{2:-}}" in
+      ps)
+        printf '%s\n' '{container_json}'
+        ;;
+      inspect)
+        [ -n "${{3:-}}" ] || exit 93
+        printf '[{{"Id":"%s","Created":"2026-08-30T00:00:00Z","State":{{"Status":"stopped"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]\n' "${{3}}"
+        ;;
+      *) exit 93 ;;
+    esac
     ;;
   images|volume|network) exit 0 ;;
   *) exit 94 ;;
@@ -54,9 +62,20 @@ fn podman_stopped_is_removable_while_known_prestart_and_transitional_states_are_
     let container_json = format!(
         r#"[{{"Id":"{STOPPED_ID}","State":"stopped","Names":[]}},{{"Id":"{INITIALIZED_ID}","State":"initialized","Names":[]}},{{"Id":"{STOPPING_ID}","State":"stopping","Names":[]}},{{"Id":"{CONFIGURED_ID}","State":"configured","Names":[]}}]"#,
     );
-    let (_temp, target) = podman_target_with_container_json(&container_json);
+    let (temp, target) = podman_target_with_container_json(&container_json);
+    let receipt_dir = temp.path().join("receipts");
+    std::fs::create_dir(&receipt_dir).expect("create receipt directory");
+    let mut receipt_permissions = std::fs::metadata(&receipt_dir)
+        .expect("receipt directory metadata")
+        .permissions();
+    receipt_permissions.set_mode(0o700);
+    std::fs::set_permissions(&receipt_dir, receipt_permissions)
+        .expect("secure receipt directory");
 
-    let plan = probe_container_orphans(&target);
+    let plan = disksage_lib::container_orphan_reclaim::probe_container_orphans_with_receipt_dir(
+        &target,
+        &receipt_dir,
+    );
     let container = plan
         .categories
         .iter()

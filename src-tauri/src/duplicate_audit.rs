@@ -498,6 +498,23 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 #[cfg(all(unix, not(coverage)))]
 pub(crate) fn active_duplicate_candidates(paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     let mut active = BTreeSet::new();
+    let candidate_identities: BTreeMap<(u64, u64), &PathBuf> = paths
+        .iter()
+        .filter_map(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .map(|metadata| (unix_identity(&metadata), path))
+        })
+        .collect();
+    let descriptors = std::fs::read_dir("/dev/fd")
+        .map_err(|_| "duplicate-reclaim-active-use-fd-unavailable".to_string())?;
+    for descriptor in descriptors.flatten() {
+        if let Ok(metadata) = File::open(descriptor.path()).and_then(|file| file.metadata()) {
+            if let Some(path) = candidate_identities.get(&unix_identity(&metadata)) {
+                active.insert((*path).clone());
+            }
+        }
+    }
     for chunk in paths.chunks(64) {
         let mut command = Command::new("lsof");
         command.args(["-F", "pn", "--"]);
@@ -576,6 +593,9 @@ fn remove_if_storage_identity(
     expected_content_digests: &ContentDigests,
     staging_token: u64,
 ) -> Result<(), String> {
+    if crate::safety::is_protected(path) {
+        return Err("duplicate-reclaim-protected-path".into());
+    }
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "duplicate-reclaim-candidate-changed".to_string())?;
     let (device, inode) = unix_identity(&metadata);
@@ -583,6 +603,13 @@ fn remove_if_storage_identity(
         != Some(expected_storage_identity)
     {
         return Err("duplicate-reclaim-candidate-changed".into());
+    }
+    match active_duplicate_candidates(&[path.to_path_buf()]) {
+        Ok(active) if active.contains(path) => {
+            return Err("duplicate-reclaim-active-before-staging".into());
+        }
+        Ok(_) => {}
+        Err(error) => return Err(error),
     }
     let parent = path
         .parent()
@@ -631,6 +658,19 @@ fn remove_if_storage_identity(
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
         let _ = std::fs::remove_dir(&staging_dir);
         return recovery.and(Err("duplicate-reclaim-candidate-content-changed".into()));
+    }
+    match active_duplicate_candidates(std::slice::from_ref(&staged)) {
+        Ok(active) if active.contains(&staged) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err("duplicate-reclaim-active-during-staging".into()));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let recovery = preserve_staged_candidate(path, &staged, staging_token);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return recovery.and(Err(error));
+        }
     }
     if let Err(error) = std::fs::remove_file(&staged) {
         let recovery = preserve_staged_candidate(path, &staged, staging_token);
@@ -972,6 +1012,9 @@ pub fn collect_exact_duplicate_audit(
     }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
+    if crate::safety::is_explicitly_protected(&canonical_root) {
+        return Err("duplicate-audit-root-explicitly-protected".into());
+    }
     if canonical_root.to_str().is_none() {
         return Err("duplicate-audit-root-non-unicode".into());
     }
@@ -1516,6 +1559,33 @@ mod tests {
             removal_failure_code("duplicate-reclaim-delete-failed:permission denied"),
             "duplicate-reclaim-delete-failed"
         );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn identity_bound_remove_preserves_open_candidate_after_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("duplicate.bin");
+        std::fs::write(&path, b"approved bytes").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let (device, inode) = unix_identity(&metadata);
+        let approved = storage_identity_fingerprint_from_metadata(device, inode).unwrap();
+        let original = observe_file(root.path(), path.clone(), metadata).unwrap();
+        let approved_digests = hash_stable_file(&original).unwrap();
+        let open_handle = File::open(&path).unwrap();
+
+        let error = remove_if_storage_identity(
+            &path,
+            &approved,
+            original.logical_bytes,
+            &approved_digests,
+            2,
+        )
+        .unwrap_err();
+        drop(open_handle);
+
+        assert!(!error.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), b"approved bytes");
     }
 
     #[cfg(unix)]

@@ -331,7 +331,7 @@ export type ContainerRuntimeKind =
   | "docker-colima-context"
   | "podman-machine";
 
-export type OrphanCategory = "container" | "image" | "volume" | "network";
+export type OrphanCategory = "container" | "image" | "volume" | "network" | "build_cache";
 
 export interface ContainerOrphanPlan {
   schema_kind: "disksage.container-orphan-plan";
@@ -420,6 +420,7 @@ export interface OntoClass {
   equivalents: string[];
   disjoints: string[];
   target_folder: string | null;
+  deletion_policy: string | null;
 }
 export interface Ontology {
   classes: OntoClass[];

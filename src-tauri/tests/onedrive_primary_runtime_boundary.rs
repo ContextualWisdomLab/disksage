@@ -21,7 +21,9 @@ fn onedrive_helper_does_not_force_a_quit_when_the_primary_app_is_stopped() {
         .0;
     assert!(unpin.contains("let primary_runtime_observed ="));
     assert!(unpin.contains("collect_provider_primary_runtime"));
-    assert!(unpin.contains("if primary_runtime_observed {\n        request_quit(\"OneDrive\")?;\n    }"));
+    assert!(unpin.contains("if primary_runtime_observed {"));
+    assert!(unpin.contains("request_quit(\"OneDrive\").is_err()"));
+    assert!(unpin.contains("request_graceful_term(\"OneDrive\")?"));
 
     // A fully closed primary app is already in the state required by OneDrive `/unpin`.
     // Requiring the broad helper-aware observation here would incorrectly reject that safe state.

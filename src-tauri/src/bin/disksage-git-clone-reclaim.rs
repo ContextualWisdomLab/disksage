@@ -3,7 +3,9 @@
 use disksage_lib::git_clone_reclaim::{
     approve_git_clone_reclaim, execute_git_clone_reclaim, plan_git_clone_reclaim,
 };
-use disksage_lib::git_worktree::{validate_reference, GitWorktreeAuditOptions};
+use disksage_lib::git_worktree::{
+    validate_reference, GitWorktreeAuditOptions, MAX_LOCAL_COMMAND_TIMEOUT_MS,
+};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -152,7 +154,10 @@ fn now_ms() -> u64 {
 }
 
 fn run(args: Args) -> Result<serde_json::Value, String> {
-    let options = GitWorktreeAuditOptions::default();
+    let options = GitWorktreeAuditOptions {
+        command_timeout_ms: MAX_LOCAL_COMMAND_TIMEOUT_MS,
+        ..GitWorktreeAuditOptions::default()
+    };
     let plan = plan_git_clone_reclaim(
         &args.repository_root,
         &args.retention_references,

@@ -1,12 +1,13 @@
-use disksage_lib::container_orphan_public::sanitize_plan;
+use disksage_lib::container_orphan_public::{ensure_mutation_category_authority, sanitize_plan};
 use disksage_lib::container_orphan_reclaim::{
     execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
 };
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> --receipt-dir ABSOLUTE_PRIVATE_DIR [--scope NAME] [--bin PATH] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
-Builds orphan evidence for containers, images, volumes, and networks. Execution re-audits and removes only the exact approved candidate set.";
+const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> --receipt-dir ABSOLUTE_PRIVATE_DIR [--scope NAME] [--bin PATH] [--docker-host HOST] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
+Builds orphan evidence for containers, images, volumes, networks, and build cache. Execution re-audits and removes only the exact approved candidate set.";
 
 fn next_utf8_argument(
     args: &mut impl Iterator<Item = std::ffi::OsString>,
@@ -17,6 +18,104 @@ fn next_utf8_argument(
         .ok_or_else(|| missing_message.to_string())?
         .into_string()
         .map_err(|_| invalid_message.to_string())
+}
+
+fn parse_category(value: &str) -> Result<OrphanCategory, String> {
+    match value {
+        "container" => Ok(OrphanCategory::Container),
+        "image" => Ok(OrphanCategory::Image),
+        "volume" => Ok(OrphanCategory::Volume),
+        "network" => Ok(OrphanCategory::Network),
+        "build_cache" => Ok(OrphanCategory::BuildCache),
+        _ => Err(format!("unsupported category\n{USAGE}")),
+    }
+}
+
+fn ensure_cli_execution_authority(
+    runtime: ContainerRuntimeKind,
+    docker_host: Option<&str>,
+) -> Result<(), String> {
+    match runtime {
+        ContainerRuntimeKind::DockerNative if docker_host.is_some() => Ok(()),
+        ContainerRuntimeKind::DockerNative => {
+            Err("docker-native-cli-execution-requires-authority-binding".into())
+        }
+        ContainerRuntimeKind::DockerColimaContext => {
+            Err("docker-context-cli-execution-requires-immutable-authority".into())
+        }
+        ContainerRuntimeKind::PodmanMachine => Ok(()),
+    }
+}
+
+fn docker_host_binding(host: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.container-orphan-cli-host.v1\0");
+    hasher.update(host.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn bind_docker_host_approval(phrase: &str, host: &str) -> String {
+    format!("{phrase} docker-host {}", docker_host_binding(host))
+}
+
+fn bind_docker_host_plan(
+    mut plan: disksage_lib::container_orphan_reclaim::ContainerOrphanPlan,
+    host: &str,
+) -> disksage_lib::container_orphan_reclaim::ContainerOrphanPlan {
+    for category in &mut plan.categories {
+        if let Some(phrase) = category.approval_phrase.take() {
+            category.approval_phrase = Some(bind_docker_host_approval(&phrase, host));
+        }
+    }
+    plan
+}
+
+fn unbind_docker_host_approval(phrase: &str, host: &str) -> Result<String, String> {
+    phrase
+        .strip_suffix(&format!(" docker-host {}", docker_host_binding(host)))
+        .map(str::to_string)
+        .ok_or_else(|| "docker-native-cli-authority-mismatch".to_string())
+}
+
+fn suppress_unexecutable_docker_plan(
+    mut plan: disksage_lib::container_orphan_reclaim::ContainerOrphanPlan,
+    runtime: ContainerRuntimeKind,
+) -> disksage_lib::container_orphan_reclaim::ContainerOrphanPlan {
+    if matches!(
+        runtime,
+        ContainerRuntimeKind::DockerNative | ContainerRuntimeKind::DockerColimaContext
+    ) {
+        for category in &mut plan.categories {
+            category.approval_phrase = None;
+            category.prune_command = None;
+        }
+    }
+    plan
+}
+
+fn resolve_default_docker_from_path() -> Result<PathBuf, String> {
+    let path = std::env::var_os("PATH").ok_or_else(|| "docker-native-cli-binary-unavailable".to_string())?;
+    for directory in std::env::split_paths(&path) {
+        if directory.as_os_str().is_empty() {
+            continue;
+        }
+        #[cfg(windows)]
+        let names = ["docker.exe", "docker"];
+        #[cfg(not(windows))]
+        let names = ["docker", "docker"];
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return std::fs::canonicalize(candidate)
+                    .map_err(|_| "docker-native-cli-binary-unavailable".to_string());
+            }
+        }
+    }
+    Err("docker-native-cli-binary-unavailable".into())
 }
 
 fn run() -> Result<(), String> {
@@ -36,6 +135,7 @@ fn run() -> Result<(), String> {
     let mut runtime: Option<ContainerRuntimeKind> = None;
     let mut scope: Option<String> = None;
     let mut binary_path: Option<PathBuf> = None;
+    let mut docker_host = None;
     let mut pretty = false;
     let mut execute = None;
     let mut confirmation = None;
@@ -79,6 +179,13 @@ fn run() -> Result<(), String> {
                         .ok_or_else(|| "--bin requires a path".to_string())?,
                 ));
             }
+            Some("--docker-host") if docker_host.is_none() => {
+                docker_host = Some(next_utf8_argument(
+                    &mut args,
+                    "--docker-host requires a host",
+                    "--docker-host requires a UTF-8 host",
+                )?)
+            }
             Some("--pretty") => {
                 if pretty {
                     return Err(format!("--pretty may be supplied once\n{USAGE}"));
@@ -89,21 +196,11 @@ fn run() -> Result<(), String> {
                 if execute.is_some() {
                     return Err(format!("--execute may be supplied once\n{USAGE}"));
                 }
-                execute = Some(
-                    match next_utf8_argument(
-                        &mut args,
-                        "--execute requires a category",
-                        "--execute requires a UTF-8 category",
-                    )?
-                    .as_str()
-                    {
-                        "container" => OrphanCategory::Container,
-                        "image" => OrphanCategory::Image,
-                        "volume" => OrphanCategory::Volume,
-                        "network" => OrphanCategory::Network,
-                        _ => return Err(format!("unsupported category\n{USAGE}")),
-                    },
-                );
+                execute = Some(parse_category(&next_utf8_argument(
+                    &mut args,
+                    "--execute requires a category",
+                    "--execute requires a UTF-8 category",
+                )?)?);
             }
             Some("--confirm") if confirmation.is_none() => {
                 confirmation = Some(next_utf8_argument(
@@ -144,13 +241,14 @@ fn run() -> Result<(), String> {
         }
         _ => {}
     }
-    if execute.is_some() && runtime == ContainerRuntimeKind::DockerNative {
-        // The desktop IPC contract binds Docker-native approval to the effective DOCKER_CONTEXT /
-        // DOCKER_HOST authority. This standalone CLI cannot safely reproduce that private
-        // authority boundary, so destructive native-Docker execution remains fail-closed while
-        // read-only inspection stays available.
-        return Err("docker-native-cli-execution-requires-authority-binding".into());
+    if docker_host.is_some() && runtime != ContainerRuntimeKind::DockerNative {
+        return Err(format!("--docker-host requires docker-native\n{USAGE}"));
     }
+    if let Some(category) = execute {
+        ensure_cli_execution_authority(runtime, docker_host.as_deref())?;
+        ensure_mutation_category_authority(category)?;
+    }
+    let binary_path_was_explicit = binary_path.is_some();
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
             ContainerRuntimeKind::PodmanMachine => "podman",
@@ -159,7 +257,22 @@ fn run() -> Result<(), String> {
             }
         })
     });
-    let target = ContainerRuntimeTarget::new(runtime, binary_path, scope)?;
+    let binary_path = if docker_host.is_some() {
+        if binary_path.is_absolute() {
+            std::fs::canonicalize(binary_path)
+                .map_err(|_| "docker-native-cli-binary-unavailable".to_string())?
+        } else if !binary_path_was_explicit && binary_path == Path::new("docker") {
+            resolve_default_docker_from_path()?
+        } else {
+            return Err("docker-native-cli-authority-requires-absolute-binary".into());
+        }
+    } else {
+        binary_path
+    };
+    let target = match docker_host.as_ref() {
+        Some(host) => ContainerRuntimeTarget::docker_native_host(binary_path, host.clone())?,
+        None => ContainerRuntimeTarget::new(runtime, binary_path, scope)?,
+    };
     if let Some(category) = execute {
         let receipt_dir =
             receipt_dir.ok_or_else(|| format!("--execute requires --receipt-dir\n{USAGE}"))?;
@@ -171,6 +284,10 @@ fn run() -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| "system time is before epoch".to_string())?
             .as_millis() as u64;
+        let confirmation = match docker_host.as_deref() {
+            Some(host) => unbind_docker_host_approval(&confirmation, host)?,
+            None => confirmation,
+        };
         let result = execute_container_orphan_prune(
             &target,
             category,
@@ -195,18 +312,14 @@ fn run() -> Result<(), String> {
             "--confirm and --rationale require --execute\n{USAGE}"
         ));
     }
-    let mut plan = sanitize_plan(receipt_dir.as_ref().map_or_else(
+    let plan = sanitize_plan(receipt_dir.as_ref().map_or_else(
         || disksage_lib::container_orphan_reclaim::probe_container_orphans(&target),
         |dir| probe_container_orphans_with_receipt_dir(&target, dir),
     ));
-    if runtime == ContainerRuntimeKind::DockerNative {
-        // Native Docker desktop approval is bound to the effective Docker authority by the Tauri
-        // IPC boundary. This standalone CLI deliberately cannot reproduce that private authority
-        // proof, so its read-only evidence must not publish a phrase that cannot be executed.
-        for category in &mut plan.categories {
-            category.approval_phrase = None;
-        }
-    }
+    let plan = match docker_host.as_deref() {
+        Some(host) => bind_docker_host_plan(plan, host),
+        None => suppress_unexecutable_docker_plan(plan, runtime),
+    };
     if pretty {
         println!(
             "{}",
@@ -225,5 +338,53 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_exposes_every_backend_orphan_category() {
+        assert_eq!(
+            parse_category("container").unwrap(),
+            OrphanCategory::Container
+        );
+        assert_eq!(parse_category("image").unwrap(), OrphanCategory::Image);
+        assert_eq!(parse_category("volume").unwrap(), OrphanCategory::Volume);
+        assert_eq!(parse_category("network").unwrap(), OrphanCategory::Network);
+        assert_eq!(
+            parse_category("build_cache").unwrap(),
+            OrphanCategory::BuildCache
+        );
+        assert!(parse_category("all").is_err());
+        assert!(USAGE.contains("build cache"));
+    }
+
+    #[test]
+    fn cli_rejects_mutable_docker_context_execution_before_runtime_access() {
+        assert_eq!(
+            ensure_cli_execution_authority(ContainerRuntimeKind::DockerNative, None).unwrap_err(),
+            "docker-native-cli-execution-requires-authority-binding"
+        );
+        assert_eq!(
+            ensure_cli_execution_authority(ContainerRuntimeKind::DockerColimaContext, None)
+                .unwrap_err(),
+            "docker-context-cli-execution-requires-immutable-authority"
+        );
+        assert!(ensure_cli_execution_authority(ContainerRuntimeKind::PodmanMachine, None).is_ok());
+        assert!(ensure_cli_execution_authority(
+            ContainerRuntimeKind::DockerNative,
+            Some("unix:///private/runtime.sock")
+        )
+        .is_ok());
+        let base = "DiskSage build_cache orphan prune 승인 abc receipt def";
+        let phrase = bind_docker_host_approval(base, "unix:///private/runtime.sock");
+        assert_eq!(
+            unbind_docker_host_approval(&phrase, "unix:///private/runtime.sock").unwrap(),
+            base
+        );
+        assert!(unbind_docker_host_approval(&phrase, "unix:///private/other.sock").is_err());
     }
 }

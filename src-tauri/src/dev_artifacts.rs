@@ -47,6 +47,8 @@ pub struct DevArtifactCleanResult {
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
 const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
+    (".next", &["package.json"]),
+    ("dist-electron", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     (".venv314", &["pyproject.toml", "requirements.txt", "setup.py", ".git"]),
@@ -93,6 +95,25 @@ fn is_python_314_environment(path: &Path) -> bool {
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
+}
+
+fn cargo_target_cache(path: &Path) -> bool {
+    let tag_path = path.join("CACHEDIR.TAG");
+    let tagged = std::fs::metadata(&tag_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(tag_path).is_ok_and(|tag| {
+            tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
+                && tag.contains("cache directory tag created by cargo")
+        })
+        && path.join(".rustc_info.json").is_file();
+    tagged && path.join("debug").is_dir()
+}
+
+fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    if cargo_target_cache(path) {
+        return Some(("cargo-target-cache", &[]));
+    }
+    artifact_kind(name).map(|(kind, markers)| (*kind, *markers))
 }
 
 fn age_days(path: &Path, now_ms: u64) -> u64 {
@@ -330,6 +351,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
 
     while let Some(entry) = walker.next() {
         let Ok(e) = entry else { continue };
+        if crate::safety::is_explicitly_protected(e.path()) {
+            if e.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
         if e.depth() > 0 && !scanner::keep_entry(&e) {
             if e.file_type().is_dir() {
                 walker.skip_current_dir();
@@ -351,7 +378,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let Some((_, markers)) = artifact_kind(&name) else {
+        let Some((_, markers)) = detected_artifact_kind(path, &name) else {
             continue;
         };
         let parent = path.parent().unwrap_or(root);
@@ -389,7 +416,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 return None;
             }
             let name = path.file_name()?.to_string_lossy().into_owned();
-            let (kind, _) = artifact_kind(&name)?;
+            let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
             Some(DevArtifact {
@@ -419,6 +446,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 } else {
                     age_days(&path, now_ms)
                 };
+                if age < min_age_days {
+                    return None;
+                }
                 let manifest = artifact_manifest(&path);
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
@@ -636,6 +666,25 @@ mod tests {
     }
 
     #[test]
+    fn finds_only_explicit_javascript_build_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".next", "dist-electron"] {
+            project(tmp.path(), name, "package.json", name);
+        }
+        let generic_project = tmp.path().join("generic");
+        fs::create_dir_all(generic_project.join(".build")).unwrap();
+        fs::write(generic_project.join("package.json"), b"{}").unwrap();
+        fs::write(generic_project.join(".build/customer-data.bin"), b"owned").unwrap();
+        fs::create_dir_all(tmp.path().join("unowned/.next")).unwrap();
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        for name in [".next", "dist-electron"] {
+            assert!(found.iter().any(|artifact| artifact.kind == name));
+        }
+        assert!(!found.iter().any(|artifact| artifact.kind == ".build"));
+        assert!(!found.iter().any(|artifact| artifact.path.contains("unowned")));
+    }
+
+    #[test]
     fn finds_regenerable_codegraph_indexes() {
         let tmp = tempfile::tempdir().unwrap();
         let index = tmp.path().join("repo/.codegraph");
@@ -678,7 +727,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = find_artifacts(tmp.path(), 3_650, 1);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
 
         assert_eq!(found.len(), 2);
         assert!(found
@@ -813,6 +862,67 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, ".venv314");
+    }
+
+    #[test]
+    fn discovers_standalone_cargo_target_cache_by_native_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("wardnet-pr95-target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn discovers_named_target_cache_without_project_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn ignores_named_target_layout_without_cargo_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        for child in ["deps", "build", "incremental"] {
+            fs::create_dir_all(target.join("debug").join(child)).unwrap();
+        }
+        fs::write(target.join("customer-owned.sqlite"), b"business data").unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn ignores_oversized_standalone_cargo_cache_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("standalone-cache");
+        fs::create_dir_all(cache.join("debug")).unwrap();
+        fs::write(cache.join(".rustc_info.json"), "{}").unwrap();
+        let mut tag = "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n".to_owned();
+        tag.push_str(&"x".repeat(65_536));
+        fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]

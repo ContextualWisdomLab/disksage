@@ -52,6 +52,8 @@ case "${{1:-}}" in
     fi
     if [ "${{2:-}}" = "inspect" ]; then
       # Podman network inspect may omit `Containers`; membership is verified via `container ps --all`.
+      # Current Podman documentation shows valid inspect JSON that can omit Containers
+      # when no running containers are present. Implementation accepts both `Labels` and `labels`.
       printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true,"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]'
       exit 0
     fi

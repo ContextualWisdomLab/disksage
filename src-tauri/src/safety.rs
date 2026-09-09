@@ -1,6 +1,92 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// An explicit manual keep boundary inherited by every descendant.
+pub const PROTECTED_PATH_MARKER: &str = ".disksage-protected";
+/// Binds a tree to a class IRI in the bundled safety ontology; retained classes veto cleanup.
+pub const ONTOLOGY_CLASS_MARKER: &str = ".disksage-ontology-class";
+
+fn sidecar(path: &Path, suffix: &str) -> Option<PathBuf> {
+    let mut name = path.file_name()?.to_os_string();
+    name.push(suffix);
+    Some(path.with_file_name(name))
+}
+
+/// Adds an ontology-backed deletion veto to one existing file or directory.
+pub fn bind_retained_ontology_class(path: &Path, class_id: &str) -> Result<PathBuf, String> {
+    if !path.is_absolute() || class_id.is_empty() || class_id.len() > 2_048 {
+        return Err("ontology-protection-binding-invalid".into());
+    }
+    if !crate::ontology::bundled_class_requires_retention(class_id)
+        .map_err(|_| "ontology-protection-class-unknown".to_string())?
+    {
+        return Err("ontology-protection-class-not-retained".into());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+        return Err("ontology-protection-target-unsafe".into());
+    }
+    let marker = if metadata.is_dir() {
+        path.join(ONTOLOGY_CLASS_MARKER)
+    } else {
+        sidecar(path, ONTOLOGY_CLASS_MARKER)
+            .ok_or_else(|| "ontology-protection-target-unsafe".to_string())?
+    };
+    if marker.exists() {
+        let existing = std::fs::read_to_string(&marker)
+            .map_err(|_| "ontology-protection-binding-unreadable".to_string())?;
+        return (existing.trim() == class_id)
+            .then_some(marker)
+            .ok_or_else(|| "ontology-protection-binding-conflict".to_string());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    use std::io::Write as _;
+    let mut file = options
+        .open(&marker)
+        .map_err(|_| "ontology-protection-binding-create-failed".to_string())?;
+    file.write_all(class_id.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "ontology-protection-binding-write-failed".to_string())?;
+    Ok(marker)
+}
+
+pub fn is_explicitly_protected(path: &Path) -> bool {
+    if sidecar(path, PROTECTED_PATH_MARKER).is_some_and(|marker| marker.is_file()) {
+        return true;
+    }
+    if let Some(binding) = sidecar(path, ONTOLOGY_CLASS_MARKER).filter(|marker| marker.exists()) {
+        return std::fs::read_to_string(binding)
+            .map_err(|_| ())
+            .and_then(|class_id| {
+                crate::ontology::bundled_class_requires_retention(class_id.trim()).map_err(|_| ())
+            })
+            .unwrap_or(true);
+    }
+    path.ancestors().any(|ancestor| {
+        if ancestor.join(PROTECTED_PATH_MARKER).is_file() {
+            return true;
+        }
+        let binding = ancestor.join(ONTOLOGY_CLASS_MARKER);
+        if !binding.exists() {
+            return false;
+        }
+        std::fs::read_to_string(binding)
+            .map_err(|_| ())
+            .and_then(|class_id| {
+                crate::ontology::bundled_class_requires_retention(class_id.trim()).map_err(|_| ())
+            })
+            .unwrap_or(true)
+    })
+}
+
 #[derive(Debug)]
 pub enum SafetyError {
     Protected(PathBuf),
@@ -129,6 +215,9 @@ pub fn is_protected(path: &Path) -> bool {
     // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
     if is_home_root(path, home.as_deref()) {
+        return true;
+    }
+    if is_explicitly_protected(path) {
         return true;
     }
     #[cfg(windows)]
@@ -545,6 +634,79 @@ pub fn trash_delete_if_identity_with_outcome(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_catalog_root_outcome(
+        path,
+        None,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )
+}
+
+pub fn trash_delete_if_identity_with_outcome_in_catalog_root(
+    path: &Path,
+    catalog_root: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<TrashDeleteOutcome, SafetyError> {
+    trash_delete_if_identity_with_catalog_root_outcome(
+        path,
+        Some(catalog_root),
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )
+}
+
+pub(crate) fn trash_delete_if_identity_in_catalog_root(
+    path: &Path,
+    catalog_root: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    trash_delete_if_identity_with_catalog_root(
+        path,
+        Some(catalog_root),
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )
+}
+
+fn trash_delete_if_identity_with_catalog_root(
+    path: &Path,
+    catalog_root: Option<&Path>,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    let outcome = trash_delete_if_identity_with_catalog_root_outcome(
+        path,
+        catalog_root,
+        expected_object_id,
+        bytes,
+        journal_path,
+        now_ms,
+    )?;
+    completed_trash_move(outcome)
+}
+
+fn trash_delete_if_identity_with_catalog_root_outcome(
+    path: &Path,
+    catalog_root: Option<&Path>,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<TrashDeleteOutcome, SafetyError> {
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -553,12 +715,19 @@ pub fn trash_delete_if_identity_with_outcome(
     }
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let catalog_authorized = catalog_root.is_some_and(|root| {
+        std::fs::symlink_metadata(root).is_ok_and(|metadata| {
+            metadata.is_dir() && !metadata.file_type().is_symlink()
+        }) && std::fs::canonicalize(root)
+            .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
+            && !is_explicitly_protected(&guard_path)
+    });
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    if !shared_temp_authorized && is_protected(&guard_path) {
+    if !shared_temp_authorized && !catalog_authorized && is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -1056,6 +1225,52 @@ mod tests {
         assert!(!is_protected(&tmp.path().join("node_modules")));
     }
 
+    #[test]
+    fn explicit_marker_protects_its_directory_and_descendants_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let protected = tmp.path().join("crm");
+        let sibling = tmp.path().join("cache");
+        std::fs::create_dir_all(protected.join("exports")).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(protected.join(PROTECTED_PATH_MARKER), []).unwrap();
+
+        assert!(is_protected(&protected));
+        assert!(is_protected(&protected.join("exports/customer.db")));
+        assert!(!is_protected(&sibling));
+    }
+
+    #[test]
+    fn ontology_retention_binding_is_an_inherited_delete_veto() {
+        let tmp = tempfile::tempdir().unwrap();
+        let business = tmp.path().join("business-data");
+        std::fs::create_dir_all(&business).unwrap();
+        std::fs::write(
+            business.join(ONTOLOGY_CLASS_MARKER),
+            "https://disksage.app/ontology#CustomerRelationshipManagementData\n",
+        )
+        .unwrap();
+
+        assert!(is_explicitly_protected(&business.join("customer.db")));
+        assert!(is_protected(&business.join("customer.db")));
+    }
+
+    #[test]
+    fn ontology_sidecar_protects_only_its_bound_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let export = tmp.path().join("crm-export.sql");
+        let unrelated = tmp.path().join("cache.bin");
+        std::fs::write(&export, b"crm").unwrap();
+        std::fs::write(&unrelated, b"cache").unwrap();
+        std::fs::write(
+            sidecar(&export, ONTOLOGY_CLASS_MARKER).unwrap(),
+            "https://disksage.app/ontology#CustomerRelationshipManagementData\n",
+        )
+        .unwrap();
+
+        assert!(is_protected(&export));
+        assert!(!is_protected(&unrelated));
+    }
+
     #[cfg(unix)]
     #[test]
     fn current_user_owned_shared_temp_child_stays_globally_protected() {
@@ -1201,6 +1416,25 @@ mod tests {
         assert!(victim.exists());
         assert!(original.exists());
         assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[test]
+    fn catalog_root_authority_never_overrides_an_explicit_protection_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("catalog");
+        let victim = root.join("regenerable-cache");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(root.join(PROTECTED_PATH_MARKER), []).unwrap();
+        let expected = filesystem_object_id(&victim).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = trash_delete_if_identity_in_catalog_root(
+            &victim, &root, &expected, 0, &journal, 1,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert!(victim.exists());
+        assert!(journal_recent(&journal, 10).is_empty());
     }
 
     #[test]
@@ -1365,7 +1599,7 @@ mod tests {
     #[test]
     fn journal_append_heals_torn_tail() {
         let tmp = tempfile::tempdir().unwrap();
-        let jp = tmp.path().join("j.jsonl");
+        let jp = tmp.path().join("journal.jsonl");
         std::fs::write(&jp, "{\"torn\":").unwrap();
         journal_append(
             &jp,

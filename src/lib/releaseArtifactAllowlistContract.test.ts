@@ -15,6 +15,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const runAttempt = '1';
+const platformDirectories = {
+  linux: `release-disksage-ubuntu-22.04-${runAttempt}`,
+  windows: `release-disksage-windows-2022-${runAttempt}`,
+  macos: `release-disksage-macos-latest-${runAttempt}`,
+} as const;
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
@@ -36,12 +42,6 @@ const operationalAssetNames = [
   'disksage-photo-similarity-audit-macos-arm64',
   'disksage-shared-temp-reclaim-plan-macos-arm64',
 ] as const;
-
-const platformDirectories = {
-  linux: 'release-disksage-ubuntu-22.04-1',
-  windows: 'release-disksage-windows-2022-1',
-  macos: 'release-disksage-macos-latest-1',
-} as const;
 
 /** Read one UTF-8 file from the source-controlled repository root. */
 function readRepositoryFile(relativePath: string): string {
@@ -118,23 +118,17 @@ function createCompleteReleaseFixture(): string {
   return fixtureRoot;
 }
 
-/** Execute the source-controlled pre-SBOM release admission step against one fixture. */
+/** Execute the one source-controlled release admission boundary against one fixture. */
 function runReleaseArtifactVerifier(fixtureRoot: string) {
-  const workflow = readRepositoryFile('.github/workflows/release.yml');
-  const attestJob = extractWorkflowJob(workflow, 'attest-release');
-  const verifier = extractWorkflowRunScript(
-    attestJob,
-    'Verify release artifact checksums',
+  return spawnSync(
+    'bash',
+    [
+      resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+      join(fixtureRoot, 'release-artifacts'),
+      runAttempt,
+    ],
+    { cwd: repositoryRoot, encoding: 'utf8' },
   );
-  return spawnSync('bash', ['-c', verifier], {
-    cwd: fixtureRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GITHUB_WORKSPACE: repositoryRoot,
-      GITHUB_RUN_ATTEMPT: '1',
-    },
-  });
 }
 
 describe('release artifact exact-set admission', () => {
