@@ -122,6 +122,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & .\target\agent-state-guard.exe --nocapture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP agent_state_guard: owner source absent; no runtime regression executed'
           }
       - name: Windows provider OAuth process contract when owner source is present
         shell: pwsh
@@ -130,7 +132,7 @@ jobs:
             cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
-            Write-Output 'SKIP provider_oauth_cli_process: owner test source absent; no runtime regression executed'
+            Write-Output 'SKIP provider_oauth_cli_process: owner source absent; no runtime regression executed'
           }
 
   llm-engine-build:
