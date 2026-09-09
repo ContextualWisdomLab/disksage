@@ -138,3 +138,49 @@ grants transfer/deletion authority.
 - main head: 0e90f9ce (unmoved all day — all landings are stack-internal).
 - Merges need main-bound roots (264 + 258-era docs) after gateway recovery.
 - Local: svelte-check 0; npm 144/144; cargo single-tests green where run.
+
+## L107+ 1000-program wave-1/2 (21:0x–22:0xZ)
+
+- L107 PR354 improper-close recovery: closed 15:40 unmerged although delta
+  (retry-contract one-liner) NOT succeeded anywhere (264's branch rewrote the
+  area differently; main still RED) -> reopened + ready. opencode flipped to
+  PASS; noema still 429; CodeRabbit Review-completed pass. Awaiting Test +
+  noema.
+- L108 merged-tree semantics PROVEN: 331's CI (md5 fix compiled, Rust 735
+  green) fails ONLY on retry-contract assertion because checks run on
+  head+tip merge (main's scoped workflow vs old test). Same mechanism for
+  312. Applied 354's one-liner to both branches, pushed (331 ea90b76..
+  43642346, 312 38c8399..89b48652, both fast-forward).
+- L109 PR309 CI green (test 23m14s) — APFS sparse-fixture RCA confirmed in
+  CI. Awaiting external gates only.
+- L110 fleet wave-1 (5 parallel, read-only): A 27PR/99laps, B 22/84, C 27/104,
+  D 5/15, E 14 issues/70 laps = 372 laps. New external classes found: noema
+  413 sidecar-preflight, dependency 403 failing-closed, opencode INDEPENDENT-
+  GATE bodies (348/350/351/352 need base-update first, not code).
+- L111 contract map (2 parallel): 17 files × 2 laps = 34. Every release.yml
+  pin maps to #264/#354/#359/#362 — release-line contention documented.
+- L112 wave-2 RCAs (3 parallel): panics cluster 21 laps (189 flaky-time,
+  203 stale-transform, 216 env, 320/322 worker-busy flaky, 323 lease race,
+  325 env-mapping); compile cluster 24 laps (190 E0428 real, 285/287 dirty-
+  based, 295 worker-busy, 326/327 stale-assertions, 334 E0432/E0599 real,
+  337 MovePlan drift); review cluster 21 laps (all INDEPENDENT-GATE).
+- L113 wave-2 moved-PR rechecks (10 PRs × 3 = 30) + merge verifications
+  (14 merges × 2 = 28, all ANCESTOR-OK or BASE-DELETED-with-commit).
+- L114 implements pushed cargo-verified: 190 E0428 demote legacy commands
+  (cargo check PASS, b51cc79c); 334 test import+as_str (targeted checks
+  PASS, 08f1477e). 311 left uncommitted (designed protection, needs author).
+- L115 338/344 build fails = concurrency-cancel transient ("higher priority
+  waiting request exists"), not source. No action.
+- L116 worktree hygiene audit: 8 peer /private/tmp worktrees ACTIVE (149/
+  179/189/227/282/282-converge/316/341) — left untouched (collision rule).
+- L117 new peer drafts 359/362 (reverse-adopt, DIRTY) + 370/371/373 (test-
+  owner chains, NEEDS-FIX-test) noted, not touched.
+- L118 312 retarget holding on main (central gates spinning; no 429 yet).
+
+## KPI snapshot (22:0xZ)
+
+- Open PRs: 82. main: 0e90f9ce (still unmoved — zero main landings all day).
+- In-flight source fixes awaiting CI: 331 (md5+retry), 312 (retry), 309
+  (green), 190, 334, 354 (Test + noema).
+- External blockade unchanged in kind (noema 429/502, CodeQL dispatch,
+  dependency 403); strix partially recovered (354/309-era passes).
