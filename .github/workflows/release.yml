@@ -4,6 +4,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     paths:
       - ".github/workflows/release.yml"
       - ".github/scripts/verify-release-artifacts.sh"
@@ -14,16 +15,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   # A fresh first attempt supersedes stale work, while GitHub's explicit
   # rerun attempt must not cancel itself inside the same concurrency group.
-  cancel-in-progress: ${{ github.run_attempt == 1 }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed') }}
     permissions:
       contents: read
     env:
@@ -209,9 +211,10 @@ jobs:
       - name: Upload release artifact set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}
+          name: release-disksage-${{ matrix.os }}-${{ github.run_id }}
           path: ${{ matrix.bundles }}
           if-no-files-found: error
+          overwrite: true
 
   download-artifact-pr-compat:
     if: github.event_name == 'pull_request'
@@ -227,12 +230,12 @@ jobs:
       - name: Download exact release artifact set with v8
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
       - name: Verify downloaded release artifact contract
         shell: bash
-        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"
 
   attest-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -255,13 +258,13 @@ jobs:
       - name: Download exact release artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
 
       - name: Verify downloaded release artifact contract
         shell: bash
-        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"
 
       - name: Generate and validate source-bound SBOM
         shell: bash
@@ -287,10 +290,11 @@ jobs:
       - name: Upload attested release SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-sbom-${{ github.run_attempt }}
+          name: release-sbom-${{ github.run_id }}
           path: release-artifacts/sbom/disksage.spdx.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -302,14 +306,14 @@ jobs:
       - name: Download attested release artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
+          pattern: release-disksage-*-${{ github.run_id }}
           path: release-artifacts
           merge-multiple: false
 
       - name: Download attested release SBOM
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-sbom-${{ github.run_attempt }}
+          name: release-sbom-${{ github.run_id }}
           path: release-artifacts/sbom
       - name: Publish attested artifacts to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2

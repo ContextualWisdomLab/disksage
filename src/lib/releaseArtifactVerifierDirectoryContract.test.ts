@@ -61,6 +61,29 @@ function verify(artifactRoot: string) {
 }
 
 describe('release artifact verifier directory contract', () => {
+  for (const emptyPayload of ['bundle', 'cli'] as const) {
+    it.runIf(process.platform !== 'win32')(`rejects an empty ${emptyPayload} even with a matching checksum`, () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-empty-release-'));
+      const artifactRoot = join(fixtureRoot, 'release-artifacts');
+      try {
+        materializeExactArtifactSet(artifactRoot);
+        const name = 'disksage-cloud-plan-linux-x86_64';
+        const payload = emptyPayload === 'bundle'
+          ? join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb')
+          : join(artifactRoot, platformDirectories.linux, name);
+        write(payload, '');
+        if (emptyPayload === 'cli') {
+          write(`${payload}.sha256`, `${createHash('sha256').update('').digest('hex')}  ${name}\n`);
+        }
+        const result = verify(artifactRoot);
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toContain('Empty release artifact');
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
   it.runIf(process.platform !== 'win32')(
     'accepts the exact platform namespaces uploaded by the release matrix',
     () => {
@@ -166,7 +189,7 @@ describe('release artifact verifier directory contract', () => {
     const attestJob = workflow.slice(attestStart, publishStart);
     const downloadOffset = attestJob.indexOf('- name: Download exact release artifact set');
     const verifierOffset = attestJob.indexOf(
-      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
     );
     const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
 

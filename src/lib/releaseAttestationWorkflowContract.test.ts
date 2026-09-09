@@ -16,8 +16,12 @@ describe("release attestation workflow contract", () => {
     const attestJob = workflow.slice(attestStart, publishStart);
     const checkoutIndex = attestJob.indexOf("actions/checkout@");
     const downloadIndex = attestJob.indexOf("name: Download exact release artifact set");
+    const verifierIndex = attestJob.indexOf(
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
+    );
     expect(checkoutIndex).toBeGreaterThanOrEqual(0);
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
+    expect(verifierIndex).toBeGreaterThan(downloadIndex);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
     const verifier = readFileSync(resolve(repositoryRoot, ".github/scripts/verify-release-artifacts.sh"), "utf8");
     expect(verifier).toContain("expected exactly 17 regular files");

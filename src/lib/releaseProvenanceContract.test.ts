@@ -114,7 +114,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain('merge-multiple: false');
     expect(attestJob).toContain(
-      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
     );
     expect(attestJob).toContain(
       'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6',
