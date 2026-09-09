@@ -1,11 +1,11 @@
-use disksage_lib::stale_git_clone_commands::remove_stale_git_clone;
+use disksage_lib::stale_git_clone_commands::remove_stale_git_clone_fail_closed;
 
 const REMOVAL_UNAVAILABLE: &str =
     "stale-git-clone-removal-identity-bound-trash-unavailable";
 
 #[test]
 fn disabled_ipc_fails_before_payload_validation() {
-    let error = remove_stale_git_clone(
+    let error = remove_stale_git_clone_fail_closed(
         "relative-path".into(),
         0,
         String::new(),

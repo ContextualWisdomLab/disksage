@@ -108,7 +108,7 @@ fn macos_cleanup_moves_reviewed_external_volume_artifact_to_that_volumes_trash()
     assert!(
         results[0].ok,
         "a reviewed artifact on another mounted volume must use that volume's native Trash independently of HOME/.Trash: {}",
-        results[0].error.as_deref().unwrap_or("unknown cleanup failure")
+        if results[0].error.is_empty() { "unknown cleanup failure" } else { results[0].error.as_str() }
     );
     assert!(
         !artifact.exists(),
