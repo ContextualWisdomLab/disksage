@@ -54,6 +54,10 @@ fn next_path(args: &mut impl Iterator<Item = OsString>, option: &str) -> Result<
 }
 
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
+    let raw_args: Vec<OsString> = raw_args.into_iter().collect();
+    if raw_args.len() == 1 && matches!(raw_args[0].to_str(), Some("-h" | "--help")) {
+        return Ok(ParseResult::Help);
+    }
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut plan_fingerprint = None;
@@ -69,7 +73,6 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut rationale = None;
     let mut record_root = None;
     let mut args = raw_args.into_iter();
-
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--repository-root") => {
@@ -145,7 +148,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
             Some("--reviewed-by") => reviewed_by = Some(next_utf8(&mut args, "--reviewed-by")?),
             Some("--rationale") => rationale = Some(next_utf8(&mut args, "--rationale")?),
             Some("--record-root") => record_root = Some(next_path(&mut args, "--record-root")?),
-            Some("-h" | "--help") => return Ok(ParseResult::Help),
+            Some("-h" | "--help") => return Err(format!("help must be used alone\n{USAGE}")),
             Some(option) => return Err(format!("unknown option: {option}\n{USAGE}")),
             None => return Err("option must be valid UTF-8".into()),
         }
@@ -341,6 +344,16 @@ mod tests {
             parse_args([OsString::from("--help")]).unwrap(),
             ParseResult::Help
         );
+        assert_eq!(
+            parse_args([OsString::from("-h")]).unwrap(),
+            ParseResult::Help
+        );
+        let error = parse_args([
+            OsString::from("--help"),
+            OsString::from("--include-closed-pull-requests"),
+        ])
+        .unwrap_err();
+        assert!(error.contains("help must be used alone"));
     }
 
     #[test]

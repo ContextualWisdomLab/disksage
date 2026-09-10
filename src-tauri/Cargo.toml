@@ -164,6 +164,61 @@ name = "archive_tree_help_exit"
 path = "tests/archive_tree_help_exit.rs"
 required-features = ["archive-cli"]
 
+[[test]]
+name = "volume_snapshot_help_exit"
+path = "tests/volume_snapshot_help_exit.rs"
+required-features = ["volume-cli"]
+
+[[test]]
+name = "zotero_local_help_exit"
+path = "tests/zotero_local_help_exit.rs"
+
+[[test]]
+name = "maven_cache_audit_help_exit"
+path = "tests/maven_cache_audit_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "protect_path_help_exit"
+path = "tests/protect_path_help_exit.rs"
+
+[[test]]
+name = "runtime_storage_help_exit"
+path = "tests/runtime_storage_help_exit.rs"
+
+[[test]]
+name = "git_worktree_metadata_prune_help_exit"
+path = "tests/git_worktree_metadata_prune_help_exit.rs"
+
+[[test]]
+name = "icloud_sync_health_help_exit"
+path = "tests/icloud_sync_health_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "provider_recovery_help_exit"
+path = "tests/provider_recovery_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "icloud_provider_recovery_help_exit"
+path = "tests/icloud_provider_recovery_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "naruon_copy_readiness_process_help"
+path = "tests/naruon_copy_readiness_process_help.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "dev_artifacts_help_exit"
+path = "tests/dev_artifacts_help_exit.rs"
+
+[[test]]
+name = "git_worktree_remove_help_exit"
+path = "tests/git_worktree_remove_help_exit.rs"
+required-features = ["cloud-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -152,8 +152,14 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if permanent && (confirm.is_none() || rationale.is_none()) {
         return Err("--permanent requires --confirm and --rationale".into());
     }
-    if rationale.as_deref().is_some_and(|value| !rationale_valid(value)) {
-        return Err("--rationale must be 1..1000 visible characters without leading/trailing whitespace".into());
+    if rationale
+        .as_deref()
+        .is_some_and(|value| !rationale_valid(value))
+    {
+        return Err(
+            "--rationale must be 1..1000 visible characters without leading/trailing whitespace"
+                .into(),
+        );
     }
     Ok(Args {
         root,
@@ -307,12 +313,27 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
 }
 
 fn main() {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
         println!("{USAGE}");
         return;
     }
-    match parse_args(&raw).and_then(run) {
+    let strings = raw
+        .into_iter()
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "인자를 UTF-8로 해석할 수 없음".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let strings = match strings {
+        Ok(strings) => strings,
+        Err(error) => {
+            eprintln!("disksage-dev-artifacts: {error}");
+            std::process::exit(2);
+        }
+    };
+    match parse_args(&strings).and_then(run) {
         Ok(report) => println!(
             "{}",
             serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
@@ -457,8 +478,8 @@ mod tests {
             object_id: "object-a".into(),
             age_days: 30,
         };
-        let first = permanent_approval_phrase(&root, Some("target"), 30, &[candidate.clone()])
-            .unwrap();
+        let first =
+            permanent_approval_phrase(&root, Some("target"), 30, &[candidate.clone()]).unwrap();
         let mut changed = candidate;
         changed.object_id = "object-b".into();
         let second = permanent_approval_phrase(&root, Some("target"), 30, &[changed]).unwrap();
