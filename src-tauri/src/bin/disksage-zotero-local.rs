@@ -22,9 +22,21 @@ fn read_input(path: &PathBuf) -> Result<Vec<u8>, String> {
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Option<(PathBuf, bool)>, String> {
+    let raw_args: Vec<OsString> = args.into_iter().collect();
+    let help_count = raw_args
+        .iter()
+        .filter(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
+        .count();
+    if help_count > 0 {
+        if raw_args.len() == 1 && help_count == 1 {
+            return Ok(None);
+        }
+        return Err("help must be used alone".into());
+    }
+
     let mut input = None;
     let mut execute = false;
-    let mut args = args.into_iter();
+    let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--input") => {
@@ -40,7 +52,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Option<(PathBu
                 }
             }
             Some("--execute") => execute = true,
-            Some("--help" | "-h") => return Ok(None),
+            Some("--help" | "-h") => return Err("help must be used alone".into()),
             Some(value) => return Err(format!("unknown option: {value}")),
             None => return Err("invalid UTF-8 option".into()),
         }

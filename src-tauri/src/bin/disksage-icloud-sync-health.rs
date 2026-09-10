@@ -1,6 +1,7 @@
 //! Headless, path-free report for the local macOS CloudDocs sync queue.
 
 use disksage_lib::icloud_sync_health::{default_cloud_docs_db_dir, probe_icloud_sync_health};
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -84,11 +85,19 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
         .map_err(|_| "icloud-sync-health-output-write-failed".to_string())
 }
 
-fn run() -> Result<(), String> {
+fn run(raw: Vec<OsString>) -> Result<(), String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is unavailable".to_string())?;
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>(), &home)?;
+    let args = raw
+        .into_iter()
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "invalid argument encoding".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let args = parse_args(&args, &home)?;
     let report = probe_icloud_sync_health(&args.db_dir, now_ms()?)?;
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|_| "icloud-sync-health-json-invalid".to_string())?;
@@ -103,7 +112,14 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = run() {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!(
+            "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]"
+        );
+        return;
+    }
+    if let Err(error) = run(raw) {
         eprintln!("DiskSage iCloud sync health: {error}");
         std::process::exit(1);
     }

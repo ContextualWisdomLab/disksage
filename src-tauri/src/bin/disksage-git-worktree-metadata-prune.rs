@@ -86,7 +86,7 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
             Some("--record-path") if record_path.is_none() => {
                 record_path = Some(PathBuf::from(value(args, &mut index, "--record-path")?));
             }
-            Some("--help" | "-h") => return Err(USAGE.into()),
+            Some("--help" | "-h") => return Err(format!("help must be used alone\n{USAGE}")),
             Some(_) => return Err(format!("invalid or duplicate option\n{USAGE}")),
             None => return Err("option must be valid UTF-8".into()),
         }
@@ -263,7 +263,12 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
 }
 
 fn main() {
-    let result = parse_args(&std::env::args_os().skip(1).collect::<Vec<_>>()).and_then(run);
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!("{USAGE}");
+        return;
+    }
+    let result = parse_args(&raw).and_then(run);
     match result {
         Ok(value) => println!("{}", serde_json::to_string_pretty(&value).unwrap()),
         Err(error) if error == USAGE => println!("{USAGE}"),

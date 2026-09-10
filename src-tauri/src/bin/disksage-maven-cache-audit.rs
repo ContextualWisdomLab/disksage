@@ -1,5 +1,6 @@
 //! Read-only Maven local-repository provenance audit. This command never removes artifacts.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs::OpenOptions, io::Write};
@@ -21,7 +22,7 @@ fn usage() -> &'static str {
     "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]"
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
@@ -29,16 +30,18 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
 }
 
 fn number<T: std::str::FromStr>(
-    args: &[String],
+    args: &[OsString],
     index: &mut usize,
     flag: &str,
 ) -> Result<T, String> {
     value(args, index, flag)?
+        .into_string()
+        .map_err(|_| format!("{flag}는 UTF-8 정수여야 함"))?
         .parse()
         .map_err(|_| format!("{flag}는 정수여야 함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn parse_args(args: &[OsString]) -> Result<Args, String> {
     let defaults = MavenCacheAuditOptions::default();
     let mut repository_root = None;
     let mut output = None;
@@ -47,16 +50,19 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_issues = defaults.max_issues;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--repository-root" => {
+        match args[index].to_str() {
+            Some("--repository-root") => {
                 repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?))
             }
-            "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
-            "--max-entries" => max_entries = number(args, &mut index, "--max-entries")?,
-            "--max-candidates" => max_candidates = number(args, &mut index, "--max-candidates")?,
-            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            Some("--output") => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
+            Some("--max-entries") => max_entries = number(args, &mut index, "--max-entries")?,
+            Some("--max-candidates") => {
+                max_candidates = number(args, &mut index, "--max-candidates")?
+            }
+            Some("--max-issues") => max_issues = number(args, &mut index, "--max-issues")?,
+            Some("--help") | Some("-h") => return Err("help".into()),
+            Some(_) => return Err("알 수 없는 인자".into()),
+            None => return Err("인자를 UTF-8로 해석할 수 없음".into()),
         }
         index += 1;
     }
@@ -134,7 +140,18 @@ fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<Stri
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let help_count = raw
+        .iter()
+        .filter(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
+        .count();
+    if help_count > 0 {
+        if raw.len() == 1 && help_count == 1 {
+            println!("{}", usage());
+            return Ok(());
+        }
+        return Err("help must be used alone".into());
+    }
     let args = parse_args(&raw)?;
     let report = report(&args)?;
     let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
@@ -162,14 +179,14 @@ mod tests {
     fn parser_requires_absolute_root_and_accepts_bounds() {
         assert_eq!(
             parse_args(&[
-                "--repository-root".into(),
-                "/Users/example/.m2/repository".into(),
-                "--max-entries".into(),
-                "1000".into(),
-                "--max-candidates".into(),
-                "20".into(),
-                "--max-issues".into(),
-                "10".into(),
+                OsString::from("--repository-root"),
+                OsString::from("/Users/example/.m2/repository"),
+                OsString::from("--max-entries"),
+                OsString::from("1000"),
+                OsString::from("--max-candidates"),
+                OsString::from("20"),
+                OsString::from("--max-issues"),
+                OsString::from("10"),
             ])
             .unwrap(),
             Args {
@@ -181,7 +198,11 @@ mod tests {
             }
         );
         assert!(parse_args(&[]).is_err());
-        assert!(parse_args(&["--repository-root".into(), "relative".into()]).is_err());
+        assert!(parse_args(&[
+            OsString::from("--repository-root"),
+            OsString::from("relative")
+        ])
+        .is_err());
         assert!(parse_args(&[
             "--repository-root".into(),
             "/tmp/repository".into(),
