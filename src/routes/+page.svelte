@@ -118,7 +118,7 @@
     {#if scanning}
       <button onclick={() => api.cancelScan()}>취소</button>
     {:else}
-      <button onclick={scan}>스캔</button>
+      <button onclick={scan} disabled={scanning || !selectedRoot}>스캔</button>
     {/if}
     {#if stats}
       <span class="stats">

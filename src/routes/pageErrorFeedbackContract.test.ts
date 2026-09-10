@@ -68,4 +68,11 @@ describe("main scan and navigation failure feedback", () => {
     expect(source).toContain("api.getNode(");
     expect(source).toContain("api.topFiles(200)");
   });
+
+  it("does not leave the scan action enabled when no root is available", () => {
+    const source = readSource("src/routes/+page.svelte");
+    const controls = between(source, '<div class="controls">', "{#if stats}");
+
+    expect(controls).toContain("disabled={scanning || !selectedRoot}");
+  });
 });
