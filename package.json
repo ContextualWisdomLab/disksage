@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "test": "svelte-kit sync && vitest run && node --test scripts/ci/workflow-concurrency-contract.test.mjs",
+    "test": "svelte-kit sync && vitest run && node --test scripts/ci/workflow-concurrency-contract.test.mjs && npm run test:browser",
+    "test:browser": "node scripts/ci/top-files-browser-e2e.mjs",
     "coverage": "svelte-kit sync && vitest run --coverage",
     "prepare": "svelte-kit sync || echo ''",
     "tauri": "tauri"

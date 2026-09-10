@@ -84,7 +84,38 @@ jobs:
         with:
           node-version: 22.12.0
       - run: npm ci
-      - run: npm test
+      - name: Run npm test
+        id: npm_test
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/disksage-npm-test.log"
+      - name: Upload authoritative npm test failure transcript
+        if: steps.npm_test.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-test-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/disksage-npm-test.log
+          if-no-files-found: error
+      - name: Diagnose SvelteKit sync after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm exec -- svelte-kit sync
+      - name: Diagnose Vitest after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm exec -- vitest run
+      - name: Diagnose workflow contract after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: node --test scripts/ci/workflow-concurrency-contract.test.mjs
+      - name: Diagnose browser test after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm run test:browser --if-present
+      - name: Preserve npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        run: exit 1
       - run: npm run build
 
   macos-cache-cleanup:
@@ -108,7 +139,7 @@ jobs:
             if [[ -f "src-tauri/tests/${test_name}.rs" ]]; then
               cargo test --manifest-path src-tauri/Cargo.toml --test "$test_name"
             else
-              printf 'SKIP %s: owner test source absent; no runtime regression executed\n' "$test_name"
+              printf 'SKIP %s: owner source absent; no runtime regression executed\n' "$test_name"
             fi
           done
 
