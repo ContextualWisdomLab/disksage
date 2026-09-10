@@ -12,7 +12,7 @@ const sampleFile: EntryView = {
 
 describe("TopFiles accessible data table", () => {
   it("renders the empty result as an announced next action instead of an empty table", () => {
-    const { body } = render(TopFiles, { props: { files: [] } });
+    const body = render(TopFiles, { props: { files: [] } }).body.replace(/ class="svelte-[^"]+"| svelte-[a-z0-9]+/g, "");
 
     expect(body).toContain('<h2 id="top-files-heading">가장 큰 파일 0개</h2>');
     expect(body).toContain('class="empty" role="status"');
@@ -21,7 +21,7 @@ describe("TopFiles accessible data table", () => {
   });
 
   it("renders a named table with explicit column headers", () => {
-    const { body } = render(TopFiles, { props: { files: [sampleFile] } });
+    const body = render(TopFiles, { props: { files: [sampleFile] } }).body.replace(/ class="svelte-[^"]+"| svelte-[a-z0-9]+/g, "");
 
     expect(body).toContain('<h2 id="top-files-heading">가장 큰 파일 1개</h2>');
     expect(body).toContain('<table aria-labelledby="top-files-heading">');
@@ -31,7 +31,7 @@ describe("TopFiles accessible data table", () => {
   });
 
   it("renders both a fragment shortcut and a sequentially focusable scroll region", () => {
-    const { body } = render(TopFiles, { props: { files: [sampleFile] } });
+    const body = render(TopFiles, { props: { files: [sampleFile] } }).body.replace(/ class="svelte-[^"]+"| svelte-[a-z0-9]+/g, "");
 
     expect(body).toContain('<a class="table-focus" href="#top-files-table">파일 표 탐색 시작</a>');
     expect(body).toContain('id="top-files-table"');
