@@ -219,6 +219,10 @@ name = "git_worktree_remove_help_exit"
 path = "tests/git_worktree_remove_help_exit.rs"
 required-features = ["cloud-cli"]
 
+[[test]]
+name = "cli_help_inventory_contract"
+path = "tests/cli_help_inventory_contract.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
