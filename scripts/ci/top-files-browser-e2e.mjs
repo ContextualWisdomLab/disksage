@@ -340,6 +340,9 @@ async function main() {
     profile = mkdtempSync(join(tmpdir(), "disksage-browser-e2e-"));
     chrome = spawn(chromeBinary, [
       "--headless=new",
+      ...(typeof process.getuid === "function" && process.getuid() === 0
+        ? ["--no-sandbox", "--disable-setuid-sandbox"]
+        : []),
       `--remote-debugging-port=${DEBUG_PORT}`,
       `--user-data-dir=${profile}`,
       "--disable-background-networking",
