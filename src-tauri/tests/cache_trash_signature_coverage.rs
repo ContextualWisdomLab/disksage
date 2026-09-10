@@ -175,6 +175,20 @@ fn ambiguous_cache_lookalikes_and_symlinked_roots_are_fail_closed() {
     }
 }
 
+#[test]
+fn cache_trash_snapshot_rejects_tampered_approval_before_any_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut snapshot = proven_cache_trash_snapshot(temp.path());
+    snapshot.approval_phrase.push('0');
+
+    let journal = temp.path().join("tampered-cache-trash-purge.jsonl");
+    assert_eq!(
+        purge_proven_cache_trash(temp.path(), &journal, 27, &snapshot).unwrap_err(),
+        "cache-trash-confirmation-mismatch"
+    );
+    assert!(!journal.exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_cache_trash_purge_stays_unavailable_without_handle_bound_authority() {
