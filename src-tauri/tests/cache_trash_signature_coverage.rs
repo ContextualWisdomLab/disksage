@@ -200,6 +200,7 @@ fn ambiguous_cache_lookalikes_and_symlinked_roots_are_fail_closed() {
     mkdir(git.join("checkouts"));
 
     let archive = trash.join("archive-v0");
+    mkdir(&archive);
     write(archive.join("A1b2C3d4_E5f6G7h"));
 
     let trivy = trash.join("db");
