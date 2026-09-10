@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use crate::{commands::CleanResult, rules, safety};
 
@@ -11,48 +10,28 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 11] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 6] = [
     "npm-cache",
     "pnpm-cache",
     "adobe-cache",
     "edge-cache",
-    "edge-code-sign-clones",
     "uv-cache",
     "trivy-cache",
-    "appmap-download-cache",
-    "superset-http-cache",
-    "superset-code-cache",
-    "playwright-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 15] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 8] = [
     "_cacache",
     "v11",
-    "Default",
     "simple-v21",
-    "simple-v22",
-    "simple-v24",
     "typequest",
     "wheels-v6",
     "sdists-v9",
     "builds-v0",
-    "git-v0",
-    "archive-v0",
     "db",
-    "com.apple.CloudDocs.iCloudDriveFileProvider",
-    "fileprovider-fpck",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
-// Large package caches need longer than the interactive worktree probe while retaining the same
-// recursive open-handle evidence and fail-closed timeout behavior.
-const CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS: u64 = 30_000;
-
-fn remaining_probe_timeout_ms(elapsed: Duration) -> Option<u64> {
-    Duration::from_millis(CACHE_ACTIVE_USE_PROBE_TIMEOUT_MS)
-        .checked_sub(elapsed)
-        .and_then(|remaining| u64::try_from(remaining.as_millis()).ok())
-        .filter(|remaining| *remaining > 0)
-}
+const PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE: &str =
+    "cache-trash-identity-bound-permanent-delete-unavailable";
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -65,203 +44,15 @@ pub struct CacheTrashCandidate {
     pub signature: String,
 }
 
+/// Candidate list and approval token produced by one Trash scan.
+///
+/// The snapshot is read-only evidence. Permanent deletion remains unavailable until DiskSage can
+/// bind the final irreversible syscall to the exact reviewed filesystem object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CacheTrashPurgeResult {
-    pub name: String,
-    pub path: String,
-    pub bytes: u64,
-    pub signature: String,
-    pub purged: bool,
-    pub error: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UvCachePruneResult {
-    pub cache_path: String,
-    pub bytes_before: u64,
-    pub bytes_after: u64,
-    pub observed_reduction_bytes: u64,
-    pub status_code: i32,
-    pub executed: bool,
-}
-
-#[cfg(target_os = "macos")]
-fn fixed_uv_path() -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    for link in ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"] {
-        let Ok(path) = std::fs::canonicalize(link) else {
-            continue;
-        };
-        let allowed = path.starts_with("/opt/homebrew/Cellar/uv/")
-            || path.starts_with("/usr/local/Cellar/uv/");
-        let metadata = std::fs::symlink_metadata(&path).ok();
-        if allowed
-            && metadata.is_some_and(|metadata| {
-                metadata.is_file()
-                    && !metadata.file_type().is_symlink()
-                    && metadata.permissions().mode() & 0o111 != 0
-            })
-        {
-            return Ok(path);
-        }
-    }
-    Err("uv-cache-prune-executable-unavailable".into())
-}
-
-#[cfg(target_os = "macos")]
-fn private_uv_copy(source_path: &Path) -> Result<tempfile::TempDir, String> {
-    use std::io::{Seek, SeekFrom};
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let mut source = std::fs::File::open(source_path)
-        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
-    let opened = source
-        .metadata()
-        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
-    let current = std::fs::symlink_metadata(source_path)
-        .map_err(|_| "uv-cache-prune-executable-unavailable".to_string())?;
-    if !opened.is_file()
-        || !current.is_file()
-        || current.file_type().is_symlink()
-        || opened.dev() != current.dev()
-        || opened.ino() != current.ino()
-    {
-        return Err("uv-cache-prune-executable-identity-changed".into());
-    }
-    source
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
-    let directory = tempfile::Builder::new()
-        .prefix("disksage-uv-")
-        .tempdir()
-        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
-    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
-        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
-    let destination = directory.path().join("uv");
-    let mut copy = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&destination)
-        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
-    std::io::copy(&mut source, &mut copy)
-        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
-    copy.sync_all()
-        .map_err(|_| "uv-cache-prune-executable-copy-failed".to_string())?;
-    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700))
-        .map_err(|_| "uv-cache-prune-private-copy-unavailable".to_string())?;
-    Ok(directory)
-}
-
-#[cfg(target_os = "macos")]
-fn run_private_uv_prune(executable: &Path, cache: &Path) -> Result<i32, String> {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-    use std::thread;
-
-    let mut command = Command::new(executable);
-    command
-        .args(["cache", "prune", "--cache-dir"])
-        .arg(cache)
-        .args(["--no-config", "--no-progress"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|_| "uv-cache-prune-spawn-failed".to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(300);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status.code().unwrap_or(-1)),
-            Ok(None) if Instant::now() >= deadline => {
-                unsafe {
-                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("uv-cache-prune-timeout".into());
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(_) => {
-                unsafe {
-                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("uv-cache-prune-wait-failed".into());
-            }
-        }
-    }
-}
-
-/// Run uv's native dangling-entry prune without `--force`, from a private copy of the verified
-/// Homebrew executable. uv retains environments that are still in use.
-pub fn prune_uv_cache_headless(
-    journal_path: &Path,
-    now_ms: u64,
-) -> Result<UvCachePruneResult, String> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (journal_path, now_ms);
-        return Err("uv-cache-prune-unsupported-platform".into());
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-        let cache = rules::cache_candidate(&bases, "uv-cache")
-            .filter(|candidate| candidate.exists)
-            .map(|candidate| PathBuf::from(candidate.path))
-            .ok_or("uv-cache-prune-cache-unavailable")?;
-        let mut entries = 0;
-        let bytes_before = bounded_tree_size(&cache, &mut entries, true)?;
-        let source = fixed_uv_path()?;
-        let private = private_uv_copy(&source)?;
-        let mut journal = safety::JournalEntry {
-            ts_ms: now_ms,
-            op: "uv_cache_prune".into(),
-            path: cache.to_string_lossy().into_owned(),
-            bytes: bytes_before,
-            outcome: "pending".into(),
-        };
-        safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
-        let status_code = match run_private_uv_prune(&private.path().join("uv"), &cache) {
-            Ok(status_code) => status_code,
-            Err(error) => {
-                journal.outcome = format!("error:{error}");
-                safety::journal_append(journal_path, &journal)
-                    .map_err(|journal_error| journal_error.to_string())?;
-                return Err(error);
-            }
-        };
-        let mut entries = 0;
-        let bytes_after = bounded_tree_size(&cache, &mut entries, true)?;
-        journal.outcome = if status_code == 0 {
-            "ok"
-        } else {
-            "error:uv-exit-nonzero"
-        }
-        .into();
-        safety::journal_append(journal_path, &journal).map_err(|error| error.to_string())?;
-        Ok(UvCachePruneResult {
-            cache_path: cache.to_string_lossy().into_owned(),
-            bytes_before,
-            bytes_after,
-            observed_reduction_bytes: bytes_before.saturating_sub(bytes_after),
-            status_code,
-            executed: true,
-        })
-    }
+pub struct CacheTrashSnapshot {
+    pub candidates: Vec<CacheTrashCandidate>,
+    pub approval_phrase: String,
 }
 
 fn direct_child_is_dir(path: &Path, name: &str) -> bool {
@@ -276,140 +67,8 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
-fn native_trash_collision_suffix(suffix: &str) -> bool {
-    !suffix.is_empty()
-        && (suffix.bytes().all(|byte| byte.is_ascii_digit())
-            || suffix.split('-').map(str::len).eq([2, 2, 2, 3])
-                && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'-'))
-}
-
-fn proven_cache_base_name(name: &str) -> Option<&str> {
-    PROVEN_CACHE_TRASH_NAMES.iter().copied().find(|base| {
-        name == *base
-            || name
-                .strip_prefix(base)
-                .and_then(|suffix| suffix.strip_prefix(' '))
-                .is_some_and(native_trash_collision_suffix)
-    })
-}
-
-fn edge_code_sign_clone_name(name: &str) -> bool {
-    let (base, collision) = name
-        .split_once(' ')
-        .map_or((name, None), |(base, suffix)| (base, Some(suffix)));
-    let Some(suffix) = base.strip_prefix("code_sign_clone.") else {
-        return false;
-    };
-    suffix.len() == 6
-        && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        && collision.is_none_or(native_trash_collision_suffix)
-}
-
-fn looks_like_uv_archive_cache(path: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    let mut seen = false;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            return false;
-        };
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Ok(metadata) = entry.path().symlink_metadata() else {
-            return false;
-        };
-        if !metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || name.len() != 16
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-        {
-            return false;
-        }
-        seen = true;
-    }
-    seen
-}
-
-fn is_uuid_name(name: &str) -> bool {
-    name.len() == 36
-        && name.bytes().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
-}
-
-fn fileprovider_sqlite_triplet(path: &Path, prefix: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    let mut names = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    names.sort();
-    let Some(database) = names.iter().find(|name| {
-        name.starts_with(prefix) && !name.ends_with("-wal") && !name.ends_with("-shm")
-    }) else {
-        return false;
-    };
-    let suffix = database.strip_prefix(prefix).unwrap_or(database);
-    let valid_name = if prefix.is_empty() {
-        suffix.get(0..36).is_some_and(is_uuid_name) && suffix.as_bytes().get(36) == Some(&b'-')
-    } else {
-        suffix.strip_suffix(".db").is_some_and(|stem| {
-            !stem.is_empty()
-                && stem
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'-')
-        })
-    };
-    valid_name
-        && names.len() == 3
-        && direct_child_is_file(path, database)
-        && direct_child_is_file(path, &format!("{database}-wal"))
-        && direct_child_is_file(path, &format!("{database}-shm"))
-}
-
-fn looks_like_fileprovider_temporary_item(path: &Path, cloud_docs: bool) -> bool {
-    let Ok(mut entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    let Some(Ok(account)) = entries.next() else {
-        return false;
-    };
-    if entries.next().is_some()
-        || !is_uuid_name(&account.file_name().to_string_lossy())
-        || !account
-            .path()
-            .symlink_metadata()
-            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-    {
-        return false;
-    }
-    fileprovider_sqlite_triplet(&account.path(), if cloud_docs { "database-" } else { "" })
-}
-
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
-    if edge_code_sign_clone_name(name) {
-        let bundle = path.join("Microsoft Edge.app.bundle");
-        let contents = bundle.join("Contents");
-        return (direct_child_is_dir(path, "Microsoft Edge.app.bundle")
-            && direct_child_is_dir(&bundle, "Contents")
-            && direct_child_is_dir(&contents, "MacOS")
-            && direct_child_is_dir(&contents, "_CodeSignature")
-            && direct_child_is_file(&contents, "Info.plist"))
-        .then_some("edge-code-sign-clone");
-    }
-    let base_name = proven_cache_base_name(name)?;
-    let signature = match base_name {
+    let signature = match name {
         "_cacache"
             if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
         {
@@ -421,14 +80,7 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         {
             "pnpm-store-v11"
         }
-        "Default"
-            if direct_child_is_dir(path, "Cache") && direct_child_is_dir(path, "Code Cache") =>
-        {
-            "edge-profile-cache"
-        }
-        "simple-v21" | "simple-v22" | "simple-v24" if direct_child_is_dir(path, "pypi") => {
-            "uv-simple-index-cache"
-        }
+        "simple-v21" if direct_child_is_dir(path, "pypi") => "uv-simple-index-cache",
         "typequest" if direct_child_is_dir(path, "common") && direct_child_is_dir(path, ".2") => {
             "uv-typequest-cache"
         }
@@ -452,37 +104,17 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
                 });
             has_build.then_some("uv-build-cache")?
         }
-        "git-v0"
-            if direct_child_is_dir(path, "locks")
-                && direct_child_is_dir(path, "checkouts")
-                && direct_child_is_dir(path, "db") =>
-        {
-            "uv-git-cache"
-        }
-        "archive-v0" if looks_like_uv_archive_cache(path) => "uv-archive-cache",
         "db" if direct_child_is_file(path, "trivy.db")
             && direct_child_is_file(path, "metadata.json") =>
         {
             "trivy-database-cache"
-        }
-        "com.apple.CloudDocs.iCloudDriveFileProvider"
-            if looks_like_fileprovider_temporary_item(path, true) =>
-        {
-            "fileprovider-cloud-docs-temporary-sqlite"
-        }
-        "fileprovider-fpck" if looks_like_fileprovider_temporary_item(path, false) => {
-            "fileprovider-fpck-temporary-sqlite"
         }
         _ => return None,
     };
     Some(signature)
 }
 
-fn bounded_tree_size(
-    path: &Path,
-    entries: &mut usize,
-    allow_unfollowed_symlinks: bool,
-) -> Result<u64, String> {
+fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
     *entries = entries.saturating_add(1);
     if *entries > MAX_CACHE_TRASH_ENTRIES {
         return Err("cache-trash-entry-limit-exceeded".into());
@@ -490,9 +122,7 @@ fn bounded_tree_size(
     let metadata =
         std::fs::symlink_metadata(path).map_err(|_| "cache-trash-stat-failed".to_string())?;
     if metadata.file_type().is_symlink() {
-        return allow_unfollowed_symlinks
-            .then_some(0)
-            .ok_or_else(|| "cache-trash-symlink-rejected".into());
+        return Err("cache-trash-symlink-rejected".into());
     }
     if metadata.is_file() {
         return Ok(metadata.len());
@@ -503,26 +133,63 @@ fn bounded_tree_size(
     let mut total = 0u64;
     for entry in std::fs::read_dir(path).map_err(|_| "cache-trash-read-dir-failed".to_string())? {
         let entry = entry.map_err(|_| "cache-trash-read-entry-failed".to_string())?;
-        total = total.saturating_add(bounded_tree_size(
-            &entry.path(),
-            entries,
-            allow_unfollowed_symlinks,
-        )?);
+        total = total.saturating_add(bounded_tree_size(&entry.path(), entries)?);
     }
     Ok(total)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unix_trash_directory(
+    home: &Path,
+    configured_home: Option<&Path>,
+    xdg_data_home: Option<&Path>,
+) -> PathBuf {
+    xdg_data_home
+        .filter(|path| path.is_absolute())
+        .filter(|_| configured_home == Some(home))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("Trash")
+        .join("files")
+}
+
+pub(crate) fn trash_directory(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return Some(home.join(".Trash"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // XDG_DATA_HOME belongs to the configured user home. Tests and callers that
+        // inspect an alternate home must remain hermetic and use that home's default.
+        let configured_home = std::env::var_os("HOME").map(PathBuf::from);
+        let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+        return Some(unix_trash_directory(
+            home,
+            configured_home.as_deref(),
+            xdg_data_home.as_deref(),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let _ = home;
+        None
+    }
 }
 
 /// Return only direct OS-Trash children whose cache signature is proven by structure and whose
 /// size can be bounded without following symlinks or reading file contents.
 pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
-    let trash = home.join(".Trash");
+    let Some(trash) = trash_directory(home) else {
+        return Vec::new();
+    };
     let Ok(entries) = std::fs::read_dir(&trash) else {
         return Vec::new();
     };
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if proven_cache_base_name(&name).is_none() && !edge_code_sign_clone_name(&name) {
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
             continue;
         }
         let path = entry.path();
@@ -530,11 +197,7 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
             continue;
         };
         let mut count = 0;
-        let Ok(bytes) = bounded_tree_size(
-            &path,
-            &mut count,
-            matches!(signature, "edge-code-sign-clone" | "uv-archive-cache"),
-        ) else {
+        let Ok(bytes) = bounded_tree_size(&path, &mut count) else {
             continue;
         };
         candidates.push(CacheTrashCandidate {
@@ -548,50 +211,58 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     candidates
 }
 
-/// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
-/// approval boundary; each object is rechecked immediately before removal and journaled.
-pub fn purge_proven_cache_trash(
-    home: &Path,
-    journal_path: &Path,
-    now_ms: u64,
-) -> Result<Vec<CacheTrashPurgeResult>, String> {
-    let planned = proven_cache_trash_candidates(home);
-    let mut results = Vec::with_capacity(planned.len());
-    for candidate in planned {
-        let path = PathBuf::from(&candidate.path);
-        let mut entry = crate::safety::JournalEntry {
-            ts_ms: now_ms,
-            op: "permanent_cache_trash_delete".into(),
-            path: candidate.path.clone(),
-            bytes: candidate.bytes,
-            outcome: "pending".into(),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
-        let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
-            .is_some_and(|signature| signature == candidate.signature)
-        {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            }
-        } else {
-            Err("cache-trash-signature-changed".into())
-        };
-        entry.outcome = match &outcome {
-            Ok(()) => "ok".into(),
-            Err(error) => format!("error:{error}"),
-        };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
-        results.push(CacheTrashPurgeResult {
-            name: candidate.name,
-            path: candidate.path,
-            bytes: candidate.bytes,
-            signature: candidate.signature,
-            purged: outcome.is_ok(),
-            error: outcome.err().unwrap_or_default(),
-        });
+pub(crate) fn approval_phrase_for_candidates(candidates: &[CacheTrashCandidate]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.cache-trash-purge-approval.v1\0");
+    let mut ordered = candidates.to_vec();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    for candidate in ordered {
+        for field in [
+            candidate.name.as_str(),
+            candidate.path.as_str(),
+            candidate.signature.as_str(),
+        ] {
+            hasher.update(&(field.len() as u64).to_le_bytes());
+            hasher.update(field.as_bytes());
+        }
+        hasher.update(&candidate.bytes.to_le_bytes());
     }
-    Ok(results)
+    format!(
+        "DiskSage cache-trash purge approval {}",
+        hasher.finalize().to_hex()
+    )
+}
+
+/// Return the candidate list and approval phrase from one atomic read-only scan.
+pub fn proven_cache_trash_snapshot(home: &Path) -> CacheTrashSnapshot {
+    let candidates = proven_cache_trash_candidates(home);
+    let approval_phrase = approval_phrase_for_candidates(&candidates);
+    CacheTrashSnapshot {
+        candidates,
+        approval_phrase,
+    }
+}
+
+/// Return a candidate-set-bound approval phrase for read-only review evidence.
+/// The phrase is opaque to the customer and changes whenever the proven Trash set changes.
+pub fn proven_cache_trash_approval_phrase(home: &Path) -> String {
+    proven_cache_trash_snapshot(home).approval_phrase
+}
+
+/// Refuse permanent cache-Trash deletion until the final irreversible syscall can be bound to the
+/// exact reviewed filesystem object. Candidate-only path/signature/size revalidation is not enough
+/// to authorize `remove_dir_all`, because a same-user replacement can occur after the pathname
+/// checks and before recursive deletion.
+pub fn purge_proven_cache_trash(
+    _home: &Path,
+    _journal_path: &Path,
+    _now_ms: u64,
+    snapshot: &CacheTrashSnapshot,
+) -> Result<(), String> {
+    if snapshot.approval_phrase != approval_phrase_for_candidates(&snapshot.candidates) {
+        return Err("cache-trash-confirmation-mismatch".into());
+    }
+    Err(PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE.into())
 }
 
 fn active_use_blocker(
@@ -616,42 +287,25 @@ pub(crate) fn clean_cache_contents_inner(
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
-    if dir == bases.temp || dir == rules::shared_temp_root() {
-        return Err("temp-cleanup-requires-purpose-specific-audit".into());
-    }
     let mut expected = requested_targets.to_vec();
     sort_targets(&mut expected);
     let mut current = rules::cache_targets(dir)?;
     sort_targets(&mut current);
-    if expected.iter().any(|target| !current.contains(target)) {
+    if current != expected {
         return Err("cache-cleanup-targets-stale".into());
     }
-    expected.sort_by(|left, right| {
-        right
-            .bytes
-            .cmp(&left.bytes)
-            .then_with(|| left.path.cmp(&right.path))
-    });
 
-    let probe_started = Instant::now();
     Ok(expected
         .into_iter()
         .map(|target| {
-            let Some(probe_timeout_ms) = remaining_probe_timeout_ms(probe_started.elapsed()) else {
-                return CleanResult {
-                    path: target.path,
-                    ok: false,
-                    error: "cache-target-active-use-evidence-incomplete".into(),
-                };
-            };
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
-            // reclaiming unrelated archives, within one bounded operation-wide evidence budget.
+            // reclaiming unrelated, inactive cache archives in the same catalog root.
             let recursive = std::fs::symlink_metadata(&target.path)
                 .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
                 .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
-                probe_timeout_ms,
+                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 recursive,
             );
@@ -662,9 +316,8 @@ pub(crate) fn clean_cache_contents_inner(
                     error: error.into(),
                 };
             }
-            match safety::trash_delete_if_identity_in_catalog_root(
+            match safety::trash_delete_if_identity(
                 Path::new(&target.path),
-                dir,
                 &target.object_id,
                 target.bytes,
                 journal_path,
@@ -729,50 +382,7 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
-/// Return a fresh exact-child snapshot for one fixed catalog cache ID.
-pub fn plan_catalog_cache_headless(cache_id: &str) -> Result<serde_json::Value, String> {
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let candidate = rules::cache_candidate(&bases, cache_id)
-        .ok_or("cache-catalog-id-unknown")?;
-    let targets = if candidate.exists {
-        rules::cache_targets(Path::new(&candidate.path))?
-    } else {
-        Vec::new()
-    };
-    Ok(serde_json::json!({ "candidate": candidate, "targets": targets }))
-}
-
-/// Re-audit and move only one fixed catalog cache's unchanged, inactive children to OS Trash.
-pub fn clean_catalog_cache_headless(
-    cache_id: &str,
-    target_object_id: Option<&str>,
-    journal_path: &Path,
-    now_ms: u64,
-) -> Result<serde_json::Value, String> {
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let candidate = rules::cache_candidate(&bases, cache_id)
-        .filter(|candidate| candidate.exists)
-        .ok_or("cache-catalog-target-unavailable")?;
-    let path = PathBuf::from(&candidate.path);
-    let mut targets = rules::cache_targets(&path)?;
-    if let Some(object_id) = target_object_id {
-        targets.retain(|target| target.object_id == object_id);
-        if targets.len() != 1 {
-            return Err("cache-catalog-target-object-id-unavailable".into());
-        }
-    }
-    serde_json::to_value(clean_cache_contents_inner(
-        &bases,
-        &path,
-        &targets,
-        journal_path,
-        now_ms,
-    )?)
-    .map_err(|error| error.to_string())
-}
-
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
-#[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
@@ -783,7 +393,6 @@ pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String
 }
 
 /// Move only the reviewed cache children to the OS Trash, retaining the cache root itself.
-#[cfg(not(coverage))]
 #[tauri::command]
 pub fn clean_cache_contents(
     dir: String,
@@ -815,16 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn active_use_probe_budget_is_operation_wide() {
-        assert_eq!(remaining_probe_timeout_ms(Duration::ZERO), Some(30_000));
-        assert_eq!(
-            remaining_probe_timeout_ms(Duration::from_secs(29)),
-            Some(1_000)
-        );
-        assert_eq!(remaining_probe_timeout_ms(Duration::from_secs(30)), None);
-    }
-
-    #[test]
     fn cleanup_rejects_non_catalog_root() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
@@ -838,51 +437,49 @@ mod tests {
         assert_eq!(error, "cache-root-not-current-or-safe");
     }
 
-    #[cfg(unix)]
     #[test]
-    fn cleanup_rejects_broad_shared_temp_mutation() {
+    fn cleanup_rejects_provider_managed_cache_root_without_mutation() {
         let tmp = tempfile::tempdir().unwrap();
-        let bases = fake_bases(tmp.path());
-        let journal = tmp.path().join("journal.jsonl");
-        #[cfg(target_os = "macos")]
-        let shared_temp = Path::new("/private/tmp");
-        #[cfg(not(target_os = "macos"))]
-        let shared_temp = Path::new("/tmp");
-
-        let error = clean_cache_contents_inner(&bases, shared_temp, &[], &journal, 1)
-            .err()
-            .expect("shared temp requires a purpose-specific audit");
-
-        assert_eq!(error, "temp-cleanup-requires-purpose-specific-audit");
-    }
-
-    #[test]
-    fn cleanup_rejects_broad_user_temp_mutation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bases = fake_bases(tmp.path());
-        fs::create_dir(&bases.temp).unwrap();
+        let provider_cache = tmp
+            .path()
+            .join("Library/CloudStorage/OneDrive-Personal/cache");
+        fs::create_dir_all(&provider_cache).unwrap();
+        let victim = provider_cache.join("artifact.bin");
+        fs::write(&victim, b"provider-content").unwrap();
+        let bases = rules::BaseDirs {
+            temp: provider_cache.clone(),
+            local_data: tmp.path().join("local"),
+            home: tmp.path().join("home"),
+        };
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
-            .err()
-            .expect("user temp requires a purpose-specific audit");
+        let error = clean_cache_contents_inner(
+            &bases,
+            &provider_cache,
+            &[],
+            &journal,
+            1,
+        )
+        .err()
+        .expect("provider-managed cache roots must remain outside cleanup authority");
 
-        assert_eq!(error, "temp-cleanup-requires-purpose-specific-audit");
+        assert_eq!(error, "cache-root-not-current-or-safe");
+        assert_eq!(fs::read(&victim).unwrap(), b"provider-content");
+        assert!(!journal.exists());
     }
 
     #[test]
     fn cleanup_rejects_stale_target_snapshot_without_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
-        let cache = bases.home.join(".npm");
-        fs::create_dir_all(&cache).unwrap();
-        let victim = cache.join("keep.bin");
+        fs::create_dir(&bases.temp).unwrap();
+        let victim = bases.temp.join("keep.bin");
         fs::write(&victim, b"keep").unwrap();
         let journal = tmp.path().join("journal.jsonl");
-        let mut targets = rules::cache_targets(&cache).unwrap();
+        let mut targets = rules::cache_targets(&bases.temp).unwrap();
         targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &cache, &targets, &journal, 1)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
             .err()
             .expect("stale target snapshot must be rejected");
 
@@ -921,11 +518,27 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
-    fn proven_cache_trash_requires_signature_and_journals_purge() {
+    fn unix_trash_directory_uses_xdg_data_home_for_configured_home() {
+        let home = Path::new("/home/test-user");
+        let xdg = Path::new("/mnt/data");
+        assert_eq!(
+            unix_trash_directory(home, Some(home), Some(xdg)),
+            PathBuf::from("/mnt/data/Trash/files")
+        );
+        assert_eq!(
+            unix_trash_directory(home, Some(Path::new("/home/other")), Some(xdg)),
+            PathBuf::from("/home/test-user/.local/share/Trash/files")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn proven_cache_trash_requires_signature_but_permanent_delete_is_unavailable() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        fs::create_dir(&trash).unwrap();
+        let trash = trash_directory(tmp.path()).unwrap();
+        fs::create_dir_all(&trash).unwrap();
         let npm = trash.join("_cacache");
         fs::create_dir_all(npm.join("content-v2")).unwrap();
         fs::create_dir(npm.join("tmp")).unwrap();
@@ -933,170 +546,80 @@ mod tests {
         let unrelated = trash.join("Default");
         fs::create_dir(&unrelated).unwrap();
         fs::create_dir(unrelated.join("Cache")).unwrap();
+        fs::create_dir(unrelated.join("Code Cache")).unwrap();
 
         let candidates = proven_cache_trash_candidates(tmp.path());
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].signature, "npm-cacache");
         assert_eq!(candidates[0].bytes, 5);
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.name != "Default"),
+            "a browser profile root must never be exposed as a cache candidate"
+        );
+        let approval_phrase = proven_cache_trash_approval_phrase(tmp.path());
+        assert!(approval_phrase.starts_with("DiskSage cache-trash purge approval "));
 
         let journal = tmp.path().join("journal.jsonl");
-        let results = purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert!(!npm.exists());
-        let journal_text = fs::read_to_string(journal).unwrap();
-        assert!(journal_text.contains("permanent_cache_trash_delete"));
-        assert!(journal_text.contains("\"outcome\":\"ok\""));
-    }
-
-    #[test]
-    fn proven_fileprovider_temporary_sqlite_requires_exact_triplet() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        let cloud = trash.join("com.apple.CloudDocs.iCloudDriveFileProvider");
-        let account = cloud.join("75876723-DC8F-4F53-9282-AE20BDB9034C");
-        fs::create_dir_all(&account).unwrap();
-        for suffix in ["", "-wal", "-shm"] {
-            fs::write(
-                account.join(format!("database-1788164997-554161.db{suffix}")),
-                b"x",
-            )
-            .unwrap();
-        }
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 1);
+        let snapshot = proven_cache_trash_snapshot(tmp.path());
+        let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
+        assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
+        assert!(npm.exists());
+        assert!(!journal.exists());
         assert_eq!(
-            candidates[0].signature,
-            "fileprovider-cloud-docs-temporary-sqlite"
+            approval_phrase,
+            proven_cache_trash_approval_phrase(tmp.path())
         );
-
-        fs::write(account.join("business.db"), b"keep").unwrap();
-        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
     }
 
+    #[cfg(not(windows))]
     #[test]
-    fn proven_uv_git_cache_requires_all_native_directories() {
+    fn fail_closed_purge_never_expands_or_mutates_submitted_snapshot() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        let git = trash.join("git-v0");
-        fs::create_dir_all(git.join("locks")).unwrap();
-        fs::create_dir(git.join("checkouts")).unwrap();
-        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
+        let trash = trash_directory(tmp.path()).unwrap();
+        fs::create_dir_all(&trash).unwrap();
+        let npm = trash.join("_cacache");
+        fs::create_dir_all(npm.join("content-v2")).unwrap();
+        fs::create_dir(npm.join("tmp")).unwrap();
+        fs::write(npm.join("content-v2").join("entry"), b"cache").unwrap();
+        let snapshot = proven_cache_trash_snapshot(tmp.path());
 
-        fs::create_dir(git.join("db")).unwrap();
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].signature, "uv-git-cache");
+        let pnpm = trash.join("v11");
+        fs::create_dir(&pnpm).unwrap();
+        fs::create_dir(pnpm.join("metadata")).unwrap();
+        fs::create_dir(pnpm.join("metadata-full")).unwrap();
+
+        let journal = tmp.path().join("journal.jsonl");
+        let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
+        assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
+        assert!(
+            npm.exists(),
+            "reviewed cache must remain without object-bound delete"
+        );
+        assert!(pnpm.exists(), "entries added after review must remain");
+        assert!(!journal.exists());
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
-    fn proven_uv_archive_cache_requires_native_keys_and_never_follows_symlinks() {
+    fn purge_rejects_tampered_snapshot_before_journaling_or_deletion() {
         let tmp = tempfile::tempdir().unwrap();
-        let archive = tmp.path().join(".Trash/archive-v0");
-        let entry = archive.join("Ab12_-cdEF34ghIJ");
-        fs::create_dir_all(&entry).unwrap();
-        let outside = tmp.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join("keep"), b"keep").unwrap();
-        std::os::unix::fs::symlink(&outside, entry.join("linked-package")).unwrap();
+        let trash = trash_directory(tmp.path()).unwrap();
+        fs::create_dir_all(&trash).unwrap();
+        let npm = trash.join("_cacache");
+        fs::create_dir_all(npm.join("content-v2")).unwrap();
+        fs::create_dir(npm.join("tmp")).unwrap();
+        fs::write(npm.join("content-v2").join("entry"), b"cache").unwrap();
 
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].signature, "uv-archive-cache");
-        assert_eq!(candidates[0].bytes, 0);
+        let mut snapshot = proven_cache_trash_snapshot(tmp.path());
+        snapshot.approval_phrase.push_str("-changed");
+        let journal = tmp.path().join("journal.jsonl");
+        let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
 
-        let results =
-            purge_proven_cache_trash(tmp.path(), &tmp.path().join("journal.jsonl"), 9).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
-
-        let invalid = tmp.path().join(".Trash/archive-v0");
-        fs::create_dir_all(invalid.join("not-a-native-key!")).unwrap();
-        assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn private_uv_prune_uses_only_fixed_non_force_arguments() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let executable = tmp.path().join("uv");
-        fs::write(
-            &executable,
-            b"#!/bin/sh\n[ \"$1\" = cache ] && [ \"$2\" = prune ] && [ \"$3\" = --cache-dir ] && [ \"$5\" = --no-config ] && [ \"$6\" = --no-progress ]\n",
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let cache = tmp.path().join("cache");
-        fs::create_dir(&cache).unwrap();
-
-        assert_eq!(run_private_uv_prune(&executable, &cache).unwrap(), 0);
-    }
-
-    #[test]
-    fn proven_cache_accepts_only_native_trash_collision_names() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        for name in [
-            "git-v0 2",
-            "git-v0 14-56-42-563",
-            "git-v0-old",
-            "git-v0 2 old",
-            "git-v01",
-        ] {
-            let git = trash.join(name);
-            fs::create_dir_all(git.join("locks")).unwrap();
-            fs::create_dir(git.join("checkouts")).unwrap();
-            fs::create_dir(git.join("db")).unwrap();
-        }
-
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 2);
-        assert!(candidates
-            .iter()
-            .all(|candidate| candidate.signature == "uv-git-cache"));
-
-        let wheels = trash.join("wheels-v6 14-56-42-563");
-        fs::create_dir_all(wheels.join("pypi")).unwrap();
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 3);
-        assert!(candidates.iter().any(|candidate| {
-            candidate.name == "wheels-v6 14-56-42-563" && candidate.signature == "uv-wheel-cache"
-        }));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn edge_code_sign_clone_signature_purges_without_following_bundle_symlinks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        let clone = trash.join("code_sign_clone.Ab12zZ");
-        let contents = clone.join("Microsoft Edge.app.bundle/Contents");
-        fs::create_dir_all(contents.join("MacOS")).unwrap();
-        fs::create_dir(contents.join("_CodeSignature")).unwrap();
-        fs::write(contents.join("Info.plist"), b"plist").unwrap();
-        let outside = tmp.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join("keep"), b"keep").unwrap();
-        std::os::unix::fs::symlink(&outside, contents.join("Frameworks")).unwrap();
-
-        for invalid in ["code_sign_clone.short", "code_sign_clone.Ab12zZ.old"] {
-            fs::create_dir_all(trash.join(invalid)).unwrap();
-        }
-
-        let candidates = proven_cache_trash_candidates(tmp.path());
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].signature, "edge-code-sign-clone");
-
-        let results =
-            purge_proven_cache_trash(tmp.path(), &tmp.path().join("journal.jsonl"), 8).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert!(!clone.exists());
-        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
+        assert_eq!(error, "cache-trash-confirmation-mismatch");
+        assert!(npm.exists());
+        assert!(!journal.exists());
     }
 
     #[cfg(unix)]

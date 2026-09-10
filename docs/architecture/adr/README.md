@@ -7,7 +7,7 @@ new numbered record rather than rewriting history.
 | ADR | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-cloud-offload-goal-state.md) | Provider evidence drives the cloud-offload Goal | Accepted |
-| [0002](0002-cache-cleanup-is-per-item-evidence-bound.md) | Cache cleanup is per-item evidence-bound | Accepted |
+| [0002](0002-cache-cleanup-is-per-item-evidence-bound.md) | Cache cleanup is per-item evidence-bound | Superseded by 0020 for permanent cache-Trash deletion |
 | [0003](0003-zotero-local-api-metadata-handoff.md) | Zotero Local API metadata handoff | Accepted |
 | [0004](0004-bounded-maintenance-command-execution.md) | Bounded maintenance command execution | Accepted |
 | [0005](0005-hourly-agent-loop-is-advisory.md) | Hourly agent loop is advisory | Superseded by 0008 |
@@ -17,14 +17,7 @@ new numbered record rather than rewriting history.
 | [0009](0009-path-free-lineage-relation-graph.md) | Export a path-free lineage relation graph | Accepted |
 | [0010](0010-rooted-organize-destinations.md) | Require rooted, process-independent organize destinations | Accepted |
 | [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
-| [0012](0012-container-orphan-reclaim-runtime-agnostic.md) | Runtime-agnostic container orphan reclamation is identity-bound and fail-closed | Accepted |
-| [0013](0013-closed-pull-request-worktree-authority.md) | Bind closed pull-request worktree cleanup to forge evidence | Accepted |
-| [0014](0014-runtime-storage-trim-without-vm-image-rewrite.md) | Trim guest extents without rewriting VM images | Accepted |
-| [0015](0015-explicit-cutoff-open-pull-request-worktree-authority.md) | Require an explicit cutoff for stale open pull-request worktrees | Accepted |
-| [0016](0016-shared-temporary-storage-ownership-bound.md) | Bound `/tmp` cleanup to current-user-owned trees | Accepted |
-| [0017](0017-standalone-stale-pr-clone-authority.md) | Require exact-head authority for standalone stale-PR clones | Accepted |
-| [0018](0018-permanent-generated-artifact-failure-safety.md) | Retain failed permanent artifact deletions in private staging | Accepted |
-| [0019](0019-macos-file-provider-local-eviction.md) | Use each macOS File Provider domain for local-only eviction | Accepted |
+| [0020](0020-cache-trash-permanent-delete-fails-closed.md) | Cache Trash permanent deletion fails closed | Proposed |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;

@@ -1192,9 +1192,6 @@ pub fn collect_archive_files_bounded(
                 return true;
             }
             let path = entry.path();
-            if crate::safety::is_explicitly_protected(path) {
-                return false;
-            }
             if excluded.iter().any(|cloud| path.starts_with(cloud)) {
                 return false;
             }
@@ -4157,7 +4154,7 @@ fn source_blocked_reason(
 
 /// File Provider's private storage and download staging trees are owned by macOS. Their files
 /// are implementation state, not user payloads; only a provider-aware operation may reclaim them.
-fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
+pub(crate) fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
     let mut previous = String::new();
     path.components().any(|component| {
         let name = normalized_account_text(&component.as_os_str().to_string_lossy());
