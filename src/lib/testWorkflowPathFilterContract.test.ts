@@ -103,6 +103,23 @@ describe("test workflow path-filter contract", () => {
     expect(workflow).not.toContain("AllowInsecureRepositories");
     expect(workflow).not.toContain("--allow-unauthenticated");
   });
+
+  it("preserves npm test failure while exposing bounded nested phase diagnostics", () => {
+    expect(workflow).toContain("id: npm-test");
+    expect(workflow).toContain("continue-on-error: true");
+    for (const phase of [
+      "Diagnose SvelteKit sync after npm test failure",
+      "Diagnose Vitest after npm test failure",
+      "Diagnose workflow contract after npm test failure",
+      "Diagnose browser test after npm test failure",
+    ]) {
+      expect(workflow).toContain(`name: ${phase}`);
+    }
+    expect(workflow).toContain("if: steps.npm-test.outcome == 'failure'");
+    expect(workflow).toContain("npm run test:browser --if-present");
+    expect(workflow).toContain("name: Preserve npm test failure");
+    expect(workflow).toContain("exit 1");
+  });
 });
 
 // Exercise the canonical shell admission without compiling or faking Rust test results.
