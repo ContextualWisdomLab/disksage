@@ -155,3 +155,105 @@ fn catalog_signatures_are_structurally_proven_before_fixture_trash_is_purged() {
     assert_eq!(journal_text.matches("\"outcome\":\"pending\"").count(), 14);
     assert_eq!(journal_text.matches("\"outcome\":\"ok\"").count(), 14);
 }
+
+#[test]
+fn ambiguous_cache_lookalikes_and_symlinked_roots_are_fail_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    assert!(proven_cache_trash_candidates(temp.path()).is_empty());
+
+    let trash = temp.path().join(".Trash");
+    mkdir(&trash);
+
+    let npm = trash.join("_cacache invalid-collision");
+    mkdir(npm.join("content-v2"));
+    mkdir(npm.join("tmp"));
+
+    let pnpm = trash.join("v11");
+    mkdir(pnpm.join("metadata"));
+
+    let edge = trash.join("Default 8");
+    mkdir(edge.join("Cache"));
+
+    let edge_code_sign = trash.join("code_sign_clone.A1b2C3");
+    let edge_contents = edge_code_sign.join("Microsoft Edge.app.bundle/Contents");
+    mkdir(edge_contents.join("MacOS"));
+    mkdir(edge_contents.join("_CodeSignature"));
+
+    let simple = trash.join("simple-v21");
+    mkdir(&simple);
+    write(simple.join("pypi"));
+
+    let typequest = trash.join("typequest");
+    mkdir(typequest.join("common"));
+
+    let wheels = trash.join("wheels-v6");
+    mkdir(&wheels);
+
+    let sdists = trash.join("sdists-v9");
+    mkdir(sdists.join("pypi"));
+
+    let builds = trash.join("builds-v0");
+    mkdir(builds.join(".tmp-native-build"));
+
+    let git = trash.join("git-v0");
+    mkdir(git.join("locks"));
+    mkdir(git.join("checkouts"));
+
+    let archive = trash.join("archive-v0");
+    write(archive.join("A1b2C3d4_E5f6G7h"));
+
+    let trivy = trash.join("db");
+    mkdir(&trivy);
+    write(trivy.join("trivy.db"));
+
+    let cloud_docs = trash.join("com.apple.CloudDocs.iCloudDriveFileProvider");
+    mkdir(cloud_docs.join("0F876723-DC8F-4F53-9282-AE20BDB9034C"));
+    mkdir(cloud_docs.join("1F876723-DC8F-4F53-9282-AE20BDB9034C"));
+
+    let fpck = trash.join("fileprovider-fpck");
+    mkdir(fpck.join("not-a-uuid"));
+
+    #[cfg(unix)]
+    let symlink_target = {
+        let target = temp.path().join("outside-valid-npm-cache");
+        mkdir(target.join("content-v2"));
+        mkdir(target.join("tmp"));
+        std::os::unix::fs::symlink(&target, trash.join("_cacache 7")).unwrap();
+        target
+    };
+
+    let candidates = proven_cache_trash_candidates(temp.path());
+    assert!(candidates.is_empty(), "ambiguous structures must never become deletion candidates");
+
+    let journal = temp.path().join("fail-closed-purge.jsonl");
+    assert!(purge_proven_cache_trash(temp.path(), &journal, 23)
+        .unwrap()
+        .is_empty());
+    assert!(!journal.exists());
+
+    for path in [
+        npm,
+        pnpm,
+        edge,
+        edge_code_sign,
+        simple,
+        typequest,
+        wheels,
+        sdists,
+        builds,
+        git,
+        archive,
+        trivy,
+        cloud_docs,
+        fpck,
+    ] {
+        assert!(path.exists(), "unproven lookalike must survive: {}", path.display());
+    }
+
+    #[cfg(unix)]
+    {
+        assert!(trash.join("_cacache 7").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(symlink_target.join("content-v2").is_dir());
+        assert!(symlink_target.join("tmp").is_dir());
+    }
+}
