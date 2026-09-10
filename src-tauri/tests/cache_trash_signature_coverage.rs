@@ -62,7 +62,7 @@ fn catalog_signatures_are_structurally_proven_before_fixture_trash_is_purged() {
     mkdir(git.join("db"));
 
     let archive = trash.join("archive-v0");
-    mkdir(archive.join("A1b2C3d4_E5f6-G7h"));
+    mkdir(archive.join("A1b2C3d4_E5f6G7h"));
 
     let trivy = trash.join("db");
     mkdir(&trivy);
