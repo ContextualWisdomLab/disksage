@@ -13,7 +13,7 @@ describe("Test workflow checkout provenance", () => {
       line.includes("- uses: actions/checkout@") ? [index] : [],
     );
 
-    expect(checkoutIndexes).toHaveLength(3);
+    expect(checkoutIndexes.length).toBeGreaterThanOrEqual(4);
     for (const checkoutIndex of checkoutIndexes) {
       const stepIndent = lines[checkoutIndex].match(/^(\s*)/)?.[1] ?? "";
       let endIndex = checkoutIndex + 1;

@@ -184,6 +184,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Resolve the provider OAuth descriptor's platform data-home authority before entering the domain:
+  honor absolute Linux `$XDG_DATA_HOME` and redirected Windows `%APPDATA%`, ignore invalid relative
+  environment paths, keep explicit `--connections` and `--home` authoritative, and preserve native
+  non-UTF-8 filesystem operands while leaving macOS Application Support behavior unchanged.
 - Use macOS `NSFileManager` for reversible Trash moves so cleanup does not wait on Finder
   AppleEvents or inherit a stalled Finder copy queue.
 - Permit fully current-user-owned real children of the shared Unix temporary root while retaining

@@ -147,7 +147,7 @@ path = "src/bin/disksage-container-orphan-plan.rs"
 
 [[bin]]
 name = "disksage-provider-oauth"
-path = "src/bin/disksage-provider-oauth.rs"
+path = "src/bin/disksage-provider-oauth-entry.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]

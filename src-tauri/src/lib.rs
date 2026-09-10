@@ -116,6 +116,11 @@ pub mod provider_recovery;
 /// Preserves provider-client running/stopped state across temporary maintenance stops.
 pub mod provider_runtime_state;
 pub mod provider_evidence;
+/// Native OAuth 2.0 lifecycle for cloud-provider metadata checks and explicit file uploads.
+///
+/// DiskSage uses the system browser, PKCE S256, ephemeral loopback listeners, exact provider hosts,
+/// and the OS credential store. Refresh tokens never enter settings or command responses; access
+/// tokens live only long enough to perform one bounded provider operation.
 pub mod provider_oauth;
 pub mod provider_global_sync;
 pub mod provider_sync;

@@ -68,8 +68,22 @@ DiskSage displays this before consent. It does not silently fall back to a broad
 
 `disksage-provider-oauth` exposes the same Rust PKCE and credential lifecycle outside the Tauri
 webview so an operator can prepare a headless `disksage-cloud-plan` run without pasting a bearer or
-refresh token. The default descriptor path is the DiskSage application-data path; an explicit
-`--connections` value must be absolute and can be shared with `disksage-cloud-plan`.
+refresh token. An explicit `--connections` value must be absolute and is the highest descriptor-path
+authority. An explicit `--home` is next and derives the platform default from that supplied home;
+this keeps hermetic operator/test roots independent of ambient environment data-home variables.
+Without either explicit option, the shipped host entrypoint resolves the default descriptor path as
+follows:
+
+- Linux/non-macOS Unix: an absolute, non-empty `$XDG_DATA_HOME`, otherwise
+  `$HOME/.local/share/com.contextualwisdomlab.disksage/cloud-oauth-connections.json`. Relative XDG
+  values are invalid authority and are ignored.
+- Windows: an absolute, non-empty `%APPDATA%` so redirected roaming AppData remains authoritative;
+  otherwise `%USERPROFILE%\AppData\Roaming\com.contextualwisdomlab.disksage\cloud-oauth-connections.json`.
+- macOS: `$HOME/Library/Application Support/com.contextualwisdomlab.disksage/cloud-oauth-connections.json`.
+
+The entrypoint resolves these process/platform values and passes one explicit path into the OAuth
+domain. The domain does not read process-global environment state. `--list` remains read-only: a
+missing descriptor returns an empty list and does not create the app-data directory or document.
 
 ```bash
 cargo run --locked --features cloud-cli --bin disksage-provider-oauth -- --list
@@ -128,6 +142,8 @@ this design.
 
 ## Primary references
 
+- [XDG Base Directory Specification 0.8](https://specifications.freedesktop.org/basedir/latest/)
+- [Windows Folder Redirection with Group Policy](https://learn.microsoft.com/en-us/windows-server/storage/folder-redirection/folder-redirection-using-group-policy)
 - [Microsoft identity platform authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
 - [Microsoft redirect URI restrictions and native loopback behavior](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url)
 - [Microsoft Graph permission reference](https://learn.microsoft.com/en-us/graph/permissions-reference)
