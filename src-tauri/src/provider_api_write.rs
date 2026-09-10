@@ -65,11 +65,27 @@ struct OneDriveUploadProgress {
 }
 
 fn validate_bearer_token(token: &str) -> Result<(), String> {
-    if token.is_empty()
-        || token.len() > MAX_BEARER_TOKEN_BYTES
-        || token.bytes().any(|byte| byte.is_ascii_control())
-    {
+    if token.is_empty() || token.len() > MAX_BEARER_TOKEN_BYTES {
         return Err("provider-api-bearer-token-invalid".into());
+    }
+
+    let mut saw_token_character = false;
+    let mut saw_padding = false;
+    for byte in token.bytes() {
+        if byte == b'=' {
+            if !saw_token_character {
+                return Err("provider-api-bearer-token-invalid".into());
+            }
+            saw_padding = true;
+            continue;
+        }
+        if saw_padding
+            || !(byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/'))
+        {
+            return Err("provider-api-bearer-token-invalid".into());
+        }
+        saw_token_character = true;
     }
     Ok(())
 }
