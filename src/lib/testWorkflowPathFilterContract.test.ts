@@ -97,9 +97,9 @@ describe("test workflow path-filter contract", () => {
     );
   });
 
-  it("isolates Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
-    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(2);
-    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(2);
+  it("isolates every Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
+    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(3);
+    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(3);
     expect(workflow).not.toContain("AllowInsecureRepositories");
     expect(workflow).not.toContain("--allow-unauthenticated");
   });
@@ -146,7 +146,7 @@ it("macOS cache job executes present owner tests, reports absent source, and pro
     mkdirSync(resolve(fixture, "src-tauri/tests"), { recursive: true });
     writeFileSync(resolve(fixture, "src-tauri/tests/generated_cache_staged_activity.rs"), "");
     expect(run().status).toBe(0);
-    expect(readFileSync(log, "utf8")).toBe("test --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
+    expect(readFileSync(log, "utf8")).toBe("test --locked --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
     expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
