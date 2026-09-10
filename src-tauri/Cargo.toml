@@ -223,6 +223,10 @@ required-features = ["cloud-cli"]
 name = "cli_help_inventory_contract"
 path = "tests/cli_help_inventory_contract.rs"
 
+[[test]]
+name = "cli_help_contract_runtime"
+path = "tests/cli_help_contract_runtime.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
