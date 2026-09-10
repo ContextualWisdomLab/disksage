@@ -104,11 +104,29 @@ describe("test workflow path-filter contract", () => {
     const signedRetryRefreshCount = workflow.match(
       /apt-get -o Acquire::Retries=3 update/g,
     )?.length ?? 0;
+    const multilineRunBlocks = workflow.match(/^\s{8}run: \|\n(?:^\s{10}.*(?:\n|$))*/gm) ?? [];
+    const dependencyRefreshBlocks = multilineRunBlocks.filter(
+      (block) => block.includes("dl.google.com/linux/chrome") || block.includes("apt-get -o Acquire::Retries=3 update"),
+    );
 
     expect(chromeRepositoryIsolationCount).toBeGreaterThan(0);
     expect(signedRetryRefreshCount).toBe(chromeRepositoryIsolationCount);
+    expect(dependencyRefreshBlocks).toHaveLength(chromeRepositoryIsolationCount);
+    for (const block of dependencyRefreshBlocks) {
+      expect(block).toContain("grep -q 'dl.google.com/linux/chrome'");
+      expect(block).toContain("apt-get -o Acquire::Retries=3 update");
+    }
     expect(workflow).not.toContain("AllowInsecureRepositories");
     expect(workflow).not.toContain("--allow-unauthenticated");
+  });
+
+  it("builds and uploads a frontend coverage diagnostic only when its required files exist", () => {
+    expect(workflow).toContain(
+      "if: failure() && steps.frontend-coverage.outcome == 'failure' && hashFiles('coverage/coverage-final.json') != '' && hashFiles('coverage/coverage-summary.json') != ''",
+    );
+    expect(workflow).toContain(
+      "if: failure() && steps.frontend-coverage.outcome == 'failure' && hashFiles('frontend-coverage-diagnostic.json') != ''",
+    );
   });
 });
 
