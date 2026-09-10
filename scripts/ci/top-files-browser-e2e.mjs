@@ -226,6 +226,43 @@ async function pressKey(cdp, key, code, windowsVirtualKeyCode) {
   await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode });
 }
 
+async function horizontalOverflowEvidence(cdp) {
+  return evaluate(cdp, `(() => {
+    const viewport = document.documentElement.clientWidth;
+    const describe = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const classes = [...element.classList].slice(0, 4).map((value) => '.' + value).join('');
+      return {
+        element: element.tagName.toLowerCase() + (element.id ? '#' + element.id : '') + classes,
+        left: Math.round(rect.left * 100) / 100,
+        right: Math.round(rect.right * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        boxSizing: style.boxSizing,
+        display: style.display,
+        minWidth: style.minWidth,
+        maxWidth: style.maxWidth,
+        overflowX: style.overflowX,
+      };
+    };
+    const offenders = [...document.body.querySelectorAll('*')]
+      .map(describe)
+      .filter((item) => item.left < -1 || item.right > viewport + 1)
+      .sort((a, b) => Math.max(b.right - viewport, -b.left) - Math.max(a.right - viewport, -a.left))
+      .slice(0, 16);
+    return {
+      innerWidth,
+      documentClientWidth: viewport,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      bodyClientWidth: document.body.clientWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      offenders,
+    };
+  })()`);
+}
+
 async function proveNormalInteraction(cdp) {
   await navigate(cdp, "normal");
   assert(!(await evaluate(cdp, "!!document.querySelector('#top-files-table')")), "top-files-surface-visible-before-scan");
@@ -286,7 +323,10 @@ async function proveNormalInteraction(cdp) {
     await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false });
     await new Promise((resolve) => setTimeout(resolve, 50));
     const overflow = await evaluate(cdp, "document.documentElement.scrollWidth > document.documentElement.clientWidth");
-    assert(!overflow, `top-files-page-horizontal-overflow:${width}`);
+    if (overflow) {
+      const evidence = await horizontalOverflowEvidence(cdp);
+      throw new Error(`top-files-page-horizontal-overflow:${width}:${JSON.stringify(evidence)}`);
+    }
     const clipped = await evaluate(cdp, `(() => {
       const region = document.querySelector('#top-files-table');
       const heading = document.querySelector('#top-files-heading');
