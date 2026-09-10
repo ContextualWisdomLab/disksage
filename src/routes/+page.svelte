@@ -5,6 +5,7 @@
   import TopFiles from "$lib/TopFiles.svelte";
   import Treemap from "$lib/Treemap.svelte";
   import Cleanup from "$lib/Cleanup.svelte";
+  import PodmanEvidence from "$lib/PodmanEvidence.svelte";
   import Duplicates from "$lib/Duplicates.svelte";
   import Inventory from "$lib/Inventory.svelte";
   import Organize from "$lib/Organize.svelte";
@@ -117,7 +118,7 @@
     {#if scanning}
       <button onclick={() => api.cancelScan()}>취소</button>
     {:else}
-      <button onclick={scan}>스캔</button>
+      <button onclick={scan} disabled={scanning || !selectedRoot}>스캔</button>
     {/if}
     {#if stats}
       <span class="stats">
@@ -165,6 +166,8 @@
   {/if}
 
   <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
+
+  <PodmanEvidence />
 
   <Inventory scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 

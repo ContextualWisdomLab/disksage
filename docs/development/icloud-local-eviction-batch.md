@@ -1,10 +1,12 @@
-# iCloud local-copy batch eviction
+# Cloud local-copy batch eviction
 
-DiskSage treats iCloud local-copy eviction as a destructive, evidence-bound operation. Planning remains read-only; execution is unavailable until every selected item has been replanned, the exact batch fingerprint has been approved by an attributed human, and the immutable record directory is outside all cloud-controlled paths.
+DiskSage treats iCloud and OneDrive local-copy eviction as destructive, evidence-bound operations. Planning remains read-only; execution is unavailable until every selected item has been replanned, the exact batch fingerprint has been approved by an attributed human, and the immutable record directory is outside all cloud-controlled paths.
 
 ## Fail-closed execution contract
 
 - Every item receives a fresh clock reading; timestamps are never synthesized from a batch start time.
+- Planning excludes sync-incomplete or otherwise unsafe items by index and bounded error code, so
+  one unsafe item cannot prevent separately verified items from reaching human approval.
 - The executor stops at the first failed or verification-incomplete item.
 - A successful item result and a refreshed batch checkpoint are written before the next item begins.
 - Failure to persist an item result marks verification incomplete, records the bounded failure code in the batch checkpoint, and halts execution.
@@ -14,7 +16,7 @@ DiskSage treats iCloud local-copy eviction as a destructive, evidence-bound oper
 
 ## Evidence boundary and interoperability
 
-**Local-only evidence** includes canonical source paths, detected iCloud-root details, record-directory locations, and immutable item or batch records that contain those paths. It remains on the operator-controlled system and is not a service-ingestion payload.
+**Local-only evidence** includes canonical source paths, detected cloud-root details, record-directory locations, and immutable item or batch records that contain those paths. It remains on the operator-controlled system and is not a service-ingestion payload.
 
 **Shareable evidence** is limited to the path-free CLI plan and result views: schema versions, counts, byte totals, fingerprints, approval identifiers, bounded error codes, completion flags, and stable notices. Shareable evidence must never include source paths, user-file content, or control-directory locations. A CWL service or future Naruon module can ingest this bounded contract without requiring DiskSage to be deployed as a service; DiskSage therefore remains independently operable while preserving a narrow MSA interoperability boundary.
 
@@ -36,7 +38,7 @@ The implementation applies **fail-safe defaults** by treating absent, stale, mal
 
 ## Verification
 
-Release acceptance requires the focused `cloud_local_eviction_batch::tests::` suite, the `disksage-icloud-local-eviction-batch` binary suite, the documentation contract tests, formatting, whitespace validation, ordinary repository tests, security scans, and exact-head review gates to pass. Temporary repair workflows and scripts used to reproduce a regression are intentionally absent from the final source tree.
+Release acceptance requires the focused `cloud_local_eviction_batch::tests::` suite, the `disksage-cloud-local-eviction-batch` binary suite, the documentation contract tests, formatting, whitespace validation, ordinary repository tests, security scans, and exact-head review gates to pass. Temporary repair workflows and scripts used to reproduce a regression are intentionally absent from the final source tree.
 
 ## References
 

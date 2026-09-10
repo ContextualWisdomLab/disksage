@@ -18,7 +18,11 @@ describe('release Tauri binary isolation', () => {
     expect(cargoManifest).toContain('required-features = ["cloud-cli"]');
     expect(cargoManifest).toContain('required-features = ["archive-cli"]');
 
-    expect(workflow).toContain('npm run tauri -- build --features llm-engine');
+    expect(workflow).toContain(
+      'node node_modules/@tauri-apps/cli/tauri.js build --features llm-engine',
+    );
+    expect(workflow).not.toContain('npm run tauri -- build --features llm-engine');
+    expect(workflow).not.toContain('npm run tauri -- build --no-bundle');
     expect(workflow).not.toMatch(
       /npm run tauri -- build --features [^\n]*(?:volume-cli|cloud-cli|archive-cli)/,
     );
