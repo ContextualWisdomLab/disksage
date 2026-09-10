@@ -153,7 +153,7 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
     let adr_index = std::fs::read_to_string(repository_root.join("docs/architecture/adr/README.md"))
         .unwrap();
     let current_adr = std::fs::read_to_string(repository_root.join(
-        "docs/architecture/adr/0012-cache-trash-permanent-delete-fails-closed.md",
+        "docs/architecture/adr/0020-cache-trash-permanent-delete-fails-closed.md",
     ))
     .unwrap();
 
@@ -163,9 +163,9 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
     assert!(runbook.contains("empty the native Trash manually"));
     assert!(!runbook.contains("permanently removes only"));
 
-    assert!(legacy_adr.contains("**Status:** Superseded by ADR-0012"));
+    assert!(legacy_adr.contains("**Status:** Superseded by ADR-0020"));
     assert!(adr_index.contains(
-        "0012-cache-trash-permanent-delete-fails-closed.md"
+        "0020-cache-trash-permanent-delete-fails-closed.md"
     ));
     assert!(adr_index.contains("Cache Trash permanent deletion fails closed"));
     assert!(adr_index.contains("Proposed"));
