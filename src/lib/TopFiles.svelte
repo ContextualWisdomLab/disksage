@@ -11,6 +11,8 @@
     <p class="empty" role="status">표시할 대용량 파일이 없습니다. 다른 폴더를 선택해 다시 스캔하세요.</p>
   {:else}
     <a class="table-focus" href="#top-files-table">파일 표 탐색 시작</a>
+    <!-- Keyboard focus is intentional: this overflow region must support native PageDown/arrow scrolling. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div id="top-files-table" class="table-scroll" role="region" tabindex="0" aria-labelledby="top-files-heading">
       <table aria-labelledby="top-files-heading">
         <thead><tr><th scope="col">크기</th><th scope="col">경로</th></tr></thead>
