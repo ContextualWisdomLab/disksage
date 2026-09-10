@@ -19,7 +19,8 @@ fn unsupported_icloud_upload_fails_before_source_or_network_access() {
 
 #[test]
 fn malformed_bearer_tokens_fail_before_provider_dispatch() {
-    for token in ["", "line\nbreak"] {
+    let oversized_token = "a".repeat(64 * 1024 + 1);
+    for token in ["", "line\nbreak", oversized_token.as_str()] {
         let error = upload_file(
             CloudProvider::Icloud,
             Path::new("local-root"),
@@ -36,7 +37,7 @@ fn malformed_bearer_tokens_fail_before_provider_dispatch() {
 
 #[test]
 fn malformed_object_ids_and_unsupported_delete_fail_before_transport() {
-    for object_id in ["", "line\nbreak"] {
+    for object_id in ["", "   ", "line\nbreak"] {
         assert_eq!(
             delete_uploaded_object(CloudProvider::Icloud, object_id, "token_1").unwrap_err(),
             "provider-api-object-id-invalid"
