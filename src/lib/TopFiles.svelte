@@ -29,7 +29,7 @@
 
 <style>
   .table-scroll { max-height: 40vh; max-width: 100%; overflow: auto; }
-  .table-scroll:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+  .table-scroll:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   .table-focus { display: inline-block; margin-block-end: 0.35rem; }
   table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.85rem; }
   th:first-child { width: 5.5rem; }
