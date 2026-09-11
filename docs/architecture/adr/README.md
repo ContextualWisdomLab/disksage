@@ -25,6 +25,12 @@ new numbered record rather than rewriting history.
 | [0017](0017-standalone-stale-pr-clone-authority.md) | Require exact-head authority for standalone stale-PR clones | Accepted |
 | [0018](0018-permanent-generated-artifact-failure-safety.md) | Retain failed permanent artifact deletions in private staging | Accepted |
 | [0019](0019-macos-file-provider-local-eviction.md) | Use each macOS File Provider domain for local-only eviction | Accepted |
+| [0021](0021-versioned-translation-ledger-separate-from-ontology.md) | Keep versioned UI translation resources separate from filesystem ontology | Proposed |
+
+ADR-0020 is intentionally absent from this branch because that number is already reserved by the
+active cache-Trash owner #263. The translation-ledger Draft uses 0021 rather than creating an ADR
+number collision; normal integration must preserve whichever verified ADR-0020 descendant becomes
+canonical.
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;
