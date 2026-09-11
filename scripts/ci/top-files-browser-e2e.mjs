@@ -47,6 +47,64 @@ async function waitForJson(url, timeoutMs = 20_000) {
   throw new Error(`browser-e2e-readiness-timeout: ${lastError?.message ?? "unknown"}`);
 }
 
+const SIGNALS_PROCESS_GROUP = process.platform !== "win32";
+
+function signalProcessTree(child, signal) {
+  if (SIGNALS_PROCESS_GROUP && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH" && error?.code !== "EPERM") throw error;
+    }
+  }
+  child.kill(signal);
+}
+
+function processHasExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForProcessExit(child, timeoutMs) {
+  if (processHasExited(child)) return true;
+  return Promise.race([
+    new Promise((resolve) => child.once("exit", () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+}
+
+async function terminateProcessTree(child, timeoutMs = 2_000) {
+  if (processHasExited(child)) return;
+  signalProcessTree(child, "SIGTERM");
+  if (await waitForProcessExit(child, timeoutMs)) return;
+  signalProcessTree(child, "SIGKILL");
+  if (!(await waitForProcessExit(child, timeoutMs))) {
+    throw new Error("browser-e2e-chrome-shutdown-timeout");
+  }
+}
+
+async function closeBrowserGracefully(browserCdp, child, timeoutMs = 5_000) {
+  if (processHasExited(child)) return;
+  if (!browserCdp) {
+    await terminateProcessTree(child);
+    return;
+  }
+
+  let closeRequestError;
+  browserCdp.call("Browser.close").catch((error) => {
+    closeRequestError = error;
+  });
+  if (await waitForProcessExit(child, timeoutMs)) return;
+
+  if (closeRequestError) {
+    console.error(
+      "browser-e2e-browser-close-failed",
+      closeRequestError instanceof Error ? closeRequestError.stack : closeRequestError,
+    );
+  }
+  await terminateProcessTree(child);
+}
+
 class CdpClient {
   constructor(url) {
     this.url = url;
@@ -226,6 +284,75 @@ async function pressKey(cdp, key, code, windowsVirtualKeyCode) {
   await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode });
 }
 
+async function horizontalOverflowEvidence(cdp) {
+  return evaluate(cdp, `(() => {
+    const viewport = document.documentElement.clientWidth;
+    const describe = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const classes = [...element.classList].slice(0, 4).map((value) => '.' + value).join('');
+      return {
+        element: element.tagName.toLowerCase() + (element.id ? '#' + element.id : '') + classes,
+        left: Math.round(rect.left * 100) / 100,
+        right: Math.round(rect.right * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        boxSizing: style.boxSizing,
+        display: style.display,
+        minWidth: style.minWidth,
+        maxWidth: style.maxWidth,
+        overflowX: style.overflowX,
+      };
+    };
+    const elements = [...document.body.querySelectorAll('*')];
+    const descriptions = elements.map(describe);
+    const offenders = descriptions
+      .filter((item) => item.left < -1 || item.right > viewport + 1)
+      .sort((a, b) => Math.max(b.right - viewport, -b.left) - Math.max(a.right - viewport, -a.left))
+      .slice(0, 16);
+    const scrollSources = descriptions
+      .filter((item) => item.scrollWidth > item.clientWidth + 1)
+      .sort((a, b) => (b.scrollWidth - b.clientWidth) - (a.scrollWidth - a.clientWidth))
+      .slice(0, 16);
+    const baselineScrollWidth = document.documentElement.scrollWidth;
+    const containmentCandidates = new Set();
+    for (const element of elements) {
+      if (element.scrollWidth <= element.clientWidth + 1) continue;
+      for (let current = element; current && current !== document.documentElement; current = current.parentElement) {
+        containmentCandidates.add(current);
+      }
+    }
+    const containmentSources = [];
+    for (const element of containmentCandidates) {
+      const previousValue = element.style.getPropertyValue('overflow-x');
+      const previousPriority = element.style.getPropertyPriority('overflow-x');
+      element.style.setProperty('overflow-x', 'hidden', 'important');
+      const reducedDocumentScrollWidth = document.documentElement.scrollWidth;
+      if (reducedDocumentScrollWidth < baselineScrollWidth) {
+        containmentSources.push({
+          ...describe(element),
+          reducedDocumentScrollWidth,
+          reduction: baselineScrollWidth - reducedDocumentScrollWidth,
+        });
+      }
+      if (previousValue) element.style.setProperty('overflow-x', previousValue, previousPriority);
+      else element.style.removeProperty('overflow-x');
+    }
+    containmentSources.sort((a, b) => b.reduction - a.reduction);
+    return {
+      innerWidth,
+      documentClientWidth: viewport,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      bodyClientWidth: document.body.clientWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      offenders,
+      scrollSources,
+      containmentSources: containmentSources.slice(0, 16),
+    };
+  })()`);
+}
+
 async function proveNormalInteraction(cdp) {
   await navigate(cdp, "normal");
   assert(!(await evaluate(cdp, "!!document.querySelector('#top-files-table')")), "top-files-surface-visible-before-scan");
@@ -286,7 +413,10 @@ async function proveNormalInteraction(cdp) {
     await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false });
     await new Promise((resolve) => setTimeout(resolve, 50));
     const overflow = await evaluate(cdp, "document.documentElement.scrollWidth > document.documentElement.clientWidth");
-    assert(!overflow, `top-files-page-horizontal-overflow:${width}`);
+    if (overflow) {
+      const evidence = await horizontalOverflowEvidence(cdp);
+      throw new Error(`top-files-page-horizontal-overflow:${width}:${JSON.stringify(evidence)}`);
+    }
     const clipped = await evaluate(cdp, `(() => {
       const region = document.querySelector('#top-files-table');
       const heading = document.querySelector('#top-files-heading');
@@ -332,8 +462,10 @@ async function main() {
     logLevel: "error",
   });
   let chrome;
+  let browserCdp;
   let cdp;
   let profile;
+  let primaryError;
   try {
     await server.listen();
     const chromeBinary = findChrome();
@@ -353,7 +485,12 @@ async function main() {
       "--metrics-recording-only",
       "--no-first-run",
       "about:blank",
-    ], { stdio: ["ignore", "pipe", "pipe"] });
+    ], { stdio: ["ignore", "pipe", "pipe"], detached: SIGNALS_PROCESS_GROUP });
+
+    const browserVersion = await waitForJson(`http://${HOST}:${DEBUG_PORT}/json/version`);
+    assert(browserVersion?.webSocketDebuggerUrl, "browser-e2e-browser-target-unavailable");
+    browserCdp = new CdpClient(browserVersion.webSocketDebuggerUrl);
+    await browserCdp.connect();
 
     const targets = await waitForJson(`http://${HOST}:${DEBUG_PORT}/json/list`);
     const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
@@ -369,11 +506,33 @@ async function main() {
     await proveEmptyAndErrorStates(cdp);
     await provePermissionState(cdp);
     console.log("DISKSAGE_BROWSER_E2E_RESULT status=passed browser=chrome scenarios=normal,loading,empty,error,permission");
+  } catch (error) {
+    primaryError = error;
   } finally {
-    cdp?.close();
-    chrome?.kill("SIGTERM");
-    await server.close();
-    if (profile) rmSync(profile, { recursive: true, force: true });
+    let cleanupError;
+    const runCleanup = async (operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+
+    await runCleanup(() => closeBrowserGracefully(browserCdp, chrome));
+    await runCleanup(async () => cdp?.close());
+    await runCleanup(async () => browserCdp?.close());
+    await runCleanup(() => server.close());
+    await runCleanup(async () => {
+      if (profile) rmSync(profile, { recursive: true, force: true });
+    });
+
+    if (primaryError) {
+      if (cleanupError) {
+        console.error("browser-e2e-cleanup-after-primary-failure", cleanupError instanceof Error ? cleanupError.stack : cleanupError);
+      }
+      throw primaryError;
+    }
+    if (cleanupError) throw cleanupError;
   }
 }
 
