@@ -47,22 +47,37 @@ async function waitForJson(url, timeoutMs = 20_000) {
   throw new Error(`browser-e2e-readiness-timeout: ${lastError?.message ?? "unknown"}`);
 }
 
+const SIGNALS_PROCESS_GROUP = process.platform !== "win32";
+
+function signalProcessTree(child, signal) {
+  if (SIGNALS_PROCESS_GROUP && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH" && error?.code !== "EPERM") throw error;
+    }
+  }
+  child.kill(signal);
+}
+
 async function stopChildProcess(child, timeoutMs = 5_000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once("exit", resolve));
-  child.kill("SIGTERM");
+  signalProcessTree(child, "SIGTERM");
   const graceful = await Promise.race([
     exited.then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
   ]);
-  if (graceful) return;
-
-  child.kill("SIGKILL");
-  const forced = await Promise.race([
-    exited.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
-  ]);
-  if (!forced) throw new Error("browser-e2e-chrome-shutdown-timeout");
+  if (!graceful) {
+    signalProcessTree(child, "SIGKILL");
+    const forced = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
+    ]);
+    if (!forced) throw new Error("browser-e2e-chrome-shutdown-timeout");
+  }
+  signalProcessTree(child, "SIGKILL");
 }
 
 class CdpClient {
@@ -444,7 +459,7 @@ async function main() {
       "--metrics-recording-only",
       "--no-first-run",
       "about:blank",
-    ], { stdio: ["ignore", "pipe", "pipe"] });
+    ], { stdio: ["ignore", "pipe", "pipe"], detached: SIGNALS_PROCESS_GROUP });
 
     const targets = await waitForJson(`http://${HOST}:${DEBUG_PORT}/json/list`);
     const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
