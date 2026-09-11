@@ -5,7 +5,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+static PATH_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Restores the caller's PATH after the fake `lsof` process fixture completes.
 struct PathGuard(Option<OsString>);
@@ -38,6 +41,9 @@ fn prepend_fixture_path(fake_bin: &std::path::Path) -> PathGuard {
 /// Proves a successful helper cannot let a pipe-owning descendant outlive the command bound.
 #[test]
 fn successful_helper_settles_descendants_before_bounded_reader_join() {
+    let _path_lock = PATH_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temporary = tempfile::tempdir().expect("temporary process fixture");
     let fake_bin = temporary.path().join("bin");
     let artifact = temporary.path().join("artifact");
@@ -94,6 +100,9 @@ fn reap_fixture_leader(marker: PathBuf) {
 #[cfg(target_os = "linux")]
 #[test]
 fn observation_failure_does_not_detach_pipe_reader_fds() {
+    let _path_lock = PATH_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temporary = tempfile::tempdir().expect("temporary observation-error fixture");
     let fake_bin = temporary.path().join("bin");
     let artifact = temporary.path().join("artifact");
