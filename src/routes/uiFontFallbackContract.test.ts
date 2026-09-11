@@ -18,10 +18,13 @@ describe("material UI font fallback", () => {
     expect(page).toContain('"Hiragino Sans"');
     expect(page).toContain('"Yu Gothic UI"');
     expect(page).toContain('"PingFang SC"');
+    expect(page).toContain('"PingFang TC"');
     expect(page).toContain('"Microsoft YaHei"');
+    expect(page).toContain('"Microsoft JhengHei"');
     expect(page).toContain('"Noto Sans CJK KR"');
     expect(page).toContain('"Noto Sans CJK JP"');
     expect(page).toContain('"Noto Sans CJK SC"');
+    expect(page).toContain('"Noto Sans CJK TC"');
     expect(page).toContain('"Noto Sans"');
   });
 });
