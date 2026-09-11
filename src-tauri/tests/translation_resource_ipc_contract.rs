@@ -47,6 +47,22 @@ fn unsupported_locale_fails_instead_of_falling_back() {
         resolve_translation_message(&resource(), "it", "app.action.scan"),
         Err("translation-locale-unsupported".to_string())
     );
+    assert_eq!(
+        resolve_translation_message(&resource(), &"x".repeat(1024), "app.action.scan"),
+        Err("translation-locale-unsupported".to_string())
+    );
+}
+
+#[test]
+fn malformed_or_oversized_screen_key_is_rejected_before_lookup() {
+    assert_eq!(
+        resolve_translation_message(&resource(), "en", "App.action.scan"),
+        Err("translation-screen-key-invalid".to_string())
+    );
+    assert_eq!(
+        resolve_translation_message(&resource(), "en", &"a".repeat(161)),
+        Err("translation-screen-key-invalid".to_string())
+    );
 }
 
 #[test]
