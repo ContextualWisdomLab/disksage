@@ -18,11 +18,15 @@ fn resource() -> TranslationResource {
         ("de".to_string(), "Scannen".to_string()),
         ("fr".to_string(), "Analyser".to_string()),
     ]);
+    let cancel = scan.clone();
 
     TranslationResource {
         resource_version: "2026.09.11.1".to_string(),
         schema_version: 1,
-        messages: BTreeMap::from([("app.action.scan".to_string(), scan)]),
+        messages: BTreeMap::from([
+            ("app.action.scan".to_string(), scan),
+            ("app.action.cancel".to_string(), cancel),
+        ]),
     }
 }
 
