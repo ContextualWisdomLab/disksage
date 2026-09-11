@@ -265,11 +265,41 @@ async function horizontalOverflowEvidence(cdp) {
         overflowX: style.overflowX,
       };
     };
-    const offenders = [...document.body.querySelectorAll('*')]
-      .map(describe)
+    const elements = [...document.body.querySelectorAll('*')];
+    const descriptions = elements.map(describe);
+    const offenders = descriptions
       .filter((item) => item.left < -1 || item.right > viewport + 1)
       .sort((a, b) => Math.max(b.right - viewport, -b.left) - Math.max(a.right - viewport, -a.left))
       .slice(0, 16);
+    const scrollSources = descriptions
+      .filter((item) => item.scrollWidth > item.clientWidth + 1)
+      .sort((a, b) => (b.scrollWidth - b.clientWidth) - (a.scrollWidth - a.clientWidth))
+      .slice(0, 16);
+    const baselineScrollWidth = document.documentElement.scrollWidth;
+    const containmentCandidates = new Set();
+    for (const element of elements) {
+      if (element.scrollWidth <= element.clientWidth + 1) continue;
+      for (let current = element; current && current !== document.documentElement; current = current.parentElement) {
+        containmentCandidates.add(current);
+      }
+    }
+    const containmentSources = [];
+    for (const element of containmentCandidates) {
+      const previousValue = element.style.getPropertyValue('overflow-x');
+      const previousPriority = element.style.getPropertyPriority('overflow-x');
+      element.style.setProperty('overflow-x', 'hidden', 'important');
+      const reducedDocumentScrollWidth = document.documentElement.scrollWidth;
+      if (reducedDocumentScrollWidth < baselineScrollWidth) {
+        containmentSources.push({
+          ...describe(element),
+          reducedDocumentScrollWidth,
+          reduction: baselineScrollWidth - reducedDocumentScrollWidth,
+        });
+      }
+      if (previousValue) element.style.setProperty('overflow-x', previousValue, previousPriority);
+      else element.style.removeProperty('overflow-x');
+    }
+    containmentSources.sort((a, b) => b.reduction - a.reduction);
     return {
       innerWidth,
       documentClientWidth: viewport,
@@ -277,6 +307,8 @@ async function horizontalOverflowEvidence(cdp) {
       bodyClientWidth: document.body.clientWidth,
       bodyScrollWidth: document.body.scrollWidth,
       offenders,
+      scrollSources,
+      containmentSources: containmentSources.slice(0, 16),
     };
   })()`);
 }
