@@ -6,7 +6,7 @@
 //! same fixed path is included in Tauri configuration; path-based production loading stays crate-only.
 
 use disksage_lib::translation_resource::{
-    current_translation_resource_asset, CURRENT_TRANSLATION_RESOURCE_VERSION,
+    current_translation_resource_asset, TranslationResource, CURRENT_TRANSLATION_RESOURCE_VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -47,5 +47,28 @@ fn current_translation_resource_is_version_path_digest_and_bundle_bound() {
     assert!(
         resources.iter().any(|entry| entry.as_str() == Some(asset.relative_path)),
         "the digest-bound translation resource must be included in the application bundle"
+    );
+}
+
+#[test]
+fn schema_v1_rejects_unknown_top_level_fields() {
+    let asset = current_translation_resource_asset();
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let resource_bytes =
+        std::fs::read(manifest_dir.join(asset.relative_path)).expect("read bundled resource fixture");
+    let mut candidate: serde_json::Value =
+        serde_json::from_slice(&resource_bytes).expect("resource fixture must be JSON");
+    candidate
+        .as_object_mut()
+        .expect("translation resource must be an object")
+        .insert(
+            "future_semantics_without_schema_bump".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+    let parsed = serde_json::from_value::<TranslationResource>(candidate);
+    assert!(
+        parsed.is_err(),
+        "schema_version=1 must reject undeclared top-level semantics rather than silently discard them"
     );
 }
