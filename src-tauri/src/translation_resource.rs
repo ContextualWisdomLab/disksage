@@ -50,10 +50,12 @@ pub fn current_translation_resource_asset() -> TranslationResourceAsset {
 
 /// Loads the current resource from an already-resolved fixed bundle path.
 ///
-/// The caller is responsible only for resolving the compile-time `relative_path` through the
-/// application resource directory. The file contents remain authoritative only after this function
-/// verifies the pinned digest and resource structure.
-pub fn load_current_translation_resource_file(path: &Path) -> Result<TranslationResource, String> {
+/// This stays crate-visible so a future Tauri adapter can resolve only the compile-time asset through
+/// `BaseDirectory::Resource`; external library consumers cannot turn an arbitrary path into product
+/// translation authority. The bytes remain authoritative only after digest and structure validation.
+pub(crate) fn load_current_translation_resource_file(
+    path: &Path,
+) -> Result<TranslationResource, String> {
     let path_metadata = fs::symlink_metadata(path)
         .map_err(|_| "translation-resource-metadata-unavailable".to_string())?;
     if path_metadata.file_type().is_symlink() {
@@ -67,23 +69,24 @@ pub fn load_current_translation_resource_file(path: &Path) -> Result<Translation
     }
 
     let mut file = File::open(path).map_err(|_| "translation-resource-open-failed".to_string())?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|_| "translation-resource-opened-metadata-failed".to_string())?;
-    if !opened_metadata.is_file() {
-        return Err("translation-resource-opened-object-not-regular".to_string());
-    }
-
-    let mut bytes = Vec::with_capacity(path_metadata.len() as usize);
-    file.by_ref()
-        .take((MAX_TRANSLATION_RESOURCE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "translation-resource-read-failed".to_string())?;
+    let bytes = read_bounded_translation_resource(&mut file, path_metadata.len() as usize)?;
     load_translation_resource_bytes(
         &bytes,
         CURRENT_TRANSLATION_RESOURCE_VERSION,
         CURRENT_TRANSLATION_RESOURCE_SHA256,
     )
+}
+
+fn read_bounded_translation_resource(
+    reader: impl Read,
+    initial_capacity: usize,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(initial_capacity.min(MAX_TRANSLATION_RESOURCE_BYTES));
+    reader
+        .take((MAX_TRANSLATION_RESOURCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "translation-resource-read-failed".to_string())?;
+    Ok(bytes)
 }
 
 fn load_translation_resource_bytes(
@@ -176,9 +179,14 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::fs;
+    use std::io;
 
     fn checked_in_bytes() -> &'static [u8] {
         include_bytes!("../resources/translation/releases/2026.09.11.1.json")
+    }
+
+    fn checked_in_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(CURRENT_TRANSLATION_RESOURCE_PATH)
     }
 
     fn mutated_resource(mutator: impl FnOnce(&mut Value)) -> Vec<u8> {
@@ -205,6 +213,13 @@ mod tests {
         assert_eq!(resource.messages.len(), 2);
         assert_eq!(resource.messages["app.action.scan"]["ko"], "스캔");
         assert_eq!(resource.messages["app.action.scan"]["fr"], "Analyser");
+    }
+
+    #[test]
+    fn checked_in_resource_file_passes_native_file_admission() {
+        let resource = load_current_translation_resource_file(&checked_in_path())
+            .expect("checked-in translation resource file must validate");
+        assert_eq!(resource.resource_version, CURRENT_TRANSLATION_RESOURCE_VERSION);
     }
 
     #[test]
@@ -264,6 +279,9 @@ mod tests {
             load_mutated(&invalid_key),
             Err("translation-resource-screen-key-invalid".to_string())
         );
+        assert!(!valid_screen_key(""));
+        assert!(!valid_screen_key(&"a".repeat(161)));
+        assert!(valid_screen_key("app.scan_action-v1"));
 
         let missing_locale = mutated_resource(|value| {
             value["messages"]["app.action.scan"]
@@ -337,6 +355,22 @@ mod tests {
         );
     }
 
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("synthetic read boundary failure"))
+        }
+    }
+
+    #[test]
+    fn bounded_reader_preserves_read_failure_and_caps_capacity() {
+        assert_eq!(
+            read_bounded_translation_resource(FailingReader, usize::MAX),
+            Err("translation-resource-read-failed".to_string())
+        );
+    }
+
     #[test]
     fn file_loader_accepts_regular_pinned_resource_and_rejects_directory() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -372,18 +406,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn file_loader_rejects_symlink_resource() {
-        use std::os::unix::fs::symlink;
+    fn file_loader_rejects_symlink_and_unreadable_resource() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let target = directory.path().join("target.json");
         let link = directory.path().join("resource.json");
         fs::write(&target, checked_in_bytes()).expect("write symlink target");
         symlink(&target, &link).expect("create symlink fixture");
-
         assert_eq!(
             load_current_translation_resource_file(&link),
             Err("translation-resource-symlink-rejected".to_string())
+        );
+
+        let unreadable = directory.path().join("unreadable.json");
+        fs::write(&unreadable, checked_in_bytes()).expect("write unreadable fixture");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+            .expect("remove fixture read permission");
+        let result = load_current_translation_resource_file(&unreadable);
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o600))
+            .expect("restore fixture read permission for cleanup");
+        assert_eq!(
+            result,
+            Err("translation-resource-open-failed".to_string())
         );
     }
 }
