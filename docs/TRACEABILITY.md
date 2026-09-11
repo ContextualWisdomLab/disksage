@@ -2,7 +2,7 @@
 
 **Status:** Living engineering evidence map
 
-**Snapshot:** 2026-09-05
+**Snapshot:** 2026-09-12
 
 This document records why external standards and primary technical authorities constrain DiskSage behavior. It does not turn a cited source, an open pull request, or a test fixture into shipped evidence. Runtime code, exact-head tests, protected Git history, immutable release artifacts, and recovery receipts remain the acceptance evidence.
 
@@ -30,6 +30,20 @@ Git `prunable` metadata, incomplete size/status evidence, dirty state, active pr
 
 This boundary is intentionally stronger than a synthetic object-state unit test because deletion safety depends on Git registration state, filesystem presence, process state, and bounded evidence being observed together.
 
+## Unix subprocess and process-group lifecycle
+
+### Identity-preserving bounded execution — issues #385/#393 and PRs #386/#399
+
+**Problem.** Several Unix adapters create a private process group so timeout or descendant-held pipes can be bounded. Reaping the direct process-group leader before all group-directed signals are complete removes the live/waitable identity anchor. A later `kill(-pgid, ...)` still targets a numeric process-group ID; if the prior group lifetime has ended and the number has been reused, the signal can address an unrelated group. Separately, blocking stdout/stderr readers created before child observation can outlive an error return when descendants retain the pipe write ends.
+
+**Constraints.** POSIX.1-2024 `waitid()` with `WNOWAIT` obtains status without consuming it, so an exited child can remain waitable until the caller deliberately reaps it. `WNOHANG` permits a nonblocking observation. An `EINTR` result says the operation was interrupted by a signal; it does not itself consume a child wait status, so DiskSage retries that observation. Other observation errors are not treated as proof that the old numeric PID/PGID remains a safe signalling target. POSIX `kill()` with a negative `pid` selects a process group by the absolute numeric value. POSIX.1-2024 also defines process-ID/process-group-ID lifetimes and explicitly discusses why reusing an old process-group number can misdirect later signals. DiskSage's rule—keep the leader live or waitable until group signalling is finished—is an engineering consequence of these primitives and lifetime rules, not a claim that POSIX prescribes DiskSage's exact wrapper design.
+
+**Accepted design direction.** #386 is the canonical Unix lifecycle owner. Normal exit is observed without reaping; descendants are settled while the leader still pins identity; `Child::wait()` then consumes status exactly once. Timeout cleanup likewise signals the verified private group before reaping. Interrupted no-reap observations are retried only for `EINTR`; a genuine non-interrupted observation failure fails closed and cannot authorize a negative-PID signal. Domain adapters remain responsible for bounding or cancelling their own reader threads/file descriptors and for translating uncertainty into domain evidence rather than detaching resources or manufacturing success.
+
+**Rejected alternatives.** `try_wait()` followed by remembered-PGID signalling, retrying every observation error, detaching blocked readers, widening command timeouts, or killing an unverified process group are rejected. Those approaches either lose identity continuity, conceal uncertainty, or leave DiskSage-owned resources outside the bounded execution contract.
+
+**Exact acceptance evidence.** The canonical foundation requires real Unix child/process-group fixtures for running, exited-but-unreaped, timeout, descendant-held-pipe, interruption retry, explicit final reap, and fail-closed observation errors. Each consumer must then prove its own fixed executable/arguments, domain evidence, output bounds, and platform behavior on a resulting exact head. #399 exact `1d49d9faad26de2bbc26a605a578d35804eee009` has terminal Test `34642960506` SUCCESS for its original success/timeout descendant-held-pipe repair, but current review still requires bounded/cancellable reader cleanup for genuine non-interrupted observation failure. #386 exact `ad61c380ee3cb0319bf423afe1247f91cce033ce` adds EINTR-only retry and must earn its own terminal exact-head evidence before dependent restack.
+
 ## Ontology and provenance boundary
 
 DiskSage filesystem classification uses ontology terms as semantic evidence, not as mutation permission. OWL 2 remains the formal ontology-language reference. SHACL is the validation reference for RDF graph constraints where a shape contract is used. PROV-O is the provenance vocabulary reference when an evidence artifact needs explicit entity/activity/agent provenance. None of these vocabularies authorizes deletion, remote synchronization, or credential use by itself.
@@ -51,6 +65,9 @@ Issue #342 maps to CWE-367 (Time-of-check Time-of-use Race Condition): a resourc
 | Microsoft `FILE_RENAME_INFO` / `SetFileInformationByHandle` | Relative rename may resolve against `RootDirectory`; temporary creation still needs pinned namespace authority | #339 / issue #342 | Windows reparse/ancestor replacement fixture and native-handle creation/replacement evidence |
 | Apple `fsync(2)` / `fcntl(F_FULLFSYNC)` documentation | macOS persistence language must identify the primitive actually used and not overstate crash/power-loss guarantees | #344 foundation / #339 consumer | macOS filesystem fixture plus documented ordinary-vs-stronger sync decision, fallback, and cost |
 | CWE-367 | Pathname check/use gaps are a security weakness even without a final-component symlink | #339 / SECURITY/THREAT_MODEL | Causal test and stable-authority fix, not timing reduction |
+| POSIX.1-2024 `waitid(..., WNOWAIT)` | Observe exited children without consuming wait status so the leader can remain the lifecycle identity anchor until group cleanup is complete; retry only signal interruption | #386 foundation; #385 migration coordinator | Real running/exited-unreaped/timeout/EINTR fixtures, explicit final reap, no `try_wait()` fallback |
+| POSIX.1-2024 `kill()` negative-pid process-group selection + process-ID reuse rules | Do not send a group signal after the numeric identity is no longer proven to refer to the admitted private group | #386 foundation; #393/#399 and other domain consumers | Group signal occurs while leader is live/waitable; genuine observation failure sends no unverified negative-PID signal |
+| POSIX.1-2024 read/interruption semantics | Pipe readers must handle interruption and remain bounded without converting an error path into detached resource ownership | each subprocess domain adapter | Real descendant-held stdout/stderr plus error-path cleanup fixture; no timeout widening or detached-reader acceptance |
 | OWL 2 | Formal classes/properties/individuals may express filesystem classification semantics | ontology/classification owner | Ontology conformance plus mapping tests; no mutation-authority inference |
 | SHACL | RDF graph validity may be checked against explicit shapes | ontology validation adapter | Fail-closed validation fixtures for required shapes |
 | PROV-O | Provenance relationships may describe evidence production/derivation | evidence/provenance adapter | Stable identifiers and provenance-preservation tests; no deletion authorization |
@@ -69,7 +86,13 @@ Microsoft. (2021, October 13). *SetFileInformationByHandle function (fileapi.h).
 
 MITRE. (2026, April 30). *CWE-367: Time-of-check Time-of-use (TOCTOU) race condition (CWE 4.20).* Common Weakness Enumeration. https://cwe.mitre.org/data/definitions/367.html
 
-The Open Group. (2024). *rename, renameat — rename file.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
+The Open Group. (2024). *General concepts: Process ID reuse.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html
+
+The Open Group. (2024). *kill — send a signal to a process or a group of processes.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html
+
+The Open Group. (2024). *wait, waitpid, waitid — wait for a process to change state.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/wait.html
+
+The Open Group. (2024). *read — read from a file.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html
 
 The Open Group. (2024). *Rationale for Base Definitions: Directory operations and durability.* In *The Open Group Base Specifications Issue 8, IEEE Std 1003.1-2024.* https://pubs.opengroup.org/onlinepubs/9799919799/xrat/V4_xbd_chap01.html
 
