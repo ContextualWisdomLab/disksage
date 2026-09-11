@@ -151,6 +151,15 @@ jobs:
           else
             printf 'SKIP unix_process_group: owner source absent; no runtime regression executed\n'
           fi
+      - name: macOS provider global-sync process-group regression when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if [[ -f "src-tauri/tests/provider_global_sync_success_pipe_contract.rs" ]]; then
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --test provider_global_sync_success_pipe_contract
+          else
+            printf 'SKIP provider_global_sync_success_pipe_contract: owner source absent; no runtime regression executed\n'
+          fi
 
   windows-home-resolution:
     runs-on: windows-latest
