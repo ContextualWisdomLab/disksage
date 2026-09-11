@@ -432,14 +432,20 @@ async function main() {
     primaryError = error;
   } finally {
     let cleanupError;
-    try {
-      cdp?.close();
-      await stopChildProcess(chrome);
-      await server.close();
+    const runCleanup = async (operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+
+    await runCleanup(async () => cdp?.close());
+    await runCleanup(() => stopChildProcess(chrome));
+    await runCleanup(() => server.close());
+    await runCleanup(async () => {
       if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    } catch (error) {
-      cleanupError = error;
-    }
+    });
 
     if (primaryError) {
       if (cleanupError) {
