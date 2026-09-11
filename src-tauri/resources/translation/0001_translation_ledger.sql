@@ -42,3 +42,39 @@ CREATE TABLE translation_messages (
         REFERENCES translation_screen_keys(screen_key)
         ON UPDATE RESTRICT ON DELETE RESTRICT
 ) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER translation_resource_versions_no_update
+BEFORE UPDATE ON translation_resource_versions
+BEGIN
+    SELECT RAISE(ABORT, 'translation-resource-version-immutable');
+END;
+
+CREATE TRIGGER translation_resource_versions_no_delete
+BEFORE DELETE ON translation_resource_versions
+BEGIN
+    SELECT RAISE(ABORT, 'translation-resource-version-immutable');
+END;
+
+CREATE TRIGGER translation_screen_keys_no_update
+BEFORE UPDATE ON translation_screen_keys
+BEGIN
+    SELECT RAISE(ABORT, 'translation-screen-key-immutable');
+END;
+
+CREATE TRIGGER translation_screen_keys_no_delete
+BEFORE DELETE ON translation_screen_keys
+BEGIN
+    SELECT RAISE(ABORT, 'translation-screen-key-immutable');
+END;
+
+CREATE TRIGGER translation_messages_no_update
+BEFORE UPDATE ON translation_messages
+BEGIN
+    SELECT RAISE(ABORT, 'translation-message-immutable');
+END;
+
+CREATE TRIGGER translation_messages_no_delete
+BEFORE DELETE ON translation_messages
+BEGIN
+    SELECT RAISE(ABORT, 'translation-message-immutable');
+END;
