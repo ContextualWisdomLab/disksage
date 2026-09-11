@@ -87,6 +87,8 @@ describe("versioned translation ledger", () => {
     expect(translationLookupCacheKey("2026.09.11.1", "ko", "scan.action.start")).not.toBe(
       translationLookupCacheKey("2026.09.11.2", "ko", "scan.action.start"),
     );
+    expect(() => new TranslationLookupCache(0)).toThrow("translation-cache-capacity-must-be-positive-safe-integer");
+    expect(() => new TranslationLookupCache(1.5)).toThrow("translation-cache-capacity-must-be-positive-safe-integer");
 
     const cache = new TranslationLookupCache(2);
     cache.set("2026.09.11.1", "ko", "scan.action.start", "스캔");
@@ -98,7 +100,9 @@ describe("versioned translation ledger", () => {
     expect(cache.get("2026.09.11.1", "ko", "scan.action.start")).toBe("스캔");
     expect(cache.get("2026.09.11.1", "ja", "scan.action.start")).toBe("スキャン");
 
+    cache.set("2026.09.11.2", "ko", "scan.action.start", "새 스캔");
     cache.clearVersion("2026.09.11.1");
-    expect(cache.get("2026.09.11.1", "ko", "scan.action.start")).toBeUndefined();
+    expect(cache.get("2026.09.11.1", "ja", "scan.action.start")).toBeUndefined();
+    expect(cache.get("2026.09.11.2", "ko", "scan.action.start")).toBe("새 스캔");
   });
 });
