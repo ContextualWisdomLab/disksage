@@ -47,6 +47,24 @@ async function waitForJson(url, timeoutMs = 20_000) {
   throw new Error(`browser-e2e-readiness-timeout: ${lastError?.message ?? "unknown"}`);
 }
 
+async function stopChildProcess(child, timeoutMs = 5_000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  const graceful = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+  if (graceful) return;
+
+  child.kill("SIGKILL");
+  const forced = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
+  ]);
+  if (!forced) throw new Error("browser-e2e-chrome-shutdown-timeout");
+}
+
 class CdpClient {
   constructor(url) {
     this.url = url;
@@ -411,9 +429,9 @@ async function main() {
     console.log("DISKSAGE_BROWSER_E2E_RESULT status=passed browser=chrome scenarios=normal,loading,empty,error,permission");
   } finally {
     cdp?.close();
-    chrome?.kill("SIGTERM");
+    await stopChildProcess(chrome);
     await server.close();
-    if (profile) rmSync(profile, { recursive: true, force: true });
+    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
