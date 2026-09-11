@@ -10,6 +10,21 @@ use std::process::Command;
 use std::os::unix::ffi::OsStringExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::sync::{Mutex, MutexGuard};
+
+#[cfg(unix)]
+static RUNTIME_PROCESS_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+fn runtime_process_guard() -> MutexGuard<'static, ()> {
+    RUNTIME_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(not(unix))]
+fn runtime_process_guard() {}
 
 #[cfg(unix)]
 fn fake_runtime(script_body: &str) -> (tempfile::TempDir, PathBuf) {
@@ -45,6 +60,7 @@ fn private_receipt_dir() -> tempfile::TempDir {
 #[cfg(unix)]
 #[test]
 fn healthy_empty_docker_lists_are_complete_and_binary_is_not_repeated() {
+    let _runtime_process_guard = runtime_process_guard();
     let (_temp, runtime) = fake_runtime(
         r#"
 case "${1:-}" in
@@ -100,6 +116,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn docker_audit_requests_full_ids_and_all_image_evidence() {
+    let _runtime_process_guard = runtime_process_guard();
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (_temp, runtime) = fake_runtime(&format!(
         r#"
@@ -158,6 +175,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn docker_image_size_identity_mismatch_blocks_only_image_category() {
+    let _runtime_process_guard = runtime_process_guard();
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let (_temp, runtime) = fake_runtime(&format!(
@@ -191,6 +209,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn approved_container_execution_targets_only_the_fingerprinted_candidate() {
+    let _runtime_process_guard = runtime_process_guard();
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (_temp, runtime) = fake_runtime(&format!(
         r#"
@@ -257,6 +276,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn volume_execution_requires_explicit_ownership_and_preserves_compose_volumes() {
+    let _runtime_process_guard = runtime_process_guard();
     let (_temp, runtime) = fake_runtime(
         r#"
 case "${1:-}" in
@@ -313,6 +333,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn option_shaped_network_name_is_rejected_before_network_inspect() {
+    let _runtime_process_guard = runtime_process_guard();
     let (_temp, runtime) = fake_runtime(
         r#"
 case "${1:-}" in
@@ -343,6 +364,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn non_utf8_cli_argument_prints_real_usage_not_a_literal_placeholder() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let opaque =
         std::ffi::OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
@@ -361,6 +383,7 @@ fn non_utf8_cli_argument_prints_real_usage_not_a_literal_placeholder() {
 
 #[test]
 fn cli_help_must_be_a_terminal_solo_request() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let output = Command::new(binary)
         .args(["--runtime", "docker-native", "--help"])
@@ -376,6 +399,7 @@ fn cli_help_must_be_a_terminal_solo_request() {
 
 #[test]
 fn unsupported_runtime_kind_is_not_reflected_in_diagnostics() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let untrusted = "customer-secret-runtime-name";
     let output = Command::new(binary)
@@ -392,6 +416,7 @@ fn unsupported_runtime_kind_is_not_reflected_in_diagnostics() {
 
 #[test]
 fn singleton_cli_options_reject_duplicates_before_domain_work() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let cases = [
         (
@@ -440,6 +465,7 @@ fn singleton_cli_options_reject_duplicates_before_domain_work() {
 
 #[test]
 fn runtime_scope_relationship_is_validated_before_domain_work() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let cases = [
         (
@@ -471,6 +497,7 @@ fn runtime_scope_relationship_is_validated_before_domain_work() {
 #[cfg(unix)]
 #[test]
 fn podman_machine_cli_defaults_to_the_podman_binary() {
+    let _runtime_process_guard = runtime_process_guard();
     let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let podman = temp.path().join("podman");
