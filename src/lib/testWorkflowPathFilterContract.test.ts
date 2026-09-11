@@ -191,3 +191,48 @@ it("macOS Unix process-group admission runs the locked owner test and propagates
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+it("macOS provider global-sync admission runs the locked process contract and propagates failure", () => {
+  const job = workflow.split("  macos-cache-cleanup:\n")[1]?.split("  windows-home-resolution:")[0] ?? "";
+  const script = namedRunScript(
+    job,
+    "macOS provider global-sync process-group regression when owner source is present",
+  );
+  expect(script).toContain('src-tauri/tests/provider_global_sync_success_pipe_contract.rs');
+  expect(script).toContain(
+    "cargo test --locked --manifest-path src-tauri/Cargo.toml --test provider_global_sync_success_pipe_contract",
+  );
+
+  const fixture = mkdtempSync(resolve(tmpdir(), "disksage-provider-global-sync-admission-"));
+  try {
+    const bin = resolve(fixture, "bin");
+    mkdirSync(bin);
+    const log = resolve(fixture, "cargo.log");
+    writeFileSync(
+      resolve(bin, "cargo"),
+      "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$CARGO_LOG\"\nexit \"${CARGO_EXIT:-0}\"\n",
+      { mode: 0o700 },
+    );
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_LOG: log };
+    const run = (extra = {}) => spawnSync("bash", ["-e", "-c", script], {
+      cwd: fixture,
+      env: { ...env, ...extra },
+      encoding: "utf8",
+    });
+
+    const absent = run();
+    expect(absent.status).toBe(0);
+    expect(absent.stdout.match(/no runtime regression executed/g)).toHaveLength(1);
+    expect(existsSync(log)).toBe(false);
+
+    mkdirSync(resolve(fixture, "src-tauri/tests"), { recursive: true });
+    writeFileSync(resolve(fixture, "src-tauri/tests/provider_global_sync_success_pipe_contract.rs"), "");
+    expect(run().status).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe(
+      "test --locked --manifest-path src-tauri/Cargo.toml --test provider_global_sync_success_pipe_contract\n",
+    );
+    expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
