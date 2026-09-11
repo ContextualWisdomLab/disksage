@@ -60,6 +60,12 @@ function negativePathsIgnoreEntries(source: string): string[] {
   return negatives;
 }
 
+function namedRunScript(job: string, stepName: string): string {
+  const marker = `      - name: ${stepName}\n`;
+  const step = job.split(marker)[1]?.split(/\n      - /, 1)[0] ?? "";
+  return step.match(/        run: \|\n([\s\S]*)/)?.[1].replace(/^          /gm, "") ?? "";
+}
+
 describe("test workflow path-filter contract", () => {
   it("detects negative paths-ignore entries after comments and in inline lists", () => {
     const fixtures = [
@@ -122,12 +128,13 @@ describe("test workflow path-filter contract", () => {
   });
 });
 
-// Exercise the canonical shell admission without compiling or faking Rust test results.
+// Exercise each canonical shell admission independently without compiling or faking Rust test results.
 it("macOS cache job executes present owner tests, reports absent source, and propagates failure", () => {
   const job = workflow.split("  macos-cache-cleanup:\n")[1]?.split("  windows-home-resolution:")[0] ?? "";
   expect(job).toContain("runs-on: macos-latest");
   expect(job).toContain("ref: ${{ github.event.pull_request.head.sha || github.sha }}");
-  const script = job.match(/        run: \|\n([\s\S]*)/)?.[1].replace(/^          /gm, "") ?? "";
+  const script = namedRunScript(job, "macOS cache cleanup regressions when owner source is present");
+  expect(script).not.toContain("unix_process_group");
   for (const target of ["cache_cleanup_corepack_scope", "cache_cleanup_cli_permanent_gradle", "generated_cache_staged_activity"]) {
     expect(script).toContain(target);
   }
@@ -147,6 +154,38 @@ it("macOS cache job executes present owner tests, reports absent source, and pro
     writeFileSync(resolve(fixture, "src-tauri/tests/generated_cache_staged_activity.rs"), "");
     expect(run().status).toBe(0);
     expect(readFileSync(log, "utf8")).toBe("test --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
+    expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+it("macOS Unix process-group admission runs the locked owner test and propagates failure", () => {
+  const job = workflow.split("  macos-cache-cleanup:\n")[1]?.split("  windows-home-resolution:")[0] ?? "";
+  const script = namedRunScript(job, "macOS Unix process-group regression when owner source is present");
+  expect(script).toContain('src-tauri/src/unix_process_group.rs');
+  expect(script).toContain("cargo test --locked --manifest-path src-tauri/Cargo.toml --lib unix_process_group::tests");
+
+  const fixture = mkdtempSync(resolve(tmpdir(), "disksage-unix-process-group-admission-"));
+  try {
+    const bin = resolve(fixture, "bin");
+    mkdirSync(bin);
+    const log = resolve(fixture, "cargo.log");
+    writeFileSync(resolve(bin, "cargo"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$CARGO_LOG\"\nexit \"${CARGO_EXIT:-0}\"\n", { mode: 0o700 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_LOG: log };
+    const run = (extra = {}) => spawnSync("bash", ["-e", "-c", script], { cwd: fixture, env: { ...env, ...extra }, encoding: "utf8" });
+
+    const absent = run();
+    expect(absent.status).toBe(0);
+    expect(absent.stdout.match(/no runtime regression executed/g)).toHaveLength(1);
+    expect(existsSync(log)).toBe(false);
+
+    mkdirSync(resolve(fixture, "src-tauri/src"), { recursive: true });
+    writeFileSync(resolve(fixture, "src-tauri/src/unix_process_group.rs"), "");
+    expect(run().status).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe(
+      "test --locked --manifest-path src-tauri/Cargo.toml --lib unix_process_group::tests\n",
+    );
     expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
