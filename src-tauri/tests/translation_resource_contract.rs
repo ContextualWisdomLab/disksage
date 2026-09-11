@@ -1,15 +1,18 @@
-//! Contract for the native immutable translation-resource boundary.
+//! Integration contract for the native immutable translation-resource boundary.
 //!
 //! The presentation ledger is not sufficient by itself: packaged copy must be bound to a fixed
 //! resource version, bundle-relative path and digest before any future IPC/UI adapter can consume
-//! it. This integration test intentionally lands before the production module for a compile RED.
+//! it. This test exercises the checked-in asset through the production loader and verifies that the
+//! same fixed path is included in the Tauri bundle configuration.
 
 use disksage_lib::translation_resource::{
-    current_translation_resource_asset, CURRENT_TRANSLATION_RESOURCE_VERSION,
+    current_translation_resource_asset, load_current_translation_resource_file,
+    CURRENT_TRANSLATION_RESOURCE_VERSION,
 };
+use std::path::Path;
 
 #[test]
-fn current_translation_resource_is_version_path_and_digest_bound() {
+fn current_translation_resource_is_version_path_digest_and_bundle_bound() {
     let asset = current_translation_resource_asset();
 
     assert_eq!(
@@ -23,4 +26,23 @@ fn current_translation_resource_is_version_path_and_digest_bound() {
     assert_eq!(asset.sha256.len(), 64);
     assert!(asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert!(asset.sha256.bytes().all(|byte| !byte.is_ascii_uppercase()));
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let resource = load_current_translation_resource_file(&manifest_dir.join(asset.relative_path))
+        .expect("checked-in bundled translation resource must pass native admission");
+    assert_eq!(resource.resource_version, CURRENT_TRANSLATION_RESOURCE_VERSION);
+    assert_eq!(resource.messages["app.action.cancel"]["en"], "Cancel");
+    assert_eq!(resource.messages["app.action.cancel"]["ko"], "취소");
+
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(manifest_dir.join("tauri.conf.json")).expect("read Tauri configuration"),
+    )
+    .expect("Tauri configuration must be JSON");
+    let resources = config["bundle"]["resources"]
+        .as_array()
+        .expect("Tauri bundle resources must be an array");
+    assert!(
+        resources.iter().any(|entry| entry.as_str() == Some(asset.relative_path)),
+        "the digest-bound translation resource must be included in the application bundle"
+    );
 }
