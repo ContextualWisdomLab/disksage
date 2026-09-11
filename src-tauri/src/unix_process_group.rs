@@ -31,28 +31,44 @@ pub(crate) enum NoReapWaitOutcome {
     TimedOutStillRunning,
 }
 
+/// Retry only operations interrupted before completion; every other error remains fail closed.
+fn retry_interrupted<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+
 /// Observe a direct child with `waitid(..., WNOHANG | WNOWAIT)` without reaping it.
 ///
 /// `WNOWAIT` is the safety property: callers may still target the child's private process group by
 /// numeric PGID while the leader remains waitable. With `WNOHANG`, POSIX defines a zero `si_pid`
 /// when no selected child is waitable; using the returned child PID is therefore the portable
-/// discriminator instead of treating `si_signo` as the readiness flag. After descendant cleanup
-/// is complete, the caller must consume the status with `Child::wait()` exactly once.
+/// discriminator instead of treating `si_signo` as the readiness flag. `EINTR` is retried because
+/// it does not invalidate the pinned child identity; every other observation error is returned.
+/// After descendant cleanup is complete, the caller must consume the status with `Child::wait()`
+/// exactly once.
 pub(crate) fn observe_child_without_reap(child_pid: u32) -> io::Result<ChildObservation> {
     let child_id = libc::id_t::try_from(child_pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "child PID exceeds id_t"))?;
     let mut info = MaybeUninit::<libc::siginfo_t>::zeroed();
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            child_id,
-            info.as_mut_ptr(),
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
-    }
+    retry_interrupted(|| {
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child_id,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })?;
     let info = unsafe { info.assume_init() };
     let observed_pid = unsafe { info.si_pid() };
     if observed_pid == 0 {
@@ -78,8 +94,9 @@ pub(crate) fn observe_child_without_reap(child_pid: u32) -> io::Result<ChildObse
 ///
 /// This is the shared polling boundary for private-process-group callers. An exited result still
 /// pins the leader PID because `WNOWAIT` leaves it waitable; a timeout result means the leader is
-/// still running. Observation errors are returned immediately and never fall back to `try_wait()`,
-/// because such a fallback could reap the leader before a later group signal.
+/// still running. Interrupted observations are retried inside `observe_child_without_reap`; other
+/// errors are returned immediately and never fall back to `try_wait()`, because such a fallback
+/// could reap the leader before a later group signal.
 pub(crate) fn wait_for_child_without_reap(
     child_pid: u32,
     timeout: Duration,
@@ -121,6 +138,7 @@ pub(crate) fn signal_private_process_group(child_pid: u32, signal: i32) -> io::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
@@ -155,6 +173,27 @@ mod tests {
             .expect("wait for child without reap"),
             NoReapWaitOutcome::ExitedUnreaped
         );
+    }
+
+    #[test]
+    fn retry_interrupted_retries_only_interrupted_errors() {
+        let attempts = Cell::new(0usize);
+        let result = retry_interrupted(|| {
+            let attempt = attempts.get();
+            attempts.set(attempt + 1);
+            if attempt < 2 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(17usize)
+            }
+        })
+        .expect("interrupted operations are retried");
+        assert_eq!(result, 17);
+        assert_eq!(attempts.get(), 3);
+
+        let error = retry_interrupted::<()>(|| Err(io::Error::from(io::ErrorKind::InvalidInput)))
+            .expect_err("non-interrupted errors remain fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -227,7 +266,7 @@ mod tests {
 
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate live private process group");
-        let status = child.wait().expect("reap terminated leader");
+        let status = child.wait().expect("reap terminated leader after group cleanup");
         assert!(!status.success());
     }
 }
