@@ -434,32 +434,62 @@ fn run_bounded_command(
         .ok_or_else(|| format!("{program}-stderr-capture-failed"))?;
     let stdout_thread = drain_bounded(stdout);
     let stderr_thread = drain_bounded(stderr);
-    let started = Instant::now();
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
-                timed_out = true;
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                break child.wait().ok();
+
+    #[cfg(unix)]
+    let status = {
+        use crate::unix_process_group::{
+            signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+        };
+
+        match wait_for_child_without_reap(
+            child_pid,
+            Duration::from_millis(timeout_ms),
+            Duration::from_millis(POLL_INTERVAL_MS),
+        ) {
+            Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+                // The unreaped leader pins the process-group identity until every inheriting
+                // descendant is settled, so reader joins cannot escape the caller's command bound.
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                child.wait().ok()
             }
-            Ok(None) => thread::sleep(Duration::from_millis(POLL_INTERVAL_MS)),
+            Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+                timed_out = true;
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                let _ = child.kill();
+                child.wait().ok()
+            }
             Err(_) => {
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
+                // Observation failed before group identity was proven pinned. Never send a
+                // negative-PID signal in this state; terminate only the direct child and fail closed.
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                return Err(format!("{program}-command-wait-failed"));
             }
         }
     };
+
+    #[cfg(not(unix))]
+    let status = {
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break child.wait().ok();
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(POLL_INTERVAL_MS)),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        }
+    };
+
     let (stdout, stdout_truncated) = stdout_thread
         .join()
         .map_err(|_| format!("{program}-stdout-reader-failed"))?;
