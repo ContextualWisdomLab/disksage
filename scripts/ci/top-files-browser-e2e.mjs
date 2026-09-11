@@ -392,6 +392,7 @@ async function main() {
   let chrome;
   let cdp;
   let profile;
+  let primaryError;
   try {
     await server.listen();
     const chromeBinary = findChrome();
@@ -427,11 +428,26 @@ async function main() {
     await proveEmptyAndErrorStates(cdp);
     await provePermissionState(cdp);
     console.log("DISKSAGE_BROWSER_E2E_RESULT status=passed browser=chrome scenarios=normal,loading,empty,error,permission");
+  } catch (error) {
+    primaryError = error;
   } finally {
-    cdp?.close();
-    await stopChildProcess(chrome);
-    await server.close();
-    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    let cleanupError;
+    try {
+      cdp?.close();
+      await stopChildProcess(chrome);
+      await server.close();
+      if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      cleanupError = error;
+    }
+
+    if (primaryError) {
+      if (cleanupError) {
+        console.error("browser-e2e-cleanup-after-primary-failure", cleanupError instanceof Error ? cleanupError.stack : cleanupError);
+      }
+      throw primaryError;
+    }
+    if (cleanupError) throw cleanupError;
   }
 }
 
