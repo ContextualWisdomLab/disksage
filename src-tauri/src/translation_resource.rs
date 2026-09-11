@@ -2,8 +2,8 @@
 //!
 //! Translation copy is presentation data, not ontology vocabulary or filesystem authority. The
 //! checked-in asset is accepted only when its fixed release identity, SHA-256 digest, structural
-//! screen keys and complete supported-locale set all match. Future Tauri IPC code may resolve this
-//! fixed asset through `BaseDirectory::Resource`; it must not accept a frontend-selected path.
+//! screen keys and complete supported-locale set all match. Tauri IPC resolves this fixed asset
+//! through `BaseDirectory::Resource`; it must not accept a frontend-selected path.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -49,9 +49,14 @@ pub fn current_translation_resource_asset() -> TranslationResourceAsset {
     }
 }
 
+/// Reports whether an IPC/resource locale belongs to this build's admitted locale contract.
+pub(crate) fn is_supported_locale(locale: &str) -> bool {
+    SUPPORTED_LOCALES.contains(&locale)
+}
+
 /// Loads the current resource from an already-resolved fixed bundle path.
 ///
-/// This stays crate-visible so a future Tauri adapter can resolve only the compile-time asset through
+/// This stays crate-visible so the Tauri adapter can resolve only the compile-time asset through
 /// `BaseDirectory::Resource`; external library consumers cannot turn an arbitrary path into product
 /// translation authority. The bytes remain authoritative only after digest and structure validation.
 pub(crate) fn load_current_translation_resource_file(
@@ -130,9 +135,7 @@ fn validate_translation_resource(
             return Err("translation-resource-screen-key-invalid".to_string());
         }
         if localized.len() != SUPPORTED_LOCALES.len()
-            || localized
-                .keys()
-                .any(|locale| !SUPPORTED_LOCALES.contains(&locale.as_str()))
+            || localized.keys().any(|locale| !is_supported_locale(locale))
             || SUPPORTED_LOCALES
                 .iter()
                 .any(|locale| !localized.contains_key(*locale))
@@ -150,7 +153,8 @@ fn validate_translation_resource(
     Ok(())
 }
 
-fn valid_screen_key(screen_key: &str) -> bool {
+/// Validates the stable screen-key grammar shared by resource admission and presentation IPC.
+pub(crate) fn valid_screen_key(screen_key: &str) -> bool {
     (1..=160).contains(&screen_key.len())
         && screen_key.bytes().all(|byte| {
             byte.is_ascii_lowercase()
@@ -283,6 +287,9 @@ mod tests {
         assert!(!valid_screen_key(""));
         assert!(!valid_screen_key(&"a".repeat(161)));
         assert!(valid_screen_key("app.scan_action-v1"));
+        assert!(is_supported_locale("fr"));
+        assert!(!is_supported_locale("it"));
+        assert!(!is_supported_locale(&"x".repeat(1024)));
 
         let missing_locale = mutated_resource(|value| {
             value["messages"]["app.action.scan"]

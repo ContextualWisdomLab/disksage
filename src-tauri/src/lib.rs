@@ -125,6 +125,8 @@ pub mod reclaim;
 pub mod semantic_catalog;
 /// Immutable, digest-bound presentation-resource admission separate from ontology vocabulary.
 pub mod translation_resource;
+/// Read-only, fail-closed Tauri projection of the immutable presentation resource.
+pub mod translation_resource_bridge;
 pub mod volume_pressure;
 pub mod zotero_local;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
@@ -156,6 +158,7 @@ pub fn run() {
             commands::expand_clean_targets,
             commands::find_duplicate_files,
             commands::get_ontology,
+            translation_resource_bridge::get_translation_message,
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
