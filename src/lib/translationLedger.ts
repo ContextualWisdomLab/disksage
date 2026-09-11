@@ -24,7 +24,11 @@ type CachedTranslation = {
 export class TranslationLookupCache {
   private readonly entries = new Map<string, CachedTranslation>();
 
-  constructor(private readonly maxEntries: number) {}
+  constructor(private readonly maxEntries: number) {
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+      throw new RangeError("translation-cache-capacity-must-be-positive-safe-integer");
+    }
+  }
 
   get(resourceVersion: ResourceVersion, locale: LocaleTag, screenKey: ScreenKey): string | undefined {
     const key = translationLookupCacheKey(resourceVersion, locale, screenKey);
