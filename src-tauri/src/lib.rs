@@ -123,6 +123,8 @@ pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 pub mod semantic_catalog;
+/// Immutable, digest-bound presentation-resource admission separate from ontology vocabulary.
+pub mod translation_resource;
 pub mod volume_pressure;
 pub mod zotero_local;
 /// Bounded, path-free ontology planning for uninstalled macOS application data.
