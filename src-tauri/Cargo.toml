@@ -202,6 +202,9 @@ mail-parser = "0.11.5"
 libc = "0.2"
 mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "4f9276b6fe6063f86c4cd4453fb72a13f3f6db11", default-features = false }
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
 

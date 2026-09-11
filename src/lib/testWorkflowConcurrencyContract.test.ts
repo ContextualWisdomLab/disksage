@@ -16,12 +16,12 @@ describe('Test workflow supersession', () => {
   it('cancels only obsolete first-attempt pull-request work without making reruns self-cancel', () => {
     const workflow = readTestWorkflow();
     const concurrencyStart = workflow.indexOf('concurrency:');
-    const permissionsStart = workflow.indexOf('permissions:');
+    const jobsStart = workflow.indexOf('jobs:');
 
     expect(concurrencyStart).toBeGreaterThanOrEqual(0);
-    expect(permissionsStart).toBeGreaterThan(concurrencyStart);
+    expect(jobsStart).toBeGreaterThan(concurrencyStart);
 
-    const concurrencyBlock = workflow.slice(concurrencyStart, permissionsStart);
+    const concurrencyBlock = workflow.slice(concurrencyStart, jobsStart);
     expect(concurrencyBlock).toContain(
       'group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}',
     );
@@ -32,14 +32,17 @@ describe('Test workflow supersession', () => {
     expect(concurrencyBlock).not.toContain('pull_request.head.sha');
   });
 
-  it('keeps every native Test job explicitly time-bounded', () => {
+  it('keeps every native Test job explicitly time-bounded without restoring superseded limits', () => {
     const workflow = readTestWorkflow();
 
     expect(workflow).toContain(
-      '  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n',
+      '  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n',
     );
     expect(workflow).toContain(
-      '  windows-home-resolution:\n    runs-on: windows-latest\n    timeout-minutes: 10\n',
+      '  macos-cache-cleanup:\n    runs-on: macos-latest\n    timeout-minutes: 20\n',
+    );
+    expect(workflow).toContain(
+      '  windows-home-resolution:\n    runs-on: windows-latest\n    timeout-minutes: 30\n',
     );
     expect(workflow).toContain(
       '  coverage-evidence:\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n',
