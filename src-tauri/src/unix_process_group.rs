@@ -34,8 +34,10 @@ pub(crate) enum NoReapWaitOutcome {
 /// Observe a direct child with `waitid(..., WNOHANG | WNOWAIT)` without reaping it.
 ///
 /// `WNOWAIT` is the safety property: callers may still target the child's private process group by
-/// numeric PGID while the leader remains waitable. After descendant cleanup is complete, the
-/// caller must consume the status with `Child::wait()` exactly once.
+/// numeric PGID while the leader remains waitable. With `WNOHANG`, POSIX defines a zero `si_pid`
+/// when no selected child is waitable; using the returned child PID is therefore the portable
+/// discriminator instead of treating `si_signo` as the readiness flag. After descendant cleanup
+/// is complete, the caller must consume the status with `Child::wait()` exactly once.
 pub(crate) fn observe_child_without_reap(child_pid: u32) -> io::Result<ChildObservation> {
     let child_id = libc::id_t::try_from(child_pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "child PID exceeds id_t"))?;
@@ -52,13 +54,24 @@ pub(crate) fn observe_child_without_reap(child_pid: u32) -> io::Result<ChildObse
         return Err(io::Error::last_os_error());
     }
     let info = unsafe { info.assume_init() };
-    match info.si_signo {
-        0 => Ok(ChildObservation::Running),
-        libc::SIGCHLD => Ok(ChildObservation::ExitedUnreaped),
-        other => Err(io::Error::other(format!(
-            "waitid returned unexpected signal {other}"
-        ))),
+    let observed_pid = unsafe { info.si_pid() };
+    if observed_pid == 0 {
+        return Ok(ChildObservation::Running);
     }
+    let observed_pid = u32::try_from(observed_pid)
+        .map_err(|_| io::Error::other("waitid returned an invalid child PID"))?;
+    if observed_pid != child_pid {
+        return Err(io::Error::other(format!(
+            "waitid returned unexpected child PID {observed_pid}; expected {child_pid}"
+        )));
+    }
+    if info.si_signo != libc::SIGCHLD {
+        return Err(io::Error::other(format!(
+            "waitid returned unexpected signal {} for child {child_pid}",
+            info.si_signo
+        )));
+    }
+    Ok(ChildObservation::ExitedUnreaped)
 }
 
 /// Wait for a direct child to exit or for `timeout` to elapse without consuming its wait status.
