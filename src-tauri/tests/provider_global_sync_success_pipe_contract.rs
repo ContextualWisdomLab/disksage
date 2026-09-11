@@ -58,11 +58,39 @@ fn successful_provider_dump_keeps_group_identity_pinned_until_cleanup() {
 #[test]
 fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminated() {
     use std::io::Read;
+    use std::mem::MaybeUninit;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::sync::mpsc::{self, RecvTimeoutError};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    fn observe_fixture_exit_without_reap(pid: libc::pid_t) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut info = MaybeUninit::<libc::siginfo_t>::zeroed();
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            assert_ne!(result, -1, "fixture waitid must observe its direct child");
+            let info = unsafe { info.assume_init() };
+            let observed_pid = unsafe { info.si_pid() };
+            if observed_pid == pid {
+                return;
+            }
+            assert_eq!(observed_pid, 0, "fixture waitid returned an unexpected child");
+            assert!(
+                Instant::now() < deadline,
+                "fixture leader must exit before the bounded deadline"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     let mut command = Command::new("/bin/sh");
     command
@@ -88,17 +116,22 @@ fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminate
         let _ = sender.send(result);
     });
 
-    let status = child.wait().expect("probe fixture leader must be waitable");
-    assert!(status.success(), "probe fixture leader must exit successfully");
-
+    // The fixture is an independent oracle: observe the leader exit with WNOWAIT, prove its
+    // descendant still holds stdout, then terminate the group while the leader PID/PGID remains
+    // pinned. The test must not reproduce the stale-PGID sequence it is meant to reject.
+    observe_fixture_exit_without_reap(process_group);
     let before_group_kill = receiver.recv_timeout(Duration::from_millis(250));
-    unsafe {
-        let _ = libc::kill(-process_group, libc::SIGKILL);
-    }
     assert!(
         matches!(before_group_kill, Err(RecvTimeoutError::Timeout)),
         "a surviving descendant that inherited stdout must prevent EOF after leader exit"
     );
+
+    let group_kill = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    assert_eq!(group_kill, 0, "pinned private process group must be signalable");
+    let status = child
+        .wait()
+        .expect("probe fixture leader must be reaped after group cleanup");
+    assert!(status.success(), "probe fixture leader must have exited successfully");
 
     let bytes = receiver
         .recv_timeout(Duration::from_secs(2))
