@@ -33,6 +33,7 @@ pub struct TranslationResourceAsset {
 
 /// Validated immutable presentation resource. It contains no ontology or mutation authority.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TranslationResource {
     pub resource_version: String,
     pub schema_version: u32,
