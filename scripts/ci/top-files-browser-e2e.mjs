@@ -61,23 +61,48 @@ function signalProcessTree(child, signal) {
   child.kill(signal);
 }
 
-async function stopChildProcess(child, timeoutMs = 5_000) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise((resolve) => child.once("exit", resolve));
-  signalProcessTree(child, "SIGTERM");
-  const graceful = await Promise.race([
-    exited.then(() => true),
+function processHasExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForProcessExit(child, timeoutMs) {
+  if (processHasExited(child)) return true;
+  return Promise.race([
+    new Promise((resolve) => child.once("exit", () => resolve(true))),
     new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
   ]);
-  if (!graceful) {
-    signalProcessTree(child, "SIGKILL");
-    const forced = await Promise.race([
-      exited.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
-    ]);
-    if (!forced) throw new Error("browser-e2e-chrome-shutdown-timeout");
-  }
+}
+
+async function terminateProcessTree(child, timeoutMs = 2_000) {
+  if (processHasExited(child)) return;
+  signalProcessTree(child, "SIGTERM");
+  if (await waitForProcessExit(child, timeoutMs)) return;
   signalProcessTree(child, "SIGKILL");
+  if (!(await waitForProcessExit(child, timeoutMs))) {
+    throw new Error("browser-e2e-chrome-shutdown-timeout");
+  }
+}
+
+async function closeBrowserGracefully(browserCdp, child, timeoutMs = 5_000) {
+  if (processHasExited(child)) return;
+  if (!browserCdp) {
+    await terminateProcessTree(child);
+    return;
+  }
+
+  let closeRequestError;
+  browserCdp.call("Browser.close").catch((error) => {
+    closeRequestError = error;
+  });
+  if (await waitForProcessExit(child, timeoutMs)) return;
+
+  if (closeRequestError) {
+    console.error(
+      "browser-e2e-browser-close-failed",
+      closeRequestError instanceof Error ? closeRequestError.stack : closeRequestError,
+    );
+  }
+  await terminateProcessTree(child);
 }
 
 class CdpClient {
@@ -437,6 +462,7 @@ async function main() {
     logLevel: "error",
   });
   let chrome;
+  let browserCdp;
   let cdp;
   let profile;
   let primaryError;
@@ -460,6 +486,11 @@ async function main() {
       "--no-first-run",
       "about:blank",
     ], { stdio: ["ignore", "pipe", "pipe"], detached: SIGNALS_PROCESS_GROUP });
+
+    const browserVersion = await waitForJson(`http://${HOST}:${DEBUG_PORT}/json/version`);
+    assert(browserVersion?.webSocketDebuggerUrl, "browser-e2e-browser-target-unavailable");
+    browserCdp = new CdpClient(browserVersion.webSocketDebuggerUrl);
+    await browserCdp.connect();
 
     const targets = await waitForJson(`http://${HOST}:${DEBUG_PORT}/json/list`);
     const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
@@ -487,11 +518,12 @@ async function main() {
       }
     };
 
+    await runCleanup(() => closeBrowserGracefully(browserCdp, chrome));
     await runCleanup(async () => cdp?.close());
-    await runCleanup(() => stopChildProcess(chrome));
+    await runCleanup(async () => browserCdp?.close());
     await runCleanup(() => server.close());
     await runCleanup(async () => {
-      if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      if (profile) rmSync(profile, { recursive: true, force: true });
     });
 
     if (primaryError) {
