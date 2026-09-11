@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+/** Reads checked-in source so the contract cannot pass against a detached fixture. */
 function readSource(path: string): string {
   return readFileSync(resolve(repositoryRoot, path), "utf8");
 }
