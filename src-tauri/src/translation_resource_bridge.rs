@@ -5,16 +5,21 @@
 //! fallback or consults ontology vocabulary.
 
 use crate::translation_resource::{
-    current_translation_resource_asset, load_current_translation_resource_file, TranslationResource,
+    current_translation_resource_asset, is_supported_locale, load_current_translation_resource_file,
+    valid_screen_key, TranslationResource,
 };
 use serde::Serialize;
 
 /// Presentation value returned to the frontend after native resource admission.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TranslationMessageView {
+    /// Immutable translation release that supplied the projected text.
     pub resource_version: String,
+    /// Exact admitted locale requested by presentation code.
     pub locale: String,
+    /// Stable presentation key used for this lookup.
     pub screen_key: String,
+    /// Localized presentation copy associated with the exact version/locale/key tuple.
     pub text: String,
 }
 
@@ -24,12 +29,11 @@ pub fn resolve_translation_message(
     locale: &str,
     screen_key: &str,
 ) -> Result<TranslationMessageView, String> {
-    let locale_is_supported = resource
-        .messages
-        .values()
-        .any(|localized| localized.contains_key(locale));
-    if !locale_is_supported {
+    if !is_supported_locale(locale) {
         return Err("translation-locale-unsupported".to_string());
+    }
+    if !valid_screen_key(screen_key) {
+        return Err("translation-screen-key-invalid".to_string());
     }
 
     let localized = resource
