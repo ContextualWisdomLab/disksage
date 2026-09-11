@@ -7,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Restores the caller's PATH after the fake `lsof` process fixture completes.
 struct PathGuard(Option<OsString>);
 
 impl Drop for PathGuard {
@@ -18,6 +19,7 @@ impl Drop for PathGuard {
     }
 }
 
+/// Proves a successful helper cannot let a pipe-owning descendant outlive the command bound.
 #[test]
 fn successful_helper_settles_descendants_before_bounded_reader_join() {
     let temporary = tempfile::tempdir().expect("temporary process fixture");
@@ -47,9 +49,14 @@ fn successful_helper_settles_descendants_before_bounded_reader_join() {
     );
 
     let started = Instant::now();
-    let _ = active_use_evidence(&artifact, 250, 8, false);
+    let evidence = active_use_evidence(&artifact, 250, 8, false);
     let elapsed = started.elapsed();
 
+    assert!(evidence.assessed, "{evidence:?}");
+    assert!(evidence.evidence_complete, "{evidence:?}");
+    assert!(evidence.active, "{evidence:?}");
+    assert_eq!(evidence.observed_pids, vec![999_999], "{evidence:?}");
+    assert_eq!(evidence.error, None, "{evidence:?}");
     assert!(
         elapsed < Duration::from_secs(2),
         "successful direct-child exit must not let a descendant retain stdout past the bounded command lifecycle; elapsed={elapsed:?}"
