@@ -112,4 +112,9 @@ describe("versioned translation ledger", () => {
     expect(cache.get("2026.09.11.1", "ja", "scan.action.start")).toBeUndefined();
     expect(cache.get("2026.09.11.2", "ko", "scan.action.start")).toBe("새 스캔");
   });
+
+  it("keeps the production translation cache inside the mandatory 100% frontend coverage denominator", () => {
+    const config = readFileSync(resolve(repositoryRoot, "vitest.config.ts"), "utf8");
+    expect(config).toContain('"src/lib/translationLedger.ts"');
+  });
 });
