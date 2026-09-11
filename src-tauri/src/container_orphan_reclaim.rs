@@ -1267,35 +1267,6 @@ struct CommandCapture {
     output_truncated: bool,
 }
 
-/// Observe whether `pid` has exited **without reaping it**.
-///
-/// Reaping the direct child would return its numeric PID (and process-group ID) to the OS
-/// reclamation pool while `command_capture` still needs to signal the group it leads to
-/// terminate descendants that hold the capture pipes. If that number is recycled as the
-/// leader of an unrelated group, the negative-PID `SIGKILL` can land on an innocent process.
-///
-/// `waitid(P_PID, ..., WEXITED | WNOHANG | WNOWAIT)` reports the exit state but leaves the
-/// child waitable, so its PID/PGID identity stays pinned until the group cleanup is delivered
-/// and the child is reaped through `Child::wait()`. Returns `true` when the child has exited,
-/// `false` while it is still running, and `Err(())` when the no-reap observation itself fails
-/// so callers can fail closed instead of signaling a group whose leader identity is unknown.
-#[cfg(unix)]
-fn child_exited_without_reaping(pid: u32) -> Result<bool, ()> {
-    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            pid as libc::id_t,
-            &mut info,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if result == -1 {
-        return Err(());
-    }
-    Ok(unsafe { info.si_pid() } != 0)
-}
-
 fn command_capture(
     executable: &Path,
     args: &[&str],
@@ -1331,19 +1302,21 @@ fn command_capture(
     let stdout_reader = thread::spawn(move || drain_bounded(stdout));
     let stderr_reader = thread::spawn(move || drain_bounded(stderr));
 
+    #[cfg(not(unix))]
     let started = Instant::now();
     #[cfg(unix)]
-    let status = loop {
-        match child_exited_without_reaping(child_pid) {
-            Ok(true) => {
+    let status = {
+        use crate::unix_process_group::{
+            signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+        };
+        match wait_for_child_without_reap(child_pid, timeout, Duration::from_millis(25)) {
+            Ok(NoReapWaitOutcome::ExitedUnreaped) => {
                 // The direct CLI has exited but is deliberately still unreaped, so its
                 // numeric PID/PGID cannot be recycled. Terminate any descendants that
                 // still own the capture pipes, then reap the leader through `Child::wait`.
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
                 match child.wait() {
-                    Ok(status) => break status,
+                    Ok(status) => status,
                     Err(error) => {
                         let _ = join_capture(stdout_reader, label, "stdout");
                         let _ = join_capture(stderr_reader, label, "stderr");
@@ -1351,20 +1324,17 @@ fn command_capture(
                     }
                 }
             }
-            Ok(false) if started.elapsed() >= timeout => {
+            Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
                 // The leader is still live and unreaped here, so the group identity is safe
                 // to signal directly.
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
             }
-            Ok(false) => thread::sleep(Duration::from_millis(25)),
-            Err(()) => {
+            Err(_) => {
                 // Without a pinned leader identity a negative-PID signal could target an
                 // unrelated recycled process group, so fail closed instead of guessing.
                 let _ = child.kill();
@@ -2614,15 +2584,15 @@ mod tests {
         let mut child = command.spawn().unwrap();
         let pid = child.id();
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match child_exited_without_reaping(pid) {
-                Ok(true) => break,
-                Ok(false) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Ok(false) => panic!("child did not exit within the observation window"),
-                Err(()) => panic!("no-reap exit observation failed"),
-            }
-        }
+        assert_eq!(
+            crate::unix_process_group::wait_for_child_without_reap(
+                pid,
+                Duration::from_secs(5),
+                Duration::from_millis(10),
+            )
+            .expect("no-reap exit observation failed"),
+            crate::unix_process_group::NoReapWaitOutcome::ExitedUnreaped
+        );
 
         // The leader has exited but was deliberately not reaped, so its PID/PGID must not
         // have been returned to the OS pool: the group still resolves (ESRCH would mean the
@@ -2651,7 +2621,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn no_reap_observation_fails_closed_for_non_child_pid() {
-        assert!(child_exited_without_reaping(1).is_err());
+        assert!(crate::unix_process_group::observe_child_without_reap(1).is_err());
     }
 
     #[cfg(unix)]

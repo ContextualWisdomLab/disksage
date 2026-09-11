@@ -68,7 +68,6 @@ pub mod cloud_transfer;
 pub mod content_digest;
 /// Unix-only identity-preserving child/process-group lifecycle mechanics.
 #[cfg(unix)]
-#[allow(dead_code)]
 pub(crate) mod unix_process_group;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim;
