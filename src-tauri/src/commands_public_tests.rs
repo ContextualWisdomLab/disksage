@@ -421,3 +421,32 @@ fn roots_and_ontology_wrappers_reach_their_real_pure_implementations() {
     assert!(!ontology.classes.is_empty());
     assert!(load_ontology_from("this is not Turtle").is_err());
 }
+
+#[test]
+fn list_roots_tauri_ipc_wrapper_matches_the_command_core() {
+    let app = tauri::test::mock_builder()
+        .invoke_handler(tauri::generate_handler![crate::commands::list_roots])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("mock Tauri app must build");
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("mock webview must build");
+
+    let response = tauri::test::get_ipc_response(
+        &webview,
+        tauri::webview::InvokeRequest {
+            cmd: "list_roots".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "http://tauri.localhost".parse().unwrap(),
+            body: tauri::ipc::InvokeBody::default(),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        },
+    )
+    .expect("list_roots IPC invocation must succeed")
+    .deserialize::<Vec<String>>()
+    .expect("list_roots IPC response must deserialize");
+
+    assert_eq!(response, list_roots());
+}
