@@ -279,11 +279,14 @@ fn partial_dump_after_timeout(bytes: Vec<u8>, identifier: &str) -> Option<String
 
 #[cfg(target_os = "macos")]
 fn run_dump(provider: CloudProvider) -> Result<String, String> {
+    use crate::unix_process_group::{
+        signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+    };
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let identifier = provider_identifier(provider)
         .ok_or_else(|| "provider-global-sync-icloud-specialized".to_string())?;
@@ -308,11 +311,8 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         .spawn()
         .map_err(|_| "provider-global-sync-probe-unavailable".to_string())?;
     let child_pid = child.id();
-    let kill_group = || unsafe {
-        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-    };
     let Some(stdout) = child.stdout.take() else {
-        kill_group();
+        let _ = signal_private_process_group(child_pid, libc::SIGKILL);
         let _ = child.kill();
         let _ = child.wait();
         return Err("provider-global-sync-probe-stdout-unavailable".into());
@@ -336,33 +336,40 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         }
         Ok(bytes)
     });
-    let deadline = Instant::now() + Duration::from_millis(PROBE_TIMEOUT_MS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                kill_group();
-                break status;
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                kill_group();
-                let _ = child.kill();
-                let _ = child.wait();
-                let partial = reader.join().ok().and_then(Result::ok);
-                if let Some(output) =
-                    partial.and_then(|bytes| partial_dump_after_timeout(bytes, identifier))
-                {
-                    return Ok(output);
+    let status = match wait_for_child_without_reap(
+        child_pid,
+        Duration::from_millis(PROBE_TIMEOUT_MS),
+        Duration::from_millis(50),
+    ) {
+        Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            match child.wait() {
+                Ok(status) => status,
+                Err(_) => {
+                    let _ = reader.join();
+                    return Err("provider-global-sync-probe-failed".into());
                 }
-                return Err("provider-global-sync-probe-timeout".into());
             }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(_) => {
-                kill_group();
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return Err("provider-global-sync-probe-failed".into());
+        }
+        Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            let partial = reader.join().ok().and_then(Result::ok);
+            if let Some(output) =
+                partial.and_then(|bytes| partial_dump_after_timeout(bytes, identifier))
+            {
+                return Ok(output);
             }
+            return Err("provider-global-sync-probe-timeout".into());
+        }
+        Err(_) => {
+            // Without a pinned child observation, a negative-PID signal could target a recycled
+            // process group. Fail closed and address only the owned child process.
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err("provider-global-sync-probe-failed".into());
         }
     };
     let bytes = reader
