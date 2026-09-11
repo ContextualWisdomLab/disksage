@@ -14,13 +14,28 @@ const schemaPath = resolve(repositoryRoot, "src-tauri/resources/translation/0001
 const sqliteContractPath = resolve(repositoryRoot, "scripts/ci/translation-ledger-sqlite-contract.mjs");
 
 /**
- * Runs the real SQLite migration under the repository's minimum Node 22.12 runtime,
- * where `node:sqlite` is intentionally available only behind `--experimental-sqlite`.
+ * Returns the SQLite-enabling CLI argument only for the supported Node release that still needs it.
+ * Node 22.13+ unflagged `node:sqlite`; newer supported majors should not depend on an obsolete
+ * positive experimental flag continuing to be accepted.
+ */
+function sqliteRuntimeArguments(nodeVersion: string): string[] {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(nodeVersion);
+  if (!match) throw new Error("translation-ledger-node-version-unparseable");
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major === 22 && minor === 12 ? ["--experimental-sqlite"] : [];
+}
+
+/**
+ * Runs the real SQLite migration with the repository's current Node executable while preserving
+ * the declared 22.12/24/26+ engine range. Only Node 22.12 receives its required SQLite flag.
  */
 function runSqliteLedgerContract(): void {
-  const result = spawnSync(process.execPath, ["--experimental-sqlite", sqliteContractPath, schemaPath], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    process.execPath,
+    [...sqliteRuntimeArguments(process.versions.node), sqliteContractPath, schemaPath],
+    { encoding: "utf8" },
+  );
   if (result.error) {
     throw result.error;
   }
@@ -40,6 +55,16 @@ function runSqliteLedgerContract(): void {
 describe("versioned translation ledger", () => {
   it("executes as normalized, append-only SQLite schema with immutable version/key references", () => {
     runSqliteLedgerContract();
+  });
+
+  it("uses the experimental SQLite flag only for supported Node 22.12", () => {
+    expect(sqliteRuntimeArguments("22.12.0")).toEqual(["--experimental-sqlite"]);
+    expect(sqliteRuntimeArguments("22.13.0")).toEqual([]);
+    expect(sqliteRuntimeArguments("24.0.0")).toEqual([]);
+    expect(sqliteRuntimeArguments("26.0.0")).toEqual([]);
+    expect(() => sqliteRuntimeArguments("not-a-node-version")).toThrow(
+      "translation-ledger-node-version-unparseable",
+    );
   });
 
   it("binds cache identity to resource version, locale, and stable screen key", () => {
