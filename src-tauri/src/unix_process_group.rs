@@ -82,7 +82,11 @@ mod tests {
 
     fn spawn_private_group_shell(script: &str, stdout: Stdio) -> Child {
         let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg(script).stdout(stdout).stderr(Stdio::null());
+        command
+            .arg("-c")
+            .arg(script)
+            .stdout(stdout)
+            .stderr(Stdio::null());
         unsafe {
             command.pre_exec(|| {
                 if libc::setpgid(0, 0) == -1 {
@@ -91,7 +95,9 @@ mod tests {
                 Ok(())
             });
         }
-        command.spawn().expect("spawn private process-group leader")
+        command
+            .spawn()
+            .expect("spawn private process-group leader")
     }
 
     fn wait_until_exited_without_reap(child_pid: u32) {
@@ -135,7 +141,9 @@ mod tests {
         assert!(status.success());
 
         let mut output = String::new();
-        stdout.read_to_string(&mut output).expect("drain bounded test output");
+        stdout
+            .read_to_string(&mut output)
+            .expect("drain bounded test output");
         assert_eq!(output, "ready");
         assert!(started.elapsed() < Duration::from_secs(2));
     }
