@@ -2,13 +2,13 @@
 //!
 //! The presentation ledger is not sufficient by itself: packaged copy must be bound to a fixed
 //! resource version, bundle-relative path and digest before any future IPC/UI adapter can consume
-//! it. This test exercises the checked-in asset through the production loader and verifies that the
-//! same fixed path is included in the Tauri bundle configuration.
+//! it. The integration oracle independently hashes the checked-in bundle asset and verifies that the
+//! same fixed path is included in Tauri configuration; path-based production loading stays crate-only.
 
 use disksage_lib::translation_resource::{
-    current_translation_resource_asset, load_current_translation_resource_file,
-    CURRENT_TRANSLATION_RESOURCE_VERSION,
+    current_translation_resource_asset, CURRENT_TRANSLATION_RESOURCE_VERSION,
 };
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 #[test]
@@ -28,11 +28,14 @@ fn current_translation_resource_is_version_path_digest_and_bundle_bound() {
     assert!(asset.sha256.bytes().all(|byte| !byte.is_ascii_uppercase()));
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let resource = load_current_translation_resource_file(&manifest_dir.join(asset.relative_path))
-        .expect("checked-in bundled translation resource must pass native admission");
-    assert_eq!(resource.resource_version, CURRENT_TRANSLATION_RESOURCE_VERSION);
-    assert_eq!(resource.messages["app.action.cancel"]["en"], "Cancel");
-    assert_eq!(resource.messages["app.action.cancel"]["ko"], "취소");
+    let resource_bytes =
+        std::fs::read(manifest_dir.join(asset.relative_path)).expect("read bundled resource fixture");
+    let digest = Sha256::digest(resource_bytes);
+    let digest_hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(digest_hex, asset.sha256);
 
     let config: serde_json::Value = serde_json::from_slice(
         &std::fs::read(manifest_dir.join("tauri.conf.json")).expect("read Tauri configuration"),
