@@ -296,24 +296,25 @@
 </div>
 
 <style>
-  .worktree-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #b7c6d8; display: grid; gap: 0.55rem; }
-  .inputs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }
-  .inputs label { flex: 1 1 30rem; }
-  label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: #4d5660; }
-  .path-input, .references, .confirmation { width: min(60rem, 90vw); font-family: ui-monospace, monospace; }
+  .worktree-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #b7c6d8; display: grid; gap: 0.55rem; min-width: 0; }
+  .worktree-panel > * { min-width: 0; }
+  .inputs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; min-width: 0; }
+  .inputs label { flex: 1 1 30rem; min-width: 0; }
+  label { display: grid; gap: 0.2rem; min-width: 0; font-size: 0.82rem; color: #4d5660; }
+  .path-input, .references, .confirmation { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; font-family: ui-monospace, monospace; }
   .references { min-height: 4rem; }
   .confirmation { min-height: 4.5rem; }
-  .report { display: grid; gap: 0.55rem; padding: 0.75rem; border: 1px solid #72889c; border-radius: 4px; background: #f7fafc; }
-  .summary { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: baseline; }
+  .report { display: grid; gap: 0.55rem; min-width: 0; padding: 0.75rem; border: 1px solid #72889c; border-radius: 4px; background: #f7fafc; }
+  .summary { display: flex; flex-wrap: wrap; gap: 0.8rem; min-width: 0; align-items: baseline; }
   .fingerprint { margin: 0; overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
   .worktrees { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow-y: auto; }
   .worktrees li { padding: 0.45rem 0; border-bottom: 1px solid #d9e0e6; }
   .path { overflow-wrap: anywhere; color: #66717d; font-size: 0.78rem; }
-  .blocked { padding: 0.6rem; border: 1px solid #b74a4a; background: #fff6f6; }
+  .blocked { min-width: 0; padding: 0.6rem; border: 1px solid #b74a4a; background: #fff6f6; }
   .blocked ul { margin-bottom: 0; }
-  .approval { display: grid; gap: 0.55rem; justify-items: start; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
-  .approval code { max-width: min(60rem, 90vw); overflow-wrap: anywhere; user-select: all; }
-  .approval textarea { width: min(60rem, 90vw); resize: vertical; }
+  .approval { display: grid; gap: 0.55rem; min-width: 0; justify-items: stretch; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
+  .approval code { min-width: 0; max-width: 100%; overflow-wrap: anywhere; user-select: all; }
+  .approval textarea { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; resize: vertical; }
   .muted { color: #727b84; margin: 0; }
   .warning { color: #8a5700; margin: 0; }
   .safe { color: #276437; margin: 0; }
