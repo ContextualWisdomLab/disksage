@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 struct PathGuard(Option<OsString>);
 
 impl Drop for PathGuard {
+    /// Restores the inherited environment so this PATH-mutating fixture cannot leak into later tests.
     fn drop(&mut self) {
         match self.0.take() {
             Some(value) => std::env::set_var("PATH", value),
