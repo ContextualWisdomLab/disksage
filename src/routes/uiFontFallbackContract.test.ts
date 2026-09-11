@@ -10,21 +10,24 @@ function readSource(path: string): string {
 }
 
 describe("material UI font fallback", () => {
-  it("declares explicit cross-platform CJK fallbacks on the application surface", () => {
+  it("declares explicit cross-platform CJK fallbacks in the application font stack", () => {
     const page = readSource("src/routes/+page.svelte");
+    const declaration = page.match(/font-family:\s*([^;]+);/)?.[1] ?? "";
 
-    expect(page).toContain('"Apple SD Gothic Neo"');
-    expect(page).toContain('"Malgun Gothic"');
-    expect(page).toContain('"Hiragino Sans"');
-    expect(page).toContain('"Yu Gothic UI"');
-    expect(page).toContain('"PingFang SC"');
-    expect(page).toContain('"PingFang TC"');
-    expect(page).toContain('"Microsoft YaHei"');
-    expect(page).toContain('"Microsoft JhengHei"');
-    expect(page).toContain('"Noto Sans CJK KR"');
-    expect(page).toContain('"Noto Sans CJK JP"');
-    expect(page).toContain('"Noto Sans CJK SC"');
-    expect(page).toContain('"Noto Sans CJK TC"');
-    expect(page).toContain('"Noto Sans"');
+    expect(declaration).toContain("system-ui");
+    expect(declaration).toContain('"Apple SD Gothic Neo"');
+    expect(declaration).toContain('"Malgun Gothic"');
+    expect(declaration).toContain('"Hiragino Sans"');
+    expect(declaration).toContain('"Yu Gothic UI"');
+    expect(declaration).toContain('"PingFang SC"');
+    expect(declaration).toContain('"PingFang TC"');
+    expect(declaration).toContain('"Microsoft YaHei"');
+    expect(declaration).toContain('"Microsoft JhengHei"');
+    expect(declaration).toContain('"Noto Sans CJK KR"');
+    expect(declaration).toContain('"Noto Sans CJK JP"');
+    expect(declaration).toContain('"Noto Sans CJK SC"');
+    expect(declaration).toContain('"Noto Sans CJK TC"');
+    expect(declaration).toContain('"Noto Sans"');
+    expect(declaration.trim().endsWith("sans-serif")).toBe(true);
   });
 });
