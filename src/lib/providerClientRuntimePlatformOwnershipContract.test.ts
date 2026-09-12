@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const providerRuntimePath = "src-tauri/src/provider_client_runtime.rs";
 
+/** Read the canonical Rust source so platform-ownership drift fails before warning debt regresses. */
 function readProviderRuntime(): string {
   return readFileSync(resolve(repositoryRoot, providerRuntimePath), "utf8");
 }
