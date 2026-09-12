@@ -76,8 +76,16 @@ function eventPaths(source: string, eventName: "push" | "pull_request"): string[
   const eventStart = lines.findIndex((line) => line === `  ${eventName}:`);
   if (eventStart < 0) return [];
 
+  const eventEndCandidate = lines.findIndex((line, index) => {
+    if (index <= eventStart || !line.trim() || line.trimStart().startsWith("#")) {
+      return false;
+    }
+    return line.length - line.trimStart().length <= 2;
+  });
+  const eventEnd = eventEndCandidate < 0 ? lines.length : eventEndCandidate;
   const pathsStart = lines.findIndex(
-    (line, index) => index > eventStart && line === "    paths:",
+    (line, index) =>
+      index > eventStart && index < eventEnd && line === "    paths:",
   );
   if (pathsStart < 0) return [];
 
