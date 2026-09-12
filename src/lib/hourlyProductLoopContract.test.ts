@@ -57,4 +57,36 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain('ref: ${{ github.sha }}');
     expect(workflow).not.toContain("ref: main");
   });
+
+  it("records orchestrator/free as a separate proposed decision without rewriting accepted ADR-0008", () => {
+    const acceptedDecision = readFileSync(
+      resolve(
+        repositoryRoot,
+        "docs/architecture/adr/0008-hourly-loop-foreign-dependencies-read-only.md",
+      ),
+      "utf8",
+    );
+    const proposedDecision = readFileSync(
+      resolve(repositoryRoot, "docs/architecture/adr/0024-orchestrator-free-advisory-routing.md"),
+      "utf8",
+    );
+    const decisionIndex = readFileSync(
+      resolve(repositoryRoot, "docs/architecture/adr/README.md"),
+      "utf8",
+    );
+
+    expect(acceptedDecision).toContain("**Status:** Accepted");
+    expect(acceptedDecision).toContain("discovers a model through `/v1/models`");
+    expect(proposedDecision).toContain("**Status:** Proposed");
+    expect(proposedDecision).toContain("`orchestrator/free`");
+    expect(proposedDecision).toContain("must not call `/v1/models`");
+    expect(proposedDecision).toContain("connection-establishment timeout");
+    expect(proposedDecision).toContain("total elapsed-time cutoff");
+    expect(decisionIndex).toContain(
+      "[0024](0024-orchestrator-free-advisory-routing.md)",
+    );
+    expect(decisionIndex).toContain(
+      "Delegate local advisory model selection to contextual-orchestrator | Proposed",
+    );
+  });
 });
