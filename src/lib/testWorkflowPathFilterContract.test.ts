@@ -122,6 +122,13 @@ describe("test workflow path-filter contract", () => {
     expect(negativePathsIgnoreEntries(workflow)).toEqual([]);
   });
 
+  it("does not borrow another event's paths when the target event has none", () => {
+    const fixture = `on:\n  push:\n    branches: [main]\n  pull_request:\n    paths:\n      - "**"\n`;
+
+    expect(eventPaths(fixture, "push")).toEqual([]);
+    expect(eventPaths(fixture, "pull_request")).toEqual(["**"]);
+  });
+
   it("pins the exact ordered path contract for push and pull requests", () => {
     const expectedPaths = [
       "**",
