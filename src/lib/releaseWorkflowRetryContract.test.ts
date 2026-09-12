@@ -33,7 +33,9 @@ describe('release workflow retry contract', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
     expect(doctoring).toContain('explicit rerun attempts do not cancel themselves');
-    expect(doctoring).toContain('github.run_attempt == 1');
+    expect(doctoring).toContain(
+      "github.event_name == 'pull_request' && github.run_attempt == 1",
+    );
     expect(changelog).toContain('retry-safe release concurrency');
   });
 });
