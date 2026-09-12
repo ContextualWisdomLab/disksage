@@ -36,6 +36,7 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain('--arg model "orchestrator/free"');
     expect(workflow).toContain('"${base}/v1/chat/completions"');
     expect(workflow).toContain("--connect-timeout 30");
+    expect(workflow).not.toMatch(/^\s*timeout-minutes:\s*/m);
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain("gh pr list --state open --limit 100");
     expect(workflow).not.toContain("COPILOT_GITHUB_TOKEN");
