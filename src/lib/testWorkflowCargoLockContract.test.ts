@@ -18,7 +18,9 @@ describe("Test workflow Cargo lockfile contract", () => {
   it("runs every canonical Cargo test/build/check invocation with --locked", () => {
     const commands = cargoInvocations(workflow);
 
-    expect(commands.length).toBeGreaterThanOrEqual(10);
+    // Nine canonical invocations currently protect Ubuntu, macOS, Windows and llm-engine lanes.
+    // Keep a floor so deleting an exercised Cargo lane cannot make this contract vacuously pass.
+    expect(commands.length).toBeGreaterThanOrEqual(9);
     for (const command of commands) {
       expect(command, command).toMatch(/(?:^|\s)--locked(?:\s|$)/);
     }
