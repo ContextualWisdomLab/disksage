@@ -28,7 +28,7 @@ schedule would create an unpinned autonomous reviewer. The hourly product and
 PR review loop is owned by the trusted central workflow
 [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml)
 at `37 * * * *`. That caller dispatches the pinned reusable scheduler at
-[`a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`](https://github.com/ContextualWisdomLab/.github/blob/a3fdaa1aacaba9443a18573c309fe1841fc2f0/.github/workflows/pr-review-fix-scheduler.yml),
+[`a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`](https://github.com/ContextualWisdomLab/.github/blob/a3fdaa1aacaba9443a18573f3c309fe1841fc2f0/.github/workflows/pr-review-fix-scheduler.yml),
 which performs its own OpenCode OIDC exchange and exact-head lease. This keeps
 the hourly requirement live without making DiskSage's local advisory workflow
 an unpinned mutation authority.
