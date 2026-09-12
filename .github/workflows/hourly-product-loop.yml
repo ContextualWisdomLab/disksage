@@ -19,14 +19,14 @@ jobs:
         id: config
         run: |
           set -euo pipefail
-          if [ -n "$ORCHESTRATOR_URL" ] && [ -n "$ORCHESTRATOR_TOKEN" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
+          if [ -z "$ORCHESTRATOR_URL" ] || [ -z "$ORCHESTRATOR_TOKEN" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "contextual-orchestrator gateway URL/token are required; no provider or local fallback is permitted" >&2
+            exit 1
           fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact event commit
-        if: steps.config.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -34,7 +34,6 @@ jobs:
           persist-credentials: false
 
       - name: Collect bounded repository context
-        if: steps.config.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -50,7 +49,6 @@ jobs:
             > /tmp/context.json
 
       - name: Run OpenCode Agent review through orchestrator/free
-        if: steps.config.outputs.configured == 'true'
         run: |
           set -euo pipefail
           base="${ORCHESTRATOR_URL%/}"
@@ -102,8 +100,3 @@ jobs:
           path: /tmp/hourly-product-loop-receipt.json
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Explain missing orchestrator configuration
-        if: steps.config.outputs.configured != 'true'
-        run: |
-          echo "Hourly loop skipped: CONTEXTUAL_ORCHESTRATOR_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required; no fallback agent, provider secret, KV mutation, or Copilot token is used." >> "$GITHUB_STEP_SUMMARY"
