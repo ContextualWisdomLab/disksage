@@ -68,18 +68,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/disksage"
           echo "TMPDIR=$RUNNER_TEMP/disksage" >> "$GITHUB_ENV"
       - name: Rust tests (includes unix symlink test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
       - name: Extraction-free archive tree proof tests
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.12.0
@@ -137,7 +137,7 @@ jobs:
         run: |
           for test_name in cache_cleanup_corepack_scope cache_cleanup_cli_permanent_gradle generated_cache_staged_activity; do
             if [[ -f "src-tauri/tests/${test_name}.rs" ]]; then
-              cargo test --manifest-path src-tauri/Cargo.toml --test "$test_name"
+              cargo test --locked --manifest-path src-tauri/Cargo.toml --test "$test_name"
             else
               printf 'SKIP %s: owner source absent; no runtime regression executed\n' "$test_name"
             fi
@@ -220,4 +220,4 @@ jobs:
           workspaces: src-tauri
           cache-targets: false
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
