@@ -100,5 +100,5 @@ jobs:
         with:
           name: hourly-product-loop-receipt-${{ github.run_id }}
           path: /tmp/hourly-product-loop-receipt.json
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
