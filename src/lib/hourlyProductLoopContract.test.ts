@@ -49,6 +49,23 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).not.toContain("/tmp/agent-ok.txt");
   });
 
+  it("scopes the gateway token only to steps that require the gateway", () => {
+    const workflow = readFileSync(
+      resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
+      "utf8",
+    );
+    const jobStart = workflow.indexOf("contextual-orchestrator-opencode:");
+    const stepsStart = workflow.indexOf("    steps:", jobStart);
+    const jobHeader = workflow.slice(jobStart, stepsStart);
+
+    expect(jobStart).toBeGreaterThanOrEqual(0);
+    expect(stepsStart).toBeGreaterThan(jobStart);
+    expect(jobHeader).not.toContain("CONTEXTUAL_ORCHESTRATOR_TOKEN");
+    expect(
+      workflow.match(/ORCHESTRATOR_TOKEN: \$\{\{ secrets\.CONTEXTUAL_ORCHESTRATOR_TOKEN \}\}/g) ?? [],
+    ).toHaveLength(2);
+  });
+
   it("fails closed before repository or model work when gateway configuration is absent", () => {
     const workflow = readFileSync(
       resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
