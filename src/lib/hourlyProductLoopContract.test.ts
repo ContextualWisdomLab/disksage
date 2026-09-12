@@ -48,7 +48,7 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).not.toContain("/tmp/agent-ok.txt");
   });
 
-  it("preserves the accepted visible-skip boundary when gateway configuration is absent", () => {
+  it("fails closed before repository or model work when gateway configuration is absent", () => {
     const workflow = readFileSync(
       resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
       "utf8",
@@ -60,12 +60,9 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(checkoutStart).toBeGreaterThan(configStart);
     const configStep = workflow.slice(configStart, checkoutStart);
     expect(configStep).toContain('echo "configured=false" >> "$GITHUB_OUTPUT"');
-    expect(configStep).not.toContain("exit 1");
-    expect(
-      workflow.match(/if: steps\.config\.outputs\.configured == 'true'/g) ?? [],
-    ).toHaveLength(3);
-    expect(workflow).toContain("- name: Explain missing orchestrator configuration");
-    expect(workflow).toContain("if: steps.config.outputs.configured != 'true'");
+    expect(configStep).toContain("exit 1");
+    expect(workflow).not.toContain("- name: Explain missing orchestrator configuration");
+    expect(workflow).not.toContain("if: steps.config.outputs.configured != 'true'");
   });
 
   it("binds repository context to the exact manually dispatched commit", () => {
@@ -102,6 +99,7 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(proposedDecision).toContain("must not call `/v1/models`");
     expect(proposedDecision).toContain("connection-establishment timeout");
     expect(proposedDecision).toContain("total elapsed-time cutoff");
+    expect(proposedDecision).toContain("fails closed when gateway configuration is missing");
     expect(decisionIndex).toContain(
       "[0024](0024-orchestrator-free-advisory-routing.md)",
     );
