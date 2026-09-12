@@ -3,50 +3,70 @@ name: Test
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
-      - "!docs/doctoring/release-artifact-provenance.md"
-      - "!docs/doctoring/tauri-content-security-policy.md"
-      - "!docs/doctoring/model-artifact-integrity.md"
-      - "!docs/doctoring/model-load-handle-binding.md"
-      - "!docs/development/icloud-local-eviction-batch.md"
-      - "!docs/architecture/goals/cloud-offload-goal.json"
-      - "!CHANGELOG.md"
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!*.md"
+      # GitHub supports re-inclusion only with ordered positive patterns under `paths`.
+      - "docs/doctoring/release-artifact-provenance.md"
+      - "docs/doctoring/tauri-content-security-policy.md"
+      - "docs/doctoring/model-artifact-integrity.md"
+      - "docs/doctoring/model-load-handle-binding.md"
+      - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/architecture/goals/cloud-offload-goal.json"
+      - "CHANGELOG.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
-      - "!docs/doctoring/release-artifact-provenance.md"
-      - "!docs/doctoring/tauri-content-security-policy.md"
-      - "!docs/doctoring/model-artifact-integrity.md"
-      - "!docs/doctoring/model-load-handle-binding.md"
-      - "!docs/development/icloud-local-eviction-batch.md"
-      - "!docs/architecture/goals/cloud-offload-goal.json"
-      - "!CHANGELOG.md"
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!*.md"
+      # GitHub supports re-inclusion only with ordered positive patterns under `paths`.
+      - "docs/doctoring/release-artifact-provenance.md"
+      - "docs/doctoring/tauri-content-security-policy.md"
+      - "docs/doctoring/model-artifact-integrity.md"
+      - "docs/doctoring/model-load-handle-binding.md"
+      - "docs/development/icloud-local-eviction-batch.md"
+      - "docs/architecture/goals/cloud-offload-goal.json"
+      - "CHANGELOG.md"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install Tauri system deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          for source_file in /etc/apt/sources.list.d/*; do
+            if [[ -f "$source_file" ]] && grep -q 'dl.google.com/linux/chrome' "$source_file"; then
+              sudo rm -f "$source_file"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev lsof
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           cache-targets: false
+      - name: Configure private test temp
+        run: |
+          mkdir -p "$RUNNER_TEMP/disksage"
+          echo "TMPDIR=$RUNNER_TEMP/disksage" >> "$GITHUB_ENV"
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
@@ -62,17 +82,92 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20.19.0
+          node-version: 22.12.0
       - run: npm ci
-      - run: npm test
+      - name: Run npm test
+        id: npm_test
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/disksage-npm-test.log"
+      - name: Upload authoritative npm test failure transcript
+        if: steps.npm_test.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-test-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/disksage-npm-test.log
+          if-no-files-found: error
+      - name: Diagnose SvelteKit sync after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm exec -- svelte-kit sync
+      - name: Diagnose Vitest after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm exec -- vitest run
+      - name: Diagnose workflow contract after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: node --test scripts/ci/workflow-concurrency-contract.test.mjs
+      - name: Diagnose browser test after npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        continue-on-error: true
+        run: npm run test:browser --if-present
+      - name: Preserve npm test failure
+        if: steps.npm_test.outcome == 'failure'
+        run: exit 1
       - run: npm run build
 
-  windows-home-resolution:
-    runs-on: windows-latest
-    timeout-minutes: 10
+  macos-cache-cleanup:
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - name: macOS cache cleanup regressions when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          for test_name in cache_cleanup_corepack_scope cache_cleanup_cli_permanent_gradle generated_cache_staged_activity; do
+            if [[ -f "src-tauri/tests/${test_name}.rs" ]]; then
+              cargo test --manifest-path src-tauri/Cargo.toml --test "$test_name"
+            else
+              printf 'SKIP %s: owner source absent; no runtime regression executed\n' "$test_name"
+            fi
+          done
+      - name: macOS Unix process-group regression when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if [[ -f "src-tauri/src/unix_process_group.rs" ]]; then
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --lib unix_process_group::tests
+          else
+            printf 'SKIP unix_process_group: owner source absent; no runtime regression executed\n'
+          fi
+      - name: macOS provider global-sync process-group regression when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if [[ -f "src-tauri/tests/provider_global_sync_success_pipe_contract.rs" ]]; then
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --test provider_global_sync_success_pipe_contract
+          else
+            printf 'SKIP provider_global_sync_success_pipe_contract: owner source absent; no runtime regression executed\n'
+          fi
+
+  windows-home-resolution:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Windows absolute-home regression
@@ -81,6 +176,26 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows agent-state regression when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/src/agent_state_guard.rs') {
+            rustc --edition=2021 --test src-tauri/src/agent_state_guard.rs -o target/agent-state-guard.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & .\target\agent-state-guard.exe --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP agent_state_guard: owner source absent; no runtime regression executed'
+          }
+      - name: Windows provider OAuth process contract when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/tests/provider_oauth_cli_process.rs') {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --test provider_oauth_cli_process
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP provider_oauth_cli_process: owner source absent; no runtime regression executed'
+          }
 
   llm-engine-build:
     runs-on: ubuntu-latest
@@ -88,10 +203,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install build deps (llama.cpp native + tauri)
         run: |
-          sudo apt-get update
+          for source_file in /etc/apt/sources.list.d/*; do
+            if [[ -f "$source_file" ]] && grep -q 'dl.google.com/linux/chrome' "$source_file"; then
+              sudo rm -f "$source_file"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get install -y cmake clang libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
