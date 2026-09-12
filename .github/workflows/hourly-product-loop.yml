@@ -10,7 +10,6 @@ permissions:
 jobs:
   contextual-orchestrator-opencode:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
     env:
       ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}
       ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
