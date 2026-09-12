@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/test.yml"), "utf8");
 
+/**
+ * Normalizes one YAML scalar used by the deliberately narrow path-filter parser.
+ */
 function scalarValue(raw: string): string {
   const value = raw.trim();
   if (value.startsWith('"')) {
@@ -21,6 +24,10 @@ function scalarValue(raw: string): string {
   return value.split(/\s+#/, 1)[0].trim();
 }
 
+/**
+ * Finds forbidden negative entries specifically under `paths-ignore`, including
+ * comment-separated and inline-list forms that previously escaped review.
+ */
 function negativePathsIgnoreEntries(source: string): string[] {
   const negatives: string[] = [];
   const lines = source.split(/\r?\n/);
@@ -60,6 +67,39 @@ function negativePathsIgnoreEntries(source: string): string[] {
   return negatives;
 }
 
+/**
+ * Reads the ordered `paths` entries for one workflow event, preserving order so
+ * exclusions and required positive re-inclusions remain an executable contract.
+ */
+function eventPaths(source: string, eventName: "push" | "pull_request"): string[] {
+  const lines = source.split(/\r?\n/);
+  const eventStart = lines.findIndex((line) => line === `  ${eventName}:`);
+  if (eventStart < 0) return [];
+
+  const pathsStart = lines.findIndex(
+    (line, index) => index > eventStart && line === "    paths:",
+  );
+  if (pathsStart < 0) return [];
+
+  const entries: string[] = [];
+  for (let index = pathsStart + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const indent = line.length - line.trimStart().length;
+    if (indent <= 4) break;
+
+    const item = trimmed.match(/^-\s*(.+)$/);
+    if (item) entries.push(scalarValue(item[1]));
+  }
+  return entries;
+}
+
+/**
+ * Extracts a named shell step from a job without accidentally absorbing a later
+ * step, which keeps the admission fixtures tied to their canonical owner script.
+ */
 function namedRunScript(job: string, stepName: string): string {
   const marker = `      - name: ${stepName}\n`;
   const step = job.split(marker)[1]?.split(/\n      - /, 1)[0] ?? "";
@@ -80,6 +120,24 @@ describe("test workflow path-filter contract", () => {
 
   it("does not put negative globs under paths-ignore", () => {
     expect(negativePathsIgnoreEntries(workflow)).toEqual([]);
+  });
+
+  it("pins the exact ordered path contract for push and pull requests", () => {
+    const expectedPaths = [
+      "**",
+      "!docs/**",
+      "!*.md",
+      "docs/doctoring/release-artifact-provenance.md",
+      "docs/doctoring/tauri-content-security-policy.md",
+      "docs/doctoring/model-artifact-integrity.md",
+      "docs/doctoring/model-load-handle-binding.md",
+      "docs/development/icloud-local-eviction-batch.md",
+      "docs/architecture/goals/cloud-offload-goal.json",
+      "CHANGELOG.md",
+    ];
+
+    expect(eventPaths(workflow, "push")).toEqual(expectedPaths);
+    expect(eventPaths(workflow, "pull_request")).toEqual(expectedPaths);
   });
 
   it("runs the Windows agent-state regression when that owner source is present", () => {
