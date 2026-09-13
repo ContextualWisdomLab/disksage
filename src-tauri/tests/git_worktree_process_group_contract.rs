@@ -113,7 +113,7 @@ fn observation_failure_does_not_detach_pipe_reader_fds() {
 
     let fake_lsof = fake_bin.join("lsof");
     let script = format!(
-        "#!/bin/sh\nreadlink /proc/$$/fd/1 > '{}'\nprintf '%s\\n' \"$$\" > '{}'\nsleep 5 &\nsleep 0.2\nprintf 'p999999\\0'\nexit 0\n",
+        "#!/bin/sh\npipe_identity=$(readlink /proc/$$/fd/1)\nprintf '%s\\n' \"$pipe_identity\" > '{}'\nprintf '%s\\n' \"$$\" > '{}'\nsleep 5 &\nsleep 0.2\nprintf 'p999999\\0'\nexit 0\n",
         pipe_marker.display(),
         leader_marker.display()
     );
