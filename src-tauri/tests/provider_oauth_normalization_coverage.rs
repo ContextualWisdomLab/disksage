@@ -9,7 +9,13 @@ fn connection_id(provider: CloudProvider, root_id: &str, root_path: &str) -> Str
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+    use std::fmt::Write as _;
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 fn canonical_connection_id(provider: CloudProvider, root_id: &str, root_path: &str) -> String {
