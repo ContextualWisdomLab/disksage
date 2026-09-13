@@ -8,13 +8,13 @@ use crate::cloud::CloudProvider;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-#[cfg(all(not(coverage), target_os = "macos"))]
+#[cfg(not(coverage))]
 use std::io::Read;
 #[cfg(not(coverage))]
 use std::io::Write;
-#[cfg(all(not(coverage), target_os = "macos"))]
+#[cfg(not(coverage))]
 use std::process::{Command, Stdio};
-#[cfg(all(not(coverage), target_os = "macos"))]
+#[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -22,9 +22,9 @@ const SNAPSHOT_SCHEMA_KIND: &str = "disksage.provider-client-runtime";
 pub const PROVIDER_CLIENT_RUNTIME_EVIDENCE_DIRECTORY: &str = "provider-client-runtime-evidence";
 const MAX_PERSISTED_RUNTIME_SNAPSHOTS: usize = 128;
 const MAX_PERSISTED_RUNTIME_SNAPSHOT_BYTES: usize = 64 * 1024;
-#[cfg(all(not(coverage), target_os = "macos"))]
+#[cfg(not(coverage))]
 const PROCESS_OUTPUT_LIMIT: u64 = 64 * 1024;
-#[cfg(all(not(coverage), target_os = "macos"))]
+#[cfg(not(coverage))]
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -317,6 +317,29 @@ pub fn collect_provider_client_runtime(
     }
     let process_names = collect_macos_process_names().ok();
     assess_provider_client_runtime(provider, process_names.as_deref(), observed_at_ms)
+}
+
+/// Observe only the provider's primary desktop process.
+///
+/// Provider extensions may remain alive after the desktop app quits, so recovery operations must
+/// not use the broader copy-prerequisite observation when waiting to run a vendor maintenance CLI.
+#[cfg(not(coverage))]
+pub(crate) fn collect_provider_primary_runtime(provider: CloudProvider) -> Option<bool> {
+    if provider == CloudProvider::Icloud {
+        return Some(true);
+    }
+    let expected = match provider {
+        CloudProvider::Onedrive => "OneDrive",
+        CloudProvider::GoogleDrive => "Google Drive",
+        CloudProvider::Icloud => unreachable!(),
+    };
+    collect_macos_process_names().ok().and_then(|names| {
+        std::str::from_utf8(&names).ok().map(|names| {
+            names
+                .lines()
+                .any(|name| name.trim().eq_ignore_ascii_case(expected))
+        })
+    })
 }
 
 #[cfg(not(coverage))]
