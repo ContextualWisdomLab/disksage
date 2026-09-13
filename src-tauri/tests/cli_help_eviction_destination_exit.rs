@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str, &str, &str); 3] = [
+const BINARIES: [(&str, &str, &str, &str); 4] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
@@ -16,6 +16,12 @@ const BINARIES: [(&str, &str, &str, &str); 3] = [
         "usage: disksage-incomplete-download-destination-plan --source-root ABSOLUTE_PATH --cloud-root ABSOLUTE_PATH --destination-subdirectory RELATIVE_PATH (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--capacity-reserve-mib 0..=1048576] [--private-output ABSOLUTE_NEW_FILE.json]",
         "incomplete-download-destination-plan-unknown-argument",
         "incomplete-download-destination-plan-invalid-utf8-argument",
+    ),
+    (
+        "disksage-cloud-local-eviction-batch",
+        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "알 수 없는 인자",
+        "icloud-local-eviction-batch-invalid-utf8-argument",
     ),
     (
         "disksage-icloud-local-eviction-batch",

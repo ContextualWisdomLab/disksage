@@ -122,10 +122,13 @@ fn plan_moves_impl(
             Some(c) => c,
             None => match pick(&f.path, &candidates) {
                 Some(picked) => picked,
-                None => match classify(&f.path) {
+                None if lineage_probe.is_none() => match classify(&f.path) {
                     Some(c) => c.to_string(),
                     None => continue,
                 },
+                // A metadata-aware plan must have an explicit rule or content-aware picker
+                // decision; extension/name-only classification is not movement authority.
+                None => continue,
             },
         };
         let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
@@ -354,7 +357,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
             home,
             1_800_000_000_000,
             &[],
-            &|_, _| None,
+            &|_, _| Some("Image".to_string()),
             &|_| Some(lineage.clone()),
         );
         assert_eq!(plans.len(), 1);
@@ -362,6 +365,22 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
         assert!(validate_move_source(&plans[0]).is_ok());
         std::fs::write(&source, b"changed").unwrap();
         assert_eq!(validate_move_source(&plans[0]), Err("organize-source-size-changed".into()));
+    }
+
+    #[test]
+    fn metadata_aware_plan_skips_name_only_fallback() {
+        let onto = parse_ttl(ONTO).unwrap();
+        let files = vec![fe("/downloads/pic.png", 1)];
+        let plans = plan_moves_with_metadata(
+            &files,
+            &onto,
+            Path::new("/home/u"),
+            1_800_000_000_000,
+            &[],
+            &|_, _| None,
+            &|_| Some(LineageMetadata::default()),
+        );
+        assert!(plans.is_empty());
     }
 
     #[test]
@@ -377,7 +396,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
             Path::new("/home/u"),
             1_800_000_000_000,
             &[],
-            &|_, _| None,
+            &|_, _| Some("Image".to_string()),
             &|_| {
                 probes.set(probes.get() + 1);
                 Some(LineageMetadata::default())
