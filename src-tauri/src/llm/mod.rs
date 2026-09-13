@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod backend;
 mod cache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
