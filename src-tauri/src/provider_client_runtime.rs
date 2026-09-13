@@ -8,13 +8,13 @@ use crate::cloud::CloudProvider;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 use std::io::Read;
 #[cfg(not(coverage))]
 use std::io::Write;
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 use std::process::{Command, Stdio};
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -22,9 +22,9 @@ const SNAPSHOT_SCHEMA_KIND: &str = "disksage.provider-client-runtime";
 pub const PROVIDER_CLIENT_RUNTIME_EVIDENCE_DIRECTORY: &str = "provider-client-runtime-evidence";
 const MAX_PERSISTED_RUNTIME_SNAPSHOTS: usize = 128;
 const MAX_PERSISTED_RUNTIME_SNAPSHOT_BYTES: usize = 64 * 1024;
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 const PROCESS_OUTPUT_LIMIT: u64 = 64 * 1024;
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), target_os = "macos"))]
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
