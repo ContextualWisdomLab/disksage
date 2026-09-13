@@ -76,3 +76,14 @@ fn validation_accepts_exact_public_length_boundaries() {
 
     assert!(validate_references(&[item]).is_ok());
 }
+
+#[test]
+fn validation_rejects_whitespace_only_item_type() {
+    let mut item = reference();
+    item.item_type = "   \t".into();
+
+    assert_eq!(
+        validate_references(&[item]).unwrap_err(),
+        "zotero-item-type-invalid"
+    );
+}
