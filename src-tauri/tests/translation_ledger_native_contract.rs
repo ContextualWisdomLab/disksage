@@ -31,6 +31,17 @@ fn native_ledger_remains_private_and_resource_admission_precedes_persistence() {
 }
 
 #[test]
+fn write_lock_recheck_is_constant_scope_and_full_verification_happens_without_it() {
+    let store_source = include_str!("../src/translation_ledger_store.rs");
+
+    assert!(store_source.contains("existing_release_identity_matches(&transaction"));
+    assert!(!store_source.contains("existing_release_matches(&transaction"));
+    assert!(store_source.contains(
+        "transaction.commit()\n            .map_err(|_| \"translation-ledger-transaction-commit-failed\".to_string())?;\n        return existing_release_matches(connection"
+    ));
+}
+
+#[test]
 fn presentation_ipc_does_not_accept_database_resource_or_digest_authority() {
     let bridge_source = include_str!("../src/translation_resource_bridge.rs");
     let command_start = bridge_source
