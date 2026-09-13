@@ -404,4 +404,21 @@ mod tests {
             Err("translation-screen-area-invalid".to_string())
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_ledger_rejects_symlink_database_path() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary ledger directory");
+        let target = directory.path().join("target.sqlite3");
+        std::fs::File::create(&target).expect("target file");
+        let database_path = directory.path().join("translation-ledger.sqlite3");
+        symlink(&target, &database_path).expect("database symlink");
+
+        assert_eq!(
+            open_translation_ledger(&database_path).unwrap_err(),
+            "translation-ledger-path-symlink-rejected"
+        );
+    }
 }
