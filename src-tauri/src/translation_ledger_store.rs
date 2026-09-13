@@ -83,13 +83,21 @@ pub(crate) fn install_current_translation_resource(
         .map_err(|_| "translation-ledger-transaction-start-failed".to_string())?;
 
     // Another process may have completed the same immutable install before this writer acquired the
-    // SQLite write lock. Re-check only local ledger state after lock acquisition; no file or network
-    // I/O occurs inside the transaction.
-    if existing_release_matches(&transaction, resource, asset.sha256, &prepared)? {
+    // SQLite write lock. Keep the lock-held recheck constant-scope: only the immutable release
+    // identity is read here. Full message/screen verification runs after releasing the write lock.
+    if existing_release_identity_matches(&transaction, resource, asset.sha256)? {
         transaction
             .commit()
             .map_err(|_| "translation-ledger-transaction-commit-failed".to_string())?;
-        return Ok(());
+        return existing_release_matches(connection, resource, asset.sha256, &prepared).and_then(
+            |matches| {
+                if matches {
+                    Ok(())
+                } else {
+                    Err("translation-ledger-existing-version-mismatch".to_string())
+                }
+            },
+        );
     }
 
     insert_release(
@@ -182,11 +190,10 @@ fn screen_area_for_key(screen_key: &str) -> Result<String, String> {
     Ok(screen_area.to_string())
 }
 
-fn existing_release_matches(
+fn existing_release_identity_matches(
     connection: &Connection,
     resource: &TranslationResource,
     content_sha256: &str,
-    prepared: &[PreparedScreenKey<'_>],
 ) -> Result<bool, String> {
     let existing: Option<(u32, String)> = connection
         .query_row(
@@ -203,6 +210,18 @@ fn existing_release_matches(
     };
     if schema_version != resource.schema_version || existing_sha256 != content_sha256 {
         return Err("translation-ledger-existing-version-mismatch".to_string());
+    }
+    Ok(true)
+}
+
+fn existing_release_matches(
+    connection: &Connection,
+    resource: &TranslationResource,
+    content_sha256: &str,
+    prepared: &[PreparedScreenKey<'_>],
+) -> Result<bool, String> {
+    if !existing_release_identity_matches(connection, resource, content_sha256)? {
+        return Ok(false);
     }
 
     let expected_message_count: i64 = prepared
