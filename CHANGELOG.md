@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Replace age-based development artifact authority with an explicit selected-workspace plan for
+  Cargo, Node, and Python generated roots. Require ecosystem lockfiles, complete physical-allocation
+  manifests, non-provider ancestry, unchanged filesystem identity, a fresh inactive-use check, and
+  explicit Trash approval before any reversible cleanup.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

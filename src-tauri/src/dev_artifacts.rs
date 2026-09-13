@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,9 @@ pub struct DevArtifact {
     pub kind: String,
     pub project: String,
     pub bytes: u64,
+    /// Filesystem blocks currently allocated for regular files in this generated root and actually
+    /// reclaimable when every hard-link name for each counted object is inside the root.
+    pub allocated_bytes: u64,
     pub files: u64,
     pub skipped: u64,
     pub scan_complete: bool,
@@ -39,8 +43,6 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
-    ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -50,7 +52,9 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
-    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
+    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else {
+        return 0;
+    };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
 }
@@ -58,6 +62,7 @@ fn age_days(path: &Path, now_ms: u64) -> u64 {
 #[derive(Default)]
 struct ArtifactManifest {
     bytes: u64,
+    allocated_bytes: u64,
     files: u64,
     skipped: u64,
     scan_complete: bool,
@@ -66,11 +71,202 @@ struct ArtifactManifest {
     object_id: String,
 }
 
+#[derive(Clone, Copy)]
+struct LinkAllocationEvidence {
+    allocated_bytes: u64,
+    total_links: u64,
+    observed_links: u64,
+}
+
+#[cfg(unix)]
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.blocks().saturating_mul(512))
+}
+
+#[cfg(unix)]
+fn hard_link_count(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.nlink())
+}
+
+#[cfg(windows)]
+fn windows_api_path(path: &Path) -> Option<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const BACKSLASH: u16 = b'\\' as u16;
+    const FORWARD_SLASH: u16 = b'/' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    let verbatim_prefix = [BACKSLASH, BACKSLASH, QUESTION, BACKSLASH];
+    if wide.starts_with(&verbatim_prefix) {
+        wide.push(0);
+        return Some(wide);
+    }
+    let device_prefix = [BACKSLASH, BACKSLASH, DOT, BACKSLASH];
+    if !path.is_absolute() || wide.starts_with(&device_prefix) {
+        return None;
+    }
+
+    // `\\?\` disables Win32 dot-component normalization. Resolve ordinary absolute
+    // paths before entering that namespace so `workspace\detour\..\target` remains a
+    // valid allocation query while preserving already-verbatim paths above.
+    let normalized = std::path::absolute(path).ok()?;
+    wide = normalized.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    for unit in &mut wide {
+        if *unit == FORWARD_SLASH {
+            *unit = BACKSLASH;
+        }
+    }
+    let mut extended: Vec<u16> = if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        r"\\?\UNC\".encode_utf16().collect()
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        extended.extend_from_slice(&wide[2..]);
+    } else {
+        extended.extend_from_slice(&wide);
+    }
+    extended.push(0);
+    Some(extended)
+}
+
+#[cfg(windows)]
+fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    const INVALID_FILE_SIZE: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCompressedFileSizeW(file_name: *const u16, high: *mut u32) -> u32;
+        fn GetLastError() -> u32;
+        fn SetLastError(error: u32);
+    }
+    let wide = windows_api_path(path)?;
+    let mut high = 0_u32;
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 absolute path and `high` is writable.
+    let low = unsafe {
+        SetLastError(0);
+        GetCompressedFileSizeW(wide.as_ptr(), &mut high)
+    };
+    // INVALID_FILE_SIZE can also be a valid low word; GetLastError disambiguates it.
+    if low == INVALID_FILE_SIZE && unsafe { GetLastError() } != 0 {
+        return None;
+    }
+    Some((u64::from(high) << 32) | u64::from(low))
+}
+
+#[cfg(windows)]
+fn hard_link_count(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    let handle = winapi_util::Handle::from_path_any(path).ok()?;
+    let info = winapi_util::file::information(&handle).ok()?;
+    Some(info.number_of_links())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(metadata.len())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hard_link_count(_path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+fn canonicalize_provider_roots<I>(roots: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    roots
+        .into_iter()
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+        .collect()
+}
+
+fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
+    #[cfg(windows)]
+    let candidates = [
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+        crate::home_resolution::windows_home_drive_path(),
+    ];
+    #[cfg(not(windows))]
+    let candidates = [std::env::var_os("HOME").map(PathBuf::from), None];
+    let home = crate::home_resolution::select_absolute_home(candidates).ok()?;
+    if home
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&home).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let expected_identity = crate::safety::filesystem_object_id(&home).ok()?;
+    let home = std::fs::canonicalize(home).ok()?;
+    if crate::safety::filesystem_object_id(&home).ok()? != expected_identity {
+        return None;
+    }
+    Some(canonicalize_provider_roots(
+        crate::cloud::discover_cloud_roots(&home)
+            .into_iter()
+            .map(|cloud_root| PathBuf::from(cloud_root.path)),
+    ))
+}
+
+fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
+    let component_blocked = path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(value) if value == "CloudStorage" || value == "Mobile Documents")
+    });
+    if component_blocked {
+        return true;
+    }
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return true;
+    };
+    provider_roots
+        .iter()
+        .any(|cloud_path| canonical_path.starts_with(cloud_path))
+}
+
+fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
+    match kind {
+        "target" => path.join("Cargo.toml").is_file() && path.join("Cargo.lock").is_file(),
+        "node_modules" => {
+            path.join("package.json").is_file()
+                && [
+                    "package-lock.json",
+                    "pnpm-lock.yaml",
+                    "yarn.lock",
+                    "bun.lock",
+                    "bun.lockb",
+                ]
+                .iter()
+                .any(|name| path.join(name).is_file())
+        }
+        ".venv" | "venv" => {
+            ["pyproject.toml", "setup.py"]
+                .iter()
+                .any(|name| path.join(name).is_file())
+                && ["uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"]
+                    .iter()
+                    .any(|name| path.join(name).is_file())
+        }
+        _ => false,
+    }
+}
+
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
 ///
-/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
-/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
-/// unusually large trees instead of blocking the UI indefinitely.
+/// Paths, kinds, sizes, mtimes, hard-link topology, and filesystem identities are enough to detect
+/// a stale selection while avoiding sensitive content reads. A time/record bound makes the cleanup
+/// gate fail closed on unusually large trees instead of blocking the UI indefinitely.
 fn artifact_manifest(root: &Path) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
@@ -82,6 +278,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     }
     manifest.object_id = root_object_id.unwrap_or_default();
     let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let mut link_allocations: HashMap<String, LinkAllocationEvidence> = HashMap::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -130,26 +327,75 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 manifest.scan_complete = false;
                 continue;
             };
-            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
+            let Ok(identity) = crate::safety::filesystem_object_id(&entry_path) else {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
-                "<unknown>".into()
-            });
+                continue;
+            };
             let modified = modified_stamp(&metadata).unwrap_or_else(|| {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
                 "<unknown>".into()
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
+            let Some(allocated) = allocated_bytes(entry_path, &metadata) else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            let Some(total_links) = hard_link_count(entry_path, &metadata) else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            if total_links == 0 {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            }
+            match link_allocations.entry(identity.clone()) {
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(LinkAllocationEvidence {
+                        allocated_bytes: allocated,
+                        total_links,
+                        observed_links: 1,
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                    let evidence = occupied.get_mut();
+                    if evidence.allocated_bytes != allocated || evidence.total_links != total_links {
+                        manifest.scan_complete = false;
+                    }
+                    evidence.observed_links = evidence.observed_links.saturating_add(1);
+                }
+            }
             manifest.files = manifest.files.saturating_add(1);
-            manifest
-                .records
-                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
+            manifest.records.push(format!(
+                "F\0{relative}\0{identity}\0{}\0{allocated}\0{total_links}\0{modified}",
+                metadata.len()
+            ));
+            if crate::cloud::metadata_is_dataless(&metadata) {
+                manifest.scan_complete = false;
+            }
+        }
+    }
+
+    for evidence in link_allocations.values() {
+        if evidence.observed_links > evidence.total_links {
+            manifest.scan_complete = false;
+            continue;
+        }
+        if evidence.observed_links == evidence.total_links {
+            manifest.allocated_bytes = manifest
+                .allocated_bytes
+                .saturating_add(evidence.allocated_bytes);
         }
     }
 
     if !manifest.scan_complete {
-        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
+        manifest
+            .records
+            .push("!incomplete\0bounded-artifact-manifest".into());
     }
     manifest.records.sort_unstable();
     manifest.fingerprint = metadata_fingerprint(&manifest.records);
@@ -157,8 +403,16 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
 }
 
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
-    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+    let duration = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!(
+        "{}:{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
 }
 
 fn metadata_fingerprint(records: &[String]) -> String {
@@ -170,7 +424,31 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
+fn staged_manifest_matches_request(path: &Path, request: &DevArtifact) -> bool {
+    let manifest = artifact_manifest(path);
+    manifest.scan_complete
+        && manifest.skipped == 0
+        && manifest.object_id == request.object_id
+        && manifest.bytes == request.bytes
+        && manifest.allocated_bytes == request.allocated_bytes
+        && manifest.files == request.files
+        && manifest.fingerprint == request.fingerprint
+}
+
+fn validate_staged_artifact(path: &Path, request: &DevArtifact) -> Result<(), String> {
+    let active_use = crate::git_worktree::active_use_evidence(path, 2_000, 64, true);
+    if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
+        return Err(
+            "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요"
+                .into(),
+        );
+    }
+    staged_manifest_matches_request(path, request)
+        .then_some(())
+        .ok_or_else(|| "개발 빌드 파일이 변경되었습니다. 다시 확인하세요".into())
+}
+
+/// 마커 인접 아티팩트 디렉토리를 찾아 로컬 할당량이 큰 순서로 반환.
 ///
 /// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
 /// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
@@ -179,13 +457,31 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    let Some(provider_roots) = discovered_provider_roots() else {
+        return Vec::new();
+    };
+    let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
+        return Vec::new();
+    };
+    if !root.is_absolute()
+        || root_metadata.file_type().is_symlink()
+        || !root_metadata.is_dir()
+        || provider_managed_ancestry(root, &provider_roots)
+    {
+        return Vec::new();
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
-            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            entry.depth() == 0 || scanner::keep_entry(entry)
+            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일. Provider ancestry
+            // canonicalization is needed only for directories because only directories can affect
+            // traversal or become generated-root candidates.
+            entry.depth() == 0
+                || (scanner::keep_entry(entry)
+                    && (!entry.file_type().is_dir()
+                        || !provider_managed_ancestry(entry.path(), &provider_roots)))
         });
 
     for entry in walker {
@@ -194,10 +490,14 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        let Some((_, markers)) = artifact_kind(&name) else { continue };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = !markers.is_empty() && marker_and_lockfile_present(parent, &name);
         if marker_ok {
             candidates.push(path.to_path_buf());
         }
@@ -219,14 +519,19 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter_map(|path| {
-            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
-            if age < min_age_days {
-                return None;
-            }
+            let age = if now_ms == u64::MAX {
+                u64::MAX
+            } else {
+                age_days(path, now_ms)
+            };
+            let _ = min_age_days; // age is display-only; it never grants cleanup authority.
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
+            if manifest.allocated_bytes == 0 {
+                return None;
+            }
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -235,6 +540,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 bytes: manifest.bytes,
+                allocated_bytes: manifest.allocated_bytes,
                 files: manifest.files,
                 skipped: manifest.skipped,
                 scan_complete: manifest.scan_complete,
@@ -245,7 +551,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         })
         .collect();
 
-    found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    found.sort_by(|a, b| {
+        b.allocated_bytes
+            .cmp(&a.allocated_bytes)
+            .then_with(|| b.bytes.cmp(&a.bytes))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     found
 }
 
@@ -260,7 +571,18 @@ pub fn clean_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    approved: bool,
 ) -> Vec<DevArtifactCleanResult> {
+    if !approved {
+        return requests
+            .iter()
+            .map(|request| DevArtifactCleanResult {
+                path: request.path.clone(),
+                ok: false,
+                error: "정리하려면 검토 화면에서 휴지통 이동을 승인하세요".into(),
+            })
+            .collect();
+    }
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
@@ -270,6 +592,8 @@ pub fn clean_artifacts(
                     && candidate.kind == request.kind
                     && candidate.project == request.project
                     && candidate.bytes == request.bytes
+                    && candidate.allocated_bytes == request.allocated_bytes
+                    && request.allocated_bytes > 0
                     && candidate.files == request.files
                     && candidate.skipped == request.skipped
                     && candidate.scan_complete
@@ -289,12 +613,27 @@ pub fn clean_artifacts(
                 };
             }
 
-            match crate::safety::trash_delete_if_identity(
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&request.path),
+                2_000,
+                64,
+                true,
+            );
+            if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요".into(),
+                };
+            }
+
+            match crate::safety::trash_delete_if_identity_and_validate(
                 Path::new(&request.path),
                 &request.object_id,
-                request.bytes,
+                request.allocated_bytes,
                 journal_path,
                 now_ms,
+                |staged| validate_staged_artifact(staged, request),
             ) {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
@@ -316,7 +655,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
+    fn project(
+        root: &std::path::Path,
+        name: &str,
+        marker: &str,
+        artifact: &str,
+    ) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
@@ -330,7 +674,13 @@ mod tests {
     fn finds_marker_adjacent_artifacts() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "webapp", "package.json", "node_modules");
+        fs::write(
+            tmp.path().join("webapp/pnpm-lock.yaml"),
+            b"lockfileVersion: 9",
+        )
+        .unwrap();
         project(tmp.path(), "cli", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cli/Cargo.lock"), b"version = 4").unwrap();
         // 마커 없는 가짜 — 탐지되면 안 됨
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
@@ -351,30 +701,92 @@ mod tests {
     }
 
     #[test]
-    fn finds_regenerable_codegraph_indexes() {
+    fn requires_a_recognized_lockfile() {
         let tmp = tempfile::tempdir().unwrap();
-        let index = tmp.path().join("repo/.codegraph");
-        fs::create_dir_all(&index).unwrap();
-        fs::write(index.join("db"), b"generated").unwrap();
+        project(tmp.path(), "repo", "package.json", "node_modules");
 
         let found = find_artifacts(tmp.path(), 0, u64::MAX);
 
-        assert!(found.iter().any(|artifact| {
-            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
-        }));
+        assert!(found.is_empty());
     }
 
     #[test]
-    fn respects_min_age() {
+    fn zero_allocation_artifact_is_not_offered_for_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("empty-app");
+        fs::create_dir_all(project.join("node_modules")).unwrap();
+        fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(project.join("package-lock.json"), b"{}").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "zero-allocation generated roots cannot be executable cleanup candidates"
+        );
+    }
+
+    #[test]
+    fn hard_links_inside_artifact_count_physical_allocation_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, target.join("payload-copy.bin")).unwrap();
+        let metadata = fs::metadata(&payload).unwrap();
+        let expected = allocated_bytes(&payload, &metadata).unwrap();
+        assert!(expected > 0, "fixture must consume physical allocation");
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].allocated_bytes, expected,
+            "one filesystem object must not be counted once per in-root hard-link name"
+        );
+    }
+
+    #[test]
+    fn external_hard_link_prevents_false_reclaim_offer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, tmp.path().join("cargo-app/payload-retained.bin")).unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "blocks retained by a hard link outside the generated root are not reclaimable"
+        );
+    }
+
+    #[test]
+    fn unavailable_provider_root_does_not_discard_other_provider_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = tmp.path().join("provider-existing");
+        let unavailable = tmp.path().join("provider-unavailable");
+        fs::create_dir_all(&existing).unwrap();
+
+        let roots = canonicalize_provider_roots([existing.clone(), unavailable.clone()]);
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], fs::canonicalize(existing).unwrap());
+        assert_eq!(roots[1], unavailable);
+    }
+
+    #[test]
+    fn reports_age_without_using_it_as_cleanup_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
-        // 방금 만든 것: min_age_days=30이면 제외 (now = 실제 현재로는 나이가 0)
+        fs::write(tmp.path().join("fresh/package-lock.json"), b"{}").unwrap();
+        // 방금 만든 항목도 잠금 파일과 할당 증거가 있으면 표시한다. 나이는 정보일 뿐이다.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
-        // min_age_days=0이면 포함
+        assert_eq!(find_artifacts(tmp.path(), 30, now_ms).len(), 1);
         assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
     }
 
@@ -382,6 +794,7 @@ mod tests {
     fn artifacts_inside_artifacts_are_not_double_counted() {
         let tmp = tempfile::tempdir().unwrap();
         let nm = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/yarn.lock"), b"lock").unwrap();
         // node_modules 내부의 중첩 node_modules — 별도 항목이면 안 됨
         let nested = nm.join("dep").join("node_modules");
         fs::create_dir_all(&nested).unwrap();
@@ -394,6 +807,7 @@ mod tests {
     fn cleanup_fails_closed_when_artifact_identity_changes() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
         let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
         assert_eq!(candidates.len(), 1);
         let journal = tmp.path().join("journal.jsonl");
@@ -402,12 +816,123 @@ mod tests {
         std::fs::rename(&live, &original).unwrap();
         std::fs::create_dir(&live).unwrap();
         std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
-        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1, true);
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(!journal.exists(), "stale identity must not create a journal");
+        assert!(
+            !journal.exists(),
+            "stale identity must not create a journal"
+        );
+    }
+
+    #[test]
+    fn classifies_manual_cargo_node_and_venv_reclaim_without_age_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "cargo-6_7-gib-incident", "Cargo.toml", "target");
+        fs::write(
+            tmp.path().join("cargo-6_7-gib-incident/Cargo.lock"),
+            b"version = 4",
+        )
+        .unwrap();
+        project(tmp.path(), "node-app", "package.json", "node_modules");
+        fs::write(
+            tmp.path().join("node-app/pnpm-lock.yaml"),
+            b"lockfileVersion: 9",
+        )
+        .unwrap();
+        project(tmp.path(), "python-app", "pyproject.toml", ".venv");
+        fs::write(tmp.path().join("python-app/uv.lock"), b"version = 1").unwrap();
+
+        let found = find_artifacts(tmp.path(), u64::MAX, u64::MAX);
+
+        assert_eq!(
+            found.len(),
+            3,
+            "age threshold never decides generated-root eligibility"
+        );
+        assert!(found
+            .iter()
+            .all(|item| item.scan_complete && item.allocated_bytes > 0));
+        assert!(found.iter().any(|item| item.kind == "target"));
+        assert!(found.iter().any(|item| item.kind == "node_modules"));
+        assert!(found.iter().any(|item| item.kind == ".venv"));
+    }
+
+    #[test]
+    fn cleanup_requires_explicit_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        let result = clean_artifacts(
+            &candidates,
+            tmp.path(),
+            0,
+            &tmp.path().join("journal.jsonl"),
+            1,
+            false,
+        );
+
+        assert!(!result[0].ok);
+        assert!(artifact.exists());
+    }
+
+    #[test]
+    fn broad_selected_root_prunes_nested_file_provider_build_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("Library/CloudStorage/provider/repository");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            b"[package]\nname='fixture'\nversion='0.1.0'",
+        )
+        .unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(project.join("target/output.bin"), b"generated").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "nested File Provider roots must be pruned before candidate planning"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_validation_restores_artifact_with_retained_writer() {
+        use std::fs::OpenOptions;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
+        let request = find_artifacts(tmp.path(), 0, u64::MAX).remove(0);
+        let _writer = OpenOptions::new()
+            .write(true)
+            .open(artifact.join("payload.bin"))
+            .unwrap();
+
+        let result = crate::safety::trash_delete_if_identity_and_validate(
+            &artifact,
+            &request.object_id,
+            request.allocated_bytes,
+            &tmp.path().join("journal.jsonl"),
+            1,
+            |staged| validate_staged_artifact(staged, &request),
+        );
+
+        assert!(
+            result.is_err(),
+            "a retained writer must prevent Trash handoff"
+        );
+        assert!(
+            artifact.exists(),
+            "failed validation must restore the artifact"
+        );
+        assert!(artifact.join("payload.bin").exists());
     }
 }
