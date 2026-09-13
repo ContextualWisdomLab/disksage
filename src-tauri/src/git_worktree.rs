@@ -20,6 +20,11 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -367,6 +372,8 @@ fn is_oid(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Drains bounded child output to EOF on platforms where child pipes remain blocking.
+#[cfg(not(unix))]
 fn drain_bounded<R: Read + Send + 'static>(mut reader: R) -> thread::JoinHandle<(Vec<u8>, bool)> {
     thread::spawn(move || {
         let mut stored = Vec::new();
@@ -391,6 +398,58 @@ fn drain_bounded<R: Read + Send + 'static>(mut reader: R) -> thread::JoinHandle<
     })
 }
 
+/// Adds `O_NONBLOCK` without clearing the pipe's existing status flags.
+#[cfg(unix)]
+fn set_reader_nonblocking<R: AsRawFd>(reader: &R) -> std::io::Result<()> {
+    let fd = reader.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Drains a nonblocking Unix child pipe until EOF or explicit wait-failure cancellation.
+#[cfg(unix)]
+fn drain_bounded_cancellable<R: Read + Send + 'static>(
+    mut reader: R,
+    cancelled: Arc<AtomicBool>,
+) -> thread::JoinHandle<(Vec<u8>, bool)> {
+    thread::spawn(move || {
+        let mut stored = Vec::new();
+        let mut truncated = false;
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let remaining = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(stored.len());
+                    let retained = remaining.min(read);
+                    stored.extend_from_slice(&buffer[..retained]);
+                    if retained < read {
+                        truncated = true;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+                }
+                Err(_) => {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+        (stored, truncated)
+    })
+}
+
+/// Runs one child command with bounded output and platform-specific descendant settlement.
 fn run_bounded_command(
     program: &str,
     args: &[OsString],
@@ -432,40 +491,92 @@ fn run_bounded_command(
         .stderr
         .take()
         .ok_or_else(|| format!("{program}-stderr-capture-failed"))?;
+
+    #[cfg(unix)]
+    if set_reader_nonblocking(&stdout).is_err() || set_reader_nonblocking(&stderr).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{program}-command-reader-setup-failed"));
+    }
+
+    #[cfg(unix)]
+    let reader_cancelled = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    let stdout_thread = drain_bounded_cancellable(stdout, Arc::clone(&reader_cancelled));
+    #[cfg(unix)]
+    let stderr_thread = drain_bounded_cancellable(stderr, Arc::clone(&reader_cancelled));
+    #[cfg(not(unix))]
     let stdout_thread = drain_bounded(stdout);
+    #[cfg(not(unix))]
     let stderr_thread = drain_bounded(stderr);
-    let started = Instant::now();
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
-                timed_out = true;
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                break child.wait().ok();
+
+    #[cfg(unix)]
+    let (status, wait_failed) = {
+        use crate::unix_process_group::{
+            signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+        };
+
+        match wait_for_child_without_reap(
+            child_pid,
+            Duration::from_millis(timeout_ms),
+            Duration::from_millis(POLL_INTERVAL_MS),
+        ) {
+            Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+                // The unreaped leader pins the process-group identity until every inheriting
+                // descendant is settled, so reader joins cannot escape the caller's command bound.
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                (child.wait().ok(), false)
             }
-            Ok(None) => thread::sleep(Duration::from_millis(POLL_INTERVAL_MS)),
+            Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+                timed_out = true;
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                let _ = child.kill();
+                (child.wait().ok(), false)
+            }
             Err(_) => {
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
+                // Observation failed before group identity was proven pinned. Never send a
+                // negative-PID signal in this state; settle only the direct child, then cancel and
+                // join the owned pipe readers before returning the existing fail-closed error.
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                reader_cancelled.store(true, Ordering::Release);
+                (None, true)
             }
         }
     };
-    let (stdout, stdout_truncated) = stdout_thread
-        .join()
-        .map_err(|_| format!("{program}-stdout-reader-failed"))?;
-    let (stderr, stderr_truncated) = stderr_thread
-        .join()
-        .map_err(|_| format!("{program}-stderr-reader-failed"))?;
+
+    #[cfg(not(unix))]
+    let status = {
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break child.wait().ok();
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(POLL_INTERVAL_MS)),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        }
+    };
+
+    let stdout_joined = stdout_thread.join();
+    let stderr_joined = stderr_thread.join();
+    #[cfg(unix)]
+    if wait_failed {
+        return Err(format!("{program}-command-wait-failed"));
+    }
+    let (stdout, stdout_truncated) =
+        stdout_joined.map_err(|_| format!("{program}-stdout-reader-failed"))?;
+    let (stderr, stderr_truncated) =
+        stderr_joined.map_err(|_| format!("{program}-stderr-reader-failed"))?;
     Ok(CommandResult {
         child_pid,
         status_code: status.and_then(|value| value.code()),
@@ -3108,7 +3219,7 @@ mod tests {
             ]"#,
             oid('a'),
             oid('b'),
-            oid('c'),
+            oid('c')
         );
         assert_eq!(
             parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
@@ -3174,7 +3285,7 @@ mod tests {
             oid('a'),
             oid('b'),
             oid('c'),
-            oid('d'),
+            oid('d')
         );
         let cutoff = parse_github_timestamp_ms("2026-08-01T00:00:00Z").unwrap();
         assert_eq!(
