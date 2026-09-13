@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+#[cfg(target_os = "macos")]
 use std::fs::File;
+#[cfg(target_os = "macos")]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "macos", not(test)))]
