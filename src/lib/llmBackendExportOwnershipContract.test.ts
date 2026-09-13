@@ -12,9 +12,14 @@ function readRustSource(path: string): string {
   return readFileSync(resolve(repositoryRoot, path), "utf8");
 }
 
-/** Detect the root backend re-export spelling guarded by the original contract. */
+/** Detect a public use statement that exposes backend policy through the LLM root. */
 function hasForbiddenBackendRootReexport(source: string): boolean {
-  return /^pub use backend::/m.test(source);
+  const publicUseStatements = source.match(/^\s*pub\s+use\s+[\s\S]*?;/gm) ?? [];
+  return publicUseStatements.some((statement) =>
+    /\bbackend\s*::\s*(?:\*|\{[^}]*\b(?:Backend|choose_backend)\b[^}]*\}|\b(?:Backend|choose_backend)\b)/s.test(
+      statement,
+    ),
+  );
 }
 
 describe("LLM backend ownership", () => {
