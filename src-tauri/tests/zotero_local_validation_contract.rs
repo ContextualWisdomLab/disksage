@@ -58,6 +58,17 @@ fn manifest_rejects_size_schema_and_empty_collection_failures() {
 }
 
 #[test]
+fn manifest_accepts_a_valid_bounded_reference() {
+    let encoded = serde_json::to_vec(&vec![reference()]).unwrap();
+    let parsed = parse_manifest(&encoded).unwrap();
+
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].item_type, "journalArticle");
+    assert_eq!(parsed[0].title, "Metadata-first storage planning");
+    assert_eq!(parsed[0].url.as_deref(), Some("https://example.org/paper"));
+}
+
+#[test]
 fn validation_enforces_collection_item_title_and_creator_bounds() {
     assert_eq!(
         validate_references(&vec![reference(); MAX_REFERENCE_COUNT + 1]).unwrap_err(),
@@ -107,6 +118,13 @@ fn validation_enforces_collection_item_title_and_creator_bounds() {
     );
 
     let mut item = reference();
+    item.creators[0].creator_type = "x".repeat(65);
+    assert_eq!(
+        validate_references(&[item]).unwrap_err(),
+        "zotero-creator-invalid"
+    );
+
+    let mut item = reference();
     item.creators[0].first_name = None;
     item.creators[0].last_name = None;
     item.creators[0].name = Some("   ".into());
@@ -119,6 +137,18 @@ fn validation_enforces_collection_item_title_and_creator_bounds() {
     item.creators[0].first_name = None;
     item.creators[0].last_name = None;
     item.creators[0].name = Some("Ada Lovelace".into());
+    assert!(validate_references(&[item]).is_ok());
+
+    let mut item = reference();
+    item.creators[0].name = None;
+    item.creators[0].last_name = None;
+    item.creators[0].first_name = Some("Ada".into());
+    assert!(validate_references(&[item]).is_ok());
+
+    let mut item = reference();
+    item.creators[0].name = None;
+    item.creators[0].first_name = None;
+    item.creators[0].last_name = Some("Lovelace".into());
     assert!(validate_references(&[item]).is_ok());
 }
 
@@ -145,6 +175,25 @@ fn validation_rejects_unsafe_urls_files_and_text_fields() {
         "zotero-full-text-must-be-regular-file"
     );
 
+    let regular_file = tempfile::NamedTempFile::new().unwrap();
+    let mut item = reference();
+    item.full_text_path = Some(regular_file.path().to_path_buf());
+    assert!(validate_references(&[item]).is_ok());
+
+    #[cfg(unix)]
+    {
+        let symlink_root = tempfile::tempdir().unwrap();
+        let target = tempfile::NamedTempFile::new_in(symlink_root.path()).unwrap();
+        let link = symlink_root.path().join("linked-full-text.pdf");
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        let mut item = reference();
+        item.full_text_path = Some(link);
+        assert_eq!(
+            validate_references(&[item]).unwrap_err(),
+            "zotero-full-text-must-be-regular-file"
+        );
+    }
+
     let oversized = tempfile::NamedTempFile::new().unwrap();
     oversized
         .as_file()
@@ -170,6 +219,10 @@ fn validation_rejects_unsafe_urls_files_and_text_fields() {
         validate_references(&[item]).unwrap_err(),
         "zotero-field-invalid"
     );
+
+    let mut item = reference();
+    item.extra = Some("line one\nline two\tannotation".into());
+    assert!(validate_references(&[item]).is_ok());
 
     let mut item = reference();
     item.full_text_path = Some(PathBuf::from("definitely-missing-relative-zotero-file"));
