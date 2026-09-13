@@ -7,6 +7,7 @@
 #[path = "disksage-icloud-local-eviction-batch.rs"]
 mod canonical_cli;
 
+/// Delegate the provider-neutral binary to the single canonical batch-eviction CLI implementation.
 fn main() {
     canonical_cli::main();
 }
