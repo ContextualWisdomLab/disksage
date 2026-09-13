@@ -132,7 +132,11 @@ fn observation_failure_does_not_detach_pipe_reader_fds() {
 
     assert!(evidence.assessed, "{evidence:?}");
     assert!(!evidence.evidence_complete, "{evidence:?}");
-    assert!(evidence.error.is_some(), "{evidence:?}");
+    assert_eq!(
+        evidence.error.as_deref(),
+        Some("lsof-command-wait-failed"),
+        "the fixture must prove the real non-interrupted wait-observation failure path; {evidence:?}"
+    );
     assert!(
         elapsed < Duration::from_secs(2),
         "observation failure must remain bounded; elapsed={elapsed:?}"
