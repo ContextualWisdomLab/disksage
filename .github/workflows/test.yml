@@ -73,6 +73,13 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/disksage-rust-test.log"
+      - name: Upload authoritative Rust diagnostic transcript
+        if: steps.rust_test.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/disksage-rust-test.log
+          if-no-files-found: error
       - name: Upload authoritative Rust test failure transcript
         if: steps.rust_test.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

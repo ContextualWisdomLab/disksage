@@ -40,9 +40,13 @@ function namedStep(source: string, stepName: string): NamedStep {
 }
 
 describe("Test workflow Rust failure evidence", () => {
-  it("retains the authoritative Rust-test transcript before preserving failure", () => {
+  it("retains current-head Rust diagnostics and preserves failures", () => {
     const rustTest = namedStep(workflow, "Rust tests (includes unix symlink test)");
-    const upload = namedStep(
+    const diagnosticUpload = namedStep(
+      workflow,
+      "Upload authoritative Rust diagnostic transcript",
+    );
+    const failureUpload = namedStep(
       workflow,
       "Upload authoritative Rust test failure transcript",
     );
@@ -55,24 +59,40 @@ describe("Test workflow Rust failure evidence", () => {
     expect(rustTest.block).toContain(
       'cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/disksage-rust-test.log"',
     );
-    expect(upload.block).toContain("if: steps.rust_test.outcome == 'failure'");
-    expect(upload.block).toContain(
+
+    expect(diagnosticUpload.block).toContain(
+      "if: steps.rust_test.outcome == 'success'",
+    );
+    expect(diagnosticUpload.block).toContain(
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     );
-    expect(upload.block).toContain(
-      "name: rust-test-failure-${{ github.run_id }}-${{ github.run_attempt }}",
+    expect(diagnosticUpload.block).toContain(
+      "name: rust-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
     );
-    expect(upload.block).toContain(
+    expect(diagnosticUpload.block).toContain(
       'path: ${{ runner.temp }}/disksage-rust-test.log',
     );
-    expect(upload.block).toContain("if-no-files-found: error");
+    expect(diagnosticUpload.block).toContain("if-no-files-found: error");
+
+    expect(failureUpload.block).toContain("if: steps.rust_test.outcome == 'failure'");
+    expect(failureUpload.block).toContain(
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    );
+    expect(failureUpload.block).toContain(
+      "name: rust-test-failure-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(failureUpload.block).toContain(
+      'path: ${{ runner.temp }}/disksage-rust-test.log',
+    );
+    expect(failureUpload.block).toContain("if-no-files-found: error");
     expect(preserve.block).toContain(
       "if: steps.rust_test.outcome == 'failure'",
     );
     expect(preserve.block).toContain("run: exit 1");
 
-    expect(rustTest.start).toBeLessThan(upload.start);
-    expect(upload.start).toBeLessThan(preserve.start);
+    expect(rustTest.start).toBeLessThan(diagnosticUpload.start);
+    expect(diagnosticUpload.start).toBeLessThan(failureUpload.start);
+    expect(failureUpload.start).toBeLessThan(preserve.start);
     expect(preserve.start).toBeLessThan(nextRustLane.start);
   });
 });
