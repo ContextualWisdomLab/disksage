@@ -6,15 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use disksage_lib::git_worktree::MAX_REFERENCE_BYTES;
-use disksage_lib::git_worktree::{
-    audit_git_worktrees, public_summary, validate_reference, GitWorktreeAuditOptions,
-};
+use disksage_lib::git_worktree::{public_summary, validate_reference, GitWorktreeAuditOptions};
 use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     repository_root: PathBuf,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     private_output: Option<PathBuf>,
     options: GitWorktreeAuditOptions,
 }
@@ -26,7 +26,7 @@ enum ParseOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]"
+    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]"
 }
 
 fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -67,6 +67,8 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut private_output = None;
+    let mut include_closed_pull_requests = false;
+    let mut stale_open_pull_request_cutoff_ms = None;
     let mut options = GitWorktreeAuditOptions::default();
     let mut seen_repository_root = false;
     let mut seen_private_output = false;
@@ -83,24 +85,31 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
         match flag {
             "--repository-root" => {
                 mark_singleton(&mut seen_repository_root)?;
-                repository_root = Some(PathBuf::from(value(
-                    args,
-                    &mut index,
-                    "--repository-root",
-                )?));
+                repository_root =
+                    Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
             }
             "--reference-ref" => {
                 let reference = utf8_value(args, &mut index, "--reference-ref")?;
                 validate_reference(&reference)?;
                 retention_references.push(reference);
             }
-            "--private-output" => {
-                mark_singleton(&mut seen_private_output)?;
-                private_output = Some(PathBuf::from(value(
+            "--include-closed-pull-requests" if !include_closed_pull_requests => {
+                include_closed_pull_requests = true;
+            }
+            "--include-closed-pull-requests" => return Err("duplicate-option".into()),
+            "--stale-open-pull-request-cutoff-ms" => {
+                if stale_open_pull_request_cutoff_ms.is_some() {
+                    return Err("duplicate-option".into());
+                }
+                stale_open_pull_request_cutoff_ms = Some(parse_number(
                     args,
                     &mut index,
-                    "--private-output",
-                )?));
+                    "--stale-open-pull-request-cutoff-ms",
+                )?);
+            }
+            "--private-output" => {
+                mark_singleton(&mut seen_private_output)?;
+                private_output = Some(PathBuf::from(value(args, &mut index, "--private-output")?));
             }
             "--command-timeout-ms" => {
                 mark_singleton(&mut seen_command_timeout)?;
@@ -147,6 +156,8 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     Ok(ParseOutcome::Run(Args {
         repository_root,
         retention_references,
+        include_closed_pull_requests,
+        stale_open_pull_request_cutoff_ms,
         private_output,
         options,
     }))
@@ -196,9 +207,19 @@ fn write_private_report(
 }
 
 fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, String> {
-    let report = audit_git_worktrees(
+    let evidence = disksage_lib::git_worktree_github_evidence::collect(
+        &args.repository_root,
+        args.include_closed_pull_requests,
+        args.stale_open_pull_request_cutoff_ms,
+        args.options,
+    )?;
+    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
         &args.retention_references,
+        &evidence.closed_heads,
+        &evidence.stale_open_heads,
+        &evidence.pull_request_commits,
+        args.stale_open_pull_request_cutoff_ms,
         args.options,
         observed_at_ms,
     )?;
@@ -254,10 +275,7 @@ mod tests {
     use super::*;
 
     fn run_args(values: &[&str]) -> Args {
-        let raw: Vec<OsString> = values
-            .iter()
-            .map(|value| OsString::from(*value))
-            .collect();
+        let raw: Vec<OsString> = values.iter().map(|value| OsString::from(*value)).collect();
         match parse_args(&raw).unwrap() {
             ParseOutcome::Run(args) => args,
             ParseOutcome::Help => panic!("runtime arguments must not parse as help"),

@@ -33,3 +33,15 @@ dm:Code a owl:Class ;
 dm:Dataset a owl:Class ;
     rdfs:label "데이터셋"@ko , "Dataset"@en ;
     dm:targetFolder "~/Datasets" .
+
+dm:BusinessData a owl:Class ;
+    rdfs:label "업무 데이터"@ko , "Business data"@en ;
+    dm:deletionPolicy "retain" .
+
+dm:CustomerRelationshipManagementData a owl:Class ;
+    rdfs:subClassOf dm:BusinessData ;
+    rdfs:label "고객 관계 관리 데이터"@ko , "Customer relationship management data"@en .
+
+dm:VirtualMachinePackage a owl:Class ;
+    rdfs:label "가상 머신 패키지"@ko , "Virtual machine package"@en ;
+    dm:deletionPolicy "retain" .

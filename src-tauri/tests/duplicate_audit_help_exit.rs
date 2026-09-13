@@ -2,7 +2,7 @@
 
 use std::process::{Command, Output};
 
-const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json]";
+const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json] [--execute --approved-private-report ABSOLUTE_FILE.json --approved-audit-fingerprint HEX64 --confirm EXACT_PHRASE --rationale TEXT]";
 
 /// Require one invalid process result to stay visible without reflecting opaque input.
 fn assert_invalid_argument_is_bounded(output: Output) {
