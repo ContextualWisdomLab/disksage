@@ -8,7 +8,9 @@
 use crate::translation_resource::{
     current_translation_resource_asset, is_supported_locale, valid_screen_key, TranslationResource,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+};
 use std::path::Path;
 
 const TRANSLATION_LEDGER_MIGRATION: &str =
@@ -18,7 +20,26 @@ const MAX_SCREEN_AREA_BYTES: usize = 80;
 
 /// Opens the local presentation ledger and installs its immutable schema when absent.
 pub(crate) fn open_translation_ledger(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open(path).map_err(|_| "translation-ledger-open-failed".to_string())?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("translation-ledger-path-symlink-rejected".to_string())
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err("translation-ledger-path-not-regular-file".to_string())
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("translation-ledger-path-metadata-unavailable".to_string()),
+    }
+
+    // `SQLITE_OPEN_NOFOLLOW` closes the metadata/open race: even if the path is swapped after the
+    // preflight check, SQLite itself refuses symbolic-link database authority.
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_CREATE
+        | OpenFlags::SQLITE_OPEN_NOFOLLOW
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let connection = Connection::open_with_flags(path, flags)
+        .map_err(|_| "translation-ledger-open-failed".to_string())?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|_| "translation-ledger-foreign-keys-failed".to_string())?;
