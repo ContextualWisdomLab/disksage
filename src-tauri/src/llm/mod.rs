@@ -17,7 +17,9 @@ pub use cache::VerdictCache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 pub use engine::LlamaEngine;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use model::{download_to, verify_sha256, ModelSpec, DEFAULT};
+pub use model::{download_to, DEFAULT};
+#[cfg(test)]
+pub use model::ModelSpec;
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
