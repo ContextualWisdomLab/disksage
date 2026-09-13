@@ -58,6 +58,7 @@ pub mod cloud_local_eviction_batch;
 pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
+/// Multi-format content digest evidence calculated from one exact byte snapshot.
 pub mod content_digest;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
