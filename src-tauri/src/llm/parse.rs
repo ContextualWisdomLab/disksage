@@ -37,11 +37,6 @@ fn extract_json(raw: &str) -> Option<&str> {
     None
 }
 
-/// 판정만. 실패 시 Unrated.
-pub fn parse_verdict(raw: &str) -> Verdict {
-    parse_verdict_full(raw).0
-}
-
 /// (판정, 이유). 실패 시 (Unrated, "")로 fail-closed.
 pub fn parse_verdict_full(raw: &str) -> (Verdict, String) {
     let Some(js) = extract_json(raw) else { return (Verdict::Unrated, String::new()); };
@@ -87,6 +82,11 @@ pub fn parse_ext_reasoning(raw: &str, candidates: &[&str]) -> Option<ExtReasonin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_verdict(raw: &str) -> Verdict {
+        parse_verdict_full(raw).0
+    }
+
     #[test]
     fn parses_clean_json() {
         assert_eq!(parse_verdict(r#"{"verdict":"safe","reason":"cache file"}"#), Verdict::Safe);
