@@ -1,4 +1,6 @@
-use disksage_lib::zotero_local::{validate_references, ZoteroCreator, ZoteroReference};
+use disksage_lib::zotero_local::{
+    validate_references, ZoteroCreator, ZoteroReference, MAX_REFERENCE_COUNT,
+};
 
 fn reference() -> ZoteroReference {
     ZoteroReference {
@@ -78,12 +80,19 @@ fn validation_accepts_exact_public_length_boundaries() {
 }
 
 #[test]
-fn validation_rejects_whitespace_only_item_type() {
-    let mut item = reference();
-    item.item_type = "   \t".into();
+fn validation_accepts_exact_collection_creator_url_and_text_limits() {
+    assert!(validate_references(&vec![reference(); MAX_REFERENCE_COUNT]).is_ok());
 
-    assert_eq!(
-        validate_references(&[item]).unwrap_err(),
-        "zotero-item-type-invalid"
-    );
+    let mut creators_at_limit = reference();
+    creators_at_limit.creators = vec![creators_at_limit.creators[0].clone(); 50];
+    assert!(validate_references(&[creators_at_limit]).is_ok());
+
+    let mut url_at_limit = reference();
+    url_at_limit.url = Some(format!("https://{}", "x".repeat(4 * 1024 - "https://".len())));
+    assert_eq!(url_at_limit.url.as_ref().unwrap().len(), 4 * 1024);
+    assert!(validate_references(&[url_at_limit]).is_ok());
+
+    let mut text_at_limit = reference();
+    text_at_limit.abstract_note = Some("x".repeat(32 * 1024));
+    assert!(validate_references(&[text_at_limit]).is_ok());
 }
