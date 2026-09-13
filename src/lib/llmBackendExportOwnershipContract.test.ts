@@ -12,6 +12,11 @@ function readRustSource(path: string): string {
   return readFileSync(resolve(repositoryRoot, path), "utf8");
 }
 
+/** Detect the root backend re-export spelling guarded by the original contract. */
+function hasForbiddenBackendRootReexport(source: string): boolean {
+  return /^pub use backend::/m.test(source);
+}
+
 describe("LLM backend ownership", () => {
   it("keeps backend selection in its module without an unused root re-export", () => {
     const moduleSource = readRustSource(llmModulePath);
@@ -19,6 +24,19 @@ describe("LLM backend ownership", () => {
 
     expect(backendSource).toContain("pub enum Backend");
     expect(backendSource).toContain("pub fn choose_backend(");
-    expect(moduleSource).not.toMatch(/^pub use backend::/m);
+    expect(hasForbiddenBackendRootReexport(moduleSource)).toBe(false);
+  });
+
+  it("rejects equivalent backend re-export spellings", () => {
+    for (const statement of [
+      "pub use backend::{Backend, choose_backend};",
+      "pub use self::backend::{Backend, choose_backend};",
+      "pub use crate::llm::backend::Backend;",
+      "pub use self::backend::*;",
+    ]) {
+      expect(hasForbiddenBackendRootReexport(statement)).toBe(true);
+    }
+
+    expect(hasForbiddenBackendRootReexport("pub use parse::parse_verdict_full;")).toBe(false);
   });
 });
