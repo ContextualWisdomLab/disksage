@@ -8,6 +8,18 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) {
     file.flush().unwrap();
 }
 
+fn valid_connection_json() -> serde_json::Value {
+    serde_json::json!({
+        "connection_id": "20ce9ca07d014bcf578cd0e494f9278fa2ad69e7e62e5dbd9afc5fe30bf7e7eb",
+        "provider": "onedrive",
+        "cloud_root_id": "root",
+        "cloud_root_path": "/tmp/root",
+        "client_id": "12345678-1234-1234-1234-123456789abc",
+        "scope": "Files.Read offline_access",
+        "connected_at_ms": 1
+    })
+}
+
 #[test]
 fn real_filesystem_connection_document_rejects_non_regular_and_oversized_inputs() {
     let directory = tempfile::tempdir().unwrap();
@@ -70,7 +82,7 @@ fn connection_document_parser_fails_closed_for_invalid_schema_and_connection_ide
         &document_path,
         &serde_json::json!({
             "version": 1,
-            "connections": (0..33).map(|_| serde_json::json!({})).collect::<Vec<_>>()
+            "connections": (0..33).map(|_| valid_connection_json()).collect::<Vec<_>>()
         }),
     );
     assert_eq!(
@@ -78,19 +90,13 @@ fn connection_document_parser_fails_closed_for_invalid_schema_and_connection_ide
         "oauth-connection-document-version-or-count-invalid"
     );
 
+    let mut invalid_connection = valid_connection_json();
+    invalid_connection["connection_id"] = serde_json::Value::String("not-a-sha256".to_string());
     write_json(
         &document_path,
         &serde_json::json!({
             "version": 1,
-            "connections": [{
-                "connection_id": "not-a-sha256",
-                "provider": "onedrive",
-                "cloud_root_id": "root",
-                "cloud_root_path": "/tmp/root",
-                "client_id": "12345678-1234-1234-1234-123456789abc",
-                "scope": "Files.Read offline_access",
-                "connected_at_ms": 1
-            }]
+            "connections": [invalid_connection]
         }),
     );
     assert_eq!(
