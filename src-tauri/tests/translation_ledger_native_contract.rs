@@ -1,88 +1,53 @@
-use disksage_lib::translation_ledger_store::{
-    install_current_translation_resource, lookup_translation_message, open_translation_ledger,
-};
-use disksage_lib::translation_resource::{
-    current_translation_resource_asset, TranslationResource,
-};
-use std::fs;
+#[test]
+fn native_ledger_remains_private_and_resource_admission_precedes_persistence() {
+    let lib_source = include_str!("../src/lib.rs");
+    let bridge_source = include_str!("../src/translation_resource_bridge.rs");
+    let store_source = include_str!("../src/translation_ledger_store.rs");
+    let cargo_manifest = include_str!("../Cargo.toml");
 
-fn checked_in_resource() -> TranslationResource {
-    serde_json::from_slice(include_bytes!(
-        "../resources/translation/releases/2026.09.11.1.json"
-    ))
-    .expect("checked-in translation resource JSON")
+    assert!(lib_source.contains("mod translation_ledger_store;"));
+    assert!(!lib_source.contains("pub mod translation_ledger_store;"));
+
+    let admission = bridge_source
+        .find("load_current_translation_resource_file(&resource_path)?")
+        .expect("canonical immutable-resource admission must remain in the bridge");
+    let ledger_open = bridge_source
+        .find("open_translation_ledger(&database_path)?")
+        .expect("native ledger must be opened by the bridge");
+    assert!(
+        admission < ledger_open,
+        "resource file identity/digest/schema admission must finish before ledger writes"
+    );
+
+    assert!(store_source.contains("TransactionBehavior::Immediate"));
+    assert!(store_source.contains("0001_translation_ledger.sql"));
+    assert!(!store_source.contains("INSERT OR REPLACE"));
+    assert!(!store_source.contains("UPDATE translation_"));
+    assert!(!store_source.contains("DELETE FROM translation_"));
+
+    assert!(cargo_manifest.contains(
+        "rusqlite = { version = \"=0.37.0\", features = [\"bundled\"] }"
+    ));
 }
 
 #[test]
-fn native_ledger_installs_current_resource_idempotently_and_serves_exact_lookup() {
-    let directory = tempfile::tempdir().expect("temporary ledger directory");
-    let database_path = directory.path().join("translation-ledger.sqlite3");
-    let mut connection = open_translation_ledger(&database_path).expect("open native ledger");
-    let resource = checked_in_resource();
+fn presentation_ipc_does_not_accept_database_resource_or_digest_authority() {
+    let bridge_source = include_str!("../src/translation_resource_bridge.rs");
+    let command_start = bridge_source
+        .find("pub fn get_translation_message(")
+        .expect("translation command");
+    let command_body = &bridge_source[command_start..];
+    let signature_end = command_body
+        .find(") -> Result<TranslationMessageView, String>")
+        .expect("bounded translation command signature");
+    let signature = &command_body[..signature_end];
 
-    install_current_translation_resource(&mut connection, &resource, 1_789_344_000_000)
-        .expect("first immutable resource install");
-    install_current_translation_resource(&mut connection, &resource, 1_789_344_000_001)
-        .expect("idempotent immutable resource install");
-
-    let asset = current_translation_resource_asset();
-    assert_eq!(
-        lookup_translation_message(
-            &connection,
-            asset.resource_version,
-            "ko",
-            "app.action.scan",
-        )
-        .expect("exact persisted lookup"),
-        "스캔"
-    );
-
-    let version_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM translation_resource_versions", [], |row| row.get(0))
-        .expect("version count");
-    assert_eq!(version_count, 1, "idempotent install must not duplicate releases");
-
-    let screen_area: String = connection
-        .query_row(
-            "SELECT screen_area FROM translation_screen_keys WHERE screen_key = 'app.action.scan'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("persisted screen area");
-    assert_eq!(screen_area, "app.action");
-}
-
-#[test]
-fn native_ledger_rejects_mutation_of_an_existing_release_and_missing_lookup() {
-    let directory = tempfile::tempdir().expect("temporary ledger directory");
-    let database_path = directory.path().join("translation-ledger.sqlite3");
-    let mut connection = open_translation_ledger(&database_path).expect("open native ledger");
-    let resource = checked_in_resource();
-    install_current_translation_resource(&mut connection, &resource, 1_789_344_000_000)
-        .expect("initial install");
-
-    let mut changed = resource.clone();
-    changed
-        .messages
-        .get_mut("app.action.scan")
-        .expect("scan message")
-        .insert("ko".to_string(), "변조된 스캔".to_string());
-
-    assert_eq!(
-        install_current_translation_resource(&mut connection, &changed, 1_789_344_000_002),
-        Err("translation-ledger-existing-version-mismatch".to_string())
-    );
-
-    assert_eq!(
-        lookup_translation_message(
-            &connection,
-            current_translation_resource_asset().resource_version,
-            "ko",
-            "app.action.missing",
-        ),
-        Err("translation-message-missing".to_string())
-    );
-
-    drop(connection);
-    assert!(fs::metadata(database_path).expect("ledger metadata").is_file());
+    assert!(signature.contains("locale: String"));
+    assert!(signature.contains("screen_key: String"));
+    for forbidden in ["database", "path", "digest", "resource_version", "fallback"] {
+        assert!(
+            !signature.contains(forbidden),
+            "frontend IPC must not choose {forbidden} authority"
+        );
+    }
 }
