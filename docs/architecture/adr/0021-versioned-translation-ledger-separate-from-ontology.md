@@ -35,6 +35,8 @@ Draft #407 implements the first native ledger adapter. The bridge resolves and a
 
 Installation is idempotent for an already-published identical resource. If an existing `resource_version` disagrees on schema, digest, screen-area projection or message content, installation fails closed rather than mutating published rows. The write transaction is bounded to local ledger reads/inserts; bundle reads, digest verification, network/LLM calls, filesystem scanning and cross-service SQL do not occur while the explicit write lock is held.
 
+Native ownership of the database pathname does not permit following a pre-existing symbolic link. The adapter first rejects a symlink or non-regular existing target and then opens SQLite with `SQLITE_OPEN_NOFOLLOW`; the SQLite open itself therefore also refuses a symlink introduced between metadata inspection and open. A database-path identity failure is local presentation-store failure and never falls back to another pathname or mutable settings value.
+
 The native SQLite binding is pinned to `rusqlite = 0.37.0` with bundled SQLite while this line proves the actual dependency graph against DiskSage's declared Rust 1.88 toolchain on Windows/Linux/macOS. The pin is not release authority until the exact Cargo lock graph and hosted platform builds are verified.
 
 ### Stable `screen_area` projection
@@ -57,7 +59,7 @@ Aggregate: `TranslationResourceVersion`; its published messages are immutable.
 Entities/VOs: `ResourceVersion`, `ScreenKey`, `ScreenArea`, `LocaleTag`, `TranslationMessage`.  
 Repository: build-pinned bundle admission plus native SQLite immutable-release store.  
 Application service: native translation bridge installs the admitted release idempotently and serves one exact `(resource_version, locale, screen_key)` lookup.  
-Invariants: wording cannot change in place; ontology labels never satisfy a missing presentation message; cache identity includes version and locale; unverified bundle bytes never enter the ledger; presentation input cannot choose path/version/digest/database/fallback authority.
+Invariants: wording cannot change in place; ontology labels never satisfy a missing presentation message; cache identity includes version and locale; unverified bundle bytes never enter the ledger; presentation input cannot choose path/version/digest/database/fallback authority; the database path cannot resolve through a symbolic link.
 
 The transaction is intentionally small. Resource-file I/O and integrity checks complete first. A native install transaction then performs bounded local schema/release reads and inserts and commits. Read-only lookup occurs outside that write transaction. UI rendering performs no cross-service SQL.
 
@@ -69,6 +71,7 @@ The transaction is intentionally small. Resource-file I/O and integrity checks c
 - Ad-hoc component maps are rejected as canonical storage; generated projections may exist only when tied to an immutable resource version.
 - Remote translation lookup at render time is rejected for the local-first baseline.
 - Frontend-supplied resource or database paths are rejected because they convert presentation input into native authority.
+- Following a symlink at the native database pathname is rejected because local path selection must not redirect persistent presentation state outside app-data authority.
 - Mutable current-version rows and `INSERT OR REPLACE` semantics are rejected because they destroy exact-release evidence.
 - Holding a SQLite write transaction while reading/verifying bundle files is rejected because resource verification is not a database critical section.
 - Automatic English or Korean fallback is deferred. Missing-copy behavior in destructive/recovery workflows needs explicit product acceptance and rendered E2E evidence.
@@ -89,7 +92,8 @@ A schema, authenticated bundle, native store and IPC projection are still not co
 - #396 exact `bf7fe773815872b2b8fc1b03200ec0102f1c0114`, Test `34599835468`: terminal SUCCESS for build-pinned path/digest, tampering, schema/version, locale/key/message, size and Unix-symlink admission checks.
 - #398 exact `198b0f17720fb8e987ecbe339c2ab41520b278a8`, Test `34604043086`: terminal SUCCESS for fixed-resource read-only Tauri projection. It is the exact-GREEN parent of the native persistence line.
 - #406 records the native persistence buyer gap and transaction/ownership constraints.
-- #407 contract-first exact `fa9c4093a5dd6151e25f93e0dec30c65a2d4c7a7` required native persistence before the implementation existed. Current implementation exact `a4d867c12ba1c1bf1f3e5f6c4a0f2337ece6954c` adds the crate-private native store, pinned bundled SQLite binding, native app-data database authority, idempotent immutable installation, exact lookup and `screen_area` projection. Its fresh Test `34773864531` is queued/nonterminal at this update; no predecessor GREEN transfers to it.
+- #407 contract-first exact `fa9c4093a5dd6151e25f93e0dec30c65a2d4c7a7` required native persistence before the implementation existed.
+- #407 real-filesystem RED exact `5a6527bf9572898053253156676164311bc162b4` proves the first native store would follow a symlink database pathname. Minimal causal fix exact `fc97a971058475100963e78a4b0dee56068c6270` adds path-identity preflight plus `SQLITE_OPEN_NOFOLLOW` while preserving resource-admission-before-transaction and the immutable ledger contract. Fresh Test `34774422891` is nonterminal at this update; early Windows and macOS lanes are GREEN, while the canonical Ubuntu/llama lanes have not settled. No predecessor GREEN transfers.
 
 This ADR remains **Proposed**. Native persistence must earn exact current-head Windows/Linux/macOS evidence and the dependency lock graph must be immutable. Acceptance additionally requires at least one real end-to-end localized screen-key flow; full UI delivery still requires all supported locales and native shells.
 
@@ -104,6 +108,7 @@ This ADR remains **Proposed**. Native persistence must earn exact current-head W
 - SQLite. (2026). *STRICT tables*. https://www.sqlite.org/stricttables.html
 - SQLite. (2026). *SQLite foreign key support*. https://www.sqlite.org/foreignkeys.html
 - SQLite. (2026). *PRAGMA statements supported by SQLite*. https://www.sqlite.org/pragma.html
+- SQLite. (2026). *Opening a new database connection*. https://www.sqlite.org/c3ref/open.html
 - Tauri Programme. (2026). *Embedding additional files*. https://v2.tauri.app/develop/resources/
 - Tauri Programme. (2026). *Inter-process communication*. https://v2.tauri.app/concept/inter-process-communication/
 - Tauri Programme. (2026). *Runtime authority*. https://v2.tauri.app/security/runtime-authority/
