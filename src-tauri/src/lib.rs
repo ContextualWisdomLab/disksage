@@ -123,6 +123,8 @@ pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 pub mod semantic_catalog;
+/// Native SQLite repository for immutable localized-presentation releases.
+mod translation_ledger_store;
 /// Immutable, digest-bound presentation-resource admission separate from ontology vocabulary.
 pub mod translation_resource;
 /// Read-only, fail-closed Tauri projection of the immutable presentation resource.
