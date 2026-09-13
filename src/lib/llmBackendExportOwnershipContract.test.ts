@@ -23,12 +23,13 @@ function hasForbiddenBackendRootReexport(source: string): boolean {
 }
 
 describe("LLM backend ownership", () => {
-  it("keeps backend selection in its module without an unused root re-export", () => {
+  it("keeps backend selection test-owned without an unused production root", () => {
     const moduleSource = readRustSource(llmModulePath);
     const backendSource = readRustSource(llmBackendPath);
 
     expect(backendSource).toContain("pub enum Backend");
     expect(backendSource).toContain("pub fn choose_backend(");
+    expect(moduleSource).toContain('#[cfg(test)]\nmod backend;');
     expect(hasForbiddenBackendRootReexport(moduleSource)).toBe(false);
   });
 
