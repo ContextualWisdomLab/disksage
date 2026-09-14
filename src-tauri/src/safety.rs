@@ -622,6 +622,21 @@ pub(crate) fn trash_delete_if_identity_in_catalog_root(
     )
 }
 
+#[cfg(windows)]
+fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    // Win32 FILE_ATTRIBUTE_REPARSE_POINT. This rejects junctions, mount points, symbolic links,
+    // and other reparse-backed directory roots instead of treating only symbolic links as unsafe.
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
 fn revalidate_catalog_root_before_staging(
     path: &Path,
     root: &Path,
@@ -630,7 +645,10 @@ fn revalidate_catalog_root_before_staging(
 ) -> Result<(), SafetyError> {
     let metadata = std::fs::symlink_metadata(root)
         .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let current_root_id = filesystem_object_id(root)
@@ -677,7 +695,9 @@ fn trash_delete_if_identity_with_catalog_root(
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let catalog_authorized = catalog_root.is_some_and(|root| {
         std::fs::symlink_metadata(root).is_ok_and(|metadata| {
-            metadata.is_dir() && !metadata.file_type().is_symlink()
+            metadata.is_dir()
+                && !metadata.file_type().is_symlink()
+                && !is_windows_reparse_point(&metadata)
         }) && std::fs::canonicalize(root)
             .map(|root| strip_verbatim(&root))
             .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
