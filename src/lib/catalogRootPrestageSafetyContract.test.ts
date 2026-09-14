@@ -93,6 +93,20 @@ function withoutRustComments(source: string): string {
 }
 
 describe('catalog-root Trash staging safety contract', () => {
+  it('fails closed when a supplied catalog root does not authorize the target', () => {
+    const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
+    const failedCatalogAuthority = body.indexOf(
+      'if catalog_root.is_some() && !catalog_authorized',
+    );
+    const targetIdentityRead = body.indexOf('filesystem_object_id(path)');
+
+    expect(failedCatalogAuthority).toBeGreaterThanOrEqual(0);
+    expect(targetIdentityRead).toBeGreaterThan(failedCatalogAuthority);
+
+    const gate = body.slice(failedCatalogAuthority, targetIdentityRead);
+    expect(gate).toContain('return Err(SafetyError::Protected(path.to_path_buf()))');
+  });
+
   it('captures the initially authorized catalog-root object identity before staging', () => {
     const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
     const rootIdentityCapture = body.indexOf('filesystem_object_id(root)');
