@@ -206,9 +206,13 @@ pub(crate) fn is_user_owned_shared_temp_tree(_path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
     }
+    // 사용자 홈 루트 자체 (하위는 허용). 데스크톱 앱은 항상 사용자 세션에서 실행되므로
+    // USERPROFILE/HOME 부재는 상정하지 않는다 — 없으면 이 계층만 생략되고
+    // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
     if is_home_root(path, home.as_deref()) {
         return true;
@@ -218,15 +222,18 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
+        // 컴포넌트 단위 비교: '/'와 '\\' 모두 구분자로 파싱되고(C:/Windows 우회 차단),
+        // 경계가 정확해 C:\WindowsBackup 같은 형제 폴더를 오차단하지 않는다
         fn lower_components(p: &Path) -> Vec<String> {
             p.components()
                 .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
                 .collect()
         }
+        // 시스템 드라이브가 C:가 아닌 머신도 보호 — env에서 유도, 실패 시 C: 폴백
         let denied_roots: Vec<String> = {
             let mut roots = Vec::new();
             if let Ok(w) = std::env::var("SystemRoot") {
-                roots.push(w);
+                roots.push(w); // 예: C:\Windows, D:\Windows
             } else {
                 roots.push(r"C:\Windows".to_string());
             }
@@ -257,13 +264,21 @@ pub fn is_protected(path: &Path) -> bool {
         {
             return true;
         }
+        // macOS의 사용자별 임시 디렉터리는 /private 아래로 canonicalize된다. 그 하위만
+        // 허용하되 임시 루트 자체와 그 밖의 /private 트리는 계속 보호한다. 보호 경로를
+        // 가리키는 심링크는 호출부에서 먼저 canonicalize되므로 이 예외를 우회할 수 없다.
         #[cfg(target_os = "macos")]
         if is_macos_user_temp_descendant(path) {
             return false;
         }
+        // Shared system temporary trees stay globally protected. Current-user ownership is a
+        // purpose-bound deletion authority checked only by the two Trash entry points below;
+        // it must not widen cloud eviction, clone reclaim, or other callers of this guard.
         if is_shared_temp_path(path) {
             return true;
         }
+        // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
+        // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
         #[allow(unused_mut)]
         let mut denied_prefixes: Vec<&str> = vec![
             "/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev",
@@ -635,6 +650,9 @@ pub(crate) fn trash_delete_if_identity_in_catalog_root(
 #[cfg(windows)]
 fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
+
+    // Win32 FILE_ATTRIBUTE_REPARSE_POINT. This rejects junctions, mount points, symbolic links,
+    // and other reparse-backed directory roots instead of treating only symbolic links as unsafe.
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
