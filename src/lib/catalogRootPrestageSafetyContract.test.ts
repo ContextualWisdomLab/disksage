@@ -21,6 +21,15 @@ function functionBody(name: string): string {
   throw new Error(`${name} body is not balanced`);
 }
 
+function functionDeclaration(name: string): string {
+  const signature = `fn ${name}(`;
+  const start = safetySource.indexOf(signature);
+  expect(start, `${name} must exist`).toBeGreaterThanOrEqual(0);
+  const bodyStart = safetySource.indexOf('{', start);
+  expect(bodyStart).toBeGreaterThan(start);
+  return safetySource.slice(start, bodyStart);
+}
+
 function withoutRustComments(source: string): string {
   let output = '';
   let blockDepth = 0;
@@ -84,7 +93,16 @@ function withoutRustComments(source: string): string {
 }
 
 describe('catalog-root Trash staging safety contract', () => {
-  it('revalidates catalog-root authority immediately before the staging rename', () => {
+  it('captures the initially authorized catalog-root object identity before staging', () => {
+    const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
+    const rootIdentityCapture = body.indexOf('filesystem_object_id(root)');
+    const stagingDirectory = body.indexOf('let staging_dir =');
+
+    expect(rootIdentityCapture).toBeGreaterThanOrEqual(0);
+    expect(stagingDirectory).toBeGreaterThan(rootIdentityCapture);
+  });
+
+  it('revalidates reviewed root and target identities immediately before the staging rename', () => {
     const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
     const stagingBoundary = body.indexOf('let result =');
     const rename = body.indexOf('std::fs::rename(path, &staged)', stagingBoundary);
@@ -93,20 +111,45 @@ describe('catalog-root Trash staging safety contract', () => {
     expect(rename).toBeGreaterThan(stagingBoundary);
 
     const beforeRename = body.slice(stagingBoundary, rename);
-    expect(beforeRename).toContain('revalidate_catalog_root_before_staging(path, root)?');
+    expect(beforeRename).toMatch(
+      /revalidate_catalog_root_before_staging\(\s*path,\s*root,\s*expected_catalog_root_id,\s*expected_object_id\s*\)\?;?/,
+    );
+  });
+
+  it('requires the helper to fail closed on root replacement, parent drift, protection, and target replacement', () => {
+    const declaration = withoutRustComments(functionDeclaration('revalidate_catalog_root_before_staging'));
+    expect(declaration).toMatch(/path\s*:\s*&Path/);
+    expect(declaration).toMatch(/root\s*:\s*&Path/);
+    expect(declaration).toMatch(/expected_catalog_root_id\s*:\s*&str/);
+    expect(declaration).toMatch(/expected_object_id\s*:\s*&str/);
+
+    const helper = withoutRustComments(functionBody('revalidate_catalog_root_before_staging'));
+    expect(helper).toContain('std::fs::symlink_metadata(root)');
+    expect(helper).toContain('metadata.is_dir()');
+    expect(helper).toContain('metadata.file_type().is_symlink()');
+    expect(helper).toContain('filesystem_object_id(root)');
+    expect(helper).toContain('expected_catalog_root_id');
+    expect(helper).toContain('std::fs::canonicalize(root)');
+    expect(helper).toContain('std::fs::canonicalize(path)');
+    expect(helper).toContain('parent()');
+    expect(helper).toContain('is_explicitly_protected');
+    expect(helper).toContain('filesystem_object_id(path)');
+    expect(helper).toContain('expected_object_id');
   });
 
   it('does not accept a commented revalidation call as executable authority', () => {
     const fixture = `
       let result = (|| -> Result<(), SafetyError> {
-        // revalidate_catalog_root_before_staging(path, root)?;
-        /* revalidate_catalog_root_before_staging(path, root)?; */
+        // revalidate_catalog_root_before_staging(path, root, expected_catalog_root_id, expected_object_id)?;
+        /* revalidate_catalog_root_before_staging(path, root, expected_catalog_root_id, expected_object_id)?; */
         std::fs::rename(path, &staged)?;
         Ok(())
       })();
     `;
 
     const executable = withoutRustComments(fixture);
-    expect(executable).not.toContain('revalidate_catalog_root_before_staging(path, root)?');
+    expect(executable).not.toContain(
+      'revalidate_catalog_root_before_staging(path, root, expected_catalog_root_id, expected_object_id)?',
+    );
   });
 });
