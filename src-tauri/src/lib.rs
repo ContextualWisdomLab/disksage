@@ -7,6 +7,10 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod runtime_storage_commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod container_orphan_commands;
+#[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
@@ -20,6 +24,9 @@ mod userrules;
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
+pub use safety::{bind_retained_ontology_class, filesystem_object_id, is_protected};
+#[cfg(all(test, unix))]
+mod safety_non_utf8_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
 #[cfg(all(test, unix))]
@@ -59,15 +66,32 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+/// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
+pub mod container_orphan_reclaim;
+/// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
+pub mod container_orphan_public;
+#[path = "duplicate_audit.rs"]
+mod duplicate_audit_implementation;
+/// Public exact-duplicate boundary, including fail-closed legacy-report safety policy.
+#[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
+pub mod icloud_provider_recovery;
 pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
+#[path = "git_worktree.rs"]
+mod git_worktree_impl;
+/// Public Git-worktree API that keeps aggregate operation budgets from becoming local subprocess deadlines.
+#[path = "git_worktree_public.rs"]
 pub mod git_worktree;
+/// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
+pub mod git_worktree_github_evidence;
+/// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
+pub mod git_clone_reclaim;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
@@ -75,14 +99,22 @@ pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+/// Privacy-safe desktop projection of read-only Podman reclaim evidence.
+pub mod podman_desktop;
+/// Distinct IPC registration for the privacy-safe Podman evidence contract.
+pub mod podman_desktop_bridge;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
+/// Read-only VM-backed storage inspection plus explicit guest trim for Podman and Colima.
+pub mod runtime_storage;
 pub mod provider_api_client;
 pub mod provider_api_write;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
 pub mod provider_recovery;
+/// Preserves provider-client running/stopped state across temporary maintenance stops.
+pub mod provider_runtime_state;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
@@ -138,7 +170,13 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
+            podman_desktop_bridge::inspect_podman_desktop_evidence,
             commands::execute_podman_dangling_image_prune,
+            runtime_storage_commands::inspect_runtime_storage,
+            commands::execute_runtime_storage_trim,
+            commands::execute_runtime_storage_recovery,
+            container_orphan_commands::inspect_container_orphans,
+            container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
@@ -148,6 +186,8 @@ pub fn run() {
             commands::evict_icloud_local_copy,
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
+            commands::plan_stale_git_clone,
+            commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,

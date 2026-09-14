@@ -1,6 +1,7 @@
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid,
-    summarize_exact_duplicate_audit, DEFAULT_MAX_ENTRIES, DEFAULT_MIN_BYTES, MAX_ENTRIES,
+    execute_exact_duplicate_reclaim_from_report, summarize_exact_duplicate_audit,
+    ExactDuplicateAuditReport, DEFAULT_MAX_ENTRIES, DEFAULT_MIN_BYTES, MAX_ENTRIES,
 };
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::ffi::OsString;
@@ -12,13 +13,19 @@ struct Args {
     min_bytes: u64,
     max_entries: usize,
     private_output: Option<PathBuf>,
+    approved_private_report: Option<PathBuf>,
+    execute: bool,
+    approved_audit_fingerprint: Option<String>,
+    confirmation: Option<String>,
+    rationale: Option<String>,
 }
 
 fn usage() -> String {
     format!(
         "usage: disksage-duplicate-audit --root ABSOLUTE_PATH \
          [--min-bytes POSITIVE_INTEGER] [--max-entries 1..={MAX_ENTRIES}] \
-         [--private-output ABSOLUTE_NEW_FILE.json]"
+         [--private-output ABSOLUTE_NEW_FILE.json] \
+         [--execute --approved-private-report ABSOLUTE_FILE.json --approved-audit-fingerprint HEX64 --confirm EXACT_PHRASE --rationale TEXT]"
     )
 }
 
@@ -49,6 +56,11 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
     let mut max_entries = DEFAULT_MAX_ENTRIES;
     let mut max_entries_seen = false;
     let mut private_output = None;
+    let mut approved_private_report = None;
+    let mut execute = false;
+    let mut approved_audit_fingerprint = None;
+    let mut confirmation = None;
+    let mut rationale = None;
     let mut index = 0usize;
     while index < raw.len() {
         match raw[index].to_str() {
@@ -94,6 +106,24 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                     "--private-output",
                 )?));
             }
+            Some("--execute") if !execute => execute = true,
+            Some("--approved-private-report") if approved_private_report.is_none() => {
+                approved_private_report = Some(PathBuf::from(native_value(
+                    raw,
+                    &mut index,
+                    "--approved-private-report",
+                )?));
+            }
+            Some("--approved-audit-fingerprint") if approved_audit_fingerprint.is_none() => {
+                approved_audit_fingerprint =
+                    Some(text_value(raw, &mut index, "--approved-audit-fingerprint")?);
+            }
+            Some("--confirm") if confirmation.is_none() => {
+                confirmation = Some(text_value(raw, &mut index, "--confirm")?);
+            }
+            Some("--rationale") if rationale.is_none() => {
+                rationale = Some(text_value(raw, &mut index, "--rationale")?);
+            }
             Some("--help" | "-h") => return Err(usage()),
             Some(_) => return Err("알 수 없는 인자".into()),
             None => return Err("duplicate-audit-argument-invalid".into()),
@@ -109,11 +139,38 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
             return Err("--private-output은 상위 탐색이 없는 절대 경로여야 함".into());
         }
     }
+    if approved_private_report
+        .as_deref()
+        .is_some_and(|path| !absolute_without_parent(path))
+    {
+        return Err("--approved-private-report는 상위 탐색이 없는 절대 경로여야 함".into());
+    }
+    if execute
+        != (approved_private_report.is_some()
+            && approved_audit_fingerprint.is_some()
+            && confirmation.is_some()
+            && rationale.is_some())
+    {
+        return Err("duplicate-reclaim-execution-arguments-incomplete".into());
+    }
+    if execute && private_output.is_some() {
+        return Err("duplicate-reclaim-private-output-not-supported".into());
+    }
+    if approved_audit_fingerprint.as_deref().is_some_and(|value| {
+        value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err("--approved-audit-fingerprint은 HEX64여야 함".into());
+    }
     Ok(Args {
         root,
         min_bytes,
         max_entries,
         private_output,
+        approved_private_report,
+        execute,
+        approved_audit_fingerprint,
+        confirmation,
+        rationale,
     })
 }
 
@@ -137,6 +194,36 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let args = parse_args_os(&raw)?;
+    if args.execute {
+        let report_path = args.approved_private_report.as_deref().unwrap();
+        let metadata = std::fs::symlink_metadata(report_path)
+            .map_err(|_| "duplicate-reclaim-private-report-unavailable".to_string())?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() > 64 * 1024 * 1024
+        {
+            return Err("duplicate-reclaim-private-report-unsafe".into());
+        }
+        let encoded = std::fs::read(report_path)
+            .map_err(|_| "duplicate-reclaim-private-report-read-failed".to_string())?;
+        let report: ExactDuplicateAuditReport = serde_json::from_slice(&encoded)
+            .map_err(|_| "duplicate-reclaim-private-report-invalid".to_string())?;
+        let execution = execute_exact_duplicate_reclaim_from_report(
+            &args.root,
+            &report,
+            args.approved_audit_fingerprint
+                .as_deref()
+                .unwrap_or_default(),
+            args.confirmation.as_deref().unwrap_or_default(),
+            args.rationale.as_deref().unwrap_or_default(),
+            system_now_ms(),
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&execution).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     let report = collect_exact_duplicate_audit(
         &args.root,
         system_now_ms(),
@@ -196,6 +283,36 @@ mod tests {
             args.private_output,
             Some(PathBuf::from("/private/duplicates.json"))
         );
+        assert!(!args.execute);
+    }
+
+    #[test]
+    fn execution_requires_the_complete_exact_approval_boundary() {
+        let fingerprint = "a".repeat(64);
+        let args = parse_args(&[
+            "--root".into(),
+            "/source".into(),
+            "--execute".into(),
+            "--approved-private-report".into(),
+            "/private/approved.json".into(),
+            "--approved-audit-fingerprint".into(),
+            fingerprint.clone(),
+            "--confirm".into(),
+            "DiskSage exact duplicate reclaim approval".into(),
+            "--rationale".into(),
+            "reviewed exact copies".into(),
+        ])
+        .unwrap();
+        assert!(args.execute);
+        assert_eq!(
+            args.approved_private_report,
+            Some(PathBuf::from("/private/approved.json"))
+        );
+        assert_eq!(
+            args.approved_audit_fingerprint.as_deref(),
+            Some(fingerprint.as_str())
+        );
+        assert!(parse_args(&["--root".into(), "/source".into(), "--execute".into(),]).is_err());
     }
 
     #[test]
