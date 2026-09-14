@@ -55,7 +55,7 @@ fn google_drive_write_connection_document_is_admitted() {
 
     write_connection(
         &path,
-        "google_drive",
+        "google-drive",
         connection_id(CloudProvider::GoogleDrive, root_id, root_path),
         root_id,
         root_path,
