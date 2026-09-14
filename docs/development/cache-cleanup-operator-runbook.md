@@ -30,11 +30,16 @@ This command is read-only evidence. Supplying `--execute` together with
 `--purge-proven-cache-trash` is intentionally refused with
 `cache-trash-identity-bound-permanent-delete-unavailable` before journal or filesystem mutation,
 because DiskSage does not yet have an object-bound primitive for the final irreversible deletion
-syscall. Review the JSON candidate evidence, then empty the native Trash manually through the
-operating system when permanent reclaim is intended. Do not treat candidate logical bytes as
-physically reclaimed until the operating system reports the resulting availability change.
-DiskSage never treats this review path as authority to empty Trash generally or to mutate cloud
-placeholders or user files.
+syscall.
+
+If permanent reclaim is still required, review the JSON candidate evidence and use the native Trash
+interface only to select and delete those exact reviewed cache candidates. **Do not empty the native
+Trash as a whole.** Unrelated user files may be present there and are outside DiskSage's cache
+authority. If the operating system does not let the operator distinguish and select only the exact
+reviewed candidates, stop rather than perform permanent deletion. Do not treat candidate logical
+bytes as physically reclaimed until the operating system reports the resulting availability change.
+DiskSage never treats this review path as authority to mutate cloud placeholders, user files, or any
+other Trash entry.
 
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry cache/source roots when present. The Cargo registry source root is catalogued for explicit
