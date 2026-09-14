@@ -1,4 +1,6 @@
 use disksage_lib::provider_oauth::{connections_path, load_connections};
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 
@@ -8,12 +10,31 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) {
     file.flush().unwrap();
 }
 
+fn connection_id(provider: &str, root_id: &str, root_path: &str) -> String {
+    let mut hasher = Sha256::new();
+    for value in [provider, root_id, root_path] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").unwrap();
+    }
+    encoded
+}
+
 fn valid_connection_json() -> serde_json::Value {
+    let root_path = std::env::temp_dir()
+        .join("disksage-provider-connection-document-root")
+        .to_string_lossy()
+        .into_owned();
+    let connection_id = connection_id("onedrive", "root", &root_path);
     serde_json::json!({
-        "connection_id": "20ce9ca07d014bcf578cd0e494f9278fa2ad69e7e62e5dbd9afc5fe30bf7e7eb",
+        "connection_id": connection_id,
         "provider": "onedrive",
         "cloud_root_id": "root",
-        "cloud_root_path": "/tmp/root",
+        "cloud_root_path": root_path,
         "client_id": "12345678-1234-1234-1234-123456789abc",
         "scope": "Files.Read offline_access",
         "connected_at_ms": 1
@@ -123,13 +144,12 @@ fn connection_document_validation_covers_identity_path_scope_and_client_boundari
     let directory = tempfile::tempdir().unwrap();
     let document_path = connections_path(directory.path());
 
-    write_single_connection(&document_path, valid_connection_json());
+    let valid = valid_connection_json();
+    let expected_connection_id = valid["connection_id"].as_str().unwrap().to_string();
+    write_single_connection(&document_path, valid);
     let connections = load_connections(&document_path).unwrap();
     assert_eq!(connections.len(), 1);
-    assert_eq!(
-        connections[0].connection_id,
-        "20ce9ca07d014bcf578cd0e494f9278fa2ad69e7e62e5dbd9afc5fe30bf7e7eb"
-    );
+    assert_eq!(connections[0].connection_id, expected_connection_id);
 
     let mut non_hex_identity = valid_connection_json();
     non_hex_identity["connection_id"] = serde_json::Value::String("g".repeat(64));
