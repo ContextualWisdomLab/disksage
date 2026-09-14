@@ -65,6 +65,7 @@ pub mod cloud_local_eviction_batch;
 pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
+/// Multi-format content digest evidence calculated from one exact byte snapshot.
 pub mod content_digest;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim;
@@ -77,6 +78,7 @@ mod duplicate_audit_implementation;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
 pub mod icloud_provider_recovery;
+/// Bounded fast-mlsirm calibration evidence for local LLM-as-a-Judge decisions.
 pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
@@ -94,6 +96,7 @@ pub mod git_worktree_github_evidence;
 pub mod git_clone_reclaim;
 pub mod maven_cache;
 pub mod multipart_archive;
+/// Redacted cloud-capacity evidence handoff bound to an exact DiskSage decision batch.
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
@@ -119,6 +122,7 @@ pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
 pub mod provider_sync;
+/// Create-new publication boundary for sensitive local evidence; never approval or deletion authority.
 pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;

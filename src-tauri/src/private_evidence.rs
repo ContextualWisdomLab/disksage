@@ -1,19 +1,41 @@
+//! Create-new publication for sensitive local evidence.
+//!
+//! This boundary writes exact evidence outside the audited source tree without granting approval,
+//! replacement, deletion, or cleanup authority. Unix publication requires a private parent and a
+//! newly created mode-0600 regular file. This module does not claim descriptor-bound replacement
+//! or same-object mutation authority; unsupported platforms fail closed rather than emulating
+//! weaker private-mode semantics.
+
+#![deny(missing_docs)]
+
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::Path;
 
+/// Maximum encoded JSON payload accepted by the private-evidence publication boundary.
 pub const MAX_PRIVATE_EVIDENCE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Receipt proving what the create-new private-evidence writer actually published.
+///
+/// The receipt is publication evidence only. It is deliberately not an approval token and does
+/// not authorize replacement, deletion, cleanup, or any other filesystem mutation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateEvidenceReceipt {
+    /// Whether the create-new publication completed successfully.
     pub written: bool,
+    /// Lower-case SHA-256 digest of the exact encoded JSON bytes written to disk.
     pub sha256: String,
+    /// Number of encoded JSON bytes written to the evidence file.
     pub bytes: usize,
+    /// Recorded Unix permission mode for the created evidence file.
     pub unix_mode: String,
+    /// Whether publication used create-new semantics rather than replacement.
     pub create_new: bool,
+    /// Whether the published evidence may contain sensitive local filesystem paths.
     pub contains_sensitive_local_paths: bool,
+    /// Whether this receipt itself represents a user or policy approval.
     pub is_approval: bool,
 }
 
@@ -21,7 +43,10 @@ pub struct PrivateEvidenceReceipt {
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
 /// group or other principals. The file is created once with mode 0600, synced, and never
-/// overwritten. A failed write is removed before returning.
+/// overwritten. A failed write is removed before returning. The returned receipt proves
+/// publication only and grants no replacement, deletion, cleanup, or approval authority. This
+/// pathname-based create-new contract does not assert descriptor-bound replacement or later
+/// same-object mutation authority.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -103,6 +128,10 @@ pub fn write_private_json_create_new(
     })
 }
 
+/// Fail closed when the platform cannot provide the Unix private-mode create-new contract.
+///
+/// DiskSage does not substitute a weaker publication primitive on unsupported targets because that
+/// would overstate the evidence file's privacy and create-new semantics.
 #[cfg(not(unix))]
 pub fn write_private_json_create_new(
     _source_root: &Path,
