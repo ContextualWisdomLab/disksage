@@ -1,9 +1,10 @@
-//! Object-bound, create-new publication for sensitive local evidence.
+//! Create-new publication for sensitive local evidence.
 //!
 //! This boundary writes exact evidence outside the audited source tree without granting approval,
 //! replacement, deletion, or cleanup authority. Unix publication requires a private parent and a
-//! newly created mode-0600 regular file; unsupported platforms fail closed rather than emulating
-//! weaker pathname semantics.
+//! newly created mode-0600 regular file. This module does not claim descriptor-bound replacement
+//! or same-object mutation authority; unsupported platforms fail closed rather than emulating
+//! weaker private-mode semantics.
 
 #![deny(missing_docs)]
 
@@ -43,7 +44,9 @@ pub struct PrivateEvidenceReceipt {
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
 /// group or other principals. The file is created once with mode 0600, synced, and never
 /// overwritten. A failed write is removed before returning. The returned receipt proves
-/// publication only and grants no replacement, deletion, cleanup, or approval authority.
+/// publication only and grants no replacement, deletion, cleanup, or approval authority. This
+/// pathname-based create-new contract does not assert descriptor-bound replacement or later
+/// same-object mutation authority.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -127,8 +130,8 @@ pub fn write_private_json_create_new(
 
 /// Fail closed when the platform cannot provide the Unix private-mode create-new contract.
 ///
-/// DiskSage does not substitute a weaker pathname-only publication primitive on unsupported
-/// targets because that would overstate the evidence file's privacy and object-creation semantics.
+/// DiskSage does not substitute a weaker publication primitive on unsupported targets because that
+/// would overstate the evidence file's privacy and create-new semantics.
 #[cfg(not(unix))]
 pub fn write_private_json_create_new(
     _source_root: &Path,
