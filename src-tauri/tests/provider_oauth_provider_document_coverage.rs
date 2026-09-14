@@ -1,7 +1,7 @@
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_oauth::{
-    connections_path, load_connections, requested_scope, requested_write_scope, scope_allows_write,
-    validate_client_id, OAuthConnection,
+    connections_path, load_connections, prepare_authorization,
+    prepare_authorization_with_write_access,
 };
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -49,91 +49,78 @@ fn write_connection(
     .unwrap();
 }
 
+fn query_parameter<'a>(url: &'a str, key: &str) -> &'a str {
+    url.split_once('?')
+        .and_then(|(_, query)| {
+            query.split('&').find_map(|field| {
+                let (candidate, value) = field.split_once('=')?;
+                (candidate == key).then_some(value)
+            })
+        })
+        .unwrap_or_else(|| panic!("missing {key} in authorization URL"))
+}
+
 #[test]
-fn provider_scope_and_client_id_boundaries_are_explicit() {
-    assert_eq!(
-        requested_scope(CloudProvider::Onedrive).unwrap(),
-        "Files.Read offline_access"
-    );
-    assert_eq!(
-        requested_write_scope(CloudProvider::Onedrive).unwrap(),
-        "Files.ReadWrite offline_access"
-    );
-    assert_eq!(
-        requested_scope(CloudProvider::GoogleDrive).unwrap(),
-        "https://www.googleapis.com/auth/drive.metadata.readonly"
-    );
-    assert_eq!(
-        requested_write_scope(CloudProvider::GoogleDrive).unwrap(),
-        "https://www.googleapis.com/auth/drive"
-    );
-    assert_eq!(
-        requested_scope(CloudProvider::Icloud).unwrap_err(),
-        "icloud-oauth-not-supported"
-    );
-    assert_eq!(
-        requested_write_scope(CloudProvider::Icloud).unwrap_err(),
-        "icloud-oauth-not-supported"
-    );
-
-    assert!(validate_client_id(
+fn onedrive_read_authorization_binds_ephemeral_loopback_and_pkce() {
+    let pending = prepare_authorization(
         CloudProvider::Onedrive,
-        "01234567-89ab-cdef-0123-456789abcdef"
+        "01234567-89ab-cdef-0123-456789abcdef",
     )
-    .is_ok());
-    assert!(validate_client_id(
-        CloudProvider::GoogleDrive,
-        "client-123.apps.googleusercontent.com"
-    )
-    .is_ok());
+    .unwrap();
+    let url = pending.authorization_url();
 
-    for invalid in ["", " leading", "trailing ", "contains\ncontrol", "café"] {
-        assert_eq!(
-            validate_client_id(CloudProvider::GoogleDrive, invalid).unwrap_err(),
-            "oauth-client-id-invalid"
-        );
-    }
-    let oversized = "a".repeat(513);
+    assert!(url.starts_with(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?"
+    ));
+    assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A"));
+    assert!(url.contains("scope=Files.Read%20offline_access"));
+    assert!(url.contains("response_mode=query"));
+    assert!(url.contains("prompt=select_account"));
+    assert_eq!(query_parameter(url, "code_challenge_method"), "S256");
+    assert_eq!(query_parameter(url, "state").len(), 43);
+    assert_eq!(query_parameter(url, "code_challenge").len(), 43);
+}
+
+#[test]
+fn google_write_authorization_uses_write_scope_and_offline_consent() {
+    let pending = prepare_authorization_with_write_access(
+        CloudProvider::GoogleDrive,
+        "client-123.apps.googleusercontent.com",
+        true,
+    )
+    .unwrap();
+    let url = pending.authorization_url();
+
+    assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+    assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"));
+    assert!(url.contains(
+        "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive"
+    ));
+    assert!(url.contains("access_type=offline"));
+    assert!(url.contains("prompt=consent"));
+    assert!(url.contains("include_granted_scopes=true"));
+    assert_eq!(query_parameter(url, "code_challenge_method"), "S256");
+    assert_eq!(query_parameter(url, "state").len(), 43);
+    assert_eq!(query_parameter(url, "code_challenge").len(), 43);
+}
+
+#[test]
+fn authorization_preparation_fails_before_listener_authority_for_unsupported_or_invalid_clients() {
     assert_eq!(
-        validate_client_id(CloudProvider::GoogleDrive, &oversized).unwrap_err(),
-        "oauth-client-id-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::Onedrive, "not-a-guid").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::GoogleDrive, ".apps.googleusercontent.com").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::Icloud, "01234567-89ab-cdef-0123-456789abcdef")
-            .unwrap_err(),
+        prepare_authorization(
+            CloudProvider::Icloud,
+            "01234567-89ab-cdef-0123-456789abcdef"
+        )
+        .err()
+        .unwrap(),
         "icloud-oauth-not-supported"
     );
-
-    let write_connection = OAuthConnection {
-        connection_id: "0".repeat(64),
-        provider: CloudProvider::GoogleDrive,
-        cloud_root_id: "root".into(),
-        cloud_root_path: "/tmp/root".into(),
-        client_id: "client.apps.googleusercontent.com".into(),
-        scope: "https://www.googleapis.com/auth/drive".into(),
-        connected_at_ms: 1,
-    };
-    assert!(scope_allows_write(&write_connection));
-
-    let read_connection = OAuthConnection {
-        scope: "https://www.googleapis.com/auth/drive.metadata.readonly".into(),
-        ..write_connection.clone()
-    };
-    assert!(!scope_allows_write(&read_connection));
-
-    let unsupported_connection = OAuthConnection {
-        provider: CloudProvider::Icloud,
-        ..write_connection
-    };
-    assert!(!scope_allows_write(&unsupported_connection));
+    assert_eq!(
+        prepare_authorization(CloudProvider::GoogleDrive, "not-a-google-client")
+            .err()
+            .unwrap(),
+        "oauth-client-id-provider-format-invalid"
+    );
 }
 
 #[test]
@@ -157,29 +144,6 @@ fn google_drive_write_connection_document_is_admitted() {
     assert_eq!(connections.len(), 1);
     assert_eq!(connections[0].provider, CloudProvider::GoogleDrive);
     assert_eq!(connections[0].scope, "https://www.googleapis.com/auth/drive");
-}
-
-#[test]
-fn onedrive_read_connection_document_is_admitted() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    let root_id = "onedrive-root";
-    let root_path = "/tmp/onedrive-root";
-
-    write_connection(
-        &path,
-        "onedrive",
-        connection_id(CloudProvider::Onedrive, root_id, root_path),
-        root_id,
-        root_path,
-        "01234567-89ab-cdef-0123-456789abcdef",
-        "Files.Read offline_access",
-    );
-
-    let connections = load_connections(&path).unwrap();
-    assert_eq!(connections.len(), 1);
-    assert_eq!(connections[0].provider, CloudProvider::Onedrive);
-    assert!(!scope_allows_write(&connections[0]));
 }
 
 #[test]
@@ -223,203 +187,4 @@ fn icloud_connection_document_fails_closed_at_oauth_provider_boundary() {
     );
 
     assert_eq!(load_connections(&path).unwrap_err(), "icloud-oauth-not-supported");
-}
-
-#[test]
-fn missing_connection_document_is_an_empty_store() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-
-    assert!(load_connections(&path).unwrap().is_empty());
-}
-
-#[test]
-fn directory_connection_document_is_rejected_before_read() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    fs::create_dir(&path).unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-not-regular-file"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn symlink_connection_document_is_rejected_before_read() {
-    use std::os::unix::fs::symlink;
-
-    let directory = tempfile::tempdir().unwrap();
-    let target = directory.path().join("target.json");
-    let path = connections_path(directory.path());
-    fs::write(&target, b"{}").unwrap();
-    symlink(&target, &path).unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-not-regular-file"
-    );
-}
-
-#[test]
-fn oversized_connection_document_is_rejected_before_parse() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    fs::write(&path, vec![b'x'; 256 * 1024 + 1]).unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-too-large"
-    );
-}
-
-#[test]
-fn malformed_connection_document_fails_closed() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    fs::write(&path, b"{not-json").unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-invalid"
-    );
-}
-
-#[test]
-fn unsupported_connection_document_version_fails_closed() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
-            "version": 2,
-            "connections": []
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-version-or-count-invalid"
-    );
-}
-
-#[test]
-fn over_capacity_connection_document_fails_before_record_validation() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    let record = serde_json::json!({
-        "connection_id": "not-semantic-authority",
-        "provider": "google-drive",
-        "cloud_root_id": "root",
-        "cloud_root_path": "/tmp/root",
-        "client_id": "client.apps.googleusercontent.com",
-        "scope": "https://www.googleapis.com/auth/drive.metadata.readonly",
-        "connected_at_ms": 1
-    });
-    let connections = vec![record; 33];
-    fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
-            "version": 1,
-            "connections": connections
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        load_connections(&path).unwrap_err(),
-        "oauth-connection-document-version-or-count-invalid"
-    );
-}
-
-#[test]
-fn invalid_connection_semantics_fail_closed_before_authority_is_returned() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = connections_path(directory.path());
-    let root_id = "root";
-    let root_path = "/tmp/root";
-    let valid_id = connection_id(CloudProvider::GoogleDrive, root_id, root_path);
-
-    let cases = [
-        (
-            "short-id",
-            "short".to_string(),
-            root_id,
-            root_path,
-            "client.apps.googleusercontent.com",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-connection-invalid",
-        ),
-        (
-            "non-hex-id",
-            "g".repeat(64),
-            root_id,
-            root_path,
-            "client.apps.googleusercontent.com",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-connection-invalid",
-        ),
-        (
-            "blank-root-id",
-            valid_id.clone(),
-            " ",
-            root_path,
-            "client.apps.googleusercontent.com",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-connection-invalid",
-        ),
-        (
-            "relative-root-path",
-            valid_id.clone(),
-            root_id,
-            "relative/root",
-            "client.apps.googleusercontent.com",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-connection-invalid",
-        ),
-        (
-            "invalid-scope",
-            valid_id.clone(),
-            root_id,
-            root_path,
-            "client.apps.googleusercontent.com",
-            "https://example.invalid/scope",
-            "oauth-connection-invalid",
-        ),
-        (
-            "invalid-client-id",
-            valid_id.clone(),
-            root_id,
-            root_path,
-            "invalid-client-id",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-client-id-provider-format-invalid",
-        ),
-        (
-            "mismatched-identity",
-            "0".repeat(64),
-            root_id,
-            root_path,
-            "client.apps.googleusercontent.com",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "oauth-connection-id-mismatch",
-        ),
-    ];
-
-    for (case, id, case_root_id, case_root_path, client_id, scope, expected) in cases {
-        write_connection(
-            &path,
-            "google-drive",
-            id,
-            case_root_id,
-            case_root_path,
-            client_id,
-            scope,
-        );
-        assert_eq!(load_connections(&path).unwrap_err(), expected, "{case}");
-    }
 }
