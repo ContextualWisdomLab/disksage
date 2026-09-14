@@ -62,6 +62,7 @@ pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
+/// Bounded fast-mlsirm calibration evidence for local LLM-as-a-Judge decisions.
 pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
