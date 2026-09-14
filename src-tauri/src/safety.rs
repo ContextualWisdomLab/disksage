@@ -206,13 +206,9 @@ pub(crate) fn is_user_owned_shared_temp_tree(_path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
-    // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
     }
-    // 사용자 홈 루트 자체 (하위는 허용). 데스크톱 앱은 항상 사용자 세션에서 실행되므로
-    // USERPROFILE/HOME 부재는 상정하지 않는다 — 없으면 이 계층만 생략되고
-    // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
     if is_home_root(path, home.as_deref()) {
         return true;
@@ -222,18 +218,15 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        // 컴포넌트 단위 비교: '/'와 '\\' 모두 구분자로 파싱되고(C:/Windows 우회 차단),
-        // 경계가 정확해 C:\WindowsBackup 같은 형제 폴더를 오차단하지 않는다
         fn lower_components(p: &Path) -> Vec<String> {
             p.components()
                 .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
                 .collect()
         }
-        // 시스템 드라이브가 C:가 아닌 머신도 보호 — env에서 유도, 실패 시 C: 폴백
         let denied_roots: Vec<String> = {
             let mut roots = Vec::new();
             if let Ok(w) = std::env::var("SystemRoot") {
-                roots.push(w); // 예: C:\Windows, D:\Windows
+                roots.push(w);
             } else {
                 roots.push(r"C:\Windows".to_string());
             }
@@ -264,21 +257,13 @@ pub fn is_protected(path: &Path) -> bool {
         {
             return true;
         }
-        // macOS의 사용자별 임시 디렉터리는 /private 아래로 canonicalize된다. 그 하위만
-        // 허용하되 임시 루트 자체와 그 밖의 /private 트리는 계속 보호한다. 보호 경로를
-        // 가리키는 심링크는 호출부에서 먼저 canonicalize되므로 이 예외를 우회할 수 없다.
         #[cfg(target_os = "macos")]
         if is_macos_user_temp_descendant(path) {
             return false;
         }
-        // Shared system temporary trees stay globally protected. Current-user ownership is a
-        // purpose-bound deletion authority checked only by the two Trash entry points below;
-        // it must not widen cloud eviction, clone reclaim, or other callers of this guard.
         if is_shared_temp_path(path) {
             return true;
         }
-        // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
-        // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
         #[allow(unused_mut)]
         let mut denied_prefixes: Vec<&str> = vec![
             "/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev",
@@ -517,6 +502,31 @@ fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    static CATALOG_ROOT_AUTHORIZATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_catalog_root_authorization_hook<F>(hook: F)
+where
+    F: FnOnce() + 'static,
+{
+    CATALOG_ROOT_AUTHORIZATION_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_catalog_root_authorization_hook() {
+    CATALOG_ROOT_AUTHORIZATION_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
 fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
@@ -625,9 +635,6 @@ pub(crate) fn trash_delete_if_identity_in_catalog_root(
 #[cfg(windows)]
 fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-
-    // Win32 FILE_ATTRIBUTE_REPARSE_POINT. This rejects junctions, mount points, symbolic links,
-    // and other reparse-backed directory roots instead of treating only symbolic links as unsafe.
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -693,25 +700,36 @@ fn trash_delete_if_identity_with_catalog_root(
     }
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    let catalog_authorized = catalog_root.is_some_and(|root| {
-        std::fs::symlink_metadata(root).is_ok_and(|metadata| {
-            metadata.is_dir()
-                && !metadata.file_type().is_symlink()
-                && !is_windows_reparse_point(&metadata)
-        }) && std::fs::canonicalize(root)
-            .map(|root| strip_verbatim(&root))
-            .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
-            && !is_explicitly_protected(&guard_path)
-    });
+    let mut expected_catalog_root_id = None;
+    let catalog_authorized = if let Some(root) = catalog_root {
+        let initial_catalog_root_id = filesystem_object_id(root)
+            .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+        #[cfg(test)]
+        run_catalog_root_authorization_hook();
+        let metadata = std::fs::symlink_metadata(root)
+            .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+        let authorized = metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && !is_windows_reparse_point(&metadata)
+            && std::fs::canonicalize(root)
+                .map(|root| strip_verbatim(&root))
+                .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
+            && !is_explicitly_protected(&guard_path);
+        if authorized {
+            let confirmed_catalog_root_id = filesystem_object_id(root)
+                .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+            if confirmed_catalog_root_id != initial_catalog_root_id {
+                return Err(SafetyError::Protected(path.to_path_buf()));
+            }
+            expected_catalog_root_id = Some(initial_catalog_root_id);
+        }
+        authorized
+    } else {
+        false
+    };
     if catalog_root.is_some() && !catalog_authorized {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    let expected_catalog_root_id = catalog_root
-        .map(|root| {
-            filesystem_object_id(root)
-                .map_err(|_| SafetyError::Protected(path.to_path_buf()))
-        })
-        .transpose()?;
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
@@ -1408,6 +1426,46 @@ mod tests {
 
         assert!(matches!(error, Err(SafetyError::Protected(_))));
         assert!(victim.exists());
+    }
+
+    #[test]
+    fn catalog_root_authorization_rejects_root_replacement_inside_authorization_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hook_root = tmp.path().join("catalog");
+        let hook_reviewed_root = tmp.path().join("catalog-reviewed");
+        let hook_victim = hook_root.join("regenerable-cache");
+        let hook_parked_target = tmp.path().join("parked-target");
+        std::fs::create_dir_all(&hook_victim).unwrap();
+        let victim = hook_victim.clone();
+        let root = hook_root.clone();
+        let expected_target_id = filesystem_object_id(&victim).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        set_catalog_root_authorization_hook(move || {
+            std::fs::rename(&hook_victim, &hook_parked_target).unwrap();
+            std::fs::rename(&hook_root, &hook_reviewed_root).unwrap();
+            std::fs::create_dir(&hook_root).unwrap();
+            std::fs::rename(&hook_parked_target, &hook_victim).unwrap();
+        });
+
+        let error = trash_delete_if_identity_in_catalog_root(
+            &victim,
+            &root,
+            &expected_target_id,
+            0,
+            &journal,
+            1,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert_eq!(filesystem_object_id(&victim).unwrap(), expected_target_id);
+        assert!(victim.exists());
+        assert!(journal_recent(&journal, 10).is_empty());
+        assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
     }
 
     #[test]
