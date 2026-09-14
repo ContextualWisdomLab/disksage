@@ -116,6 +116,31 @@ describe('catalog-root Trash staging safety contract', () => {
     expect(stagingDirectory).toBeGreaterThan(rootIdentityCapture);
   });
 
+  it('binds catalog-root identity to the authorization observation instead of a later pathname lookup', () => {
+    const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
+    const initialCapture = body.indexOf(
+      'let initial_catalog_root_id = filesystem_object_id(root)',
+    );
+    const metadataRead = body.indexOf('std::fs::symlink_metadata(root)', initialCapture);
+    const canonicalRead = body.indexOf('std::fs::canonicalize(root)', metadataRead);
+    const confirmedCapture = body.indexOf(
+      'let confirmed_catalog_root_id = filesystem_object_id(root)',
+      canonicalRead,
+    );
+    const driftGate = body.indexOf(
+      'confirmed_catalog_root_id != initial_catalog_root_id',
+      confirmedCapture,
+    );
+    const stagingDirectory = body.indexOf('let staging_dir =');
+
+    expect(initialCapture).toBeGreaterThanOrEqual(0);
+    expect(metadataRead).toBeGreaterThan(initialCapture);
+    expect(canonicalRead).toBeGreaterThan(metadataRead);
+    expect(confirmedCapture).toBeGreaterThan(canonicalRead);
+    expect(driftGate).toBeGreaterThan(confirmedCapture);
+    expect(stagingDirectory).toBeGreaterThan(driftGate);
+  });
+
   it('revalidates reviewed root and target identities immediately before the staging rename', () => {
     const body = withoutRustComments(functionBody('trash_delete_if_identity_with_catalog_root'));
     const stagingBoundary = body.indexOf('let result =');
