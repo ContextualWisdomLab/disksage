@@ -30,9 +30,12 @@ irreversible filesystem operation can be bound to the exact object that was revi
   primitives.
 - Candidate names, signatures, byte counts, and approval phrases are review evidence only; they do
   not create irreversible mutation authority.
-- Operators who intend permanent reclaim must inspect the candidate evidence and empty the native
-  Trash manually through the operating system. DiskSage does not claim those bytes as physically
-  reclaimed until the operating system reports the resulting availability change.
+- Operators who intend permanent reclaim may use the operating-system Trash interface only to
+  delete the exact cache candidates they have reviewed. They must not empty the native Trash as a
+  whole. If the operating system does not provide a way to select only those reviewed candidates,
+  the operator must stop rather than delete unrelated Trash contents.
+- DiskSage does not claim reviewed candidate bytes as physically reclaimed until the operating
+  system reports the resulting availability change.
 - User files, cloud-provider placeholders, and arbitrary Trash entries remain outside this cache
   evidence path.
 
@@ -101,7 +104,8 @@ behavior, and that no mismatched object is irreversibly deleted.
 - Automation receives a stable refusal code rather than a partial journal or ambiguous success
   receipt.
 - Physical space recovery may require an explicit operating-system Trash action after DiskSage has
-  completed its reversible cleanup.
+  completed its reversible cleanup. That action is limited to the exact reviewed cache candidates;
+  broad Trash emptying is not an accepted operator procedure.
 - Platform capability is explicit. A future Windows implementation can advance independently behind
   a capability boundary without authorizing a weaker Linux/macOS fallback.
 - A future permanent-delete capability requires a new or superseding ADR, a real object-bound
