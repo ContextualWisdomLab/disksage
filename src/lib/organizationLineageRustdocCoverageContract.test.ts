@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
 
 const organizationLineageSource = readFileSync(
   new URL('../../src-tauri/src/organization_lineage.rs', import.meta.url),
@@ -12,8 +13,9 @@ const crateRootSource = readFileSync(
 
 describe('organization lineage rustdoc ownership', () => {
   it('keeps compiler-enforced documentation on the public lineage handoff', () => {
-    expect(organizationLineageSource).toContain('#![deny(missing_docs)]');
-    expect(organizationLineageSource).not.toMatch(/allow\s*\(\s*missing_docs\s*\)/);
+    const levels = missingDocsLintLevels(organizationLineageSource);
+    expect(levels.has('deny')).toBe(true);
+    expect(levels.has('allow')).toBe(false);
   });
 
   it('keeps the path-free ontology handoff documented at the crate root', () => {

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
 
 const privateEvidenceSource = readFileSync(
   new URL('../../src-tauri/src/private_evidence.rs', import.meta.url),
@@ -12,8 +13,9 @@ const crateRootSource = readFileSync(
 
 describe('private evidence rustdoc ownership', () => {
   it('keeps compiler-enforced documentation on the security publication boundary', () => {
-    expect(privateEvidenceSource).toContain('#![deny(missing_docs)]');
-    expect(privateEvidenceSource).not.toMatch(/allow\s*\(\s*missing_docs\s*\)/);
+    const levels = missingDocsLintLevels(privateEvidenceSource);
+    expect(levels.has('deny')).toBe(true);
+    expect(levels.has('allow')).toBe(false);
   });
 
   it('keeps create-new private evidence authority documented at the crate root', () => {

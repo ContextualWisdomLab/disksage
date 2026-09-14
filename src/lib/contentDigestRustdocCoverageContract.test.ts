@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
 
 const contentDigestSource = readFileSync(
   new URL('../../src-tauri/src/content_digest.rs', import.meta.url),
@@ -12,8 +13,9 @@ const crateRootSource = readFileSync(
 
 describe('content digest rustdoc ownership', () => {
   it('keeps compiler-enforced 100% documentation on the module public surface', () => {
-    expect(contentDigestSource).toContain('#![deny(missing_docs)]');
-    expect(contentDigestSource).not.toMatch(/allow\s*\(\s*missing_docs\s*\)/);
+    const levels = missingDocsLintLevels(contentDigestSource);
+    expect(levels.has('deny')).toBe(true);
+    expect(levels.has('allow')).toBe(false);
   });
 
   it('documents the public module boundary at the crate root', () => {

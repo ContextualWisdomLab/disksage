@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
 
 const naruonCapacitySource = readFileSync(
   new URL('../../src-tauri/src/naruon_capacity.rs', import.meta.url),
@@ -12,8 +13,9 @@ const crateRootSource = readFileSync(
 
 describe('Naruon capacity rustdoc ownership', () => {
   it('keeps compiler-enforced documentation on the public capacity envelope', () => {
-    expect(naruonCapacitySource).toContain('#![deny(missing_docs)]');
-    expect(naruonCapacitySource).not.toMatch(/allow\s*\(\s*missing_docs\s*\)/);
+    const levels = missingDocsLintLevels(naruonCapacitySource);
+    expect(levels.has('deny')).toBe(true);
+    expect(levels.has('allow')).toBe(false);
   });
 
   it('documents the redacted capacity handoff at the crate root', () => {

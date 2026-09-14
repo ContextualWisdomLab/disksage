@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
 
 const judgeCalibrationSource = readFileSync(
   new URL('../../src-tauri/src/judge_calibration.rs', import.meta.url),
@@ -12,8 +13,9 @@ const crateRootSource = readFileSync(
 
 describe('judge calibration rustdoc ownership', () => {
   it('keeps compiler-enforced documentation on the public calibration surface', () => {
-    expect(judgeCalibrationSource).toContain('#![deny(missing_docs)]');
-    expect(judgeCalibrationSource).not.toMatch(/allow\s*\(\s*missing_docs\s*\)/);
+    const levels = missingDocsLintLevels(judgeCalibrationSource);
+    expect(levels.has('deny')).toBe(true);
+    expect(levels.has('allow')).toBe(false);
   });
 
   it('documents the calibration authority at the crate root', () => {
