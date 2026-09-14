@@ -21,6 +21,26 @@ function scalarValue(raw: string): string {
   return value.split(/\s+#/, 1)[0].trim();
 }
 
+function namedStep(source: string, name: string): string {
+  const lines = source.split(/\r?\n/);
+  const marker = `- name: ${name}`;
+  const start = lines.findIndex((line) => line.trim() === marker);
+  if (start < 0) return "";
+
+  const indent = lines[start].length - lines[start].trimStart().length;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    const currentIndent = line.length - line.trimStart().length;
+    if (currentIndent === indent && line.trimStart().startsWith("- ")) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
 function negativePathsIgnoreEntries(source: string): string[] {
   const negatives: string[] = [];
   const lines = source.split(/\r?\n/);
@@ -105,20 +125,29 @@ describe("test workflow path-filter contract", () => {
   });
 
   it("preserves npm test failure while exposing bounded nested phase diagnostics", () => {
-    expect(workflow).toContain("id: npm_test");
-    expect(workflow).toContain("continue-on-error: true");
-    for (const phase of [
+    const npmTest = namedStep(workflow, "Run npm test");
+    expect(npmTest).toContain("id: npm_test");
+    expect(npmTest).toContain("continue-on-error: true");
+
+    const phases = [
       "Diagnose SvelteKit sync after npm test failure",
       "Diagnose Vitest after npm test failure",
       "Diagnose workflow contract after npm test failure",
       "Diagnose browser test after npm test failure",
-    ]) {
-      expect(workflow).toContain(`name: ${phase}`);
+    ];
+    for (const phase of phases) {
+      const step = namedStep(workflow, phase);
+      expect(step).toContain(`name: ${phase}`);
+      expect(step).toContain("if: steps.npm_test.outcome == 'failure'");
+      expect(step).toContain("continue-on-error: true");
     }
-    expect(workflow).toContain("if: steps.npm_test.outcome == 'failure'");
-    expect(workflow).toContain("npm run test:browser --if-present");
-    expect(workflow).toContain("name: Preserve npm test failure");
-    expect(workflow).toContain("exit 1");
+
+    expect(namedStep(workflow, "Diagnose browser test after npm test failure")).toContain(
+      "npm run test:browser --if-present",
+    );
+    const preserve = namedStep(workflow, "Preserve npm test failure");
+    expect(preserve).toContain("if: steps.npm_test.outcome == 'failure'");
+    expect(preserve).toContain("run: exit 1");
   });
 });
 
