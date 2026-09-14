@@ -90,6 +90,7 @@ pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
 pub mod provider_sync;
+/// Create-new publication boundary for sensitive local evidence; never approval or deletion authority.
 pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
