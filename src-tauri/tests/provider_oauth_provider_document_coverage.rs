@@ -88,3 +88,85 @@ fn icloud_connection_document_fails_closed_at_oauth_provider_boundary() {
 
     assert_eq!(load_connections(&path).unwrap_err(), "icloud-oauth-not-supported");
 }
+
+#[test]
+fn missing_connection_document_is_an_empty_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = connections_path(directory.path());
+
+    assert!(load_connections(&path).unwrap().is_empty());
+}
+
+#[test]
+fn directory_connection_document_is_rejected_before_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = connections_path(directory.path());
+    fs::create_dir(&path).unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-not-regular-file"
+    );
+}
+
+#[test]
+fn malformed_connection_document_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = connections_path(directory.path());
+    fs::write(&path, b"{not-json").unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-invalid"
+    );
+}
+
+#[test]
+fn unsupported_connection_document_version_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = connections_path(directory.path());
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 2,
+            "connections": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-version-or-count-invalid"
+    );
+}
+
+#[test]
+fn over_capacity_connection_document_fails_before_record_validation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = connections_path(directory.path());
+    let record = serde_json::json!({
+        "connection_id": "not-semantic-authority",
+        "provider": "google-drive",
+        "cloud_root_id": "root",
+        "cloud_root_path": "/tmp/root",
+        "client_id": "client.apps.googleusercontent.com",
+        "scope": "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "connected_at_ms": 1
+    });
+    let connections = vec![record; 33];
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "connections": connections
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-version-or-count-invalid"
+    );
+}
