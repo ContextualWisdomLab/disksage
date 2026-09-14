@@ -6,15 +6,23 @@ use disksage_lib::provider_oauth::{
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn provider_root_path() -> String {
+    std::env::temp_dir()
+        .join("disksage-provider-root")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn connection(provider: CloudProvider, scope: &str) -> OAuthConnection {
+    let root_path = provider_root_path();
     OAuthConnection {
-        connection_id: "0".repeat(64),
+        connection_id: connection_id(provider, "root-1", &root_path),
         provider,
         cloud_root_id: "root-1".into(),
-        cloud_root_path: "/tmp/disksage-provider-root".into(),
+        cloud_root_path: root_path,
         client_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
         scope: scope.into(),
         connected_at_ms: 1,
@@ -53,7 +61,7 @@ fn onedrive_root() -> CloudRoot {
         provider: CloudProvider::Onedrive,
         account_scope: CloudAccountScope::Unknown,
         label: "OneDrive".into(),
-        path: Path::new("/tmp/disksage-provider-root")
+        path: PathBuf::from(provider_root_path())
             .to_string_lossy()
             .into_owned(),
         readable: true,
