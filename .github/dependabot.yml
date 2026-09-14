@@ -8,6 +8,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      vitest-family:
+        dependency-type: "development"
+        patterns:
+          - "vitest"
+          - "@vitest/coverage-*"
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
     schedule:
