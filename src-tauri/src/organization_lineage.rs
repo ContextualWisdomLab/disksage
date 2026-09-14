@@ -3,40 +3,63 @@
 //! This is a metadata contract only. It never includes source/destination paths, file names,
 //! content, or provider credentials, and it cannot authorize a move or source eviction.
 
+#![deny(missing_docs)]
+
 use sha2::{Digest, Sha256};
 
 use crate::organize::MovePlan;
 
+/// Stable schema identifier for a path-free organization-lineage batch.
 pub const ORGANIZATION_LINEAGE_SCHEMA: &str = "disksage.organization-lineage-batch";
+/// Current version of the organization-lineage handoff schema.
 pub const ORGANIZATION_LINEAGE_SCHEMA_VERSION: u32 = 1;
+/// Maximum number of lineage items admitted into one exported batch.
 pub const ORGANIZATION_LINEAGE_MAX_ITEMS: usize = 200;
+/// Maximum serialized size of one exported organization-lineage batch.
 pub const ORGANIZATION_LINEAGE_MAX_BODY_BYTES: usize = 512 * 1024;
 
 const MAX_DATETIME_EPOCH_MS: u64 = 253_402_300_799_999;
 
+/// Path-free lineage facts derived from one reviewed local organization plan.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrganizationLineageItem {
+    /// Stable fingerprint binding this item to the source evidence used by the plan.
     pub lineage_fingerprint: String,
+    /// Source byte size observed when the organization plan was materialized.
     pub source_size: u64,
+    /// Source modification time observed when the organization plan was materialized.
     pub source_mtime_ms: u64,
+    /// Selected production timestamp used by the organization decision.
     pub production_time_ms: u64,
+    /// Evidence source from which the selected production time was derived.
     pub production_time_source: String,
+    /// Confidence label attached to the selected production-time evidence.
     pub production_time_confidence: String,
+    /// HTTPS ontology class assigned by the reviewed organization plan.
     pub ontology_class: String,
+    /// Semantic relation represented by the destination without disclosing its path.
     pub destination_relation: String,
+    /// Planned organization action represented by this lineage item.
     pub action: String,
 }
 
+/// Complete immutable handoff containing a bounded set of path-free organization-lineage items.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrganizationLineageBatch {
+    /// Stable schema identifier serialized as `schema`.
     #[serde(rename = "schema")]
     pub schema_kind: String,
+    /// Version of the organization-lineage handoff schema.
     pub version: u32,
+    /// Time at which DiskSage generated this complete lineage batch.
     pub generated_at_ms: u64,
+    /// Whether the batch represents the complete bounded organization-plan input.
     pub complete: bool,
+    /// SHA-256 digest of the canonical unsigned batch used to bind the exported item set.
     pub batch_fingerprint_sha256: String,
+    /// Path-free lineage items included in this batch.
     pub items: Vec<OrganizationLineageItem>,
 }
 
@@ -67,6 +90,10 @@ fn unsigned_batch(
 }
 
 /// Export a complete, path-free organization plan for Naruon/semantic-data-portal.
+///
+/// The export validates materialized lineage metadata, rejects duplicate source fingerprints,
+/// and binds the resulting item set with a SHA-256 batch fingerprint. It carries no path or
+/// content authority and cannot execute, approve, or undo an organization move.
 pub fn export_move_plans(
     plans: &[MovePlan],
     generated_at_ms: u64,

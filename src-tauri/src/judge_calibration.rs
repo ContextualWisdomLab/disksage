@@ -3,56 +3,81 @@
 //! The local model still produces the bounded decision JSON. This module validates a paired
 //! model/human label sample before an operator treats that judge as calibrated. It supports both
 //! binary and polytomous scales and keeps all agreement arithmetic in fast-mlsirm's Rust core.
+//! Calibration evidence gates model judgment; it does not grant filesystem or cleanup authority.
+
+#![deny(missing_docs)]
 
 use mlsirm_core::agreement::validate_scoring;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Schema version for serialized judge-calibration evidence and results.
 pub const SCHEMA_VERSION: u32 = 1;
+/// Measurement engine whose agreement implementation is authoritative for this boundary.
 pub const ENGINE: &str = "fast-mlsirm";
 const MAX_CATEGORIES: u32 = 1_000;
 const MAX_SAMPLES: usize = 100_000;
 
+/// Paired model/human labels and optional comparison evidence used to admit one judgment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JudgeCalibrationEvidence {
+    /// Version of the serialized calibration contract.
     pub schema_version: u32,
     /// The exact local-model judgment this calibration sample evaluates.
     pub judgment_id: String,
     /// Number of ordered labels: 2 is true/false; values above 2 are polytomous.
     pub categories: u32,
+    /// Model-assigned ordered labels, paired positionally with `human_labels`.
     pub model_labels: Vec<u32>,
+    /// Human reference labels used as the primary scoring criterion.
     pub human_labels: Vec<u32>,
-    /// Optional double-scored human baseline for the degradation gate.
+    /// Optional first human label set for the human-baseline degradation gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_baseline_a: Option<Vec<u32>>,
+    /// Optional second human label set; must be supplied together with `human_baseline_a`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_baseline_b: Option<Vec<u32>>,
-    /// Optional subgroup labels for the fairness SMD gate.
+    /// Optional subgroup labels used by the fairness SMD gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subgroup: Option<Vec<u32>>,
 }
 
+/// One named quantitative gate returned by the calibration engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JudgeCalibrationGate {
+    /// Stable gate identifier emitted by fast-mlsirm.
     pub name: String,
+    /// Observed statistic for the submitted paired evidence.
     pub value: f64,
+    /// Admission threshold applied to the statistic.
     pub threshold: f64,
+    /// Whether this individual gate satisfies its threshold.
     pub pass: bool,
 }
 
+/// Bounded calibration verdict bound to the submitted judgment identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JudgeCalibrationResult {
+    /// Version of the serialized result contract.
     pub schema_version: u32,
+    /// Measurement engine that produced the quantitative gates.
     pub engine: String,
+    /// Exact judgment identity copied from the admitted evidence.
     pub judgment_id: String,
+    /// Number of ordered response categories evaluated.
     pub categories: u32,
+    /// Number of paired model/human observations evaluated.
     pub sample_count: usize,
+    /// Aggregate pass/fail verdict from the measurement engine.
     pub passed: bool,
+    /// Individual measurement gates supporting the aggregate verdict.
     pub gates: Vec<JudgeCalibrationGate>,
+    /// Exact model-to-human agreement reported by the engine.
     pub exact_agreement: f64,
+    /// Adjacent-category agreement reported for ordered polytomous labels.
     pub adjacent_agreement: f64,
 }
 
@@ -80,6 +105,12 @@ fn compact_subgroups(labels: &[u32]) -> Result<Vec<u32>, String> {
     Ok(compacted)
 }
 
+/// Validates bounded calibration evidence and returns the fast-mlsirm admission verdict.
+///
+/// The function fails closed on malformed identities, unsupported category counts, unpaired
+/// evidence, incomplete human baselines, or subgroup cardinality mismatch before invoking the
+/// measurement engine. A successful return is calibration evidence only and does not authorize
+/// filesystem mutation or cleanup execution.
 pub fn validate(evidence: &JudgeCalibrationEvidence) -> Result<JudgeCalibrationResult, String> {
     if evidence.schema_version != SCHEMA_VERSION {
         return Err("judge-calibration-schema-version-unsupported".into());

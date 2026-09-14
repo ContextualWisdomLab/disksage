@@ -1,23 +1,42 @@
 //! Redacted export of a DiskSage cloud-capacity assessment for Naruon validation.
+//!
+//! This boundary exports capacity decision evidence without storage paths, provider account
+//! identifiers, or deletion authority. The exported assessment remains bound to the exact
+//! DiskSage cloud plan fingerprint that produced it.
+
+#![deny(missing_docs)]
 
 use crate::cloud::{CloudAccountScope, CloudPlanReport, CloudProvider};
 use crate::provider_capacity::{
     self, CapacityEvidenceKind, CloudCapacityAssessment, CloudCapacitySnapshot, CloudCapacityState,
 };
 
+/// Schema version for the redacted Naruon cloud-capacity assessment envelope.
 pub const NARUON_CLOUD_CAPACITY_SCHEMA_VERSION: u32 = 1;
 
+/// Path-free capacity assessment bound to one exact DiskSage cloud decision batch.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NaruonCloudCapacityEnvelope {
+    /// Stable schema identifier consumed by Naruon integration code.
     pub schema_kind: String,
+    /// Version of the exported Naruon capacity envelope.
     pub schema_version: u32,
+    /// Version of DiskSage's decision-batch fingerprint algorithm.
     pub decision_batch_fingerprint_version: u32,
+    /// Fingerprint binding this capacity evidence to the exact cloud plan under review.
     pub decision_batch_fingerprint: String,
+    /// Destination cloud provider represented by the assessment.
     pub provider: CloudProvider,
+    /// Destination account scope represented by the assessment.
     pub destination_account_scope: CloudAccountScope,
+    /// Validated provider-capacity assessment used by the bound cloud plan.
     pub capacity: CloudCapacityAssessment,
 }
 
+/// Export the capacity assessment from one cloud plan after validating provider evidence and plan binding.
+///
+/// The result intentionally excludes storage paths and account identifiers. It does not authorize
+/// copy, eviction, deletion, or any provider mutation.
 pub fn export_naruon_cloud_capacity_assessment(
     report: &CloudPlanReport,
 ) -> Result<NaruonCloudCapacityEnvelope, String> {
@@ -60,6 +79,10 @@ pub fn export_naruon_cloud_capacity_assessment(
     })
 }
 
+/// Validate that provider capacity evidence is structurally valid and matches DiskSage's canonical assessment.
+///
+/// This recomputes the assessment from its snapshot instead of trusting serialized decision fields,
+/// causing forged or internally inconsistent capacity claims to fail closed.
 pub fn validate_cloud_capacity_assessment(
     capacity: &CloudCapacityAssessment,
 ) -> Result<(), String> {

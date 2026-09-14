@@ -5,6 +5,8 @@
 //! Rust for that action. Frontends may display the value but must not reconstruct authorization
 //! text independently.
 
+#![deny(missing_docs)]
+
 use crate::cloud::{
     CloudCandidate, CloudPlanOptions, CloudPlanReport, CloudRoot, ExactDuplicateSummary,
     PreCopyEvidenceCohort,
