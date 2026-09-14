@@ -105,6 +105,26 @@ fn google_write_authorization_uses_write_scope_and_offline_consent() {
 }
 
 #[test]
+fn onedrive_write_authorization_uses_native_redirect_and_write_scope() {
+    let pending = prepare_authorization_with_write_access(
+        CloudProvider::Onedrive,
+        "01234567-89ab-cdef-0123-456789abcdef",
+        true,
+    )
+    .unwrap();
+    let url = pending.authorization_url();
+
+    assert!(url.starts_with(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?"
+    ));
+    assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A"));
+    assert!(url.contains("scope=Files.ReadWrite%20offline_access"));
+    assert!(url.contains("response_mode=query"));
+    assert!(url.contains("prompt=select_account"));
+    assert_eq!(query_parameter(url, "code_challenge_method"), "S256");
+}
+
+#[test]
 fn authorization_preparation_fails_before_listener_authority_for_unsupported_or_invalid_clients() {
     assert_eq!(
         prepare_authorization(
