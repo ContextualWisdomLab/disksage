@@ -44,10 +44,13 @@ fn concurrent_identity_mismatch_keeps_runtime_health_and_image_fail_closed_shape
     const WORKERS: usize = 8;
     const ITERATIONS: usize = 8;
 
+    // Match the buyer/runtime shape: workers race probes against one already-installed executable,
+    // not against executables that each worker has just written into place.
+    let (runtime_dir, target) = mismatch_runtime();
     let workers: Vec<_> = (0..WORKERS)
         .map(|worker| {
+            let target = target.clone();
             std::thread::spawn(move || {
-                let (_temp, target) = mismatch_runtime();
                 for iteration in 0..ITERATIONS {
                     let plan = probe_container_orphans(&target);
                     assert!(
@@ -83,4 +86,5 @@ fn concurrent_identity_mismatch_keeps_runtime_health_and_image_fail_closed_shape
     for worker in workers {
         worker.join().expect("identity-mismatch stress worker panicked");
     }
+    drop(runtime_dir);
 }

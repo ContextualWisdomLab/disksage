@@ -48,10 +48,14 @@ fn concurrent_short_lived_runtime_probes_keep_health_and_category_shape() {
     const WORKERS: usize = 8;
     const ITERATIONS: usize = 16;
 
+    // Publish one stable executable before concurrency begins. Production probes execute an
+    // already-installed runtime; mixing per-worker executable creation into this stress can turn
+    // Linux write/exec exclusion (ETXTBSY) into a false lifecycle failure.
+    let (runtime_dir, target) = fake_runtime();
     let workers: Vec<_> = (0..WORKERS)
         .map(|worker| {
+            let target = target.clone();
             std::thread::spawn(move || {
-                let (_temp, target) = fake_runtime();
                 for iteration in 0..ITERATIONS {
                     let plan = probe_container_orphans(&target);
                     assert!(
@@ -78,4 +82,5 @@ fn concurrent_short_lived_runtime_probes_keep_health_and_category_shape() {
     for worker in workers {
         worker.join().expect("runtime stress worker panicked");
     }
+    drop(runtime_dir);
 }
