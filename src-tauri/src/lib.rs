@@ -72,6 +72,7 @@ pub mod incomplete_download_recovery;
 pub mod git_worktree;
 pub mod maven_cache;
 pub mod multipart_archive;
+/// Redacted cloud-capacity evidence handoff bound to an exact DiskSage decision batch.
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
