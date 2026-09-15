@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/test.yml"), "utf8");
 
+/**
+ * Normalizes one YAML scalar used by the deliberately narrow path-filter parser.
+ */
 function scalarValue(raw: string): string {
   const value = raw.trim();
   if (value.startsWith('"')) {
@@ -21,6 +24,10 @@ function scalarValue(raw: string): string {
   return value.split(/\s+#/, 1)[0].trim();
 }
 
+/**
+ * Finds forbidden negative entries specifically under `paths-ignore`, including
+ * comment-separated and inline-list forms that previously escaped review.
+ */
 function negativePathsIgnoreEntries(source: string): string[] {
   const negatives: string[] = [];
   const lines = source.split(/\r?\n/);
@@ -60,6 +67,47 @@ function negativePathsIgnoreEntries(source: string): string[] {
   return negatives;
 }
 
+/**
+ * Reads the ordered `paths` entries for one workflow event, preserving order so
+ * exclusions and required positive re-inclusions remain an executable contract.
+ */
+function eventPaths(source: string, eventName: "push" | "pull_request"): string[] {
+  const lines = source.split(/\r?\n/);
+  const eventStart = lines.findIndex((line) => line === `  ${eventName}:`);
+  if (eventStart < 0) return [];
+
+  const eventEndCandidate = lines.findIndex((line, index) => {
+    if (index <= eventStart || !line.trim() || line.trimStart().startsWith("#")) {
+      return false;
+    }
+    return line.length - line.trimStart().length <= 2;
+  });
+  const eventEnd = eventEndCandidate < 0 ? lines.length : eventEndCandidate;
+  const pathsStart = lines.findIndex(
+    (line, index) =>
+      index > eventStart && index < eventEnd && line === "    paths:",
+  );
+  if (pathsStart < 0) return [];
+
+  const entries: string[] = [];
+  for (let index = pathsStart + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const indent = line.length - line.trimStart().length;
+    if (indent <= 4) break;
+
+    const item = trimmed.match(/^-\s*(.+)$/);
+    if (item) entries.push(scalarValue(item[1]));
+  }
+  return entries;
+}
+
+/**
+ * Extracts a named shell step from a job without accidentally absorbing a later
+ * step, which keeps the admission fixtures tied to their canonical owner script.
+ */
 function namedRunScript(job: string, stepName: string): string {
   const marker = `      - name: ${stepName}\n`;
   const step = job.split(marker)[1]?.split(/\n      - /, 1)[0] ?? "";
@@ -80,6 +128,31 @@ describe("test workflow path-filter contract", () => {
 
   it("does not put negative globs under paths-ignore", () => {
     expect(negativePathsIgnoreEntries(workflow)).toEqual([]);
+  });
+
+  it("does not borrow another event's paths when the target event has none", () => {
+    const fixture = `on:\n  push:\n    branches: [main]\n  pull_request:\n    paths:\n      - "**"\n`;
+
+    expect(eventPaths(fixture, "push")).toEqual([]);
+    expect(eventPaths(fixture, "pull_request")).toEqual(["**"]);
+  });
+
+  it("pins the exact ordered path contract for push and pull requests", () => {
+    const expectedPaths = [
+      "**",
+      "!docs/**",
+      "!*.md",
+      "docs/doctoring/release-artifact-provenance.md",
+      "docs/doctoring/tauri-content-security-policy.md",
+      "docs/doctoring/model-artifact-integrity.md",
+      "docs/doctoring/model-load-handle-binding.md",
+      "docs/development/icloud-local-eviction-batch.md",
+      "docs/architecture/goals/cloud-offload-goal.json",
+      "CHANGELOG.md",
+    ];
+
+    expect(eventPaths(workflow, "push")).toEqual(expectedPaths);
+    expect(eventPaths(workflow, "pull_request")).toEqual(expectedPaths);
   });
 
   it("runs the Windows agent-state regression when that owner source is present", () => {
@@ -153,7 +226,7 @@ it("macOS cache job executes present owner tests, reports absent source, and pro
     mkdirSync(resolve(fixture, "src-tauri/tests"), { recursive: true });
     writeFileSync(resolve(fixture, "src-tauri/tests/generated_cache_staged_activity.rs"), "");
     expect(run().status).toBe(0);
-    expect(readFileSync(log, "utf8")).toBe("test --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
+    expect(readFileSync(log, "utf8")).toBe("test --locked --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
     expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
