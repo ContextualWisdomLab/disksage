@@ -21,7 +21,7 @@ fn current_translation_resource_is_version_path_digest_and_bundle_bound() {
     );
     assert_eq!(
         asset.relative_path,
-        "resources/translation/releases/2026.09.11.1.json"
+        "resources/translation/releases/2026.09.15.1.json"
     );
     assert_eq!(asset.sha256.len(), 64);
     assert!(asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
