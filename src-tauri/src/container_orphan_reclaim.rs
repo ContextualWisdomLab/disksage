@@ -30,9 +30,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
-#[cfg(not(unix))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const CONTAINER_ORPHAN_SCHEMA_KIND: &str = "disksage.container-orphan-plan";
 const CONTAINER_ORPHAN_SCHEMA_VERSION: u32 = 1;
