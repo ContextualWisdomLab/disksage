@@ -78,7 +78,10 @@ function rustFunctionBody(source: string, name: string): string {
 
 describe('native translation steady-state cache contract', () => {
   it('moves immutable resource admission and SQLite installation out of every IPC lookup', () => {
-    const lookup = rustFunctionBody(bridgeSource, 'get_translation_message');
+    const command = rustFunctionBody(bridgeSource, 'get_translation_message');
+    const lookup = rustFunctionBody(bridgeSource, 'lookup');
+    expect(command).not.toContain('load_current_translation_resource_file');
+    expect(command).not.toContain('install_current_translation_resource');
     expect(lookup).not.toContain('load_current_translation_resource_file');
     expect(lookup).not.toContain('install_current_translation_resource');
 
@@ -95,12 +98,24 @@ describe('native translation steady-state cache contract', () => {
     expect(bridgeSource).toContain('MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES');
   });
 
-  it('populates runtime state once during Tauri setup and serves lookup through managed state', () => {
+  it('keeps synchronous SQLite work off the async IPC worker and out of the cache lock', () => {
+    expect(bridgeSource).toContain('Arc<Mutex<Connection>>');
+    expect(bridgeSource).toContain('tauri::async_runtime::spawn_blocking');
+    expect(bridgeSource).toContain('lookup_translation_message');
+    expect(bridgeSource).toMatch(/pub\s+async\s+fn\s+get_translation_message/);
+
+    const lookup = rustFunctionBody(bridgeSource, 'lookup');
+    expect(lookup).toContain('spawn_blocking');
+    expect(lookup).toContain('lookup_translation_message');
+    expect(lookup.indexOf('.cache')).toBeLessThan(lookup.indexOf('spawn_blocking'));
+  });
+
+  it('populates runtime state once during Tauri setup and delegates IPC through managed state', () => {
     expect(libSource).toContain('translation_resource_bridge::initialize_translation_ledger');
     expect(libSource).toContain('.manage(translation_ledger)');
 
-    const lookup = rustFunctionBody(bridgeSource, 'get_translation_message');
-    expect(lookup).toContain('TranslationLedgerRuntime');
-    expect(lookup).toContain('lookup_translation_message');
+    const command = rustFunctionBody(bridgeSource, 'get_translation_message');
+    expect(command).toContain('TranslationLedgerRuntime');
+    expect(command).toContain('.lookup(&locale, &screen_key).await');
   });
 });
