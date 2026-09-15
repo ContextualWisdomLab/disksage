@@ -66,6 +66,57 @@ impl TranslationLedgerRuntime {
             cache: Mutex::new(TranslationMessageCache::default()),
         }
     }
+
+    /// Resolve one exact tuple from the bounded cache or immutable local ledger.
+    ///
+    /// Cache locking is deliberately split around SQLite I/O so a cache miss cannot hold the
+    /// process-local projection lock while the database performs its exact tuple lookup.
+    fn lookup(&self, locale: &str, screen_key: &str) -> Result<TranslationMessageView, String> {
+        if !is_supported_locale(locale) {
+            return Err("translation-locale-unsupported".to_string());
+        }
+        if !valid_screen_key(screen_key) {
+            return Err("translation-screen-key-invalid".to_string());
+        }
+
+        let cache_key = TranslationMessageCacheKey {
+            resource_version: self.resource_version.clone(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+        };
+        let cached = self
+            .cache
+            .lock()
+            .map_err(|_| "translation-cache-lock-failed".to_string())?
+            .get(&cache_key);
+        if let Some(text) = cached {
+            return Ok(TranslationMessageView {
+                resource_version: self.resource_version.clone(),
+                locale: locale.to_string(),
+                screen_key: screen_key.to_string(),
+                text,
+            });
+        }
+
+        let text = {
+            let connection = self
+                .connection
+                .lock()
+                .map_err(|_| "translation-ledger-lock-failed".to_string())?;
+            lookup_translation_message(&connection, &self.resource_version, locale, screen_key)?
+        };
+        self.cache
+            .lock()
+            .map_err(|_| "translation-cache-lock-failed".to_string())?
+            .insert(cache_key, text.clone());
+
+        Ok(TranslationMessageView {
+            resource_version: self.resource_version.clone(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+            text,
+        })
+    }
 }
 
 /// Presentation value returned to the frontend after native resource admission.
@@ -159,53 +210,7 @@ pub fn get_translation_message(
     locale: String,
     screen_key: String,
 ) -> Result<TranslationMessageView, String> {
-    let runtime: &TranslationLedgerRuntime = runtime.inner();
-    if !is_supported_locale(&locale) {
-        return Err("translation-locale-unsupported".to_string());
-    }
-    if !valid_screen_key(&screen_key) {
-        return Err("translation-screen-key-invalid".to_string());
-    }
-
-    let cache_key = TranslationMessageCacheKey {
-        resource_version: runtime.resource_version.clone(),
-        locale: locale.clone(),
-        screen_key: screen_key.clone(),
-    };
-    let cached = runtime
-        .cache
-        .lock()
-        .map_err(|_| "translation-cache-lock-failed".to_string())?
-        .get(&cache_key);
-    if let Some(text) = cached {
-        return Ok(TranslationMessageView {
-            resource_version: runtime.resource_version.clone(),
-            locale,
-            screen_key,
-            text,
-        });
-    }
-
-    // The cache mutex is not held while SQLite performs the exact tuple lookup.
-    let text = {
-        let connection = runtime
-            .connection
-            .lock()
-            .map_err(|_| "translation-ledger-lock-failed".to_string())?;
-        lookup_translation_message(&connection, &runtime.resource_version, &locale, &screen_key)?
-    };
-    runtime
-        .cache
-        .lock()
-        .map_err(|_| "translation-cache-lock-failed".to_string())?
-        .insert(cache_key, text.clone());
-
-    Ok(TranslationMessageView {
-        resource_version: runtime.resource_version.clone(),
-        locale,
-        screen_key,
-        text,
-    })
+    runtime.inner().lookup(&locale, &screen_key)
 }
 
 #[cfg(test)]
@@ -222,6 +227,23 @@ mod tests {
             locale: locale.to_string(),
             screen_key: screen_key.to_string(),
         }
+    }
+
+    fn runtime_with_checked_in_resource() -> (tempfile::TempDir, TranslationLedgerRuntime) {
+        let directory = tempfile::tempdir().expect("temporary translation runtime directory");
+        let database_path = directory.path().join("translation-ledger.sqlite3");
+        let mut connection = open_translation_ledger(&database_path).expect("open translation ledger");
+        let resource: TranslationResource = serde_json::from_slice(include_bytes!(
+            "../resources/translation/releases/2026.09.11.1.json"
+        ))
+        .expect("checked-in translation resource JSON");
+        install_current_translation_resource(&mut connection, &resource, 1)
+            .expect("install checked-in translation resource");
+        let runtime = TranslationLedgerRuntime::new(
+            current_translation_resource_asset().resource_version.to_string(),
+            connection,
+        );
+        (directory, runtime)
     }
 
     #[test]
@@ -276,5 +298,44 @@ mod tests {
         );
         assert_eq!(cache.get(&first), None);
         assert_eq!(cache.get(&overflow).as_deref(), Some("overflow"));
+    }
+
+    #[test]
+    fn managed_runtime_serves_exact_sqlite_tuple_and_reuses_cache() {
+        let (_directory, runtime) = runtime_with_checked_in_resource();
+
+        let first = runtime
+            .lookup("ko", "app.action.scan")
+            .expect("exact persisted tuple lookup");
+        assert_eq!(first.resource_version, "2026.09.11.1");
+        assert_eq!(first.locale, "ko");
+        assert_eq!(first.screen_key, "app.action.scan");
+        assert_eq!(first.text, "스캔");
+        assert_eq!(runtime.cache.lock().unwrap().entries.len(), 1);
+
+        let second = runtime
+            .lookup("ko", "app.action.scan")
+            .expect("cached exact tuple lookup");
+        assert_eq!(second, first);
+        assert_eq!(runtime.cache.lock().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn managed_runtime_fails_closed_without_cache_pollution() {
+        let (_directory, runtime) = runtime_with_checked_in_resource();
+
+        assert_eq!(
+            runtime.lookup("it", "app.action.scan"),
+            Err("translation-locale-unsupported".to_string())
+        );
+        assert_eq!(
+            runtime.lookup("en", "App Action Scan"),
+            Err("translation-screen-key-invalid".to_string())
+        );
+        assert_eq!(
+            runtime.lookup("en", "app.action.missing"),
+            Err("translation-message-missing".to_string())
+        );
+        assert!(runtime.cache.lock().unwrap().entries.is_empty());
     }
 }
