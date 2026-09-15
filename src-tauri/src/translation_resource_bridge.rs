@@ -1,18 +1,139 @@
-//! Read-only Tauri bridge for the immutable presentation resource.
+//! Tauri bridge for immutable presentation resources and their admitted local ledger.
 //!
-//! Callers choose only an explicit locale and stable screen key. Bundle path, release identity,
-//! digest, and SQLite path remain native authority. Resource verification completes before the
-//! bounded ledger write transaction, and this bridge never performs locale fallback or consults
-//! ontology vocabulary.
+//! Bundle path, release identity, digest, and SQLite path remain native authority. Resource
+//! verification plus append-only SQLite installation complete once during application setup;
+//! steady-state IPC accepts only an explicit locale and stable screen key, performs no locale
+//! fallback, and never consults ontology vocabulary.
 
 use crate::translation_ledger_store::{
     install_current_translation_resource, lookup_translation_message, open_translation_ledger,
 };
 use crate::translation_resource::{
-    current_translation_resource_asset, is_supported_locale, load_current_translation_resource_file,
-    valid_screen_key, TranslationResource,
+    current_translation_resource_asset, is_supported_locale,
+    load_current_translation_resource_file, valid_screen_key, TranslationResource,
 };
+use rusqlite::Connection;
 use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+
+const MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES: usize = 256;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct TranslationMessageCacheKey {
+    resource_version: String,
+    locale: String,
+    screen_key: String,
+}
+
+#[derive(Debug, Default)]
+struct TranslationMessageCache {
+    entries: HashMap<TranslationMessageCacheKey, String>,
+    insertion_order: VecDeque<TranslationMessageCacheKey>,
+}
+
+impl TranslationMessageCache {
+    fn get(&self, key: &TranslationMessageCacheKey) -> Option<String> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: TranslationMessageCacheKey, text: String) {
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        if self.entries.len() >= MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.insertion_order.push_back(key.clone());
+        self.entries.insert(key, text);
+    }
+}
+
+/// Process-lifetime translation state admitted once during Tauri setup.
+pub struct TranslationLedgerRuntime {
+    resource_version: String,
+    connection: Arc<Mutex<Connection>>,
+    cache: Mutex<TranslationMessageCache>,
+}
+
+impl TranslationLedgerRuntime {
+    fn new(resource_version: String, connection: Connection) -> Self {
+        Self {
+            resource_version,
+            connection: Arc::new(Mutex::new(connection)),
+            cache: Mutex::new(TranslationMessageCache::default()),
+        }
+    }
+
+    /// Resolve one exact tuple without blocking the async IPC worker on SQLite.
+    ///
+    /// The cache lock is released before dispatching the synchronous database miss to Tauri's
+    /// blocking pool. Only the connection mutex crosses that blocking boundary; cache population
+    /// happens after the blocking task returns.
+    async fn lookup(
+        &self,
+        locale: &str,
+        screen_key: &str,
+    ) -> Result<TranslationMessageView, String> {
+        if !is_supported_locale(locale) {
+            return Err("translation-locale-unsupported".to_string());
+        }
+        if !valid_screen_key(screen_key) {
+            return Err("translation-screen-key-invalid".to_string());
+        }
+
+        let cache_key = TranslationMessageCacheKey {
+            resource_version: self.resource_version.clone(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+        };
+        let cached = self
+            .cache
+            .lock()
+            .map_err(|_| "translation-cache-lock-failed".to_string())?
+            .get(&cache_key);
+        if let Some(text) = cached {
+            return Ok(TranslationMessageView {
+                resource_version: self.resource_version.clone(),
+                locale: locale.to_string(),
+                screen_key: screen_key.to_string(),
+                text,
+            });
+        }
+
+        let connection = Arc::clone(&self.connection);
+        let resource_version = self.resource_version.clone();
+        let lookup_locale = locale.to_string();
+        let lookup_screen_key = screen_key.to_string();
+        let text = tauri::async_runtime::spawn_blocking(move || {
+            let connection = connection
+                .lock()
+                .map_err(|_| "translation-ledger-lock-failed".to_string())?;
+            lookup_translation_message(
+                &connection,
+                &resource_version,
+                &lookup_locale,
+                &lookup_screen_key,
+            )
+        })
+        .await
+        .map_err(|_| "translation-ledger-task-failed".to_string())??;
+
+        self.cache
+            .lock()
+            .map_err(|_| "translation-cache-lock-failed".to_string())?
+            .insert(cache_key, text.clone());
+
+        Ok(TranslationMessageView {
+            resource_version: self.resource_version.clone(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+            text,
+        })
+    }
+}
 
 /// Presentation value returned to the frontend after native resource admission.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -56,24 +177,14 @@ pub fn resolve_translation_message(
     })
 }
 
-/// Loads, authenticates, persists, and projects one build-owned translation message.
+/// Loads, authenticates, and persists the build-owned translation release once at startup.
 #[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn get_translation_message(
-    app: tauri::AppHandle,
-    locale: String,
-    screen_key: String,
-) -> Result<TranslationMessageView, String> {
+pub fn initialize_translation_ledger(
+    app: &tauri::AppHandle,
+) -> Result<TranslationLedgerRuntime, String> {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tauri::Manager;
-
-    if !is_supported_locale(&locale) {
-        return Err("translation-locale-unsupported".to_string());
-    }
-    if !valid_screen_key(&screen_key) {
-        return Err("translation-screen-key-invalid".to_string());
-    }
 
     let asset = current_translation_resource_asset();
     let resource_path = app
@@ -101,17 +212,145 @@ pub fn get_translation_message(
         .map_err(|_| "translation-ledger-clock-invalid".to_string())?;
 
     install_current_translation_resource(&mut connection, &resource, installed_at_unix_ms)?;
-    let text = lookup_translation_message(
-        &connection,
-        asset.resource_version,
-        &locale,
-        &screen_key,
-    )?;
+    Ok(TranslationLedgerRuntime::new(
+        asset.resource_version.to_string(),
+        connection,
+    ))
+}
 
-    Ok(TranslationMessageView {
-        resource_version: asset.resource_version.to_string(),
-        locale,
-        screen_key,
-        text,
-    })
+/// Projects one exact translation tuple from bounded process state and the admitted ledger.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn get_translation_message(
+    runtime: tauri::State<'_, TranslationLedgerRuntime>,
+    locale: String,
+    screen_key: String,
+) -> Result<TranslationMessageView, String> {
+    runtime.inner().lookup(&locale, &screen_key).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache_key(
+        resource_version: &str,
+        locale: &str,
+        screen_key: &str,
+    ) -> TranslationMessageCacheKey {
+        TranslationMessageCacheKey {
+            resource_version: resource_version.to_string(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+        }
+    }
+
+    fn runtime_with_checked_in_resource() -> (tempfile::TempDir, TranslationLedgerRuntime) {
+        let directory = tempfile::tempdir().expect("temporary translation runtime directory");
+        let database_path = directory.path().join("translation-ledger.sqlite3");
+        let mut connection =
+            open_translation_ledger(&database_path).expect("open translation ledger");
+        let resource: TranslationResource = serde_json::from_slice(include_bytes!(
+            "../resources/translation/releases/2026.09.11.1.json"
+        ))
+        .expect("checked-in translation resource JSON");
+        install_current_translation_resource(&mut connection, &resource, 1)
+            .expect("install checked-in translation resource");
+        let runtime = TranslationLedgerRuntime::new(
+            current_translation_resource_asset().resource_version.to_string(),
+            connection,
+        );
+        (directory, runtime)
+    }
+
+    #[test]
+    fn cache_identity_includes_version_locale_and_screen_key() {
+        let mut cache = TranslationMessageCache::default();
+        let canonical = cache_key("2026.09.11.1", "en", "app.action.scan");
+        cache.insert(canonical.clone(), "Scan".to_string());
+
+        assert_eq!(cache.get(&canonical).as_deref(), Some("Scan"));
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.2", "en", "app.action.scan")),
+            None
+        );
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.1", "ko", "app.action.scan")),
+            None
+        );
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.1", "en", "app.action.cancel")),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_is_bounded_and_preserves_immutable_tuple_value() {
+        let mut cache = TranslationMessageCache::default();
+        let first = cache_key("2026.09.11.1", "en", "screen.000");
+        cache.insert(first.clone(), "first".to_string());
+        cache.insert(first.clone(), "mutated".to_string());
+        assert_eq!(cache.get(&first).as_deref(), Some("first"));
+
+        for index in 1..MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES {
+            let key = cache_key(
+                "2026.09.11.1",
+                "en",
+                &format!("screen.{index:03}"),
+            );
+            cache.insert(key, index.to_string());
+        }
+        assert_eq!(cache.entries.len(), MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES);
+        assert_eq!(
+            cache.insertion_order.len(),
+            MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES
+        );
+
+        let overflow = cache_key("2026.09.11.1", "en", "screen.overflow");
+        cache.insert(overflow.clone(), "overflow".to_string());
+        assert_eq!(cache.entries.len(), MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES);
+        assert_eq!(
+            cache.insertion_order.len(),
+            MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES
+        );
+        assert_eq!(cache.get(&first), None);
+        assert_eq!(cache.get(&overflow).as_deref(), Some("overflow"));
+    }
+
+    #[test]
+    fn managed_runtime_serves_exact_sqlite_tuple_and_reuses_cache() {
+        let (_directory, runtime) = runtime_with_checked_in_resource();
+
+        let first = tauri::async_runtime::block_on(runtime.lookup("ko", "app.action.scan"))
+            .expect("exact persisted tuple lookup");
+        assert_eq!(first.resource_version, "2026.09.11.1");
+        assert_eq!(first.locale, "ko");
+        assert_eq!(first.screen_key, "app.action.scan");
+        assert_eq!(first.text, "스캔");
+        assert_eq!(runtime.cache.lock().unwrap().entries.len(), 1);
+
+        let second = tauri::async_runtime::block_on(runtime.lookup("ko", "app.action.scan"))
+            .expect("cached exact tuple lookup");
+        assert_eq!(second, first);
+        assert_eq!(runtime.cache.lock().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn managed_runtime_fails_closed_without_cache_pollution() {
+        let (_directory, runtime) = runtime_with_checked_in_resource();
+
+        assert_eq!(
+            tauri::async_runtime::block_on(runtime.lookup("it", "app.action.scan")),
+            Err("translation-locale-unsupported".to_string())
+        );
+        assert_eq!(
+            tauri::async_runtime::block_on(runtime.lookup("en", "App Action Scan")),
+            Err("translation-screen-key-invalid".to_string())
+        );
+        assert_eq!(
+            tauri::async_runtime::block_on(runtime.lookup("en", "app.action.missing")),
+            Err("translation-message-missing".to_string())
+        );
+        assert!(runtime.cache.lock().unwrap().entries.is_empty());
+    }
 }
