@@ -1,0 +1,176 @@
+{
+  "resource_version": "2026.09.15.1",
+  "schema_version": 1,
+  "messages": {
+    "app.action.cancel": {
+      "ko": "취소",
+      "en": "Cancel",
+      "ja": "キャンセル",
+      "zh": "取消",
+      "vi": "Hủy",
+      "es": "Cancelar",
+      "de": "Abbrechen",
+      "fr": "Annuler"
+    },
+    "app.action.scan": {
+      "ko": "스캔",
+      "en": "Scan",
+      "ja": "スキャン",
+      "zh": "扫描",
+      "vi": "Quét",
+      "es": "Analizar",
+      "de": "Scannen",
+      "fr": "Analyser"
+    },
+    "app.selector.locale_label": {
+      "ko": "표시 언어",
+      "en": "Display language",
+      "ja": "表示言語",
+      "zh": "显示语言",
+      "vi": "Ngôn ngữ hiển thị",
+      "es": "Idioma de la interfaz",
+      "de": "Anzeigesprache",
+      "fr": "Langue d’affichage"
+    },
+    "app.selector.root_label": {
+      "ko": "스캔할 디스크",
+      "en": "Disk to scan",
+      "ja": "スキャンするディスク",
+      "zh": "要扫描的磁盘",
+      "vi": "Ổ đĩa cần quét",
+      "es": "Disco que se va a analizar",
+      "de": "Zu scannendes Laufwerk",
+      "fr": "Disque à analyser"
+    },
+    "app.status.translation_unavailable": {
+      "ko": "선택한 언어의 번역을 불러오지 못했습니다. 다른 언어를 선택하세요.",
+      "en": "Translations for the selected language are unavailable. Choose another language.",
+      "ja": "選択した言語の翻訳を読み込めませんでした。別の言語を選択してください。",
+      "zh": "无法加载所选语言的翻译。请选择其他语言。",
+      "vi": "Không thể tải bản dịch cho ngôn ngữ đã chọn. Hãy chọn ngôn ngữ khác.",
+      "es": "No se pudieron cargar las traducciones del idioma seleccionado. Elija otro idioma.",
+      "de": "Die Übersetzungen für die ausgewählte Sprache konnten nicht geladen werden. Wählen Sie eine andere Sprache.",
+      "fr": "Impossible de charger les traductions de la langue sélectionnée. Choisissez une autre langue."
+    },
+    "app.error.root_load": {
+      "ko": "디스크 목록을 불러오지 못했습니다. DiskSage를 다시 열어 주세요.",
+      "en": "DiskSage could not load the disk list. Reopen DiskSage.",
+      "ja": "ディスク一覧を読み込めませんでした。DiskSage を開き直してください。",
+      "zh": "无法加载磁盘列表。请重新打开 DiskSage。",
+      "vi": "Không thể tải danh sách ổ đĩa. Hãy mở lại DiskSage.",
+      "es": "No se pudo cargar la lista de discos. Vuelva a abrir DiskSage.",
+      "de": "Die Laufwerksliste konnte nicht geladen werden. Öffnen Sie DiskSage erneut.",
+      "fr": "Impossible de charger la liste des disques. Rouvrez DiskSage."
+    },
+    "app.error.scan_result_load": {
+      "ko": "스캔 결과를 불러오지 못했습니다. 같은 폴더를 다시 스캔하세요.",
+      "en": "The scan results could not be loaded. Scan the same folder again.",
+      "ja": "スキャン結果を読み込めませんでした。同じフォルダーをもう一度スキャンしてください。",
+      "zh": "无法加载扫描结果。请重新扫描同一文件夹。",
+      "vi": "Không thể tải kết quả quét. Hãy quét lại cùng thư mục.",
+      "es": "No se pudieron cargar los resultados del análisis. Analice de nuevo la misma carpeta.",
+      "de": "Die Scan-Ergebnisse konnten nicht geladen werden. Scannen Sie denselben Ordner erneut.",
+      "fr": "Impossible de charger les résultats de l’analyse. Analysez de nouveau le même dossier."
+    },
+    "app.error.scan_prepare": {
+      "ko": "스캔을 준비하지 못했습니다. DiskSage를 다시 열어 주세요.",
+      "en": "DiskSage could not prepare the scan. Reopen DiskSage.",
+      "ja": "スキャンを準備できませんでした。DiskSage を開き直してください。",
+      "zh": "无法准备扫描。请重新打开 DiskSage。",
+      "vi": "Không thể chuẩn bị quét. Hãy mở lại DiskSage.",
+      "es": "No se pudo preparar el análisis. Vuelva a abrir DiskSage.",
+      "de": "Der Scan konnte nicht vorbereitet werden. Öffnen Sie DiskSage erneut.",
+      "fr": "Impossible de préparer l’analyse. Rouvrez DiskSage."
+    },
+    "app.error.scan_start": {
+      "ko": "스캔을 시작하지 못했습니다. 폴더를 다시 선택한 뒤 재시도하세요.",
+      "en": "The scan could not start. Select the folder again and retry.",
+      "ja": "スキャンを開始できませんでした。フォルダーを選び直して再試行してください。",
+      "zh": "无法开始扫描。请重新选择文件夹后再试。",
+      "vi": "Không thể bắt đầu quét. Hãy chọn lại thư mục rồi thử lại.",
+      "es": "No se pudo iniciar el análisis. Vuelva a seleccionar la carpeta e inténtelo de nuevo.",
+      "de": "Der Scan konnte nicht gestartet werden. Wählen Sie den Ordner erneut aus und versuchen Sie es noch einmal.",
+      "fr": "Impossible de démarrer l’analyse. Sélectionnez de nouveau le dossier puis réessayez."
+    },
+    "app.error.folder_load": {
+      "ko": "폴더 내용을 불러오지 못했습니다. 상위 폴더로 돌아가 다시 여세요.",
+      "en": "The folder contents could not be loaded. Return to the parent folder and open it again.",
+      "ja": "フォルダーの内容を読み込めませんでした。親フォルダーに戻って開き直してください。",
+      "zh": "无法加载文件夹内容。请返回上级文件夹后重新打开。",
+      "vi": "Không thể tải nội dung thư mục. Hãy quay lại thư mục cha rồi mở lại.",
+      "es": "No se pudo cargar el contenido de la carpeta. Vuelva a la carpeta superior y ábrala de nuevo.",
+      "de": "Der Ordnerinhalt konnte nicht geladen werden. Wechseln Sie zum übergeordneten Ordner und öffnen Sie ihn erneut.",
+      "fr": "Impossible de charger le contenu du dossier. Revenez au dossier parent puis ouvrez-le de nouveau."
+    },
+    "app.stats.files_label": {
+      "ko": "파일",
+      "en": "Files",
+      "ja": "ファイル",
+      "zh": "文件",
+      "vi": "Tệp",
+      "es": "Archivos",
+      "de": "Dateien",
+      "fr": "Fichiers"
+    },
+    "app.stats.folders_label": {
+      "ko": "폴더",
+      "en": "Folders",
+      "ja": "フォルダー",
+      "zh": "文件夹",
+      "vi": "Thư mục",
+      "es": "Carpetas",
+      "de": "Ordner",
+      "fr": "Dossiers"
+    },
+    "app.stats.total_label": {
+      "ko": "합계",
+      "en": "Total",
+      "ja": "合計",
+      "zh": "总计",
+      "vi": "Tổng",
+      "es": "Total",
+      "de": "Gesamt",
+      "fr": "Total"
+    },
+    "app.stats.skipped_label": {
+      "ko": "스킵",
+      "en": "Skipped",
+      "ja": "スキップ",
+      "zh": "已跳过",
+      "vi": "Đã bỏ qua",
+      "es": "Omitidos",
+      "de": "Übersprungen",
+      "fr": "Ignorés"
+    },
+    "app.a11y.entry_focus": {
+      "ko": "폴더 항목 탐색 시작",
+      "en": "Start browsing folder entries",
+      "ja": "フォルダー項目の閲覧を開始",
+      "zh": "开始浏览文件夹项目",
+      "vi": "Bắt đầu duyệt các mục trong thư mục",
+      "es": "Empezar a recorrer los elementos de la carpeta",
+      "de": "Ordnerinhalte durchsuchen",
+      "fr": "Parcourir les éléments du dossier"
+    },
+    "app.a11y.current_entries": {
+      "ko": "현재 폴더 항목 목록",
+      "en": "Current folder entries",
+      "ja": "現在のフォルダー項目",
+      "zh": "当前文件夹项目",
+      "vi": "Các mục trong thư mục hiện tại",
+      "es": "Elementos de la carpeta actual",
+      "de": "Inhalte des aktuellen Ordners",
+      "fr": "Éléments du dossier actuel"
+    },
+    "app.empty.entries": {
+      "ko": "표시할 항목이 없습니다. 상위 폴더로 이동하거나 다른 폴더를 스캔하세요.",
+      "en": "There are no items to show. Go to the parent folder or scan another folder.",
+      "ja": "表示する項目がありません。親フォルダーに移動するか、別のフォルダーをスキャンしてください。",
+      "zh": "没有可显示的项目。请转到上级文件夹或扫描其他文件夹。",
+      "vi": "Không có mục nào để hiển thị. Hãy chuyển lên thư mục cha hoặc quét thư mục khác.",
+      "es": "No hay elementos que mostrar. Vaya a la carpeta superior o analice otra carpeta.",
+      "de": "Es gibt keine Einträge zum Anzeigen. Wechseln Sie zum übergeordneten Ordner oder scannen Sie einen anderen Ordner.",
+      "fr": "Aucun élément à afficher. Revenez au dossier parent ou analysez un autre dossier."
+    }
+  }
+}
