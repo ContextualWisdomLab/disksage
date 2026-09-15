@@ -8,8 +8,13 @@
 //! as which container, provider, cloud object, or filesystem path may be changed remain with the
 //! calling bounded context.
 
-use std::io;
+use std::io::{self, Read};
 use std::mem::MaybeUninit;
+use std::os::fd::AsRawFd;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +34,87 @@ pub(crate) enum NoReapWaitOutcome {
     ExitedUnreaped,
     /// The deadline elapsed while the child was still running and therefore still owns its PID.
     TimedOutStillRunning,
+}
+
+/// Shared cancellation token for readers that must not wait forever for inherited pipe writers.
+///
+/// Callers cancel only after the direct child has been settled or when lifecycle observation has
+/// failed closed. Readers still consume bytes already available in the kernel pipe before they
+/// stop on the next `WouldBlock`, so cancellation does not discard buffered command output.
+#[derive(Debug, Clone)]
+pub(crate) struct PipeReaderCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl PipeReaderCancellation {
+    pub(crate) fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+/// Spawn a bounded Unix pipe reader that can stop after child settlement without requiring EOF.
+///
+/// Child stdout/stderr descriptors can remain open in descendants that escape the caller's
+/// private process group. A blocking `read` followed by an unbounded thread join would then extend
+/// a completed CLI operation indefinitely. This helper preserves existing descriptor flags,
+/// enables `O_NONBLOCK`, retries `Interrupted`, waits through `WouldBlock` while the child remains
+/// active, and exits on `WouldBlock` after cancellation. Output remains capped and reports whether
+/// bytes beyond `max_capture_bytes` were observed.
+pub(crate) fn spawn_bounded_cancellable_pipe_reader<R>(
+    mut reader: R,
+    max_capture_bytes: usize,
+    poll_interval: Duration,
+    cancellation: PipeReaderCancellation,
+) -> io::Result<thread::JoinHandle<io::Result<(Vec<u8>, bool)>>>
+where
+    R: Read + AsRawFd + Send + 'static,
+{
+    let fd = reader.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(thread::spawn(move || {
+        let mut buffer = [0u8; 65_536];
+        let mut captured = Vec::new();
+        let mut truncated = false;
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let room = max_capture_bytes.saturating_sub(captured.len());
+                    let retained = read.min(room);
+                    captured.extend_from_slice(&buffer[..retained]);
+                    if retained < read {
+                        truncated = true;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if cancellation.is_cancelled() {
+                        break;
+                    }
+                    thread::sleep(poll_interval);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok((captured, truncated))
+    }))
 }
 
 /// Retry only operations interrupted before completion; every other error remains fail closed.
@@ -139,7 +225,8 @@ pub(crate) fn signal_private_process_group(child_pid: u32, signal: i32) -> io::R
 mod tests {
     use super::*;
     use std::cell::Cell;
-    use std::io::Read;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
 
@@ -194,6 +281,55 @@ mod tests {
         let error = retry_interrupted::<()>(|| Err(io::Error::from(io::ErrorKind::InvalidInput)))
             .expect_err("non-interrupted errors remain fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn cancellable_pipe_reader_drains_available_bytes_without_waiting_for_eof() {
+        let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
+        writer.write_all(b"ready").expect("write fixture bytes");
+        let cancellation = PipeReaderCancellation::new();
+        let handle = spawn_bounded_cancellable_pipe_reader(
+            reader,
+            64,
+            Duration::from_millis(1),
+            cancellation.clone(),
+        )
+        .expect("spawn cancellable reader");
+
+        cancellation.cancel();
+        let (captured, truncated) = handle
+            .join()
+            .expect("reader thread join")
+            .expect("reader result");
+
+        assert_eq!(captured, b"ready");
+        assert!(!truncated);
+        writer.write_all(b"still-open").expect("writer remains open");
+    }
+
+    #[test]
+    fn cancellable_pipe_reader_preserves_output_cap_semantics() {
+        let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
+        writer
+            .write_all(b"abcdefgh")
+            .expect("write over-cap fixture bytes");
+        let cancellation = PipeReaderCancellation::new();
+        let handle = spawn_bounded_cancellable_pipe_reader(
+            reader,
+            4,
+            Duration::from_millis(1),
+            cancellation.clone(),
+        )
+        .expect("spawn cancellable reader");
+
+        cancellation.cancel();
+        let (captured, truncated) = handle
+            .join()
+            .expect("reader thread join")
+            .expect("reader result");
+
+        assert_eq!(captured, b"abcd");
+        assert!(truncated);
     }
 
     #[test]
