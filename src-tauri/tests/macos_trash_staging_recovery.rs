@@ -11,11 +11,10 @@ struct TrashedFixtureGuard {
 }
 
 impl TrashedFixtureGuard {
-    fn new(expected_object_id: String) -> Self {
-        let home = std::env::var_os("HOME").expect("macOS test runner HOME must be available");
+    fn new(expected_object_id: String, home: &Path) -> Self {
         Self {
             expected_object_id,
-            trash_dir: PathBuf::from(home).join(".Trash"),
+            trash_dir: home.join(".Trash"),
             cleaned: false,
         }
     }
@@ -109,7 +108,10 @@ fn journal_outcomes(path: &Path) -> Vec<String> {
 
 #[test]
 fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
-    let fixture = tempfile::tempdir().expect("create filesystem fixture");
+    let home = PathBuf::from(
+        std::env::var_os("HOME").expect("macOS test runner HOME must be available"),
+    );
+    let fixture = tempfile::tempdir_in(&home).expect("create filesystem fixture on macOS home volume");
     let project = fixture.path().join("project");
     let victim = project.join(".codegraph");
     std::fs::create_dir_all(&victim).expect("create reviewed regenerable directory");
@@ -127,7 +129,7 @@ fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
         .expect("public inventory must discover the reviewed .codegraph candidate");
     assert!(candidate.scan_complete, "destructive acceptance requires a complete inventory");
     assert_eq!(candidate.skipped, 0, "destructive acceptance cannot skip inventory entries");
-    let mut trash_guard = TrashedFixtureGuard::new(candidate.object_id.clone());
+    let mut trash_guard = TrashedFixtureGuard::new(candidate.object_id.clone(), &home);
     let journal = fixture.path().join("journal.jsonl");
 
     let results = clean_artifacts(std::slice::from_ref(candidate), fixture.path(), 0, &journal, now_ms);
