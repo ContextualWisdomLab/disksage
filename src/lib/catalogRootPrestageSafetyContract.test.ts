@@ -151,7 +151,7 @@ describe('catalog-root Trash staging safety contract', () => {
 
     const beforeRename = body.slice(stagingBoundary, rename);
     expect(beforeRename).toMatch(
-      /revalidate_catalog_root_before_staging\(\s*path,\s*root,\s*expected_catalog_root_id,\s*expected_object_id\s*\)\?;?/,
+      /revalidate_catalog_root_before_staging\(\s*path,\s*root,\s*expected_catalog_root_id,\s*expected_object_id\s*,?\s*\)\?;?/,
     );
   });
 
