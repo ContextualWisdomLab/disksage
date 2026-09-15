@@ -16,16 +16,20 @@ impl LinuxTrashFixtureGuard {
         }
     }
 
-    fn matching_items(&self) -> Vec<trash::os_limited::TrashItem> {
+    fn matching_count(&self) -> usize {
         trash::os_limited::list()
             .expect("list Linux Trash")
             .into_iter()
             .filter(|item| item.name.to_string_lossy() == self.victim_name)
-            .collect()
+            .count()
     }
 
     fn cleanup(&mut self) -> usize {
-        let items = self.matching_items();
+        let items: Vec<_> = trash::os_limited::list()
+            .expect("list Linux Trash")
+            .into_iter()
+            .filter(|item| item.name.to_string_lossy() == self.victim_name)
+            .collect();
         let count = items.len();
         if !items.is_empty() {
             trash::os_limited::purge_all(items).expect("purge ephemeral Linux Trash fixture");
@@ -38,7 +42,13 @@ impl LinuxTrashFixtureGuard {
 impl Drop for LinuxTrashFixtureGuard {
     fn drop(&mut self) {
         if !self.cleaned {
-            let items = self.matching_items();
+            let items: Vec<_> = match trash::os_limited::list() {
+                Ok(items) => items
+                    .into_iter()
+                    .filter(|item| item.name.to_string_lossy() == self.victim_name)
+                    .collect(),
+                Err(_) => return,
+            };
             if !items.is_empty() {
                 let _ = trash::os_limited::purge_all(items);
             }
@@ -110,7 +120,7 @@ fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
 
     assert!(!victim.exists(), "the reviewed object must have moved to Linux Trash");
     assert_eq!(
-        trash_guard.matching_items().len(),
+        trash_guard.matching_count(),
         1,
         "the uniquely named reviewed object must be present once in Linux Trash"
     );
