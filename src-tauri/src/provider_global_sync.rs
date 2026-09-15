@@ -280,12 +280,11 @@ fn partial_dump_after_timeout(bytes: Vec<u8>, identifier: &str) -> Option<String
 #[cfg(target_os = "macos")]
 fn run_dump(provider: CloudProvider) -> Result<String, String> {
     use crate::unix_process_group::{
-        signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+        signal_private_process_group, spawn_bounded_cancellable_pipe_reader,
+        wait_for_child_without_reap, NoReapWaitOutcome, PipeReaderCancellation,
     };
-    use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use std::thread;
     use std::time::Duration;
 
     let identifier = provider_identifier(provider)
@@ -317,25 +316,21 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         let _ = child.wait();
         return Err("provider-global-sync-probe-stdout-unavailable".into());
     };
-    let reader = thread::spawn(move || -> Result<Vec<u8>, String> {
-        let max_bytes = MAX_DUMP_BYTES as usize + 1;
-        let mut stdout = stdout;
-        let mut bytes = Vec::with_capacity(64 * 1024);
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = stdout
-                .read(&mut buffer)
-                .map_err(|_| "provider-global-sync-probe-read-failed".to_string())?;
-            if read == 0 {
-                break;
-            }
-            let remaining = max_bytes.saturating_sub(bytes.len());
-            if remaining > 0 {
-                bytes.extend_from_slice(&buffer[..read.min(remaining)]);
-            }
+    let reader_cancellation = PipeReaderCancellation::new();
+    let reader = match spawn_bounded_cancellable_pipe_reader(
+        stdout,
+        MAX_DUMP_BYTES as usize + 1,
+        Duration::from_millis(50),
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(_) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("provider-global-sync-probe-read-failed".into());
         }
-        Ok(bytes)
-    });
+    };
     let status = match wait_for_child_without_reap(
         child_pid,
         Duration::from_millis(PROBE_TIMEOUT_MS),
@@ -346,6 +341,7 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
             match child.wait() {
                 Ok(status) => status,
                 Err(_) => {
+                    reader_cancellation.cancel();
                     let _ = reader.join();
                     return Err("provider-global-sync-probe-failed".into());
                 }
@@ -355,7 +351,12 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
             let _ = signal_private_process_group(child_pid, libc::SIGKILL);
             let _ = child.kill();
             let _ = child.wait();
-            let partial = reader.join().ok().and_then(Result::ok);
+            reader_cancellation.cancel();
+            let partial = reader
+                .join()
+                .ok()
+                .and_then(Result::ok)
+                .map(|(bytes, _)| bytes);
             if let Some(output) =
                 partial.and_then(|bytes| partial_dump_after_timeout(bytes, identifier))
             {
@@ -368,13 +369,16 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
             // process group. Fail closed and address only the owned child process.
             let _ = child.kill();
             let _ = child.wait();
+            reader_cancellation.cancel();
             let _ = reader.join();
             return Err("provider-global-sync-probe-failed".into());
         }
     };
+    reader_cancellation.cancel();
     let bytes = reader
         .join()
-        .map_err(|_| "provider-global-sync-probe-read-failed".to_string())??;
+        .map_err(|_| "provider-global-sync-probe-read-failed".to_string())??
+        .0;
     if !status.success() {
         return Err("provider-global-sync-probe-exit-failed".into());
     }
