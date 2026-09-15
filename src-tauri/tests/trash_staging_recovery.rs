@@ -1,38 +1,49 @@
 #![cfg(target_os = "linux")]
 
 use disksage_lib::dev_artifacts::{clean_artifacts, find_artifacts};
-use std::path::Path;
+use std::collections::HashSet;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 struct LinuxTrashFixtureGuard {
-    victim_name: String,
+    original_path: PathBuf,
+    preexisting_ids: HashSet<OsString>,
     cleaned: bool,
 }
 
 impl LinuxTrashFixtureGuard {
-    fn new(victim_name: String) -> Self {
+    fn new(original_path: PathBuf) -> Self {
+        let preexisting_ids = trash::os_limited::list()
+            .expect("snapshot Linux Trash before destructive fixture")
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
         Self {
-            victim_name,
+            original_path,
+            preexisting_ids,
             cleaned: false,
         }
     }
 
-    fn matching_count(&self) -> usize {
-        trash::os_limited::list()
-            .expect("list Linux Trash")
+    fn matching_items(&self) -> Result<Vec<trash::TrashItem>, trash::Error> {
+        Ok(trash::os_limited::list()?
             .into_iter()
-            .filter(|item| item.name.to_string_lossy() == self.victim_name)
-            .count()
+            .filter(|item| {
+                item.original_path() == self.original_path
+                    && !self.preexisting_ids.contains(&item.id)
+            })
+            .collect())
+    }
+
+    fn matching_count(&self) -> usize {
+        self.matching_items().expect("list Linux Trash").len()
     }
 
     fn cleanup(&mut self) -> usize {
-        let items: Vec<_> = trash::os_limited::list()
-            .expect("list Linux Trash")
-            .into_iter()
-            .filter(|item| item.name.to_string_lossy() == self.victim_name)
-            .collect();
+        let items = self.matching_items().expect("list Linux Trash");
         let count = items.len();
         if !items.is_empty() {
-            trash::os_limited::purge_all(items).expect("purge ephemeral Linux Trash fixture");
+            trash::os_limited::purge_all(items).expect("purge owned Linux Trash fixture");
         }
         self.cleaned = true;
         count
@@ -42,15 +53,10 @@ impl LinuxTrashFixtureGuard {
 impl Drop for LinuxTrashFixtureGuard {
     fn drop(&mut self) {
         if !self.cleaned {
-            let items: Vec<_> = match trash::os_limited::list() {
-                Ok(items) => items
-                    .into_iter()
-                    .filter(|item| item.name.to_string_lossy() == self.victim_name)
-                    .collect(),
-                Err(_) => return,
-            };
-            if !items.is_empty() {
-                let _ = trash::os_limited::purge_all(items);
+            if let Ok(items) = self.matching_items() {
+                if !items.is_empty() {
+                    let _ = trash::os_limited::purge_all(items);
+                }
             }
         }
     }
@@ -107,7 +113,7 @@ fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
         .expect("public inventory must discover the reviewed obsolete extension");
     assert!(candidate.scan_complete, "destructive acceptance requires a complete inventory");
     assert_eq!(candidate.skipped, 0, "destructive acceptance cannot skip inventory entries");
-    let mut trash_guard = LinuxTrashFixtureGuard::new(victim_name);
+    let mut trash_guard = LinuxTrashFixtureGuard::new(victim.clone());
     let journal = fixture.path().join("journal.jsonl");
 
     let results = clean_artifacts(std::slice::from_ref(candidate), fixture.path(), 0, &journal, now_ms);
@@ -122,7 +128,7 @@ fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
     assert_eq!(
         trash_guard.matching_count(),
         1,
-        "the uniquely named reviewed object must be present once in Linux Trash"
+        "the newly created Trash item for the reviewed original path must be unique"
     );
     assert!(
         std::fs::read_dir(&extensions)
