@@ -501,6 +501,65 @@ fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
     }
 }
 
+fn recover_absent_artifact_cleanup(
+    request: &DevArtifact,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Option<DevArtifactCleanResult> {
+    if !request.scan_complete || request.skipped != 0 || request.object_id.is_empty() {
+        return None;
+    }
+    let path = Path::new(&request.path);
+    if !matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return None;
+    }
+
+    // The deletion-safety boundary already owns exact pending/complete receipt correlation and
+    // staging identity/ownership validation. Re-enter it only for an absent reviewed source; live
+    // objects continue through the fresh manifest and active-use gates below.
+    let recovery = if permanent {
+        crate::safety::permanent_delete_dir_if_identity(
+            path,
+            &request.object_id,
+            request.bytes,
+            journal_path,
+            now_ms,
+        )
+    } else {
+        crate::safety::trash_delete_if_identity(
+            path,
+            &request.object_id,
+            request.bytes,
+            journal_path,
+            now_ms,
+        )
+    };
+
+    match recovery {
+        Ok(()) => Some(DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: true,
+            error: String::new(),
+        }),
+        Err(crate::safety::SafetyError::Trash(error))
+            if !error.starts_with("mutation completed;") =>
+        {
+            // An absent source with no matching recovery receipt reaches the identity check and
+            // fails as an ordinary missing object. Preserve the existing changed/rescan contract.
+            None
+        }
+        Err(error) => Some(DevArtifactCleanResult {
+            path: request.path.clone(),
+            ok: false,
+            error: error.to_string(),
+        }),
+    }
+}
+
 fn clean_artifacts_with_disposition(
     requests: &[DevArtifact],
     root: &Path,
@@ -530,6 +589,11 @@ fn clean_artifacts_with_disposition(
             });
 
             if matches.is_none() {
+                if let Some(recovery) =
+                    recover_absent_artifact_cleanup(request, journal_path, now_ms, permanent)
+                {
+                    return recovery;
+                }
                 return DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: false,
@@ -765,6 +829,23 @@ mod tests {
             !journal.exists(),
             "stale identity must not create a journal"
         );
+    }
+
+    #[test]
+    fn missing_artifact_without_pending_recovery_stays_rescan_required() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        assert_eq!(candidates.len(), 1);
+        let journal = tmp.path().join("journal.jsonl");
+        std::fs::rename(&artifact, tmp.path().join("moved-elsewhere")).unwrap();
+
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("changed"));
+        assert!(!journal.exists());
     }
 
     #[cfg(unix)]
