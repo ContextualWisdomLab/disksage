@@ -377,7 +377,8 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
     reader_cancellation.cancel();
     let bytes = reader
         .join()
-        .map_err(|_| "provider-global-sync-probe-read-failed".to_string())??
+        .map_err(|_| "provider-global-sync-probe-read-failed".to_string())?
+        .map_err(|_| "provider-global-sync-probe-read-failed".to_string())?
         .0;
     if !status.success() {
         return Err("provider-global-sync-probe-exit-failed".into());
