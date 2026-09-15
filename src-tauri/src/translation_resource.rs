@@ -13,11 +13,11 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-pub const CURRENT_TRANSLATION_RESOURCE_VERSION: &str = "2026.09.11.1";
+pub const CURRENT_TRANSLATION_RESOURCE_VERSION: &str = "2026.09.15.1";
 const CURRENT_TRANSLATION_RESOURCE_PATH: &str =
-    "resources/translation/releases/2026.09.11.1.json";
+    "resources/translation/releases/2026.09.15.1.json";
 const CURRENT_TRANSLATION_RESOURCE_SHA256: &str =
-    "a58edf6fc547f9bee6411ac0ec7788fb092037d3e97e406755834cea9e5b691b";
+    "65e95fb5593a37bc2cbd353270f2bab5d364d734cae24237884fd216b63e4dc5";
 const TRANSLATION_RESOURCE_SCHEMA_VERSION: u32 = 1;
 const MAX_TRANSLATION_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TRANSLATION_MESSAGE_BYTES: usize = 8 * 1024;
@@ -187,7 +187,7 @@ mod tests {
     use std::io;
 
     fn checked_in_bytes() -> &'static [u8] {
-        include_bytes!("../resources/translation/releases/2026.09.11.1.json")
+        include_bytes!("../resources/translation/releases/2026.09.15.1.json")
     }
 
     fn checked_in_path() -> std::path::PathBuf {
@@ -215,7 +215,7 @@ mod tests {
         .expect("checked-in translation resource must validate");
 
         assert_eq!(resource.schema_version, 1);
-        assert_eq!(resource.messages.len(), 2);
+        assert_eq!(resource.messages.len(), 17);
         assert_eq!(resource.messages["app.action.scan"]["ko"], "스캔");
         assert_eq!(resource.messages["app.action.scan"]["fr"], "Analyser");
     }
