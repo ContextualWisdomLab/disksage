@@ -357,7 +357,9 @@ mod tests {
                     Err(error)
                         if matches!(
                             error.kind(),
-                            io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                            io::ErrorKind::BrokenPipe
+                                | io::ErrorKind::ConnectionReset
+                                | io::ErrorKind::NotConnected
                         ) =>
                     {
                         break;
