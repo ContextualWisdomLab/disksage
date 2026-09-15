@@ -38,9 +38,11 @@ pub(crate) enum NoReapWaitOutcome {
 
 /// Shared cancellation token for readers that must not wait forever for inherited pipe writers.
 ///
-/// Callers cancel when the direct child is being settled or when lifecycle observation has failed
-/// closed. Readers perform a bounded final drain so buffered command output is retained without
-/// allowing a continuously writing descendant to keep the capture join alive indefinitely.
+/// Callers cancel only after the direct child has been settled or when lifecycle observation has
+/// failed closed. Readers keep bytes already observed by the nonblocking pipe reader, but
+/// cancellation never requires a later `WouldBlock`: once the caller's capture budget is full, one
+/// additional successful read is enough to prove truncation and terminate even if an escaped
+/// descendant keeps writing continuously.
 #[derive(Debug, Clone)]
 pub(crate) struct PipeReaderCancellation {
     cancelled: Arc<AtomicBool>,
@@ -67,10 +69,11 @@ impl PipeReaderCancellation {
 /// Child stdout/stderr descriptors can remain open in descendants that escape the caller's
 /// private process group. A blocking `read` followed by an unbounded thread join would then extend
 /// a completed CLI operation indefinitely. This helper preserves existing descriptor flags,
-/// enables `O_NONBLOCK`, retries `Interrupted`, and waits through `WouldBlock` while the child
-/// remains active. After observing cancellation it drains at most the uncaptured output allowance
-/// plus one truncation byte, then exits even if a descendant keeps the pipe continuously readable.
-/// Output remains capped and reports whether bytes beyond `max_capture_bytes` were observed.
+/// enables `O_NONBLOCK`, retries `Interrupted`, waits through `WouldBlock` while the child remains
+/// active, and exits on `WouldBlock` after cancellation. If reads continue succeeding after
+/// cancellation, the reader exits once the capture budget is full and a read has proven that bytes
+/// were omitted. Output remains capped and reports whether bytes beyond `max_capture_bytes` were
+/// observed.
 pub(crate) fn spawn_bounded_cancellable_pipe_reader<R>(
     mut reader: R,
     max_capture_bytes: usize,
@@ -93,22 +96,8 @@ where
         let mut buffer = [0u8; 65_536];
         let mut captured = Vec::new();
         let mut truncated = false;
-        let mut final_drain_bytes_remaining = None;
         loop {
-            if cancellation.is_cancelled() && final_drain_bytes_remaining.is_none() {
-                final_drain_bytes_remaining = Some(
-                    max_capture_bytes
-                        .saturating_sub(captured.len())
-                        .saturating_add(1),
-                );
-            }
-            if final_drain_bytes_remaining == Some(0) {
-                break;
-            }
-            let read_limit = final_drain_bytes_remaining
-                .unwrap_or(buffer.len())
-                .min(buffer.len());
-            match reader.read(&mut buffer[..read_limit]) {
+            match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
                     let room = max_capture_bytes.saturating_sub(captured.len());
@@ -117,15 +106,14 @@ where
                     if retained < read {
                         truncated = true;
                     }
-                    if let Some(bytes_remaining) = final_drain_bytes_remaining.as_mut() {
-                        *bytes_remaining = bytes_remaining.saturating_sub(read);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    if cancellation.is_cancelled() {
+                    if cancellation.is_cancelled()
+                        && captured.len() == max_capture_bytes
+                        && truncated
+                    {
                         break;
                     }
                 }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if cancellation.is_cancelled() {
                         break;
@@ -251,6 +239,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
+    use std::sync::mpsc;
 
     fn spawn_private_group_shell(script: &str, stdout: Stdio) -> Child {
         let mut command = Command::new("/bin/sh");
@@ -355,40 +344,54 @@ mod tests {
     }
 
     #[test]
-    fn cancellable_pipe_reader_stops_when_input_stays_continuously_readable() {
-        struct AlwaysReadyReader(UnixStream);
-
-        impl Read for AlwaysReadyReader {
-            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                buffer.fill(b'x');
-                Ok(buffer.len())
+    fn cancellable_pipe_reader_stops_continuous_writer_after_cancellation() {
+        let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let writer_thread = thread::spawn(move || {
+            let chunk = [b'x'; 1_024];
+            writer.write_all(&chunk).expect("write initial fixture bytes");
+            ready_tx.send(()).expect("publish continuous-writer readiness");
+            loop {
+                match writer.write_all(&chunk) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("continuous writer failed unexpectedly: {error}"),
+                }
             }
-        }
-
-        impl AsRawFd for AlwaysReadyReader {
-            fn as_raw_fd(&self) -> std::os::fd::RawFd {
-                self.0.as_raw_fd()
-            }
-        }
-
-        let (reader, _writer) = UnixStream::pair().expect("unix stream pair");
+        });
         let cancellation = PipeReaderCancellation::new();
         let handle = spawn_bounded_cancellable_pipe_reader(
-            AlwaysReadyReader(reader),
-            64,
+            reader,
+            4_096,
             Duration::from_millis(1),
             cancellation.clone(),
         )
         .expect("spawn cancellable reader");
+        ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("continuous writer did not become ready");
 
+        let started = Instant::now();
         cancellation.cancel();
         let (captured, truncated) = handle
             .join()
             .expect("reader thread join")
             .expect("reader result");
 
-        assert_eq!(captured, vec![b'x'; 64]);
+        assert_eq!(captured.len(), 4_096);
         assert!(truncated);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "continuous escaped writer extended reader settlement"
+        );
+        writer_thread.join().expect("continuous writer thread join");
     }
 
     #[test]
