@@ -30,8 +30,8 @@
     try {
       plans = await api.planOrganize(scannedRoot);
       loadVerdicts(plans.map((p) => p.src));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "정리 계획을 만들지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -50,7 +50,7 @@
   async function executeSelected() {
     if (plans.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
+      `${plans.length}개 파일을 분류된 폴더로 이동합니다.\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
@@ -60,8 +60,8 @@
       const r = await api.executeMoves(plans);
       results = r;
       plans = [];
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "파일을 이동하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -72,8 +72,8 @@
     try {
       const r = await api.undoLastMoves();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "마지막 이동을 복원하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -87,8 +87,8 @@
       const batch = await api.exportOrganizationLineage(plans);
       await navigator.clipboard.writeText(JSON.stringify(batch, null, 2));
       exportStatus = "경로 없는 계보 계약을 클립보드에 복사했습니다.";
-    } catch (e) {
-      exportStatus = `계보 내보내기 실패: ${String(e)}`;
+    } catch {
+      exportStatus = "계보 정보를 복사하지 못했습니다. 다시 시도하세요.";
     } finally {
       busy = false;
     }

@@ -1,4 +1,4 @@
-//! Evidence-bound removal of local iCloud bytes while retaining the cloud object.
+//! Evidence-bound removal of local cloud bytes while retaining the cloud object.
 //!
 //! Planning is read-only and never opens file content. Execution is macOS-only, requires a
 //! fingerprint-bound human approval, revalidates native iCloud state and active handles, calls
@@ -171,8 +171,11 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservation, String> {
-    if root.provider != CloudProvider::Icloud {
-        return Err("icloud-local-eviction-requires-icloud-root".into());
+    if !matches!(
+        root.provider,
+        CloudProvider::Icloud | CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     let root_path = Path::new(&root.path);
     if !absolute_without_parent(root_path) || !absolute_without_parent(path) {
@@ -243,7 +246,7 @@ fn hash_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
             hasher.update(&[1]);
             hasher.update(&value.to_le_bytes());
         }
-    };
+    }
 }
 
 fn hash_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
@@ -456,12 +459,8 @@ fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence 
     let mut command = Command::new("lsof");
     command.arg("-F").arg("p");
     if path.is_dir() {
-        // `lsof PATH` only proves the directory itself is referenced. Recursive +D is required
-        // for a cache directory whose open files live below the directory entry.
         command.arg("+D");
     }
-    // A bounded lsof probe may be a shell wrapper in tests or on user systems. Kill its process
-    // group on timeout so descendants cannot keep the stdout pipe alive and starve the ps probe.
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| {
@@ -632,10 +631,6 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
         records.push((pid, parent_pid, command.trim_start()));
     }
 
-    // A watchdog or timeout wrapper commonly includes the full child command (and therefore the
-    // target path) in its own argv. It supervises the planner but does not itself use the file.
-    // Exclude the planner and its complete ancestor chain while retaining unrelated processes that
-    // independently reference the same target.
     let parent_by_pid: BTreeMap<u32, u32> = records
         .iter()
         .map(|(pid, parent_pid, _)| (*pid, *parent_pid))
@@ -733,18 +728,12 @@ fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvide
 fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let started = Instant::now();
     let remaining = deadline.saturating_duration_since(started);
-    let per_probe_budget = std::cmp::min(
-        remaining / 2,
-        Duration::from_millis(ACTIVE_USE_TIMEOUT_MS),
-    );
-    // Reserve an independent bounded slice for each source. A recursive `lsof +D` may consume its
-    // entire allocation; it must not starve the process-command probe and hide an active PID.
+    let per_probe_budget =
+        std::cmp::min(remaining / 2, Duration::from_millis(ACTIVE_USE_TIMEOUT_MS));
     let lsof = observe_lsof_active_use(path, started + per_probe_budget);
     let ps_started = Instant::now();
-    let process_commands = observe_process_command_use(
-        path,
-        std::cmp::min(deadline, ps_started + per_probe_budget),
-    );
+    let process_commands =
+        observe_process_command_use(path, std::cmp::min(deadline, ps_started + per_probe_budget));
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
@@ -783,19 +772,13 @@ fn observe_active_use_until(_path: &Path, _deadline: Instant) -> ActiveUseEviden
     }
 }
 
-/// Reuse the same bounded open-handle and process-command evidence for any source whose local
-/// bytes may be released. Unsupported or incomplete platforms remain explicit and fail closed at
-/// the caller.
 pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
     observe_active_use_until(
         path,
-        Instant::now() + Duration::from_millis(
-            ACTIVE_USE_TIMEOUT_MS.saturating_mul(2),
-        ),
+        Instant::now() + Duration::from_millis(ACTIVE_USE_TIMEOUT_MS.saturating_mul(2)),
     )
 }
 
-/// Observe open handles without allowing the probe to outlive an enclosing plan deadline.
 pub fn observe_path_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     observe_active_use_until(path, deadline)
 }
@@ -809,7 +792,6 @@ fn foundation_bool_resource(
     use objc2_foundation::NSNumber;
 
     let mut value: Option<objc2::rc::Retained<AnyObject>> = None;
-    // SAFETY: Every caller passes a Foundation NSURL key documented as NSNumber-valued.
     unsafe { url.getResourceValue_forKey_error(&mut value, key) }
         .map_err(|error| error.localizedDescription().to_string())?;
     value
@@ -828,7 +810,6 @@ fn foundation_string_resource(
     use objc2_foundation::NSString;
 
     let mut value: Option<objc2::rc::Retained<AnyObject>> = None;
-    // SAFETY: The downloading-status resource key is documented as NSString-valued.
     unsafe { url.getResourceValue_forKey_error(&mut value, key) }
         .map_err(|error| error.localizedDescription().to_string())?;
     value
@@ -852,7 +833,6 @@ fn observe_foundation_icloud_state(path: &Path) -> Result<IcloudLocalState, Stri
         .ok_or_else(|| "icloud-local-eviction-path-not-unicode".to_string())?;
     autoreleasepool(|_| {
         let url = NSURL::fileURLWithPath(&NSString::from_str(path));
-        // SAFETY: These are Foundation-exported process-lifetime resource-key constants.
         unsafe {
             let status = foundation_string_resource(&url, NSURLUbiquitousItemDownloadingStatusKey)?;
             Ok(IcloudLocalState {
@@ -908,6 +888,7 @@ fn file_provider_icloud_state(
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn observe_file_provider_icloud_state(
+    root: &CloudRoot,
     path: &Path,
     observed_bytes: u64,
 ) -> Result<IcloudLocalState, String> {
@@ -921,17 +902,32 @@ fn observe_file_provider_icloud_state(
         let url = NSURL::fileURLWithPath(&NSString::from_str(path));
         Ok::<bool, String>(NSFileManager::defaultManager().isUbiquitousItemAtURL(&url))
     })?;
-    if !is_ubiquitous {
+    if root.provider == CloudProvider::GoogleDrive {
+        return Err("cloud-local-eviction-provider-unsupported".into());
+    }
+    if root.provider == CloudProvider::Icloud && !is_ubiquitous {
         return Err("icloud-item-not-ubiquitous".into());
     }
     let output = crate::provider_sync::file_providerctl_status(path)?;
     let status = crate::provider_sync::parse_file_providerctl_item_status(&output, observed_bytes)?;
-    Ok(file_provider_icloud_state(is_ubiquitous, &status))
+    let mut state = file_provider_icloud_state(
+        is_ubiquitous || root.provider == CloudProvider::Onedrive,
+        &status,
+    );
+    if root.provider == CloudProvider::Onedrive {
+        state.allows_eviction =
+            Some(crate::provider_recovery::onedrive_files_on_demand_available());
+    }
+    Ok(state)
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalState, String> {
-    match observe_file_provider_icloud_state(path, observed_bytes) {
+fn observe_icloud_state(
+    root: &CloudRoot,
+    path: &Path,
+    observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
+    match observe_file_provider_icloud_state(root, path, observed_bytes) {
         Ok(state) => Ok(state),
         Err(error) if file_provider_command_allows_foundation_fallback(&error) => {
             observe_foundation_icloud_state(path)
@@ -952,11 +948,14 @@ fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn observe_icloud_state(_path: &Path, _observed_bytes: u64) -> Result<IcloudLocalState, String> {
+fn observe_icloud_state(
+    _root: &CloudRoot,
+    _path: &Path,
+    _observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
-/// Build a read-only, exact-path local eviction plan. File content is never opened.
 #[cfg(not(coverage))]
 pub fn plan_icloud_local_eviction(
     root: &CloudRoot,
@@ -964,7 +963,7 @@ pub fn plan_icloud_local_eviction(
     observed_at_ms: u64,
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
-    let state = observe_icloud_state(path, file.logical_bytes)?;
+    let state = observe_icloud_state(root, path, file.logical_bytes)?;
     let active_use = observe_path_active_use(path);
     Ok(build_plan(
         root,
@@ -996,7 +995,6 @@ fn approval_id_for(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Bind a human decision to one exact eligible plan. This function performs no eviction.
 pub fn approve_icloud_local_eviction(
     plan: &IcloudLocalEvictionPlan,
     approved_plan_fingerprint: &str,
@@ -1067,7 +1065,14 @@ fn validate_approval(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
+fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<Vec<String>, String> {
+    if root.provider == CloudProvider::Onedrive {
+        return crate::provider_recovery::unpin_onedrive_local_copy(path)
+            .map(|outcome| outcome.restart_blockers);
+    }
+    if root.provider != CloudProvider::Icloud {
+        return Err("cloud-local-eviction-provider-unsupported".into());
+    }
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{NSFileManager, NSString, NSURL};
 
@@ -1079,15 +1084,16 @@ fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
         NSFileManager::defaultManager()
             .evictUbiquitousItemAtURL_error(&url)
             .map_err(|error| error.localizedDescription().to_string())
-    })
+    })?;
+    Ok(Vec::new())
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn request_native_icloud_eviction(_path: &Path) -> Result<(), String> {
+fn request_native_icloud_eviction(_root: &CloudRoot, _path: &Path) -> Result<Vec<String>, String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
-fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
+fn observe_post_eviction(root: &CloudRoot, path: &Path) -> PostEvictionObservation {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return PostEvictionObservation {
             path_retained: false,
@@ -1095,7 +1101,7 @@ fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
             allocated_bytes: 0,
         };
     };
-    let is_ubiquitous = observe_icloud_state(path, metadata.len())
+    let is_ubiquitous = observe_icloud_state(root, path, metadata.len())
         .map(|state| state.is_ubiquitous)
         .unwrap_or(false);
     PostEvictionObservation {
@@ -1145,10 +1151,11 @@ fn build_result(
     approval: &IcloudLocalEvictionApproval,
     requested_at_ms: u64,
     post: PostEvictionObservation,
+    request_blockers: Vec<String>,
 ) -> IcloudLocalEvictionResult {
     let reduction = plan.allocated_bytes.saturating_sub(post.allocated_bytes);
     let reduced = post.allocated_bytes < plan.allocated_bytes;
-    let mut blockers = Vec::new();
+    let mut blockers = request_blockers;
     if !post.path_retained {
         blockers.push("icloud-cloud-item-path-not-retained".into());
     }
@@ -1184,10 +1191,6 @@ fn build_result(
     result
 }
 
-/// Remove only the local iCloud copy after revalidating the exact approved plan.
-///
-/// This never calls the regular file deletion APIs. A successful Foundation request is reported
-/// separately from the observed local-allocation reduction.
 #[cfg(not(coverage))]
 pub fn execute_icloud_local_eviction(
     root: &CloudRoot,
@@ -1204,11 +1207,11 @@ pub fn execute_icloud_local_eviction(
     {
         return Err("icloud-local-eviction-live-plan-changed".into());
     }
-    request_native_icloud_eviction(path)?;
+    let request_blockers = request_native_icloud_eviction(root, path)?;
 
     let started = Instant::now();
     let post = loop {
-        let observed = observe_post_eviction(path);
+        let observed = observe_post_eviction(root, path);
         if !observed.path_retained
             || !observed.is_ubiquitous
             || observed.allocated_bytes < approved_plan.allocated_bytes
@@ -1219,11 +1222,15 @@ pub fn execute_icloud_local_eviction(
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    Ok(build_result(approved_plan, approval, requested_at_ms, post))
+    Ok(build_result(
+        approved_plan,
+        approval,
+        requested_at_ms,
+        post,
+        request_blockers,
+    ))
 }
 
-/// Prepare the private approval/result directory without allowing an app-data symlink or a
-/// not-yet-created app-data path to redirect the first directory creation into the cloud root.
 pub fn prepare_immutable_record_directory(
     app_data_dir: &Path,
     cloud_root: &Path,
@@ -1291,7 +1298,6 @@ pub fn prepare_immutable_record_directory(
     Ok(record_dir)
 }
 
-/// Persist an approval or result as a create-new, read-only JSON record.
 pub fn write_immutable_record<T: Serialize>(
     record_dir: &Path,
     filename: &str,
@@ -1347,9 +1353,13 @@ mod tests {
     use super::*;
 
     fn root(path: &Path) -> CloudRoot {
+        root_for(path, CloudProvider::Icloud)
+    }
+
+    fn root_for(path: &Path, provider: CloudProvider) -> CloudRoot {
         CloudRoot {
-            id: "icloud:test".into(),
-            provider: CloudProvider::Icloud,
+            id: format!("{}:test", provider.as_str()),
+            provider,
             account_scope: CloudAccountScope::Personal,
             label: "iCloud".into(),
             path: path.to_string_lossy().into_owned(),
@@ -1488,6 +1498,22 @@ mod tests {
     }
 
     #[test]
+    fn synced_idle_onedrive_item_uses_the_same_fail_closed_plan_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = build_plan(
+            &root_for(temp.path(), CloudProvider::Onedrive),
+            &temp.path().join("file.bin"),
+            file(),
+            file_provider_state(),
+            idle(),
+            20,
+        );
+        assert_eq!(plan.provider, CloudProvider::Onedrive);
+        assert!(plan.eligible_after_human_approval);
+        assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+    }
+
+    #[test]
     fn sync_conflict_and_active_use_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
         let mut state = state();
@@ -1530,46 +1556,11 @@ mod tests {
         assert!(eligible.eligible_after_human_approval);
 
         for (state, blocker) in [
-            (
-                {
-                    let mut state = file_provider_state();
-                    state.is_sync_paused = Some(true);
-                    state
-                },
-                "icloud-file-provider-sync-paused-or-unconfirmed",
-            ),
-            (
-                {
-                    let mut state = file_provider_state();
-                    state.is_trashed = Some(true);
-                    state
-                },
-                "icloud-file-provider-item-trashed-or-unconfirmed",
-            ),
-            (
-                {
-                    let mut state = file_provider_state();
-                    state.allows_eviction = Some(false);
-                    state
-                },
-                "icloud-file-provider-eviction-capability-unconfirmed",
-            ),
-            (
-                {
-                    let mut state = file_provider_state();
-                    state.provider_reported_bytes = Some(99);
-                    state
-                },
-                "icloud-file-provider-document-size-mismatch",
-            ),
-            (
-                {
-                    let mut state = file_provider_state();
-                    state.item_identifier_fingerprint = None;
-                    state
-                },
-                "icloud-file-provider-item-identity-unconfirmed",
-            ),
+            ({ let mut state = file_provider_state(); state.is_sync_paused = Some(true); state }, "icloud-file-provider-sync-paused-or-unconfirmed"),
+            ({ let mut state = file_provider_state(); state.is_trashed = Some(true); state }, "icloud-file-provider-item-trashed-or-unconfirmed"),
+            ({ let mut state = file_provider_state(); state.allows_eviction = Some(false); state }, "icloud-file-provider-eviction-capability-unconfirmed"),
+            ({ let mut state = file_provider_state(); state.provider_reported_bytes = Some(99); state }, "icloud-file-provider-document-size-mismatch"),
+            ({ let mut state = file_provider_state(); state.item_identifier_fingerprint = None; state }, "icloud-file-provider-item-identity-unconfirmed"),
         ] {
             let plan = build_plan(
                 &root(temp.path()),
@@ -1616,7 +1607,10 @@ mod tests {
             b"lsof: WARNING: can't stat() /Users/test/Library/Caches/example/nested\n",
             target,
         ));
-        assert!(!lsof_stderr_is_benign(b"lsof: error: permission denied\n", target));
+        assert!(!lsof_stderr_is_benign(
+            b"lsof: error: permission denied\n",
+            target
+        ));
     }
 
     #[cfg(all(unix, not(coverage)))]
@@ -1744,6 +1738,7 @@ mod tests {
                 is_ubiquitous: true,
                 allocated_bytes: 512,
             },
+            Vec::new(),
         );
         assert!(result.verification_complete);
         assert_eq!(result.observed_allocation_reduction_bytes, 3584);
@@ -1751,6 +1746,38 @@ mod tests {
             .notices
             .contains(&"observed-allocation-reduction-is-not-volume-free-space-proof".into()));
         assert!(valid_hex64(&result.result_id));
+    }
+
+    #[test]
+    fn provider_restart_failure_is_retained_without_erasing_successful_eviction() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = plan(temp.path());
+        let approval = approve_icloud_local_eviction(
+            &plan,
+            &plan.plan_fingerprint,
+            21,
+            "human:test",
+            "reviewed",
+        )
+        .unwrap();
+        let result = build_result(
+            &plan,
+            &approval,
+            22,
+            PostEvictionObservation {
+                path_retained: true,
+                is_ubiquitous: true,
+                allocated_bytes: 512,
+            },
+            vec!["provider-client-runtime-not-observed-after-restart".into()],
+        );
+        assert!(result.eviction_request_succeeded);
+        assert!(result.local_allocation_reduction_verified);
+        assert!(!result.verification_complete);
+        assert_eq!(
+            result.verification_blockers,
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
     }
 
     #[test]
@@ -1774,6 +1801,7 @@ mod tests {
                 is_ubiquitous: false,
                 allocated_bytes: 4096,
             },
+            Vec::new(),
         );
         assert!(!result.verification_complete);
         assert_eq!(result.observed_allocation_reduction_bytes, 0);

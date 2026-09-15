@@ -1,0 +1,8 @@
+{
+  "schema_kind": "disksage.git-worktree-audit/v4",
+  "version": 4,
+  "entry_membership_fields": [
+    "completed_pull_request_commit",
+    "open_pull_request_commit"
+  ]
+}
