@@ -94,6 +94,11 @@ fn public_recovery_does_not_complete_against_a_replaced_source_parent() {
     // must not treat "staging name absent under the replacement parent" as completed recovery.
     let reviewed_parent = scan_root.join("project-reviewed");
     std::fs::rename(&project, &reviewed_parent).expect("move reviewed parent object aside");
+    assert_eq!(
+        filesystem_object_id(&reviewed_parent).expect("read moved reviewed source-parent identity"),
+        source_parent_object_id,
+        "the staging residue must move with the exact source-parent object that was reviewed"
+    );
     std::fs::create_dir(&project).expect("create replacement source parent");
     assert_ne!(
         filesystem_object_id(&project).expect("read replacement source-parent identity"),
