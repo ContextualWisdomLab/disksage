@@ -30,12 +30,13 @@ fn successful_identity_bound_trash_leaves_no_private_staging_directory() {
         .into_iter()
         .filter(|item| item.name.to_string_lossy() == victim_name)
         .collect();
-    assert_eq!(
-        trashed.len(),
-        1,
-        "the reviewed object must be present exactly once in macOS Trash"
-    );
+    let trashed_count = trashed.len();
     trash::os_limited::purge_all(trashed).expect("purge ephemeral macOS Trash fixture");
+    assert_eq!(
+        trashed_count,
+        1,
+        "the reviewed object must have been present exactly once in macOS Trash"
+    );
 
     assert!(
         std::fs::read_dir(fixture.path())
