@@ -61,6 +61,10 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+/// Unix-only identity-preserving child/process-group lifecycle mechanics.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_process_group;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
