@@ -49,9 +49,9 @@ fn object_bound_brew_launch_must_use_privileged_bash_mode() {
         .find("fn run_verified_brew(")
         .expect("verified brew runner must exist");
     let runner_end = source[runner_start..]
-        .find("fn read_bounded(")
+        .find("fn run_brew_object_bound(")
         .map(|offset| runner_start + offset)
-        .expect("verified brew runner must end before bounded reader");
+        .expect("verified brew runner must end before brew object-bound wrapper");
     let runner = &source[runner_start..runner_end];
 
     assert!(
@@ -61,35 +61,45 @@ fn object_bound_brew_launch_must_use_privileged_bash_mode() {
 }
 
 #[test]
-fn timeout_and_wait_failure_must_not_join_pipe_readers() {
+fn observation_failure_targets_only_the_direct_child_before_reader_settlement() {
     let source = source("src/brew_cleanup.rs");
     let runner_start = source
         .find("fn run_command(")
         .expect("bounded command runner must exist");
     let runner_end = source[runner_start..]
-        .find("fn run_brew_object_bound(")
+        .find("fn run_verified_brew(")
         .map(|offset| runner_start + offset)
-        .expect("bounded command runner must end before brew object-bound wrapper");
+        .expect("bounded command runner must end before verified brew wrapper");
     let runner = &source[runner_start..runner_end];
-    let timeout_start = runner
-        .find("Ok(None) if Instant::now() >= deadline")
-        .expect("timeout branch must exist");
-    let wait_failure_start = runner
-        .find("Err(_) =>")
-        .expect("wait-failure branch must exist");
-    let timeout = &runner[timeout_start..wait_failure_start];
-    let wait_failure = &runner[wait_failure_start..];
+    let failure_start = runner
+        .find("// Without a successful no-reap observation")
+        .expect("observation failure branch must document its identity boundary");
+    let failure_end = runner[failure_start..]
+        .find("\n        }\n    };")
+        .map(|offset| failure_start + offset)
+        .expect("observation failure branch must end before reader settlement");
+    let failure = &runner[failure_start..failure_end];
 
-    for failure_branch in [timeout, wait_failure] {
-        assert!(
-            failure_branch.contains("drop(stdout_reader);")
-                && failure_branch.contains("drop(stderr_reader);"),
-            "failure paths must detach reader threads after terminating the direct child"
-        );
-        assert!(
-            !failure_branch.contains("stdout_reader.join()")
-                && !failure_branch.contains("stderr_reader.join()"),
-            "failure paths must not wait forever on pipes retained by descendant processes"
-        );
-    }
+    assert!(
+        failure.contains("child.kill()") && failure.contains("child.wait()"),
+        "observation failure must terminate and reap the direct child"
+    );
+    assert!(
+        !failure.contains("signal_private_process_group("),
+        "observation failure must never guess a negative process-group ID"
+    );
+    let settlement = &runner[failure_end..];
+    let cancellation = settlement
+        .find("reader_cancellation.cancel();")
+        .expect("reader settlement must publish cancellation");
+    let stdout_join = settlement
+        .find("stdout_reader.join()")
+        .expect("stdout reader must be joined");
+    let stderr_join = settlement
+        .find("stderr_reader.join()")
+        .expect("stderr reader must be joined");
+    assert!(
+        cancellation < stdout_join && cancellation < stderr_join,
+        "reader cancellation must be visible before both owned joins"
+    );
 }
