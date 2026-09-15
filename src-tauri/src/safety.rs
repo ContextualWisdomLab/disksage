@@ -517,6 +517,31 @@ fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    static CATALOG_ROOT_AUTHORIZATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_catalog_root_authorization_hook<F>(hook: F)
+where
+    F: FnOnce() + 'static,
+{
+    CATALOG_ROOT_AUTHORIZATION_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_catalog_root_authorization_hook() {
+    CATALOG_ROOT_AUTHORIZATION_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
 fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
@@ -622,6 +647,61 @@ pub(crate) fn trash_delete_if_identity_in_catalog_root(
     )
 }
 
+#[cfg(windows)]
+fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    // Win32 FILE_ATTRIBUTE_REPARSE_POINT. This rejects junctions, mount points, symbolic links,
+    // and other reparse-backed directory roots instead of treating only symbolic links as unsafe.
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn revalidate_catalog_root_before_staging(
+    path: &Path,
+    root: &Path,
+    expected_catalog_root_id: &str,
+    expected_object_id: &str,
+) -> Result<(), SafetyError> {
+    let metadata = std::fs::symlink_metadata(root)
+        .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let current_root_id = filesystem_object_id(root)
+        .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+    if current_root_id != expected_catalog_root_id {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let canonical_root = strip_verbatim(
+        &std::fs::canonicalize(root).map_err(|_| SafetyError::Protected(path.to_path_buf()))?,
+    );
+    let canonical_path = strip_verbatim(
+        &std::fs::canonicalize(path).map_err(|_| SafetyError::Protected(path.to_path_buf()))?,
+    );
+    if canonical_path.parent() != Some(canonical_root.as_path())
+        || is_explicitly_protected(&canonical_path)
+    {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let current_target_id = filesystem_object_id(path)
+        .map_err(|error| SafetyError::Trash(format!("object identity unavailable: {error}")))?;
+    if current_target_id != expected_object_id {
+        return Err(SafetyError::Trash(
+            "개발 아티팩트의 파일시스템 객체가 바뀌었습니다. 다시 스캔하세요".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn trash_delete_if_identity_with_catalog_root(
     path: &Path,
     catalog_root: Option<&Path>,
@@ -638,13 +718,36 @@ fn trash_delete_if_identity_with_catalog_root(
     }
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    let catalog_authorized = catalog_root.is_some_and(|root| {
-        std::fs::symlink_metadata(root).is_ok_and(|metadata| {
-            metadata.is_dir() && !metadata.file_type().is_symlink()
-        }) && std::fs::canonicalize(root)
-            .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
-            && !is_explicitly_protected(&guard_path)
-    });
+    let mut expected_catalog_root_id = None;
+    let catalog_authorized = if let Some(root) = catalog_root {
+        let initial_catalog_root_id = filesystem_object_id(root)
+            .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+        #[cfg(test)]
+        run_catalog_root_authorization_hook();
+        let metadata = std::fs::symlink_metadata(root)
+            .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+        let authorized = metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && !is_windows_reparse_point(&metadata)
+            && std::fs::canonicalize(root)
+                .map(|root| strip_verbatim(&root))
+                .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
+            && !is_explicitly_protected(&guard_path);
+        if authorized {
+            let confirmed_catalog_root_id = filesystem_object_id(root)
+                .map_err(|_| SafetyError::Protected(path.to_path_buf()))?;
+            if confirmed_catalog_root_id != initial_catalog_root_id {
+                return Err(SafetyError::Protected(path.to_path_buf()));
+            }
+            expected_catalog_root_id = Some(initial_catalog_root_id);
+        }
+        authorized
+    } else {
+        false
+    };
+    if catalog_root.is_some() && !catalog_authorized {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
@@ -679,6 +782,23 @@ fn trash_delete_if_identity_with_catalog_root(
     }
 
     let result = (|| -> Result<(), SafetyError> {
+        if let (Some(root), Some(expected_catalog_root_id)) =
+            (catalog_root, expected_catalog_root_id.as_deref())
+        {
+            let revalidation = (|| -> Result<(), SafetyError> {
+                revalidate_catalog_root_before_staging(
+                    path,
+                    root,
+                    expected_catalog_root_id,
+                    expected_object_id,
+                )?;
+                Ok(())
+            })();
+            if let Err(error) = revalidation {
+                let _ = std::fs::remove_dir(&staging_dir);
+                return Err(error);
+            }
+        }
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
             return Err(SafetyError::Trash(format!(
@@ -1273,6 +1393,97 @@ mod tests {
         assert!(matches!(error, Err(SafetyError::Protected(_))));
         assert!(victim.exists());
         assert!(journal_recent(&journal, 10).is_empty());
+    }
+
+    #[test]
+    fn catalog_root_authority_rejects_a_non_parent_root_without_journaling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("catalog");
+        let wrong_root = tmp.path().join("other-catalog");
+        let victim = root.join("regenerable-cache");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::create_dir(&wrong_root).unwrap();
+        let expected = filesystem_object_id(&victim).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = trash_delete_if_identity_in_catalog_root(
+            &victim,
+            &wrong_root,
+            &expected,
+            0,
+            &journal,
+            1,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert!(victim.exists());
+        assert!(journal_recent(&journal, 10).is_empty());
+    }
+
+    #[test]
+    fn catalog_root_revalidation_rejects_root_object_replacement_with_same_target_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("catalog");
+        let reviewed_root = tmp.path().join("catalog-reviewed");
+        let victim = root.join("regenerable-cache");
+        std::fs::create_dir_all(&victim).unwrap();
+        let expected_root_id = filesystem_object_id(&root).unwrap();
+        let expected_target_id = filesystem_object_id(&victim).unwrap();
+
+        std::fs::rename(&root, &reviewed_root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::rename(reviewed_root.join("regenerable-cache"), &victim).unwrap();
+        assert_eq!(filesystem_object_id(&victim).unwrap(), expected_target_id);
+
+        let error = revalidate_catalog_root_before_staging(
+            &victim,
+            &root,
+            &expected_root_id,
+            &expected_target_id,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert!(victim.exists());
+    }
+
+    #[test]
+    fn catalog_root_authorization_rejects_root_replacement_inside_authorization_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hook_root = tmp.path().join("catalog");
+        let hook_reviewed_root = tmp.path().join("catalog-reviewed");
+        let hook_victim = hook_root.join("regenerable-cache");
+        let hook_parked_target = tmp.path().join("parked-target");
+        std::fs::create_dir_all(&hook_victim).unwrap();
+        let victim = hook_victim.clone();
+        let root = hook_root.clone();
+        let expected_target_id = filesystem_object_id(&victim).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        set_catalog_root_authorization_hook(move || {
+            std::fs::rename(&hook_victim, &hook_parked_target).unwrap();
+            std::fs::rename(&hook_root, &hook_reviewed_root).unwrap();
+            std::fs::create_dir(&hook_root).unwrap();
+            std::fs::rename(&hook_parked_target, &hook_victim).unwrap();
+        });
+
+        let error = trash_delete_if_identity_in_catalog_root(
+            &victim,
+            &root,
+            &expected_target_id,
+            0,
+            &journal,
+            1,
+        );
+
+        assert!(matches!(error, Err(SafetyError::Protected(_))));
+        assert_eq!(filesystem_object_id(&victim).unwrap(), expected_target_id);
+        assert!(victim.exists());
+        assert!(journal_recent(&journal, 10).is_empty());
+        assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
     }
 
     #[test]
