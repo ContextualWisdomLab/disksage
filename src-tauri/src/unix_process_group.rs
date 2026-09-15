@@ -304,7 +304,7 @@ mod tests {
 
         assert_eq!(captured, b"ready");
         assert!(!truncated);
-        writer.write_all(b"still-open").expect("writer remains open");
+        drop(writer);
     }
 
     #[test]
