@@ -1325,9 +1325,9 @@ fn command_capture(
     ) {
         Ok(reader) => reader,
         Err(error) => {
+            reader_cancellation.cancel();
             let _ = child.kill();
             let _ = child.wait();
-            reader_cancellation.cancel();
             let _ = join_capture(stdout_reader, label, "stdout");
             return Err(format!("{label}-stderr-reader-setup:{error}"));
         }
@@ -1349,11 +1349,11 @@ fn command_capture(
                 // The direct CLI has exited but is deliberately still unreaped, so its
                 // numeric PID/PGID cannot be recycled. Terminate any descendants that
                 // still own the capture pipes, then reap the leader through `Child::wait`.
+                reader_cancellation.cancel();
                 let _ = signal_private_process_group(child_pid, libc::SIGKILL);
                 match child.wait() {
                     Ok(status) => status,
                     Err(error) => {
-                        reader_cancellation.cancel();
                         let _ = join_capture(stdout_reader, label, "stdout");
                         let _ = join_capture(stderr_reader, label, "stderr");
                         return Err(format!("{label}-wait:{error}"));
@@ -1363,10 +1363,10 @@ fn command_capture(
             Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
                 // The leader is still live and unreaped here, so the group identity is safe
                 // to signal directly.
+                reader_cancellation.cancel();
                 let _ = signal_private_process_group(child_pid, libc::SIGKILL);
                 let _ = child.kill();
                 let _ = child.wait();
-                reader_cancellation.cancel();
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
@@ -1374,9 +1374,9 @@ fn command_capture(
             Err(_) => {
                 // Without a pinned leader identity a negative-PID signal could target an
                 // unrelated recycled process group, so fail closed instead of guessing.
+                reader_cancellation.cancel();
                 let _ = child.kill();
                 let _ = child.wait();
-                reader_cancellation.cancel();
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-wait:no-reap-observation-failed"));
