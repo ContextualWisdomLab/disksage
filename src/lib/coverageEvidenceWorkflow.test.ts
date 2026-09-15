@@ -20,10 +20,12 @@ describe('Test workflow coverage evidence contract', () => {
     );
   });
 
-  it('binds every checkout-bearing Test job to the exact current head', () => {
+  it('binds every current checkout-bearing Test job to the exact current head', () => {
     const exactHeadCheckout =
       'ref: ${{ github.event.pull_request.head.sha || github.sha }}';
-    expect(workflow.split(exactHeadCheckout).length - 1).toBe(4);
+    // test, macOS, Windows, coverage-evidence, and real llama.cpp are all
+    // independent exact-head evidence lanes on the current shared-Test owner.
+    expect(workflow.split(exactHeadCheckout).length - 1).toBe(5);
   });
 
   it('requires every Rust test and coverage invocation to honor the committed lockfile', () => {

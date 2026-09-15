@@ -47,6 +47,17 @@ describe("CloudArchive bounded error feedback", () => {
     expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-operation-mismatch")).not.toBe("");
   });
 
+  it("fails closed for non-object non-string thrown values", () => {
+    expect(boundedCloudArchiveErrorMessage("copy", 42)).toBe(
+      "클라우드 복사를 실행하지 못했습니다.",
+    );
+    expect(boundedCloudArchiveErrorMessage("cancel", null)).toBe(
+      "진행 중인 클라우드 복사를 취소하지 못했습니다.",
+    );
+    expect(isCloudCopyCancelled(42)).toBe(false);
+    expect(isCloudCopyCancelled(null)).toBe(false);
+  });
+
   it("does not invoke untrusted object traps while classifying caught values", () => {
     let accessorInvoked = false;
     const accessorError = Object.defineProperty({}, "message", {

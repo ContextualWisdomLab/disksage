@@ -7,7 +7,7 @@ new numbered record rather than rewriting history.
 | ADR | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-cloud-offload-goal-state.md) | Provider evidence drives the cloud-offload Goal | Accepted |
-| [0002](0002-cache-cleanup-is-per-item-evidence-bound.md) | Cache cleanup is per-item evidence-bound | Accepted |
+| [0002](0002-cache-cleanup-is-per-item-evidence-bound.md) | Cache cleanup is per-item evidence-bound | Superseded by 0020 for permanent cache-Trash deletion |
 | [0003](0003-zotero-local-api-metadata-handoff.md) | Zotero Local API metadata handoff | Accepted |
 | [0004](0004-bounded-maintenance-command-execution.md) | Bounded maintenance command execution | Accepted |
 | [0005](0005-hourly-agent-loop-is-advisory.md) | Hourly agent loop is advisory | Superseded by 0008 |
@@ -25,6 +25,7 @@ new numbered record rather than rewriting history.
 | [0017](0017-standalone-stale-pr-clone-authority.md) | Require exact-head authority for standalone stale-PR clones | Accepted |
 | [0018](0018-permanent-generated-artifact-failure-safety.md) | Retain failed permanent artifact deletions in private staging | Accepted |
 | [0019](0019-macos-file-provider-local-eviction.md) | Use each macOS File Provider domain for local-only eviction | Accepted |
+| [0020](0020-cache-trash-permanent-delete-fails-closed.md) | Cache Trash permanent deletion fails closed | Proposed |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;

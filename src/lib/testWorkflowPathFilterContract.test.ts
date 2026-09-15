@@ -21,6 +21,26 @@ function scalarValue(raw: string): string {
   return value.split(/\s+#/, 1)[0].trim();
 }
 
+function namedStep(source: string, name: string): string {
+  const lines = source.split(/\r?\n/);
+  const marker = `- name: ${name}`;
+  const start = lines.findIndex((line) => line.trim() === marker);
+  if (start < 0) return "";
+
+  const indent = lines[start].length - lines[start].trimStart().length;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    const currentIndent = line.length - line.trimStart().length;
+    if (currentIndent === indent && line.trimStart().startsWith("- ")) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
 function negativePathsIgnoreEntries(source: string): string[] {
   const negatives: string[] = [];
   const lines = source.split(/\r?\n/);
@@ -97,11 +117,37 @@ describe("test workflow path-filter contract", () => {
     );
   });
 
-  it("isolates Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
-    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(2);
-    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(2);
+  it("isolates every Ubuntu dependency refresh from the hosted runner Chrome repository without weakening apt verification", () => {
+    expect(workflow.match(/grep -q 'dl\.google\.com\/linux\/chrome'/g)).toHaveLength(3);
+    expect(workflow.match(/apt-get -o Acquire::Retries=3 update/g)).toHaveLength(3);
     expect(workflow).not.toContain("AllowInsecureRepositories");
     expect(workflow).not.toContain("--allow-unauthenticated");
+  });
+
+  it("preserves npm test failure while exposing bounded nested phase diagnostics", () => {
+    const npmTest = namedStep(workflow, "Run npm test");
+    expect(npmTest).toContain("id: npm_test");
+    expect(npmTest).toContain("continue-on-error: true");
+
+    const phases = [
+      "Diagnose SvelteKit sync after npm test failure",
+      "Diagnose Vitest after npm test failure",
+      "Diagnose workflow contract after npm test failure",
+      "Diagnose browser test after npm test failure",
+    ];
+    for (const phase of phases) {
+      const step = namedStep(workflow, phase);
+      expect(step).toContain(`name: ${phase}`);
+      expect(step).toContain("if: steps.npm_test.outcome == 'failure'");
+      expect(step).toContain("continue-on-error: true");
+    }
+
+    expect(namedStep(workflow, "Diagnose browser test after npm test failure")).toContain(
+      "npm run test:browser --if-present",
+    );
+    const preserve = namedStep(workflow, "Preserve npm test failure");
+    expect(preserve).toContain("if: steps.npm_test.outcome == 'failure'");
+    expect(preserve).toContain("run: exit 1");
   });
 });
 
@@ -129,7 +175,7 @@ it("macOS cache job executes present owner tests, reports absent source, and pro
     mkdirSync(resolve(fixture, "src-tauri/tests"), { recursive: true });
     writeFileSync(resolve(fixture, "src-tauri/tests/generated_cache_staged_activity.rs"), "");
     expect(run().status).toBe(0);
-    expect(readFileSync(log, "utf8")).toBe("test --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
+    expect(readFileSync(log, "utf8")).toBe("test --locked --manifest-path src-tauri/Cargo.toml --test generated_cache_staged_activity\n");
     expect(run({ CARGO_EXIT: "7" }).status).toBe(7);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
