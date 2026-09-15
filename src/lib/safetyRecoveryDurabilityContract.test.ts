@@ -21,6 +21,20 @@ describe('post-mutation recovery durability contract', () => {
     );
   });
 
+  it('durably publishes initial journal pathname creation on Unix', () => {
+    const start = safetySource.indexOf('pub fn journal_append(');
+    const end = safetySource.indexOf('pub fn journal_recent(', start);
+    const body = safetySource.slice(start, end);
+
+    expect(body, 'journal creation must be distinguishable from an append to an existing file').toContain(
+      '.create_new(true)',
+    );
+    expect(body, 'Unix must have an explicit parent-directory durability branch').toContain('#[cfg(unix)]');
+    expect(body, 'new journal creation must synchronize its containing directory').toMatch(
+      /parent\(\)[\s\S]{0,800}(File::open|std::fs::File::open)[\s\S]{0,400}sync_all\(\)/,
+    );
+  });
+
   it('does not replay an older cleanup-pending receipt after a newer terminal receipt', () => {
     const start = safetySource.indexOf('fn retry_pending_staging_cleanup(');
     const end = safetySource.indexOf('fn revalidate_catalog_root_before_staging(', start);
