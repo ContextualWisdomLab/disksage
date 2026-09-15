@@ -804,10 +804,23 @@ fn retry_pending_staging_cleanup(
     now_ms: u64,
 ) -> Option<Result<(), SafetyError>> {
     let journal_path_value = path.to_string_lossy();
-    let mut recovery = journal_recent(journal_path, usize::MAX)
+    let mut matching_entries = journal_recent(journal_path, usize::MAX)
         .into_iter()
-        .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes)
-        .find_map(|entry| parse_staging_cleanup_pending(&entry.outcome))?;
+        .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes);
+    let latest = matching_entries.next()?;
+    if latest.outcome == "ok" {
+        let completed_recovery = parse_staging_cleanup_pending(&matching_entries.next()?.outcome)?;
+        return Some(
+            if completed_recovery.target_object_id == expected_object_id
+                && completed_recovery.catalog_root_object_id.as_deref() == expected_catalog_root_id
+            {
+                Ok(())
+            } else {
+                Err(SafetyError::Protected(path.to_path_buf()))
+            },
+        );
+    }
+    let mut recovery = parse_staging_cleanup_pending(&latest.outcome)?;
     if recovery.target_object_id != expected_object_id
         || recovery.catalog_root_object_id.as_deref() != expected_catalog_root_id
     {
