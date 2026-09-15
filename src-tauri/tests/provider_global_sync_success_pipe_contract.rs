@@ -54,6 +54,43 @@ fn successful_provider_dump_keeps_group_identity_pinned_until_cleanup() {
     );
 }
 
+#[test]
+fn provider_dump_uses_cancellable_reader_before_any_owned_join() {
+    let source = include_str!("../src/provider_global_sync.rs");
+    let run_dump = source
+        .split_once("fn run_dump(provider: CloudProvider) -> Result<String, String> {")
+        .expect("provider global-sync run_dump boundary must exist")
+        .1
+        .split_once("pub fn inspect_new_copy_admission")
+        .expect("provider global-sync run_dump boundary must end before public admission")
+        .0;
+
+    assert!(
+        run_dump.contains("PipeReaderCancellation::new()"),
+        "provider stdout must have an explicit cancellation owner for descendants that escape the private process group"
+    );
+    assert!(
+        run_dump.contains("spawn_bounded_cancellable_pipe_reader("),
+        "provider stdout must consume the canonical bounded nonblocking reader lifecycle"
+    );
+    assert!(
+        !run_dump.contains("thread::spawn(move || -> Result<Vec<u8>, String>"),
+        "provider adapter must not retain its historical blocking reader thread"
+    );
+
+    let cancel = run_dump
+        .find("reader_cancellation.cancel();")
+        .expect("provider child settlement must publish reader cancellation");
+    let join = run_dump[cancel..]
+        .find("reader.join()")
+        .map(|offset| cancel + offset)
+        .expect("provider must join its owned reader after cancellation");
+    assert!(
+        cancel < join,
+        "reader cancellation must be published before the owned reader can be joined"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminated() {
