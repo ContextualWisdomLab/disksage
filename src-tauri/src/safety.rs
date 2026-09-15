@@ -564,13 +564,38 @@ fn run_catalog_root_authorization_hook() {
     });
 }
 
-fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+/// Path and filesystem identities captured while the staging directory's parent was stable.
+#[derive(Debug)]
+struct PrivateStagingDir {
+    path: PathBuf,
+    name: String,
+    object_id: String,
+    source_parent_object_id: String,
+}
+
+fn real_directory_object_id(path: &Path) -> std::io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err(std::io::Error::other("path is not a real directory"));
+    }
+    filesystem_object_id(path)
+}
+
+fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PrivateStagingDir> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    let source_parent_object_id = real_directory_object_id(&parent)?;
     let pid = std::process::id();
     for _ in 0..32 {
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial));
+        let name = format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial);
+        let candidate = parent.join(&name);
         match std::fs::create_dir(&candidate) {
             Ok(()) => {
                 #[cfg(unix)]
@@ -578,7 +603,19 @@ fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathB
                     use std::os::unix::fs::PermissionsExt;
                     std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
                 }
-                return Ok(candidate);
+                let object_id = filesystem_object_id(&candidate)?;
+                let confirmed_parent_object_id = real_directory_object_id(&parent)?;
+                if confirmed_parent_object_id != source_parent_object_id {
+                    return Err(std::io::Error::other(
+                        "private staging directory parent identity changed during creation",
+                    ));
+                }
+                return Ok(PrivateStagingDir {
+                    path: candidate,
+                    name,
+                    object_id,
+                    source_parent_object_id,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -771,46 +808,19 @@ fn remove_staging_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn staging_cleanup_recovery(
-    staging_dir: &Path,
+    staging_dir: &PrivateStagingDir,
     expected_object_id: &str,
     expected_catalog_root_id: Option<&str>,
 ) -> Result<StagingCleanupRecovery, SafetyError> {
-    let staging_name = staging_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| is_disksage_staging_name(name))
-        .ok_or_else(|| SafetyError::Trash("private staging directory name is invalid".into()))?;
-    let source_parent = staging_dir.parent().ok_or_else(|| {
-        SafetyError::Trash("private staging directory parent is unavailable".into())
-    })?;
-    let source_parent_metadata = std::fs::symlink_metadata(source_parent).map_err(|error| {
-        SafetyError::Trash(format!(
-            "private staging directory parent is unavailable: {error}"
-        ))
-    })?;
-    if !source_parent_metadata.is_dir()
-        || source_parent_metadata.file_type().is_symlink()
-        || is_windows_reparse_point(&source_parent_metadata)
-    {
+    if !is_disksage_staging_name(&staging_dir.name) {
         return Err(SafetyError::Trash(
-            "private staging directory parent is not a real directory".into(),
+            "private staging directory name is invalid".into(),
         ));
     }
-    let source_parent_object_id = filesystem_object_id(source_parent).map_err(|error| {
-        SafetyError::Trash(format!(
-            "private staging directory parent identity unavailable: {error}"
-        ))
-    })?;
-    let staging_object_id = filesystem_object_id(staging_dir).map_err(|error| {
-        SafetyError::Trash(format!(
-            "private staging directory identity unavailable; retained at {}: {error}",
-            staging_dir.display()
-        ))
-    })?;
     Ok(StagingCleanupRecovery {
-        staging_name: staging_name.into(),
-        staging_object_id,
-        source_parent_object_id: Some(source_parent_object_id),
+        staging_name: staging_dir.name.clone(),
+        staging_object_id: staging_dir.object_id.clone(),
+        source_parent_object_id: Some(staging_dir.source_parent_object_id.clone()),
         target_object_id: expected_object_id.into(),
         catalog_root_object_id: expected_catalog_root_id.map(str::to_owned),
         error: String::new(),
@@ -1110,7 +1120,7 @@ fn trash_delete_if_identity_with_catalog_root(
     })?;
     let staging_dir = create_private_staging_dir(path, now_ms)
         .map_err(|error| SafetyError::Trash(error.to_string()))?;
-    let staged = staging_dir.join(file_name);
+    let staged = staging_dir.path.join(file_name);
     let recovery = staging_cleanup_recovery(
         &staging_dir,
         expected_object_id,
@@ -1279,7 +1289,7 @@ pub fn permanent_delete_dir_if_identity(
     })?;
     let staging_dir = create_private_staging_dir(path, now_ms)
         .map_err(|error| SafetyError::Trash(error.to_string()))?;
-    let staged = staging_dir.join(file_name);
+    let staged = staging_dir.path.join(file_name);
     let recovery = staging_cleanup_recovery(&staging_dir, expected_object_id, None)?;
     let mut entry = JournalEntry {
         ts_ms: now_ms,
@@ -2002,6 +2012,37 @@ mod tests {
     }
 
     #[test]
+    fn staging_receipt_retains_creation_parent_identity_after_move_and_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let source = parent.join("node_modules");
+        std::fs::create_dir(&parent).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+
+        std::fs::rename(&parent, &moved_parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        let replacement_parent_id = filesystem_object_id(&parent).unwrap();
+
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
+
+        assert_eq!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+        assert_ne!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(replacement_parent_id.as_str())
+        );
+        assert_eq!(
+            recovery.staging_object_id,
+            filesystem_object_id(&moved_parent.join(&recovery.staging_name)).unwrap()
+        );
+        assert!(!parent.join(&recovery.staging_name).exists());
+    }
+
+    #[test]
     fn legacy_parent_unbound_recovery_fails_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
@@ -2037,7 +2078,7 @@ mod tests {
         .expect_err("legacy recovery evidence must fail closed");
 
         assert!(retry.to_string().contains("legacy staging recovery"));
-        assert!(staging_dir.exists());
+        assert!(staging_dir.path.exists());
     }
 
     #[test]
@@ -2046,25 +2087,29 @@ mod tests {
         let source = tmp.path().join("source");
         let staging_dir = create_private_staging_dir(&source, 1).unwrap();
         let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
-        std::fs::write(staging_dir.join("unexpected"), b"retain").unwrap();
+        std::fs::write(staging_dir.path.join("unexpected"), b"retain").unwrap();
 
         let nonempty = cleanup_verified_empty_staging_dir(&source, &recovery).unwrap_err();
 
         assert!(nonempty.contains("not empty"));
-        assert!(staging_dir.join("unexpected").exists());
-        std::fs::remove_file(staging_dir.join("unexpected")).unwrap();
-        std::fs::remove_dir(&staging_dir).unwrap();
-        std::fs::create_dir(&staging_dir).unwrap();
+        assert!(staging_dir.path.join("unexpected").exists());
+        std::fs::remove_file(staging_dir.path.join("unexpected")).unwrap();
+        std::fs::remove_dir(&staging_dir.path).unwrap();
+        std::fs::create_dir(&staging_dir.path).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staging_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(
+                &staging_dir.path,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
         }
 
         let replaced = cleanup_verified_empty_staging_dir(&source, &recovery).unwrap_err();
 
         assert!(replaced.contains("identity changed"));
-        assert!(staging_dir.exists());
+        assert!(staging_dir.path.exists());
     }
 
     #[test]
@@ -2100,7 +2145,7 @@ mod tests {
         .expect("pending recovery must be recognized");
 
         assert!(matches!(retry, Err(SafetyError::Protected(_))));
-        assert!(staging_dir.exists());
+        assert!(staging_dir.path.exists());
     }
 
     #[test]
@@ -2134,7 +2179,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         let staging_dir = create_private_staging_dir(&source, 1).unwrap();
-        let staged = staging_dir.join("source");
+        let staged = staging_dir.path.join("source");
         let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
         std::fs::write(&source, b"replacement").unwrap();
         std::fs::write(&staged, b"reviewed").unwrap();
@@ -2149,11 +2194,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         let staging_dir = create_private_staging_dir(&source, 1).unwrap();
-        let staged = staging_dir.join("source");
+        let staged = staging_dir.path.join("source");
         let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
         let error = restore_staged_if_source_absent(&source, &staged, &recovery).unwrap_err();
         assert!(error.contains(staged.to_string_lossy().as_ref()));
-        assert!(staging_dir.exists());
+        assert!(staging_dir.path.exists());
     }
 
     #[test]
