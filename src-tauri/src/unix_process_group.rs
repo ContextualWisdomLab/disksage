@@ -39,8 +39,10 @@ pub(crate) enum NoReapWaitOutcome {
 /// Shared cancellation token for readers that must not wait forever for inherited pipe writers.
 ///
 /// Callers cancel only after the direct child has been settled or when lifecycle observation has
-/// failed closed. Readers still consume bytes already available in the kernel pipe before they
-/// stop on the next `WouldBlock`, so cancellation does not discard buffered command output.
+/// failed closed. Readers keep bytes already observed by the nonblocking pipe reader, but
+/// cancellation never requires a later `WouldBlock`: once the caller's capture budget is full, one
+/// additional successful read is enough to prove truncation and terminate even if an escaped
+/// descendant keeps writing continuously.
 #[derive(Debug, Clone)]
 pub(crate) struct PipeReaderCancellation {
     cancelled: Arc<AtomicBool>,
@@ -68,8 +70,10 @@ impl PipeReaderCancellation {
 /// private process group. A blocking `read` followed by an unbounded thread join would then extend
 /// a completed CLI operation indefinitely. This helper preserves existing descriptor flags,
 /// enables `O_NONBLOCK`, retries `Interrupted`, waits through `WouldBlock` while the child remains
-/// active, and exits on `WouldBlock` after cancellation. Output remains capped and reports whether
-/// bytes beyond `max_capture_bytes` were observed.
+/// active, and exits on `WouldBlock` after cancellation. If reads continue succeeding after
+/// cancellation, the reader exits once the capture budget is full and a read has proven that bytes
+/// were omitted. Output remains capped and reports whether bytes beyond `max_capture_bytes` were
+/// observed.
 pub(crate) fn spawn_bounded_cancellable_pipe_reader<R>(
     mut reader: R,
     max_capture_bytes: usize,
@@ -101,6 +105,12 @@ where
                     captured.extend_from_slice(&buffer[..retained]);
                     if retained < read {
                         truncated = true;
+                    }
+                    if cancellation.is_cancelled()
+                        && captured.len() == max_capture_bytes
+                        && truncated
+                    {
+                        break;
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -229,6 +239,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
+    use std::sync::mpsc;
 
     fn spawn_private_group_shell(script: &str, stdout: Stdio) -> Child {
         let mut command = Command::new("/bin/sh");
@@ -330,6 +341,57 @@ mod tests {
 
         assert_eq!(captured, b"abcd");
         assert!(truncated);
+    }
+
+    #[test]
+    fn cancellable_pipe_reader_stops_continuous_writer_after_cancellation() {
+        let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let writer_thread = thread::spawn(move || {
+            let chunk = [b'x'; 1_024];
+            writer.write_all(&chunk).expect("write initial fixture bytes");
+            ready_tx.send(()).expect("publish continuous-writer readiness");
+            loop {
+                match writer.write_all(&chunk) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("continuous writer failed unexpectedly: {error}"),
+                }
+            }
+        });
+        let cancellation = PipeReaderCancellation::new();
+        let handle = spawn_bounded_cancellable_pipe_reader(
+            reader,
+            4_096,
+            Duration::from_millis(1),
+            cancellation.clone(),
+        )
+        .expect("spawn cancellable reader");
+        ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("continuous writer did not become ready");
+
+        let started = Instant::now();
+        cancellation.cancel();
+        let (captured, truncated) = handle
+            .join()
+            .expect("reader thread join")
+            .expect("reader result");
+
+        assert_eq!(captured.len(), 4_096);
+        assert!(truncated);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "continuous escaped writer extended reader settlement"
+        );
+        writer_thread.join().expect("continuous writer thread join");
     }
 
     #[test]
