@@ -501,8 +501,28 @@ fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
     }
 }
 
+fn artifact_request_parent_within_root(path: &Path, root: &Path) -> bool {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let Ok(canonical_parent) = std::fs::canonicalize(parent) else {
+        return false;
+    };
+    canonical_parent.starts_with(canonical_root)
+}
+
 fn recover_absent_artifact_cleanup(
     request: &DevArtifact,
+    root: &Path,
     journal_path: &Path,
     now_ms: u64,
     permanent: bool,
@@ -511,16 +531,19 @@ fn recover_absent_artifact_cleanup(
         return None;
     }
     let path = Path::new(&request.path);
-    if !matches!(
-        std::fs::symlink_metadata(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    ) {
+    if !artifact_request_parent_within_root(path, root)
+        || !matches!(
+            std::fs::symlink_metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    {
         return None;
     }
 
     // The deletion-safety boundary already owns exact pending/complete receipt correlation and
-    // staging identity/ownership validation. Re-enter it only for an absent reviewed source; live
-    // objects continue through the fresh manifest and active-use gates below.
+    // staging identity/ownership validation. Re-enter it only for an absent reviewed source under
+    // the caller's canonical scan root; live objects continue through the fresh manifest and
+    // active-use gates below.
     let recovery = if permanent {
         crate::safety::permanent_delete_dir_if_identity(
             path,
@@ -590,7 +613,7 @@ fn clean_artifacts_with_disposition(
 
             if matches.is_none() {
                 if let Some(recovery) =
-                    recover_absent_artifact_cleanup(request, journal_path, now_ms, permanent)
+                    recover_absent_artifact_cleanup(request, root, journal_path, now_ms, permanent)
                 {
                     return recovery;
                 }
@@ -846,6 +869,35 @@ mod tests {
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
         assert!(!journal.exists());
+    }
+
+    #[test]
+    fn recovery_scope_requires_canonical_parent_under_scan_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scan_root = tmp.path().join("scan-root");
+        let outside = tmp.path().join("outside");
+        let inside_parent = scan_root.join("project");
+        std::fs::create_dir_all(&inside_parent).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+
+        assert!(artifact_request_parent_within_root(
+            &inside_parent.join("missing"),
+            &scan_root
+        ));
+        assert!(!artifact_request_parent_within_root(
+            &outside.join("missing"),
+            &scan_root
+        ));
+
+        #[cfg(unix)]
+        {
+            let linked_parent = scan_root.join("linked-outside");
+            std::os::unix::fs::symlink(&outside, &linked_parent).unwrap();
+            assert!(!artifact_request_parent_within_root(
+                &linked_parent.join("missing"),
+                &scan_root
+            ));
+        }
     }
 
     #[cfg(unix)]
