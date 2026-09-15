@@ -69,10 +69,14 @@ describe("main scan and navigation failure feedback", () => {
     expect(source).toContain("api.topFiles(200)");
   });
 
-  it("does not leave the scan action enabled when no root is available", () => {
+  it("does not enable scan before both root and translated action authority are available", () => {
     const source = readSource("src/routes/+page.svelte");
     const controls = between(source, '<div class="controls">', "{#if stats}");
+    const scanAction = between(controls, "{:else}", "{/if}");
+    const disabledExpression = scanAction.match(/disabled=\{([^}]*)\}/)?.[1] ?? "";
 
-    expect(controls).toContain("disabled={scanning || !selectedRoot}");
+    expect(disabledExpression).toContain("actionLabels === null");
+    expect(disabledExpression).toContain("scanning");
+    expect(disabledExpression).toContain("!selectedRoot");
   });
 });
