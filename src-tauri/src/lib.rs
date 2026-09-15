@@ -142,6 +142,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
+        .setup(|app| {
+            use tauri::Manager;
+
+            let translation_ledger =
+                translation_resource_bridge::initialize_translation_ledger(app.handle())
+                    .map_err(std::io::Error::other)?;
+            if !app.manage(translation_ledger) {
+                return Err(
+                    std::io::Error::other("translation-ledger-runtime-already-managed").into(),
+                );
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_roots,
             commands::start_scan,
