@@ -46,4 +46,38 @@ describe('post-mutation recovery durability contract', () => {
     expect(body).not.toContain('.find_map(|entry| parse_staging_cleanup_pending(&entry.outcome))');
     expect(body).toMatch(/outcome[\s\S]{0,240}"ok"/);
   });
+
+  it('preserves completed-mutation truth when durable outcome publication fails', () => {
+    const retryStart = safetySource.indexOf('fn retry_pending_staging_cleanup(');
+    const retryEnd = safetySource.indexOf('fn revalidate_catalog_root_before_staging(', retryStart);
+    const trashStart = safetySource.indexOf('fn trash_delete_if_identity_with_catalog_root(');
+    const permanentStart = safetySource.indexOf('pub fn permanent_delete_dir_if_identity(');
+    const permanentEnd = safetySource.indexOf('pub fn same_volume(', permanentStart);
+
+    expect(retryStart, 'recovery retry helper must exist').toBeGreaterThanOrEqual(0);
+    expect(retryEnd).toBeGreaterThan(retryStart);
+    expect(trashStart, 'identity-bound Trash boundary must exist').toBeGreaterThanOrEqual(0);
+    expect(permanentStart, 'identity-bound permanent-delete boundary must exist').toBeGreaterThan(trashStart);
+    expect(permanentEnd).toBeGreaterThan(permanentStart);
+
+    const retryBody = safetySource.slice(retryStart, retryEnd);
+    const trashBody = safetySource.slice(trashStart, permanentStart);
+    const permanentBody = safetySource.slice(permanentStart, permanentEnd);
+
+    expect(retryBody, 'cleanup completion must not erase mutation truth on journal failure').not.toContain(
+      'journal_append(journal_path, &entry).and(result)',
+    );
+    expect(trashBody, 'Trash outcome publication must not use a generic ? after mutation').not.toMatch(
+      /journal_append\(journal_path,\s*&entry\)\?;\s*result/,
+    );
+    expect(
+      permanentBody,
+      'permanent-delete outcome publication must not use a generic ? after mutation',
+    ).not.toMatch(/journal_append\(journal_path,\s*&entry\)\?;\s*result/);
+
+    expect(
+      safetySource,
+      'post-mutation durable-publication failure must be reported as mutation-completed state',
+    ).toContain('durable recovery evidence publication failed');
+  });
 });
