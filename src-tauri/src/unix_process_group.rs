@@ -39,8 +39,8 @@ pub(crate) enum NoReapWaitOutcome {
 /// Shared cancellation token for readers that must not wait forever for inherited pipe writers.
 ///
 /// Callers cancel only after the direct child has been settled or when lifecycle observation has
-/// failed closed. Readers still consume bytes already available in the kernel pipe before they
-/// stop on the next `WouldBlock`, so cancellation does not discard buffered command output.
+/// failed closed. Readers retain bytes returned by an in-flight successful read before they stop,
+/// so cancellation does not discard that read's command output.
 #[derive(Debug, Clone)]
 pub(crate) struct PipeReaderCancellation {
     cancelled: Arc<AtomicBool>,
@@ -68,8 +68,8 @@ impl PipeReaderCancellation {
 /// private process group. A blocking `read` followed by an unbounded thread join would then extend
 /// a completed CLI operation indefinitely. This helper preserves existing descriptor flags,
 /// enables `O_NONBLOCK`, retries `Interrupted`, waits through `WouldBlock` while the child remains
-/// active, and exits on `WouldBlock` after cancellation. Output remains capped and reports whether
-/// bytes beyond `max_capture_bytes` were observed.
+/// active, and exits after cancellation even if a writer keeps the pipe continuously readable.
+/// Output remains capped and reports whether bytes beyond `max_capture_bytes` were observed.
 pub(crate) fn spawn_bounded_cancellable_pipe_reader<R>(
     mut reader: R,
     max_capture_bytes: usize,
@@ -101,6 +101,9 @@ where
                     captured.extend_from_slice(&buffer[..retained]);
                     if retained < read {
                         truncated = true;
+                    }
+                    if cancellation.is_cancelled() {
+                        break;
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -330,6 +333,42 @@ mod tests {
 
         assert_eq!(captured, b"abcd");
         assert!(truncated);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancellation_stops_reader_for_continuously_writing_setsid_descendant() {
+        let mut child = spawn_private_group_shell(
+            "/usr/bin/setsid /bin/sh -c 'exec /usr/bin/timeout 3 /usr/bin/yes x' & sleep 0.1",
+            Stdio::piped(),
+        );
+        let child_pid = child.id();
+        let stdout = child.stdout.take().expect("child stdout pipe");
+        let cancellation = PipeReaderCancellation::new();
+        let reader = spawn_bounded_cancellable_pipe_reader(
+            stdout,
+            1_024,
+            Duration::from_millis(1),
+            cancellation.clone(),
+        )
+        .expect("spawn cancellable reader");
+
+        wait_until_exited_without_reap(child_pid);
+        let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+        assert!(child.wait().expect("reap direct child").success());
+        cancellation.cancel();
+        let cancelled_at = Instant::now();
+        let (captured, truncated) = reader
+            .join()
+            .expect("reader thread join")
+            .expect("reader result");
+
+        assert_eq!(captured.len(), 1_024);
+        assert!(truncated);
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(2),
+            "a continuously writing setsid descendant ignored reader cancellation"
+        );
     }
 
     #[test]
