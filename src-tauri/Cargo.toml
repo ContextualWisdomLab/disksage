@@ -50,7 +50,7 @@ required-features = ["cloud-cli"]
 
 [[bin]]
 name = "disksage-cloud-local-eviction-batch"
-path = "src/bin/disksage-icloud-local-eviction-batch.rs"
+path = "src/bin/disksage-cloud-local-eviction-batch.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
@@ -200,6 +200,7 @@ infer = "0.22.0"
 png = "0.18.1"
 mail-parser = "0.11.5"
 libc = "0.2"
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
 mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "4f9276b6fe6063f86c4cd4453fb72a13f3f6db11", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
