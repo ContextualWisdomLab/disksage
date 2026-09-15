@@ -1229,6 +1229,7 @@ fn redacted_exact_delete_command(
     command
 }
 
+#[cfg(not(unix))]
 fn drain_bounded<R: std::io::Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
     let mut buffer = [0u8; 65_536];
     let mut captured = Vec::new();
@@ -1299,7 +1300,41 @@ fn command_capture(
         .stderr
         .take()
         .ok_or_else(|| format!("{label}-stderr-pipe-unavailable"))?;
+    #[cfg(unix)]
+    let reader_cancellation = crate::unix_process_group::PipeReaderCancellation::new();
+    #[cfg(unix)]
+    let stdout_reader = match crate::unix_process_group::spawn_bounded_cancellable_pipe_reader(
+        stdout,
+        MAX_CAPTURE_BYTES,
+        Duration::from_millis(25),
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{label}-stdout-reader-setup:{error}"));
+        }
+    };
+    #[cfg(unix)]
+    let stderr_reader = match crate::unix_process_group::spawn_bounded_cancellable_pipe_reader(
+        stderr,
+        MAX_CAPTURE_BYTES,
+        Duration::from_millis(25),
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            reader_cancellation.cancel();
+            let _ = join_capture(stdout_reader, label, "stdout");
+            return Err(format!("{label}-stderr-reader-setup:{error}"));
+        }
+    };
+    #[cfg(not(unix))]
     let stdout_reader = thread::spawn(move || drain_bounded(stdout));
+    #[cfg(not(unix))]
     let stderr_reader = thread::spawn(move || drain_bounded(stderr));
 
     #[cfg(not(unix))]
@@ -1318,6 +1353,7 @@ fn command_capture(
                 match child.wait() {
                     Ok(status) => status,
                     Err(error) => {
+                        reader_cancellation.cancel();
                         let _ = join_capture(stdout_reader, label, "stdout");
                         let _ = join_capture(stderr_reader, label, "stderr");
                         return Err(format!("{label}-wait:{error}"));
@@ -1330,6 +1366,7 @@ fn command_capture(
                 let _ = signal_private_process_group(child_pid, libc::SIGKILL);
                 let _ = child.kill();
                 let _ = child.wait();
+                reader_cancellation.cancel();
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-timeout"));
@@ -1339,6 +1376,7 @@ fn command_capture(
                 // unrelated recycled process group, so fail closed instead of guessing.
                 let _ = child.kill();
                 let _ = child.wait();
+                reader_cancellation.cancel();
                 let _ = join_capture(stdout_reader, label, "stdout");
                 let _ = join_capture(stderr_reader, label, "stderr");
                 return Err(format!("{label}-wait:no-reap-observation-failed"));
@@ -1368,6 +1406,8 @@ fn command_capture(
         }
     };
 
+    #[cfg(unix)]
+    reader_cancellation.cancel();
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
