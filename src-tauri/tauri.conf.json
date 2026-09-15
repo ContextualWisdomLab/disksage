@@ -67,7 +67,7 @@
     ],
     "resources": [
       "resources/ontology/default.ttl",
-      "resources/translation/releases/2026.09.11.1.json"
+      "resources/translation/releases/2026.09.15.1.json"
     ]
   }
 }
