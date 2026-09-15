@@ -654,6 +654,7 @@ fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
 }
 
 const STAGING_CLEANUP_PENDING_PREFIX: &str = "mutated_cleanup_pending:";
+const STAGING_CLEANUP_COMPLETE_PREFIX: &str = "mutated_cleanup_complete:";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct StagingCleanupRecovery {
@@ -664,14 +665,37 @@ struct StagingCleanupRecovery {
     error: String,
 }
 
+type StagingCleanupRecoveryIdentity = (String, String, String, Option<String>);
+
+fn staging_cleanup_recovery_identity(
+    recovery: &StagingCleanupRecovery,
+) -> StagingCleanupRecoveryIdentity {
+    (
+        recovery.staging_name.clone(),
+        recovery.staging_object_id.clone(),
+        recovery.target_object_id.clone(),
+        recovery.catalog_root_object_id.clone(),
+    )
+}
+
 fn staging_cleanup_pending_outcome(recovery: &StagingCleanupRecovery) -> String {
     let encoded = serde_json::to_string(recovery)
         .expect("staging cleanup recovery contains only serializable strings");
     format!("{STAGING_CLEANUP_PENDING_PREFIX}{encoded}")
 }
 
+fn staging_cleanup_complete_outcome(recovery: &StagingCleanupRecovery) -> String {
+    let encoded = serde_json::to_string(recovery)
+        .expect("staging cleanup recovery contains only serializable strings");
+    format!("{STAGING_CLEANUP_COMPLETE_PREFIX}{encoded}")
+}
+
 fn parse_staging_cleanup_pending(outcome: &str) -> Option<StagingCleanupRecovery> {
     serde_json::from_str(outcome.strip_prefix(STAGING_CLEANUP_PENDING_PREFIX)?).ok()
+}
+
+fn parse_staging_cleanup_complete(outcome: &str) -> Option<StagingCleanupRecovery> {
+    serde_json::from_str(outcome.strip_prefix(STAGING_CLEANUP_COMPLETE_PREFIX)?).ok()
 }
 
 fn is_disksage_staging_name(name: &str) -> bool {
@@ -805,25 +829,56 @@ fn retry_pending_staging_cleanup(
     now_ms: u64,
 ) -> Option<Result<(), SafetyError>> {
     let journal_path_value = path.to_string_lossy();
-    let mut matching_entries = journal_recent(journal_path, usize::MAX)
+    let mut matching_entries: Vec<_> = journal_recent(journal_path, usize::MAX)
         .into_iter()
-        .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes);
-    let latest = matching_entries.next()?;
-    if latest.outcome == "ok" {
-        let completed_recovery = parse_staging_cleanup_pending(&matching_entries.next()?.outcome)?;
-        return Some(
-            if completed_recovery.target_object_id == expected_object_id
-                && completed_recovery.catalog_root_object_id.as_deref() == expected_catalog_root_id
-            {
-                Ok(())
-            } else {
-                Err(SafetyError::Protected(path.to_path_buf()))
-            },
-        );
+        .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes)
+        .collect();
+    matching_entries.reverse();
+    let mut recoveries = std::collections::HashMap::new();
+    for (sequence, entry) in matching_entries.into_iter().enumerate() {
+        if let Some(recovery) = parse_staging_cleanup_pending(&entry.outcome) {
+            recoveries.insert(
+                staging_cleanup_recovery_identity(&recovery),
+                (recovery, false, sequence),
+            );
+        } else if let Some(recovery) = parse_staging_cleanup_complete(&entry.outcome) {
+            if let Some(state) = recoveries.get_mut(&staging_cleanup_recovery_identity(&recovery)) {
+                *state = (recovery, true, sequence);
+            }
+        }
     }
-    let mut recovery = parse_staging_cleanup_pending(&latest.outcome)?;
-    if recovery.target_object_id != expected_object_id
-        || recovery.catalog_root_object_id.as_deref() != expected_catalog_root_id
+
+    let matches_expected = |recovery: &StagingCleanupRecovery| {
+        recovery.target_object_id == expected_object_id
+            && recovery.catalog_root_object_id.as_deref() == expected_catalog_root_id
+    };
+    let pending = recoveries
+        .values()
+        .filter(|(recovery, complete, _)| !complete && matches_expected(recovery))
+        .max_by_key(|(_, _, sequence)| sequence)
+        .map(|(recovery, _, _)| recovery.clone());
+    let Some(mut recovery) = pending else {
+        let completed = recoveries
+            .values()
+            .filter(|(recovery, complete, _)| *complete && matches_expected(recovery))
+            .max_by_key(|(_, _, sequence)| sequence);
+        return if completed.is_some() {
+            Some(Ok(()))
+        } else if recoveries.is_empty() {
+            None
+        } else {
+            Some(Err(SafetyError::Protected(path.to_path_buf())))
+        };
+    };
+
+    if recoveries
+        .values()
+        .any(|(candidate, complete, _)| {
+            !complete
+                && matches_expected(candidate)
+                && staging_cleanup_recovery_identity(candidate)
+                    != staging_cleanup_recovery_identity(&recovery)
+        })
     {
         return Some(Err(SafetyError::Protected(path.to_path_buf())));
     }
@@ -833,7 +888,7 @@ fn retry_pending_staging_cleanup(
         op: op.into(),
         path: journal_path_value.into_owned(),
         bytes,
-        outcome: "ok".into(),
+        outcome: staging_cleanup_complete_outcome(&recovery),
     };
     let result = match cleanup {
         Ok(()) => Ok(()),
@@ -1806,7 +1861,9 @@ mod tests {
 
         permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 2).unwrap();
         assert!(!staging_dir.exists());
-        assert_eq!(journal_recent(&journal, 1)[0].outcome, "ok");
+        assert!(journal_recent(&journal, 1)[0]
+            .outcome
+            .starts_with(STAGING_CLEANUP_COMPLETE_PREFIX));
 
         permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 3).unwrap();
         assert!(!staging_dir.exists());

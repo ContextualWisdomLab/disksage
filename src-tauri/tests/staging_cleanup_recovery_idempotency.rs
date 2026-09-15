@@ -46,7 +46,9 @@ fn completed_cleanup_is_not_replayed_from_an_older_pending_receipt() {
 
     let after_first_retry = journal_recent(&journal, usize::MAX);
     assert_eq!(after_first_retry.len(), 2);
-    assert_eq!(after_first_retry[0].outcome, "ok");
+    assert!(after_first_retry[0]
+        .outcome
+        .starts_with("mutated_cleanup_complete:"));
 
     permanent_delete_dir_if_identity(&source, target_object_id, 0, &journal, 3)
         .expect("completed recovery must remain idempotently complete");
@@ -57,5 +59,7 @@ fn completed_cleanup_is_not_replayed_from_an_older_pending_receipt() {
         after_first_retry.len(),
         "a newer terminal receipt must suppress replay of an older cleanup-pending receipt"
     );
-    assert_eq!(after_second_retry[0].outcome, "ok");
+    assert!(after_second_retry[0]
+        .outcome
+        .starts_with("mutated_cleanup_complete:"));
 }
