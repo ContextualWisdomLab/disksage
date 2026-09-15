@@ -2,6 +2,11 @@
   import { onMount } from "svelte";
   import * as api from "$lib/api";
   import { fmtBytes } from "$lib/fmt";
+  import {
+    SUPPORTED_LOCALES,
+    getTranslationMessage,
+    type SupportedLocale,
+  } from "$lib/i18n";
   import TopFiles from "$lib/TopFiles.svelte";
   import Treemap from "$lib/Treemap.svelte";
   import Cleanup from "$lib/Cleanup.svelte";
@@ -13,6 +18,9 @@
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
+  let selectedLocale = $state<SupportedLocale>("ko");
+  let actionLabels = $state<{ scan: string; cancel: string } | null>(null);
+  let translationError = $state("");
   let scanning = $state(false);
   let stats: api.ScanStats | null = $state(null);
   let node: api.NodeView | null = $state(null);
@@ -20,8 +28,30 @@
   let top: api.EntryView[] = $state([]);
   let operationError = $state("");
   let navSeq = 0;
+  let translationSeq = 0;
+
+  async function loadActionLabels(locale: SupportedLocale) {
+    const seq = ++translationSeq;
+    actionLabels = null;
+    translationError = "";
+
+    try {
+      const [scanLabel, cancelLabel] = await Promise.all([
+        getTranslationMessage(locale, "app.action.scan"),
+        getTranslationMessage(locale, "app.action.cancel"),
+      ]);
+      if (seq !== translationSeq) return;
+      actionLabels = { scan: scanLabel.text, cancel: cancelLabel.text };
+    } catch {
+      if (seq !== translationSeq) return;
+      console.error("translation action labels unavailable");
+      translationError = `Translation unavailable for ${locale.toUpperCase()}; choose another locale.`;
+    }
+  }
 
   onMount(async () => {
+    void loadActionLabels(selectedLocale);
+
     try {
       roots = await api.listRoots();
       selectedRoot = roots[0] ?? "";
@@ -62,6 +92,7 @@
   });
 
   async function scan() {
+    if (actionLabels === null) return;
     ++navSeq;
     operationError = "";
     scanning = true;
@@ -115,10 +146,29 @@
     <select bind:value={selectedRoot} disabled={scanning}>
       {#each roots as r}<option value={r}>{r}</option>{/each}
     </select>
+    <select
+      class="locale"
+      bind:value={selectedLocale}
+      disabled={scanning}
+      aria-label="Locale"
+      onchange={() => void loadActionLabels(selectedLocale)}
+    >
+      {#each SUPPORTED_LOCALES as locale}
+        <option value={locale}>{locale.toUpperCase()}</option>
+      {/each}
+    </select>
     {#if scanning}
-      <button onclick={() => api.cancelScan()}>취소</button>
+      <button
+        onclick={() => api.cancelScan()}
+        disabled={actionLabels === null}
+        aria-busy={actionLabels === null}
+      >{actionLabels?.cancel ?? "…"}</button>
     {:else}
-      <button onclick={scan} disabled={scanning || !selectedRoot}>스캔</button>
+      <button
+        onclick={scan}
+        disabled={actionLabels === null || scanning || !selectedRoot}
+        aria-busy={actionLabels === null}
+      >{actionLabels?.scan ?? "…"}</button>
     {/if}
     {#if stats}
       <span class="stats">
@@ -127,6 +177,10 @@
       </span>
     {/if}
   </div>
+
+  {#if translationError}
+    <p class="error" role="alert">{translationError}</p>
+  {/if}
 
   {#if operationError}
     <p class="error" role="alert">{operationError}</p>
@@ -183,7 +237,8 @@
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Hiragino Sans", "Yu Gothic UI", "PingFang SC", "PingFang TC", "Microsoft YaHei", "Microsoft JhengHei", "Noto Sans CJK KR", "Noto Sans CJK JP", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans", sans-serif;
     padding: 1rem;
   }
-  .controls { display: flex; gap: 0.5rem; align-items: center; }
+  .controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .locale { min-width: 4.5rem; }
   .stats { color: #666; font-size: 0.9rem; }
   .error { margin: 0.75rem 0; font-weight: 600; }
   .crumbs { margin: 0.75rem 0; display: flex; gap: 0.25rem; flex-wrap: wrap; }
