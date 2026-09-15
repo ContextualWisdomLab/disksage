@@ -372,12 +372,20 @@ fn journal_serde_err(e: serde_json::Error) -> SafetyError {
 pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let line = serde_json::to_string(entry).map_err(journal_serde_err)?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(journal_path)
-        .map_err(journal_io_err)?;
+    let mut create_options = std::fs::OpenOptions::new();
+    create_options.create_new(true).read(true).append(true);
+    let (mut f, created) = match create_options.open(journal_path) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(journal_path)
+                .map_err(journal_io_err)?;
+            (file, false)
+        }
+        Err(error) => return Err(journal_io_err(error)),
+    };
     let mut healing = String::new();
     let len = f.seek(SeekFrom::End(0)).map_err(journal_io_err)?;
     if len > 0 {
@@ -390,7 +398,20 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
     }
     f.write_all(format!("{healing}{line}\n").as_bytes())
         .and_then(|_| f.sync_all())
-        .map_err(journal_io_err)
+        .map_err(journal_io_err)?;
+    #[cfg(unix)]
+    if created {
+        let parent = journal_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(journal_io_err)?;
+    }
+    #[cfg(not(unix))]
+    let _ = created;
+    Ok(())
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
@@ -698,6 +719,19 @@ fn parse_staging_cleanup_complete(outcome: &str) -> Option<StagingCleanupRecover
     serde_json::from_str(outcome.strip_prefix(STAGING_CLEANUP_COMPLETE_PREFIX)?).ok()
 }
 
+fn mutated_recovery_publication_error(
+    journal_error: SafetyError,
+    result: &Result<(), SafetyError>,
+) -> SafetyError {
+    let state = match result {
+        Ok(()) => "staging cleanup completed".to_string(),
+        Err(error) => error.to_string(),
+    };
+    SafetyError::Trash(format!(
+        "mutation completed; durable recovery evidence publication failed: {journal_error}; {state}"
+    ))
+}
+
 fn is_disksage_staging_name(name: &str) -> bool {
     let Some(suffix) = name.strip_prefix(".disksage-trash-") else {
         return false;
@@ -900,7 +934,10 @@ fn retry_pending_staging_cleanup(
             )))
         }
     };
-    Some(journal_append(journal_path, &entry).and(result))
+    Some(match journal_append(journal_path, &entry) {
+        Ok(()) => result,
+        Err(error) => Err(mutated_recovery_publication_error(error, &result)),
+    })
 }
 
 fn revalidate_catalog_root_before_staging(
@@ -1125,8 +1162,13 @@ fn trash_delete_if_identity_with_catalog_root(
         (Ok(()), None) => "ok".into(),
         (Err(error), None) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    match journal_append(journal_path, &entry) {
+        Ok(()) => result,
+        Err(error) if result.is_ok() || cleanup_pending.is_some() => {
+            Err(mutated_recovery_publication_error(error, &result))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -1257,8 +1299,13 @@ pub fn permanent_delete_dir_if_identity(
         (Ok(()), None) => "ok".into(),
         (Err(error), None) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    match journal_append(journal_path, &entry) {
+        Ok(()) => result,
+        Err(error) if result.is_ok() || cleanup_pending.is_some() => {
+            Err(mutated_recovery_publication_error(error, &result))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn same_volume(src: &Path, dst: &Path) -> bool {

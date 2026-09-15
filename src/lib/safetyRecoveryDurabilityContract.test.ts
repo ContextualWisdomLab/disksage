@@ -44,7 +44,8 @@ describe('post-mutation recovery durability contract', () => {
 
     const body = safetySource.slice(start, end);
     expect(body).not.toContain('.find_map(|entry| parse_staging_cleanup_pending(&entry.outcome))');
-    expect(body).toMatch(/outcome[\s\S]{0,240}"ok"/);
+    expect(body).toContain('parse_staging_cleanup_complete(&entry.outcome)');
+    expect(body).toContain('staging_cleanup_complete_outcome(&recovery)');
   });
 
   it('preserves completed-mutation truth when durable outcome publication fails', () => {
