@@ -389,6 +389,7 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
         }
     }
     f.write_all(format!("{healing}{line}\n").as_bytes())
+        .and_then(|_| f.sync_all())
         .map_err(journal_io_err)
 }
 
