@@ -1,9 +1,9 @@
-//! Read-only Tauri bridge for the immutable presentation resource.
+//! Tauri bridge for immutable presentation resources and their admitted local ledger.
 //!
-//! Callers choose only an explicit locale and stable screen key. Bundle path, release identity,
-//! digest, and SQLite path remain native authority. Resource verification completes before the
-//! bounded ledger write transaction, and this bridge never performs locale fallback or consults
-//! ontology vocabulary.
+//! Bundle path, release identity, digest, and SQLite path remain native authority. Resource
+//! verification plus append-only SQLite installation complete once during application setup;
+//! steady-state IPC accepts only an explicit locale and stable screen key, performs no locale
+//! fallback, and never consults ontology vocabulary.
 
 use crate::translation_ledger_store::{
     install_current_translation_resource, lookup_translation_message, open_translation_ledger,
@@ -206,4 +206,75 @@ pub fn get_translation_message(
         screen_key,
         text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache_key(
+        resource_version: &str,
+        locale: &str,
+        screen_key: &str,
+    ) -> TranslationMessageCacheKey {
+        TranslationMessageCacheKey {
+            resource_version: resource_version.to_string(),
+            locale: locale.to_string(),
+            screen_key: screen_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn cache_identity_includes_version_locale_and_screen_key() {
+        let mut cache = TranslationMessageCache::default();
+        let canonical = cache_key("2026.09.11.1", "en", "app.action.scan");
+        cache.insert(canonical.clone(), "Scan".to_string());
+
+        assert_eq!(cache.get(&canonical).as_deref(), Some("Scan"));
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.2", "en", "app.action.scan")),
+            None
+        );
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.1", "ko", "app.action.scan")),
+            None
+        );
+        assert_eq!(
+            cache.get(&cache_key("2026.09.11.1", "en", "app.action.cancel")),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_is_bounded_and_preserves_immutable_tuple_value() {
+        let mut cache = TranslationMessageCache::default();
+        let first = cache_key("2026.09.11.1", "en", "screen.000");
+        cache.insert(first.clone(), "first".to_string());
+        cache.insert(first.clone(), "mutated".to_string());
+        assert_eq!(cache.get(&first).as_deref(), Some("first"));
+
+        for index in 1..MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES {
+            let key = cache_key(
+                "2026.09.11.1",
+                "en",
+                &format!("screen.{index:03}"),
+            );
+            cache.insert(key, index.to_string());
+        }
+        assert_eq!(cache.entries.len(), MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES);
+        assert_eq!(
+            cache.insertion_order.len(),
+            MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES
+        );
+
+        let overflow = cache_key("2026.09.11.1", "en", "screen.overflow");
+        cache.insert(overflow.clone(), "overflow".to_string());
+        assert_eq!(cache.entries.len(), MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES);
+        assert_eq!(
+            cache.insertion_order.len(),
+            MAX_TRANSLATION_MESSAGE_CACHE_ENTRIES
+        );
+        assert_eq!(cache.get(&first), None);
+        assert_eq!(cache.get(&overflow).as_deref(), Some("overflow"));
+    }
 }
