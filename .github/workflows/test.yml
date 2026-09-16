@@ -227,7 +227,8 @@ jobs:
             $output | Write-Output
             if ($status -ne 0) { exit $status }
             $joined = $output -join "`n"
-            if ($joined -notmatch 'test safety::tests::staging_creation_windows_substitution_does_not_delete_replacement \.\.\. ok') {
+            $expected = 'test safety::tests::staging_creation_windows_substitution_does_not_delete_replacement ... ok'
+            if ($joined -notmatch [regex]::Escape($expected)) {
               Write-Error 'Windows staging rollback regression did not execute'
               exit 1
             }
