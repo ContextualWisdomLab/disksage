@@ -427,6 +427,39 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
     entries
 }
 
+const STAGING_RECOVERY_JOURNAL_SUFFIX: &str = ".staging-recovery.jsonl";
+
+fn staging_recovery_journal_path(journal_path: &Path) -> Result<PathBuf, SafetyError> {
+    sidecar(journal_path, STAGING_RECOVERY_JOURNAL_SUFFIX)
+        .ok_or_else(|| SafetyError::Journal("staging recovery journal path is unavailable".into()))
+}
+
+/// Publishes identity-bound staging recovery even when the primary journal object is unusable.
+/// The fallback has a deterministic path beside the configured journal, so recovery never needs
+/// to discover private staging directories by scanning their names.
+fn journal_append_staging_recovery(
+    journal_path: &Path,
+    entry: &JournalEntry,
+) -> Result<(), SafetyError> {
+    match journal_append(journal_path, entry) {
+        Ok(()) => Ok(()),
+        Err(primary_error) => {
+            let recovery_journal = staging_recovery_journal_path(journal_path)?;
+            journal_append(&recovery_journal, entry).map_err(|recovery_error| {
+                SafetyError::Journal(format!(
+                    "primary journal failed: {primary_error}; staging recovery journal failed: {recovery_error}"
+                ))
+            })
+        }
+    }
+}
+
+fn staging_recovery_journal_recent(journal_path: &Path) -> Vec<JournalEntry> {
+    staging_recovery_journal_path(journal_path)
+        .map(|path| journal_recent(&path, usize::MAX))
+        .unwrap_or_default()
+}
+
 #[cfg(windows)]
 fn strip_verbatim(p: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
@@ -1164,10 +1197,10 @@ fn create_private_staging_dir_for_operation(
             };
             let result =
                 SafetyError::Trash(format!("staging creation cleanup remains pending: {error}"));
-            match journal_append(journal_path, &entry) {
+            match journal_append_staging_recovery(journal_path, &entry) {
                 Ok(()) => Err(result),
                 Err(journal_error) => Err(SafetyError::Trash(format!(
-                    "staging creation cleanup remains pending; durable recovery evidence publication failed: {journal_error}; {error}"
+                    "staging creation cleanup remains pending; durable recovery evidence publication failed in both journals: {journal_error}; {error}"
                 ))),
             }
         }
@@ -1260,11 +1293,23 @@ fn retry_pending_staging_cleanup(
     now_ms: u64,
 ) -> Option<Result<(), SafetyError>> {
     let journal_path_value = path.to_string_lossy();
-    let mut matching_entries: Vec<_> = journal_recent(journal_path, usize::MAX)
+    // Fallback entries precede primary entries when timestamps tie, so a later terminal receipt
+    // in the primary journal supersedes its emergency pending receipt deterministically.
+    let mut entries = staging_recovery_journal_recent(journal_path);
+    entries.reverse();
+    let mut primary_entries = journal_recent(journal_path, usize::MAX);
+    primary_entries.reverse();
+    entries.extend(primary_entries);
+    entries.sort_by_key(|entry| {
+        (
+            entry.ts_ms,
+            parse_staging_cleanup_complete(&entry.outcome).is_some(),
+        )
+    });
+    let matching_entries: Vec<_> = entries
         .into_iter()
         .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes)
         .collect();
-    matching_entries.reverse();
     let mut recoveries = std::collections::HashMap::new();
     for (sequence, entry) in matching_entries.into_iter().enumerate() {
         if let Some(recovery) = parse_staging_cleanup_pending(&entry.outcome) {
@@ -1339,10 +1384,12 @@ fn retry_pending_staging_cleanup(
             )))
         }
     };
-    Some(match journal_append(journal_path, &entry) {
-        Ok(()) => result,
-        Err(error) => Err(mutated_recovery_publication_error(error, &result)),
-    })
+    Some(
+        match journal_append_staging_recovery(journal_path, &entry) {
+            Ok(()) => result,
+            Err(error) => Err(mutated_recovery_publication_error(error, &result)),
+        },
+    )
 }
 
 fn revalidate_catalog_root_before_staging(
@@ -2373,6 +2420,66 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".disksage-trash-")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_rollback_and_journal_failure_does_not_leave_untracked_residue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        std::fs::create_dir(&journal).unwrap();
+        let hook_parent = parent.clone();
+        let hook_moved_parent = moved_parent.clone();
+        set_staging_created_hook(move || {
+            let staging_name = std::fs::read_dir(&hook_parent)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .find(|name| name.to_string_lossy().starts_with(".disksage-trash-"))
+                .expect("the staging directory must exist before the race hook");
+            std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
+            std::fs::create_dir(&hook_parent).unwrap();
+            std::fs::write(
+                hook_moved_parent
+                    .join(staging_name)
+                    .join("rollback-blocker"),
+                b"retain",
+            )
+            .unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("rollback and primary journal failures must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("staging creation cleanup remains pending"));
+        assert!(journal_recent(&journal, 10).is_empty());
+        let recovery_journal = staging_recovery_journal_path(&journal).unwrap();
+        let entries = journal_recent(&recovery_journal, 10);
+        assert_eq!(entries.len(), 1);
+        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
+            .expect("the fallback journal must retain exact recovery authority");
+        let retained_staging = moved_parent.join(&recovery.staging_name);
+        assert_eq!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+        assert_eq!(
+            filesystem_object_id(&retained_staging).unwrap(),
+            recovery.staging_object_id
+        );
+        assert!(retained_staging.join("rollback-blocker").is_file());
+        assert_eq!(
+            filesystem_object_id(&moved_parent.join("node_modules")).unwrap(),
+            object_id
+        );
     }
 
     #[test]
