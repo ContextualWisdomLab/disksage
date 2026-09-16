@@ -372,12 +372,20 @@ fn journal_serde_err(e: serde_json::Error) -> SafetyError {
 pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let line = serde_json::to_string(entry).map_err(journal_serde_err)?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(journal_path)
-        .map_err(journal_io_err)?;
+    let mut create_options = std::fs::OpenOptions::new();
+    create_options.create_new(true).read(true).append(true);
+    let (mut f, created) = match create_options.open(journal_path) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(journal_path)
+                .map_err(journal_io_err)?;
+            (file, false)
+        }
+        Err(error) => return Err(journal_io_err(error)),
+    };
     let mut healing = String::new();
     let len = f.seek(SeekFrom::End(0)).map_err(journal_io_err)?;
     if len > 0 {
@@ -389,7 +397,21 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
         }
     }
     f.write_all(format!("{healing}{line}\n").as_bytes())
-        .map_err(journal_io_err)
+        .and_then(|_| f.sync_all())
+        .map_err(journal_io_err)?;
+    #[cfg(unix)]
+    if created {
+        let parent = journal_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(journal_io_err)?;
+    }
+    #[cfg(not(unix))]
+    let _ = created;
+    Ok(())
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
@@ -403,6 +425,39 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
     entries.reverse();
     entries.truncate(limit);
     entries
+}
+
+const STAGING_RECOVERY_JOURNAL_SUFFIX: &str = ".staging-recovery.jsonl";
+
+fn staging_recovery_journal_path(journal_path: &Path) -> Result<PathBuf, SafetyError> {
+    sidecar(journal_path, STAGING_RECOVERY_JOURNAL_SUFFIX)
+        .ok_or_else(|| SafetyError::Journal("staging recovery journal path is unavailable".into()))
+}
+
+/// Publishes identity-bound staging recovery even when the primary journal object is unusable.
+/// The fallback has a deterministic path beside the configured journal, so recovery never needs
+/// to discover private staging directories by scanning their names.
+fn journal_append_staging_recovery(
+    journal_path: &Path,
+    entry: &JournalEntry,
+) -> Result<(), SafetyError> {
+    match journal_append(journal_path, entry) {
+        Ok(()) => Ok(()),
+        Err(primary_error) => {
+            let recovery_journal = staging_recovery_journal_path(journal_path)?;
+            journal_append(&recovery_journal, entry).map_err(|recovery_error| {
+                SafetyError::Journal(format!(
+                    "primary journal failed: {primary_error}; staging recovery journal failed: {recovery_error}"
+                ))
+            })
+        }
+    }
+}
+
+fn staging_recovery_journal_recent(journal_path: &Path) -> Vec<JournalEntry> {
+    staging_recovery_journal_path(journal_path)
+        .map(|path| journal_recent(&path, usize::MAX))
+        .unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -521,6 +576,8 @@ static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static CATALOG_ROOT_AUTHORIZATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    static STAGING_CREATED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]
@@ -542,36 +599,380 @@ fn run_catalog_root_authorization_hook() {
     });
 }
 
-fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+#[cfg(test)]
+fn set_staging_created_hook<F>(hook: F)
+where
+    F: FnOnce() + 'static,
+{
+    STAGING_CREATED_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_staging_created_hook() {
+    STAGING_CREATED_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+/// Path and filesystem identities captured while the staging directory's parent was stable.
+#[derive(Debug)]
+struct PrivateStagingDir {
+    path: PathBuf,
+    name: String,
+    object_id: String,
+    source_parent_object_id: String,
+}
+
+fn real_directory_object_id(path: &Path) -> std::io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err(std::io::Error::other("path is not a real directory"));
+    }
+    filesystem_object_id(path)
+}
+
+/// Keeps rollback attached to the parent object until post-create validation succeeds.
+struct StagingCreationGuard {
+    parent: std::fs::File,
+    object_id: Option<String>,
+    #[cfg(unix)]
+    staging: Option<std::fs::File>,
+    #[cfg(not(unix))]
+    path: PathBuf,
+    #[cfg(unix)]
+    name: std::ffi::CString,
+}
+
+impl StagingCreationGuard {
+    fn rollback(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::{AsRawFd, FromRawFd};
+
+            let fd = unsafe {
+                libc::openat(
+                    self.parent.as_raw_fd(),
+                    self.name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            let current = unsafe { std::fs::File::from_raw_fd(fd) };
+            let current_id = object_id_from_metadata(&current.metadata()?).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "filesystem object identity is unavailable on this platform",
+                )
+            })?;
+            if self
+                .object_id
+                .as_deref()
+                .is_some_and(|id| id != current_id.as_str())
+            {
+                return Err(std::io::Error::other(
+                    "private staging directory identity changed during rollback",
+                ));
+            }
+
+            // The parent descriptor still names the reviewed directory after a pathname rename.
+            if unsafe {
+                libc::unlinkat(
+                    self.parent.as_raw_fd(),
+                    self.name.as_ptr(),
+                    libc::AT_REMOVEDIR,
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            return Ok(());
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::remove_dir(&self.path)
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StagingCreationError {
+    Failed(std::io::Error),
+    CleanupPending {
+        staging_dir: PrivateStagingDir,
+        error: String,
+    },
+}
+
+impl From<std::io::Error> for StagingCreationError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+fn open_staging_parent(parent: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        return std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        // Omitting FILE_SHARE_DELETE prevents parent rename/replacement while rollback is armed.
+        return std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(parent);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = parent;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "private staging parent handles are unavailable on this platform",
+        ))
+    }
+}
+
+fn staging_parent_object_id(
+    _parent_path: &Path,
+    parent: &std::fs::File,
+) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        return object_id_from_metadata(&parent.metadata()?).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem object identity is unavailable on this platform",
+            )
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        real_directory_object_id(_parent_path)
+    }
+}
+
+#[cfg(unix)]
+fn staging_name_c_string(name: &str) -> std::io::Result<std::ffi::CString> {
+    std::ffi::CString::new(name).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+fn create_staging_child(
+    parent: &std::fs::File,
+    _candidate: &Path,
+    name: &str,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let name = staging_name_c_string(name)?;
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(());
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, name);
+        std::fs::create_dir(_candidate)
+    }
+}
+
+fn secure_created_staging_child(
+    guard: &mut StagingCreationGuard,
+    _candidate: &Path,
+    name: &str,
+) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let name = staging_name_c_string(name)?;
+        let fd = unsafe {
+            libc::openat(
+                guard.parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let staging = unsafe { std::fs::File::from_raw_fd(fd) };
+        let object_id = object_id_from_metadata(&staging.metadata()?).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem object identity is unavailable on this platform",
+            )
+        })?;
+        guard.object_id = Some(object_id.clone());
+        guard.staging = Some(staging);
+        if unsafe {
+            libc::fchmod(
+                guard
+                    .staging
+                    .as_ref()
+                    .expect("staging handle was just retained")
+                    .as_raw_fd(),
+                0o700,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(object_id);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = name;
+        let object_id = filesystem_object_id(_candidate)?;
+        guard.object_id = Some(object_id.clone());
+        Ok(object_id)
+    }
+}
+
+fn staging_creation_error(
+    guard: StagingCreationGuard,
+    path: PathBuf,
+    name: String,
+    source_parent_object_id: String,
+    error: std::io::Error,
+) -> StagingCreationError {
+    match guard.rollback() {
+        Ok(()) => StagingCreationError::Failed(error),
+        Err(cleanup_error) => match guard.object_id {
+            Some(object_id) => StagingCreationError::CleanupPending {
+                staging_dir: PrivateStagingDir {
+                    path,
+                    name,
+                    object_id,
+                    source_parent_object_id,
+                },
+                error: format!(
+                    "{error}; private staging directory cleanup failed: {cleanup_error}"
+                ),
+            },
+            None => StagingCreationError::Failed(std::io::Error::other(format!(
+                "{error}; private staging directory cleanup failed before its identity was available: {cleanup_error}"
+            ))),
+        },
+    }
+}
+
+fn create_private_staging_dir(
+    path: &Path,
+    now_ms: u64,
+) -> Result<PrivateStagingDir, StagingCreationError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    let parent_handle = open_staging_parent(&parent)?;
+    let source_parent_object_id = staging_parent_object_id(&parent, &parent_handle)?;
     let pid = std::process::id();
     for _ in 0..32 {
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial));
-        match std::fs::create_dir(&candidate) {
+        let name = format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial);
+        let candidate = parent.join(&name);
+        match create_staging_child(&parent_handle, &candidate, &name) {
             Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
+                let mut guard = StagingCreationGuard {
+                    parent: parent_handle,
+                    object_id: None,
+                    #[cfg(unix)]
+                    staging: None,
+                    #[cfg(not(unix))]
+                    path: candidate.clone(),
+                    #[cfg(unix)]
+                    name: staging_name_c_string(&name)
+                        .expect("generated staging names contain no NUL bytes"),
+                };
+                let object_id = match secure_created_staging_child(&mut guard, &candidate, &name) {
+                    Ok(object_id) => object_id,
+                    Err(error) => {
+                        return Err(staging_creation_error(
+                            guard,
+                            candidate,
+                            name,
+                            source_parent_object_id,
+                            error,
+                        ))
+                    }
+                };
+                #[cfg(test)]
+                run_staging_created_hook();
+                let confirmed_parent_object_id = match real_directory_object_id(&parent) {
+                    Ok(object_id) => object_id,
+                    Err(error) => {
+                        return Err(staging_creation_error(
+                            guard,
+                            candidate,
+                            name,
+                            source_parent_object_id,
+                            error,
+                        ))
+                    }
+                };
+                if confirmed_parent_object_id != source_parent_object_id {
+                    return Err(staging_creation_error(
+                        guard,
+                        candidate,
+                        name,
+                        source_parent_object_id,
+                        std::io::Error::other(
+                            "private staging directory parent identity changed during creation",
+                        ),
+                    ));
                 }
-                return Ok(candidate);
+                return Ok(PrivateStagingDir {
+                    path: candidate,
+                    name,
+                    object_id,
+                    source_parent_object_id,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "could not allocate a private trash staging directory",
-    ))
+    )
+    .into())
 }
 
 fn restore_staged_if_source_absent(
     path: &Path,
     staged: &Path,
-    staging_dir: &Path,
+    recovery: &StagingCleanupRecovery,
 ) -> Result<(), String> {
     let source_absent = matches!(
         std::fs::symlink_metadata(path),
@@ -585,20 +986,11 @@ fn restore_staged_if_source_absent(
     }
     std::fs::rename(staged, path)
         .map_err(|error| format!("staged restore failed for {}: {error}", staged.display()))?;
-    std::fs::remove_dir(staging_dir).map_err(|error| {
-        format!(
-            "staging directory cleanup failed for {}: {error}",
-            staging_dir.display()
-        )
-    })?;
+    cleanup_verified_empty_staging_dir(path, recovery)?;
     Ok(())
 }
 
-fn remove_staged_permanently_with<F>(
-    staged: &Path,
-    staging_dir: &Path,
-    remove: F,
-) -> Result<(), SafetyError>
+fn remove_staged_permanently_with<F>(staged: &Path, remove: F) -> Result<(), SafetyError>
 where
     F: FnOnce(&Path) -> std::io::Result<()>,
 {
@@ -608,7 +1000,6 @@ where
             staged.display()
         )));
     }
-    let _ = std::fs::remove_dir(staging_dir);
     Ok(())
 }
 
@@ -660,6 +1051,345 @@ fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
 #[cfg(not(windows))]
 fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
     false
+}
+
+const STAGING_CLEANUP_PENDING_PREFIX: &str = "mutated_cleanup_pending:";
+const STAGING_CLEANUP_COMPLETE_PREFIX: &str = "mutated_cleanup_complete:";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StagingCleanupRecovery {
+    staging_name: String,
+    staging_object_id: String,
+    source_parent_object_id: Option<String>,
+    target_object_id: String,
+    catalog_root_object_id: Option<String>,
+    error: String,
+}
+
+type StagingCleanupRecoveryIdentity = (String, String, Option<String>, String, Option<String>);
+
+fn staging_cleanup_recovery_identity(
+    recovery: &StagingCleanupRecovery,
+) -> StagingCleanupRecoveryIdentity {
+    (
+        recovery.staging_name.clone(),
+        recovery.staging_object_id.clone(),
+        recovery.source_parent_object_id.clone(),
+        recovery.target_object_id.clone(),
+        recovery.catalog_root_object_id.clone(),
+    )
+}
+
+fn staging_cleanup_pending_outcome(recovery: &StagingCleanupRecovery) -> String {
+    let encoded = serde_json::to_string(recovery)
+        .expect("staging cleanup recovery contains only serializable strings");
+    format!("{STAGING_CLEANUP_PENDING_PREFIX}{encoded}")
+}
+
+fn staging_cleanup_complete_outcome(recovery: &StagingCleanupRecovery) -> String {
+    let encoded = serde_json::to_string(recovery)
+        .expect("staging cleanup recovery contains only serializable strings");
+    format!("{STAGING_CLEANUP_COMPLETE_PREFIX}{encoded}")
+}
+
+fn parse_staging_cleanup_pending(outcome: &str) -> Option<StagingCleanupRecovery> {
+    serde_json::from_str(outcome.strip_prefix(STAGING_CLEANUP_PENDING_PREFIX)?).ok()
+}
+
+fn parse_staging_cleanup_complete(outcome: &str) -> Option<StagingCleanupRecovery> {
+    serde_json::from_str(outcome.strip_prefix(STAGING_CLEANUP_COMPLETE_PREFIX)?).ok()
+}
+
+fn mutated_recovery_publication_error(
+    journal_error: SafetyError,
+    result: &Result<(), SafetyError>,
+) -> SafetyError {
+    let state = match result {
+        Ok(()) => "staging cleanup completed".to_string(),
+        Err(error) => error.to_string(),
+    };
+    SafetyError::Trash(format!(
+        "mutation completed; durable recovery evidence publication failed: {journal_error}; {state}"
+    ))
+}
+
+fn is_disksage_staging_name(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix(".disksage-trash-") else {
+        return false;
+    };
+    let mut parts = suffix.split('-');
+    (0..3).all(|_| {
+        parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    }) && parts.next().is_none()
+}
+
+#[cfg(test)]
+thread_local! {
+    static STAGING_CLEANUP_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path) -> std::io::Result<()>>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_staging_cleanup_hook<F>(hook: F)
+where
+    F: FnOnce(&Path) -> std::io::Result<()> + 'static,
+{
+    STAGING_CLEANUP_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+fn remove_staging_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(hook) = STAGING_CLEANUP_HOOK.with(|slot| slot.borrow_mut().take()) {
+        return hook(path);
+    }
+    std::fs::remove_dir(path)
+}
+
+fn staging_cleanup_recovery(
+    staging_dir: &PrivateStagingDir,
+    expected_object_id: &str,
+    expected_catalog_root_id: Option<&str>,
+) -> Result<StagingCleanupRecovery, SafetyError> {
+    if !is_disksage_staging_name(&staging_dir.name) {
+        return Err(SafetyError::Trash(
+            "private staging directory name is invalid".into(),
+        ));
+    }
+    Ok(StagingCleanupRecovery {
+        staging_name: staging_dir.name.clone(),
+        staging_object_id: staging_dir.object_id.clone(),
+        source_parent_object_id: Some(staging_dir.source_parent_object_id.clone()),
+        target_object_id: expected_object_id.into(),
+        catalog_root_object_id: expected_catalog_root_id.map(str::to_owned),
+        error: String::new(),
+    })
+}
+
+fn create_private_staging_dir_for_operation(
+    path: &Path,
+    expected_object_id: &str,
+    expected_catalog_root_id: Option<&str>,
+    op: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<PrivateStagingDir, SafetyError> {
+    match create_private_staging_dir(path, now_ms) {
+        Ok(staging_dir) => Ok(staging_dir),
+        Err(StagingCreationError::Failed(error)) => Err(SafetyError::Trash(error.to_string())),
+        Err(StagingCreationError::CleanupPending { staging_dir, error }) => {
+            let mut recovery = staging_cleanup_recovery(
+                &staging_dir,
+                expected_object_id,
+                expected_catalog_root_id,
+            )?;
+            recovery.error = error.clone();
+            let entry = JournalEntry {
+                ts_ms: now_ms,
+                op: op.into(),
+                path: path.to_string_lossy().into_owned(),
+                bytes,
+                outcome: staging_cleanup_pending_outcome(&recovery),
+            };
+            let result =
+                SafetyError::Trash(format!("staging creation cleanup remains pending: {error}"));
+            match journal_append_staging_recovery(journal_path, &entry) {
+                Ok(()) => Err(result),
+                Err(journal_error) => Err(SafetyError::Trash(format!(
+                    "staging creation cleanup remains pending; durable recovery evidence publication failed in both journals: {journal_error}; {error}"
+                ))),
+            }
+        }
+    }
+}
+
+fn cleanup_verified_empty_staging_dir(
+    source_path: &Path,
+    recovery: &StagingCleanupRecovery,
+) -> Result<(), String> {
+    if !is_disksage_staging_name(&recovery.staging_name) {
+        return Err("private staging directory name is invalid".into());
+    }
+    let expected_parent_id = recovery
+        .source_parent_object_id
+        .as_deref()
+        .ok_or_else(|| "private staging recovery lacks source parent identity".to_string())?;
+    let parent = source_path
+        .parent()
+        .ok_or_else(|| "private staging directory parent is unavailable".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("private staging directory parent is unavailable: {error}"))?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&parent_metadata)
+    {
+        return Err("private staging directory parent is not a real directory".into());
+    }
+    let actual_parent_id = filesystem_object_id(parent).map_err(|error| {
+        format!("private staging directory parent identity is unavailable: {error}")
+    })?;
+    if actual_parent_id != expected_parent_id {
+        return Err("private staging directory parent identity changed".into());
+    }
+    let staging_dir = parent.join(&recovery.staging_name);
+    let metadata = match std::fs::symlink_metadata(&staging_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "private staging directory metadata is unavailable: {error}"
+            ))
+        }
+    };
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err("private staging cleanup target is not a real directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err("private staging cleanup target is not DiskSage-owned".into());
+        }
+    }
+    let actual_id = filesystem_object_id(&staging_dir)
+        .map_err(|error| format!("private staging directory identity is unavailable: {error}"))?;
+    if actual_id != recovery.staging_object_id {
+        return Err("private staging directory identity changed".into());
+    }
+    let mut entries = std::fs::read_dir(&staging_dir)
+        .map_err(|error| format!("private staging directory is unreadable: {error}"))?;
+    if entries
+        .next()
+        .transpose()
+        .map_err(|error| format!("private staging directory is unreadable: {error}"))?
+        .is_some()
+    {
+        return Err("private staging directory is not empty".into());
+    }
+    // This stays non-recursive and fails if anything appears after the emptiness check. The final
+    // pathname-to-object mutation gap remains until this boundary can remove by an identity-bound
+    // directory handle on every supported platform.
+    remove_staging_dir(&staging_dir)
+        .map_err(|error| format!("private staging directory cleanup failed: {error}"))
+}
+
+fn retry_pending_staging_cleanup(
+    path: &Path,
+    expected_object_id: &str,
+    expected_catalog_root_id: Option<&str>,
+    op: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Option<Result<(), SafetyError>> {
+    let journal_path_value = path.to_string_lossy();
+    // Fallback entries precede primary entries when timestamps tie, so a later terminal receipt
+    // in the primary journal supersedes its emergency pending receipt deterministically.
+    let mut entries = staging_recovery_journal_recent(journal_path);
+    entries.reverse();
+    let mut primary_entries = journal_recent(journal_path, usize::MAX);
+    primary_entries.reverse();
+    entries.extend(primary_entries);
+    entries.sort_by_key(|entry| {
+        (
+            entry.ts_ms,
+            parse_staging_cleanup_complete(&entry.outcome).is_some(),
+        )
+    });
+    let matching_entries: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes)
+        .collect();
+    let mut recoveries = std::collections::HashMap::new();
+    for (sequence, entry) in matching_entries.into_iter().enumerate() {
+        if let Some(recovery) = parse_staging_cleanup_pending(&entry.outcome) {
+            recoveries.insert(
+                staging_cleanup_recovery_identity(&recovery),
+                (recovery, false, sequence),
+            );
+        } else if let Some(recovery) = parse_staging_cleanup_complete(&entry.outcome) {
+            if let Some(state) = recoveries.get_mut(&staging_cleanup_recovery_identity(&recovery)) {
+                *state = (recovery, true, sequence);
+            }
+        }
+    }
+
+    let matches_expected = |recovery: &StagingCleanupRecovery| {
+        recovery.target_object_id == expected_object_id
+            && recovery.catalog_root_object_id.as_deref() == expected_catalog_root_id
+    };
+    if recoveries.values().any(|(recovery, _, _)| {
+        matches_expected(recovery) && recovery.source_parent_object_id.is_none()
+    }) {
+        return Some(Err(SafetyError::Trash(
+            "mutation completed; legacy staging recovery lacks source parent identity; cleanup remains pending"
+                .into(),
+        )));
+    }
+    let pending = recoveries
+        .values()
+        .filter(|(recovery, complete, _)| !complete && matches_expected(recovery))
+        .max_by_key(|(_, _, sequence)| sequence)
+        .map(|(recovery, _, _)| recovery.clone());
+    let Some(mut recovery) = pending else {
+        let completed = recoveries
+            .values()
+            .filter(|(recovery, complete, _)| *complete && matches_expected(recovery))
+            .max_by_key(|(_, _, sequence)| sequence);
+        return if completed.is_some() {
+            Some(Ok(()))
+        } else if recoveries.is_empty() {
+            None
+        } else {
+            Some(Err(SafetyError::Protected(path.to_path_buf())))
+        };
+    };
+
+    if recoveries
+        .values()
+        .any(|(candidate, complete, _)| {
+            !complete
+                && matches_expected(candidate)
+                && staging_cleanup_recovery_identity(candidate)
+                    != staging_cleanup_recovery_identity(&recovery)
+        })
+    {
+        return Some(Err(SafetyError::Protected(path.to_path_buf())));
+    }
+    let cleanup = cleanup_verified_empty_staging_dir(path, &recovery);
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: op.into(),
+        path: journal_path_value.into_owned(),
+        bytes,
+        outcome: staging_cleanup_complete_outcome(&recovery),
+    };
+    let result = match cleanup {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            recovery.error = error.clone();
+            entry.outcome = staging_cleanup_pending_outcome(&recovery);
+            Err(SafetyError::Trash(format!(
+                "mutation completed; staging cleanup remains pending: {error}"
+            )))
+        }
+    };
+    Some(
+        match journal_append_staging_recovery(journal_path, &entry) {
+            Ok(()) => result,
+            Err(error) => Err(mutated_recovery_publication_error(error, &result)),
+        },
+    )
 }
 
 fn revalidate_catalog_root_before_staging(
@@ -756,6 +1486,22 @@ fn trash_delete_if_identity_with_catalog_root(
     if !shared_temp_authorized && !catalog_authorized && is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
+    if matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        if let Some(retry) = retry_pending_staging_cleanup(
+            path,
+            expected_object_id,
+            expected_catalog_root_id.as_deref(),
+            "trash_delete",
+            bytes,
+            journal_path,
+            now_ms,
+        ) {
+            return retry;
+        }
+    }
     let actual = filesystem_object_id(path)
         .map_err(|error| SafetyError::Trash(format!("object identity unavailable: {error}")))?;
     if actual != expected_object_id {
@@ -766,9 +1512,21 @@ fn trash_delete_if_identity_with_catalog_root(
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("개발 아티팩트의 파일명이 없습니다. 다시 스캔하세요".into())
     })?;
-    let staging_dir = create_private_staging_dir(path, now_ms)
-        .map_err(|error| SafetyError::Trash(error.to_string()))?;
-    let staged = staging_dir.join(file_name);
+    let staging_dir = create_private_staging_dir_for_operation(
+        path,
+        expected_object_id,
+        expected_catalog_root_id.as_deref(),
+        "trash_delete",
+        bytes,
+        journal_path,
+        now_ms,
+    )?;
+    let staged = staging_dir.path.join(file_name);
+    let recovery = staging_cleanup_recovery(
+        &staging_dir,
+        expected_object_id,
+        expected_catalog_root_id.as_deref(),
+    )?;
     let mut entry = JournalEntry {
         ts_ms: now_ms,
         op: "trash_delete".into(),
@@ -777,10 +1535,15 @@ fn trash_delete_if_identity_with_catalog_root(
         outcome: "pending".into(),
     };
     if let Err(error) = journal_append(journal_path, &entry) {
-        let _ = std::fs::remove_dir(&staging_dir);
-        return Err(error);
+        return match cleanup_verified_empty_staging_dir(path, &recovery) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(SafetyError::Journal(format!(
+                "{error}; private staging directory cleanup failed: {cleanup_error}"
+            ))),
+        };
     }
 
+    let mut cleanup_pending = None;
     let result = (|| -> Result<(), SafetyError> {
         if let (Some(root), Some(expected_catalog_root_id)) =
             (catalog_root, expected_catalog_root_id.as_deref())
@@ -795,18 +1558,25 @@ fn trash_delete_if_identity_with_catalog_root(
                 Ok(())
             })();
             if let Err(error) = revalidation {
-                let _ = std::fs::remove_dir(&staging_dir);
-                return Err(error);
+                return match cleanup_verified_empty_staging_dir(path, &recovery) {
+                    Ok(()) => Err(error),
+                    Err(cleanup_error) => Err(SafetyError::Trash(format!(
+                        "{error}; private staging directory cleanup failed: {cleanup_error}"
+                    ))),
+                };
             }
         }
         if let Err(error) = std::fs::rename(path, &staged) {
-            let _ = std::fs::remove_dir(&staging_dir);
-            return Err(SafetyError::Trash(format!(
-                "atomic staging move failed: {error}"
-            )));
+            let mutation_error = SafetyError::Trash(format!("atomic staging move failed: {error}"));
+            return match cleanup_verified_empty_staging_dir(path, &recovery) {
+                Ok(()) => Err(mutation_error),
+                Err(cleanup_error) => Err(SafetyError::Trash(format!(
+                    "{mutation_error}; private staging directory cleanup failed: {cleanup_error}"
+                ))),
+            };
         }
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
-            let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
+            let restore = restore_staged_if_source_absent(path, &staged, &recovery);
             match restore {
                 Ok(()) => {
                     SafetyError::Trash(format!("staged object identity unavailable: {error}"))
@@ -817,7 +1587,7 @@ fn trash_delete_if_identity_with_catalog_root(
             }
         })?;
         if moved_id != expected_object_id {
-            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+            return match restore_staged_if_source_absent(path, &staged, &recovery) {
                 Ok(()) => Err(SafetyError::Trash(
                     "atomic staging move changed the filesystem object; nothing was trashed".into(),
                 )),
@@ -827,21 +1597,37 @@ fn trash_delete_if_identity_with_catalog_root(
             };
         }
         if let Err(error) = platform_trash_delete(&staged) {
-            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+            return match restore_staged_if_source_absent(path, &staged, &recovery) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
                 Err(restore_error) => {
                     Err(SafetyError::Trash(format!("{}; {restore_error}", error)))
                 }
             };
         }
-        Ok(())
+        match cleanup_verified_empty_staging_dir(path, &recovery) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let mut pending = recovery.clone();
+                pending.error = error.clone();
+                cleanup_pending = Some(pending);
+                Err(SafetyError::Trash(format!(
+                    "mutation completed; staging cleanup remains pending: {error}"
+                )))
+            }
+        }
     })();
-    entry.outcome = match &result {
-        Ok(()) => "ok".into(),
-        Err(error) => format!("error:{error}"),
+    entry.outcome = match (&result, cleanup_pending.as_ref()) {
+        (_, Some(pending)) => staging_cleanup_pending_outcome(pending),
+        (Ok(()), None) => "ok".into(),
+        (Err(error), None) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    match journal_append(journal_path, &entry) {
+        Ok(()) => result,
+        Err(error) if result.is_ok() || cleanup_pending.is_some() => {
+            Err(mutated_recovery_publication_error(error, &result))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Permanently remove one unchanged, current-user-owned generated directory.
@@ -869,6 +1655,22 @@ pub fn permanent_delete_dir_if_identity(
     if !shared_temp_authorized && is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
+    if matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        if let Some(retry) = retry_pending_staging_cleanup(
+            path,
+            expected_object_id,
+            None,
+            "permanent_generated_directory_delete",
+            bytes,
+            journal_path,
+            now_ms,
+        ) {
+            return retry;
+        }
+    }
     let metadata =
         std::fs::symlink_metadata(path).map_err(|error| SafetyError::Trash(error.to_string()))?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -886,9 +1688,17 @@ pub fn permanent_delete_dir_if_identity(
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
     })?;
-    let staging_dir = create_private_staging_dir(path, now_ms)
-        .map_err(|error| SafetyError::Trash(error.to_string()))?;
-    let staged = staging_dir.join(file_name);
+    let staging_dir = create_private_staging_dir_for_operation(
+        path,
+        expected_object_id,
+        None,
+        "permanent_generated_directory_delete",
+        bytes,
+        journal_path,
+        now_ms,
+    )?;
+    let staged = staging_dir.path.join(file_name);
+    let recovery = staging_cleanup_recovery(&staging_dir, expected_object_id, None)?;
     let mut entry = JournalEntry {
         ts_ms: now_ms,
         op: "permanent_generated_directory_delete".into(),
@@ -897,18 +1707,26 @@ pub fn permanent_delete_dir_if_identity(
         outcome: "pending".into(),
     };
     if let Err(error) = journal_append(journal_path, &entry) {
-        let _ = std::fs::remove_dir(&staging_dir);
-        return Err(error);
+        return match cleanup_verified_empty_staging_dir(path, &recovery) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(SafetyError::Journal(format!(
+                "{error}; private staging directory cleanup failed: {cleanup_error}"
+            ))),
+        };
     }
+    let mut cleanup_pending = None;
     let result = (|| -> Result<(), SafetyError> {
         if let Err(error) = std::fs::rename(path, &staged) {
-            let _ = std::fs::remove_dir(&staging_dir);
-            return Err(SafetyError::Trash(format!(
-                "atomic staging move failed: {error}"
-            )));
+            let mutation_error = SafetyError::Trash(format!("atomic staging move failed: {error}"));
+            return match cleanup_verified_empty_staging_dir(path, &recovery) {
+                Ok(()) => Err(mutation_error),
+                Err(cleanup_error) => Err(SafetyError::Trash(format!(
+                    "{mutation_error}; private staging directory cleanup failed: {cleanup_error}"
+                ))),
+            };
         }
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
-            let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
+            let restore = restore_staged_if_source_absent(path, &staged, &recovery);
             match restore {
                 Ok(()) => SafetyError::Trash(format!(
                     "staged generated directory identity unavailable: {error}"
@@ -919,7 +1737,7 @@ pub fn permanent_delete_dir_if_identity(
             }
         })?;
         if moved_id != expected_object_id {
-            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+            return match restore_staged_if_source_absent(path, &staged, &recovery) {
                 Ok(()) => Err(SafetyError::Trash(
                     "atomic staging move changed the generated directory; nothing was deleted"
                         .into(),
@@ -929,14 +1747,31 @@ pub fn permanent_delete_dir_if_identity(
                 ))),
             };
         }
-        remove_staged_permanently_with(&staged, &staging_dir, |path| std::fs::remove_dir_all(path))
+        remove_staged_permanently_with(&staged, |path| std::fs::remove_dir_all(path))?;
+        match cleanup_verified_empty_staging_dir(path, &recovery) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let mut pending = recovery.clone();
+                pending.error = error.clone();
+                cleanup_pending = Some(pending);
+                Err(SafetyError::Trash(format!(
+                    "mutation completed; staging cleanup remains pending: {error}"
+                )))
+            }
+        }
     })();
-    entry.outcome = match &result {
-        Ok(()) => "ok".into(),
-        Err(error) => format!("error:{error}"),
+    entry.outcome = match (&result, cleanup_pending.as_ref()) {
+        (_, Some(pending)) => staging_cleanup_pending_outcome(pending),
+        (Ok(()), None) => "ok".into(),
+        (Err(error), None) => format!("error:{error}"),
     };
-    journal_append(journal_path, &entry)?;
-    result
+    match journal_append(journal_path, &entry) {
+        Ok(()) => result,
+        Err(error) if result.is_ok() || cleanup_pending.is_some() => {
+            Err(mutated_recovery_publication_error(error, &result))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn same_volume(src: &Path, dst: &Path) -> bool {
@@ -1486,6 +2321,167 @@ mod tests {
             .starts_with(".disksage-trash-")));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_parent_replacement_fails_without_untracked_residue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let hook_parent = parent.clone();
+        let hook_moved_parent = moved_parent.clone();
+        set_staging_created_hook(move || {
+            std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
+            std::fs::create_dir(&hook_parent).unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("a replaced staging parent must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("parent identity changed during creation"));
+        let moved_generated = moved_parent.join("node_modules");
+        assert_eq!(filesystem_object_id(&moved_generated).unwrap(), object_id);
+        assert!(moved_generated.join("generated.bin").is_file());
+        assert!(journal_recent(&journal, 10).is_empty());
+        for inspected_parent in [&parent, &moved_parent] {
+            assert!(std::fs::read_dir(inspected_parent)
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".disksage-trash-")));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_rollback_failure_is_durably_recoverable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let hook_parent = parent.clone();
+        let hook_moved_parent = moved_parent.clone();
+        set_staging_created_hook(move || {
+            let staging_name = std::fs::read_dir(&hook_parent)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .find(|name| name.to_string_lossy().starts_with(".disksage-trash-"))
+                .expect("the staging directory must exist before the race hook");
+            std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
+            std::fs::create_dir(&hook_parent).unwrap();
+            std::fs::write(
+                hook_moved_parent
+                    .join(staging_name)
+                    .join("rollback-blocker"),
+                b"retain",
+            )
+            .unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("a failed staging rollback must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("staging creation cleanup remains pending"));
+        let entries = journal_recent(&journal, 10);
+        assert_eq!(entries.len(), 1);
+        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
+            .expect("rollback failure must publish durable recovery evidence");
+        let retained_staging = moved_parent.join(&recovery.staging_name);
+        assert_eq!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+        assert_eq!(
+            filesystem_object_id(&retained_staging).unwrap(),
+            recovery.staging_object_id
+        );
+        assert!(retained_staging.join("rollback-blocker").is_file());
+        assert_eq!(
+            filesystem_object_id(&moved_parent.join("node_modules")).unwrap(),
+            object_id
+        );
+        assert!(std::fs::read_dir(&parent).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_rollback_and_journal_failure_does_not_leave_untracked_residue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        std::fs::create_dir(&journal).unwrap();
+        let hook_parent = parent.clone();
+        let hook_moved_parent = moved_parent.clone();
+        set_staging_created_hook(move || {
+            let staging_name = std::fs::read_dir(&hook_parent)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .find(|name| name.to_string_lossy().starts_with(".disksage-trash-"))
+                .expect("the staging directory must exist before the race hook");
+            std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
+            std::fs::create_dir(&hook_parent).unwrap();
+            std::fs::write(
+                hook_moved_parent
+                    .join(staging_name)
+                    .join("rollback-blocker"),
+                b"retain",
+            )
+            .unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("rollback and primary journal failures must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("staging creation cleanup remains pending"));
+        assert!(journal_recent(&journal, 10).is_empty());
+        let recovery_journal = staging_recovery_journal_path(&journal).unwrap();
+        let entries = journal_recent(&recovery_journal, 10);
+        assert_eq!(entries.len(), 1);
+        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
+            .expect("the fallback journal must retain exact recovery authority");
+        let retained_staging = moved_parent.join(&recovery.staging_name);
+        assert_eq!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+        assert_eq!(
+            filesystem_object_id(&retained_staging).unwrap(),
+            recovery.staging_object_id
+        );
+        assert!(retained_staging.join("rollback-blocker").is_file());
+        assert_eq!(
+            filesystem_object_id(&moved_parent.join("node_modules")).unwrap(),
+            object_id
+        );
+    }
+
     #[test]
     fn permanent_generated_directory_delete_rechecks_identity_and_journals() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1511,6 +2507,217 @@ mod tests {
     }
 
     #[test]
+    fn post_mutation_cleanup_failure_is_persisted_and_retry_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("node_modules");
+        std::fs::create_dir(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        set_staging_cleanup_hook(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "simulated cleanup failure",
+            ))
+        });
+
+        let first =
+            permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap_err();
+
+        assert!(first.to_string().contains("mutation completed"));
+        assert!(!generated.exists());
+        let pending = &journal_recent(&journal, 1)[0].outcome;
+        let recovery = parse_staging_cleanup_pending(pending)
+            .expect("post-mutation cleanup failure must be recoverable");
+        let staging_dir = tmp.path().join(&recovery.staging_name);
+        assert!(staging_dir.is_dir());
+        assert!(std::fs::read_dir(&staging_dir).unwrap().next().is_none());
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 2).unwrap();
+        assert!(!staging_dir.exists());
+        assert!(journal_recent(&journal, 1)[0]
+            .outcome
+            .starts_with(STAGING_CLEANUP_COMPLETE_PREFIX));
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 3).unwrap();
+        assert!(!staging_dir.exists());
+    }
+
+    #[test]
+    fn pending_cleanup_rejects_moved_and_replaced_source_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        set_staging_cleanup_hook(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "simulated cleanup failure",
+            ))
+        });
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap_err();
+        let recovery = parse_staging_cleanup_pending(&journal_recent(&journal, 1)[0].outcome)
+            .expect("cleanup failure must publish recovery evidence");
+        let retained_staging = parent.join(&recovery.staging_name);
+        assert!(retained_staging.is_dir());
+
+        std::fs::rename(&parent, &moved_parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+
+        let retry = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 2)
+            .expect_err("a replacement source parent must not complete cleanup");
+
+        assert!(retry.to_string().contains("cleanup remains pending"));
+        assert!(moved_parent.join(&recovery.staging_name).is_dir());
+        assert!(!parent.join(&recovery.staging_name).exists());
+        assert!(journal_recent(&journal, 1)[0]
+            .outcome
+            .starts_with(STAGING_CLEANUP_PENDING_PREFIX));
+    }
+
+    #[test]
+    fn staging_receipt_retains_creation_parent_identity_after_move_and_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let source = parent.join("node_modules");
+        std::fs::create_dir(&parent).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+
+        std::fs::rename(&parent, &moved_parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        let replacement_parent_id = filesystem_object_id(&parent).unwrap();
+
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
+
+        assert_eq!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+        assert_ne!(
+            recovery.source_parent_object_id.as_deref(),
+            Some(replacement_parent_id.as_str())
+        );
+        assert_eq!(
+            recovery.staging_object_id,
+            filesystem_object_id(&moved_parent.join(&recovery.staging_name)).unwrap()
+        );
+        assert!(!parent.join(&recovery.staging_name).exists());
+    }
+
+    #[test]
+    fn legacy_parent_unbound_recovery_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
+        let legacy_outcome = format!(
+            "{STAGING_CLEANUP_PENDING_PREFIX}{{\"staging_name\":\"{}\",\"staging_object_id\":\"{}\",\"target_object_id\":\"target-id\",\"catalog_root_object_id\":null,\"error\":\"simulated cleanup failure\"}}",
+            recovery.staging_name, recovery.staging_object_id
+        );
+        let journal = tmp.path().join("journal.jsonl");
+        journal_append(
+            &journal,
+            &JournalEntry {
+                ts_ms: 1,
+                op: "permanent_generated_directory_delete".into(),
+                path: source.to_string_lossy().into_owned(),
+                bytes: 0,
+                outcome: legacy_outcome,
+            },
+        )
+        .unwrap();
+
+        let retry = retry_pending_staging_cleanup(
+            &source,
+            "target-id",
+            None,
+            "permanent_generated_directory_delete",
+            0,
+            &journal,
+            2,
+        )
+        .expect("legacy recovery evidence must be recognized")
+        .expect_err("legacy recovery evidence must fail closed");
+
+        assert!(retry.to_string().contains("legacy staging recovery"));
+        assert!(staging_dir.path.exists());
+    }
+
+    #[test]
+    fn staging_cleanup_rejects_nonempty_or_replaced_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
+        std::fs::write(staging_dir.path.join("unexpected"), b"retain").unwrap();
+
+        let nonempty = cleanup_verified_empty_staging_dir(&source, &recovery).unwrap_err();
+
+        assert!(nonempty.contains("not empty"));
+        assert!(staging_dir.path.join("unexpected").exists());
+        std::fs::remove_file(staging_dir.path.join("unexpected")).unwrap();
+        std::fs::remove_dir(&staging_dir.path).unwrap();
+        std::fs::create_dir(&staging_dir.path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &staging_dir.path,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
+
+        let replaced = cleanup_verified_empty_staging_dir(&source, &recovery).unwrap_err();
+
+        assert!(replaced.contains("identity changed"));
+        assert!(staging_dir.path.exists());
+    }
+
+    #[test]
+    fn pending_catalog_cleanup_rejects_a_changed_root_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+        let mut recovery =
+            staging_cleanup_recovery(&staging_dir, "target-id", Some("reviewed-root-id")).unwrap();
+        recovery.error = "simulated cleanup failure".into();
+        let journal = tmp.path().join("journal.jsonl");
+        journal_append(
+            &journal,
+            &JournalEntry {
+                ts_ms: 1,
+                op: "trash_delete".into(),
+                path: source.to_string_lossy().into_owned(),
+                bytes: 0,
+                outcome: staging_cleanup_pending_outcome(&recovery),
+            },
+        )
+        .unwrap();
+
+        let retry = retry_pending_staging_cleanup(
+            &source,
+            "target-id",
+            Some("replacement-root-id"),
+            "trash_delete",
+            0,
+            &journal,
+            2,
+        )
+        .expect("pending recovery must be recognized");
+
+        assert!(matches!(retry, Err(SafetyError::Protected(_))));
+        assert!(staging_dir.path.exists());
+    }
+
+    #[test]
     fn permanent_delete_does_not_restore_a_partially_removed_staged_tree() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("node_modules");
@@ -1522,7 +2729,7 @@ mod tests {
         std::fs::create_dir(&staging_dir).unwrap();
         std::fs::rename(&source, &staged).unwrap();
 
-        let result = remove_staged_permanently_with(&staged, &staging_dir, |path| {
+        let result = remove_staged_permanently_with(&staged, |path| {
             std::fs::remove_file(path.join("removed.bin")).unwrap();
             Err(std::io::Error::other("simulated recursive delete failure"))
         });
@@ -1540,12 +2747,12 @@ mod tests {
     fn staged_restore_reports_reappeared_source_and_retains_staged_object() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
-        let staging_dir = tmp.path().join(".disksage-trash-staging");
-        let staged = staging_dir.join("source");
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+        let staged = staging_dir.path.join("source");
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
         std::fs::write(&source, b"replacement").unwrap();
-        std::fs::create_dir(&staging_dir).unwrap();
         std::fs::write(&staged, b"reviewed").unwrap();
-        let error = restore_staged_if_source_absent(&source, &staged, &staging_dir).unwrap_err();
+        let error = restore_staged_if_source_absent(&source, &staged, &recovery).unwrap_err();
         assert!(error.contains(staged.to_string_lossy().as_ref()));
         assert!(source.exists());
         assert!(staged.exists());
@@ -1555,12 +2762,12 @@ mod tests {
     fn staged_restore_reports_rename_failure_with_staged_path() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
-        let staging_dir = tmp.path().join(".disksage-trash-staging");
-        let staged = staging_dir.join("source");
-        std::fs::create_dir(&staging_dir).unwrap();
-        let error = restore_staged_if_source_absent(&source, &staged, &staging_dir).unwrap_err();
+        let staging_dir = create_private_staging_dir(&source, 1).unwrap();
+        let staged = staging_dir.path.join("source");
+        let recovery = staging_cleanup_recovery(&staging_dir, "target-id", None).unwrap();
+        let error = restore_staged_if_source_absent(&source, &staged, &recovery).unwrap_err();
         assert!(error.contains(staged.to_string_lossy().as_ref()));
-        assert!(staging_dir.exists());
+        assert!(staging_dir.path.exists());
     }
 
     #[test]
