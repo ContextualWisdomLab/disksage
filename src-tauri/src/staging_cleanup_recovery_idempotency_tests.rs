@@ -1,4 +1,4 @@
-use disksage_lib::safety::{
+use crate::safety::{
     filesystem_object_id, journal_append, journal_recent, permanent_delete_dir_if_identity,
     JournalEntry,
 };
