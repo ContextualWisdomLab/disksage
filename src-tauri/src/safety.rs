@@ -598,6 +598,10 @@ static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static CATALOG_ROOT_AUTHORIZATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    static STAGING_CREATION_INTENT_PUBLISHED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    static STAGING_CREATION_INTENT_COMPLETION_FAILURE: std::cell::Cell<bool> =
+        std::cell::Cell::new(false);
     static STAGING_CREATED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
@@ -619,6 +623,35 @@ fn run_catalog_root_authorization_hook() {
             hook();
         }
     });
+}
+
+#[cfg(test)]
+fn set_staging_creation_intent_published_hook<F>(hook: F)
+where
+    F: FnOnce() + 'static,
+{
+    STAGING_CREATION_INTENT_PUBLISHED_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_staging_creation_intent_published_hook() {
+    STAGING_CREATION_INTENT_PUBLISHED_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(test)]
+fn set_staging_creation_intent_completion_failure(fail: bool) {
+    STAGING_CREATION_INTENT_COMPLETION_FAILURE.with(|value| value.set(fail));
+}
+
+#[cfg(test)]
+fn staging_creation_intent_completion_must_fail() -> bool {
+    STAGING_CREATION_INTENT_COMPLETION_FAILURE.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -884,10 +917,16 @@ fn staging_creation_error(
     path: PathBuf,
     name: String,
     source_parent_object_id: String,
+    authority: Option<&StagingRecoveryAuthority<'_>>,
     error: std::io::Error,
 ) -> StagingCreationError {
     match guard.rollback() {
-        Ok(()) => StagingCreationError::Failed(error),
+        Ok(()) => StagingCreationError::Failed(complete_staging_creation_intent(
+            authority,
+            &name,
+            &source_parent_object_id,
+            error,
+        )),
         Err(cleanup_error) => match guard.object_id {
             Some(object_id) => StagingCreationError::CleanupPending {
                 staging_dir: PrivateStagingDir {
@@ -924,6 +963,12 @@ impl StagingRecoveryAuthority<'_> {
         source_parent_object_id: &str,
         complete: bool,
     ) -> Result<(), SafetyError> {
+        #[cfg(test)]
+        if complete && staging_creation_intent_completion_must_fail() {
+            return Err(SafetyError::Journal(
+                "simulated staging creation intent completion failure".into(),
+            ));
+        }
         let intent = StagingCreationIntent {
             source_parent_object_id: source_parent_object_id.into(),
             staging_name: staging_name.into(),
@@ -968,18 +1013,49 @@ impl StagingRecoveryAuthority<'_> {
     }
 }
 
+fn complete_staging_creation_intent(
+    authority: Option<&StagingRecoveryAuthority<'_>>,
+    staging_name: &str,
+    source_parent_object_id: &str,
+    error: std::io::Error,
+) -> std::io::Error {
+    let Some(authority) = authority else {
+        return error;
+    };
+    match authority.publish_creation_intent(staging_name, source_parent_object_id, true) {
+        Ok(()) => error,
+        Err(completion_error) => std::io::Error::other(format!(
+            "{error}; staging creation intent completion failed: {completion_error}"
+        )),
+    }
+}
+
 fn staging_creation_error_with_authority(
     guard: StagingCreationGuard,
     staging_dir: PrivateStagingDir,
     authority: &StagingRecoveryAuthority<'_>,
+    close_creation_intent: bool,
     error: std::io::Error,
 ) -> StagingCreationError {
     match guard.rollback() {
         Ok(()) => {
-            // A stale pending receipt is safe, but complete it when possible so a later retry does
-            // not have to rediscover that the exact object is already absent.
-            let _ = authority.publish(&staging_dir, true);
-            StagingCreationError::Failed(error)
+            if let Err(completion_error) = authority.publish(&staging_dir, true) {
+                return StagingCreationError::Failed(std::io::Error::other(format!(
+                    "{error}; staging recovery authority completion failed: {completion_error}"
+                )));
+            }
+            if close_creation_intent {
+                StagingCreationError::Failed(complete_staging_creation_intent(
+                    Some(authority),
+                    &staging_dir.name,
+                    &staging_dir.source_parent_object_id,
+                    error,
+                ))
+            } else {
+                // The attempted terminal publication itself failed, so retain its pending intent
+                // while the object-bound completion proves that rollback removed the child.
+                StagingCreationError::Failed(error)
+            }
         }
         Err(cleanup_error) => StagingCreationError::CleanupPending {
             staging_dir,
@@ -1020,6 +1096,8 @@ fn create_private_staging_dir_inner(
                         "staging creation intent publication failed: {error}"
                     ))
                 })?;
+            #[cfg(test)]
+            run_staging_creation_intent_published_hook();
         }
         match create_staging_child(&parent_handle, &candidate, &name) {
             Ok(()) => {
@@ -1042,6 +1120,7 @@ fn create_private_staging_dir_inner(
                             candidate,
                             name,
                             source_parent_object_id,
+                            authority,
                             error,
                         ))
                     }
@@ -1064,6 +1143,7 @@ fn create_private_staging_dir_inner(
                             staging_dir.path,
                             staging_dir.name,
                             staging_dir.source_parent_object_id,
+                            Some(authority),
                             error,
                         ));
                     }
@@ -1076,6 +1156,7 @@ fn create_private_staging_dir_inner(
                                 guard,
                                 staging_dir,
                                 authority,
+                                true,
                                 error,
                             ),
                             None => staging_creation_error(
@@ -1083,6 +1164,7 @@ fn create_private_staging_dir_inner(
                                 staging_dir.path,
                                 staging_dir.name,
                                 staging_dir.source_parent_object_id,
+                                authority,
                                 error,
                             ),
                         })
@@ -1097,6 +1179,7 @@ fn create_private_staging_dir_inner(
                             guard,
                             staging_dir,
                             authority,
+                            true,
                             error,
                         ),
                         None => staging_creation_error(
@@ -1104,25 +1187,55 @@ fn create_private_staging_dir_inner(
                             staging_dir.path,
                             staging_dir.name,
                             staging_dir.source_parent_object_id,
+                            authority,
                             error,
                         ),
                     });
+                }
+                if let Some(authority) = authority {
+                    if let Err(completion_error) = authority.publish_creation_intent(
+                        &staging_dir.name,
+                        &staging_dir.source_parent_object_id,
+                        true,
+                    ) {
+                        let error = std::io::Error::other(format!(
+                            "staging creation intent completion failed: {completion_error}"
+                        ));
+                        return Err(staging_creation_error_with_authority(
+                            guard,
+                            staging_dir,
+                            authority,
+                            false,
+                            error,
+                        ));
+                    }
                 }
                 return Ok(staging_dir);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 if let Some(authority) = authority {
-                    authority
-                        .publish_creation_intent(&name, &source_parent_object_id, true)
-                        .map_err(|publication_error| {
-                            std::io::Error::other(format!(
-                                "staging creation intent completion failed: {publication_error}"
-                            ))
-                        })?;
+                    if let Err(completion_error) = authority.publish_creation_intent(
+                        &name,
+                        &source_parent_object_id,
+                        true,
+                    ) {
+                        return Err(std::io::Error::other(format!(
+                            "{error}; staging creation intent completion failed: {completion_error}"
+                        ))
+                        .into());
+                    }
                 }
                 continue;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(complete_staging_creation_intent(
+                    authority,
+                    &name,
+                    &source_parent_object_id,
+                    error,
+                )
+                .into())
+            }
         }
     }
     Err(std::io::Error::new(
@@ -2662,6 +2775,11 @@ mod tests {
         assert_eq!(filesystem_object_id(&moved_generated).unwrap(), object_id);
         assert!(moved_generated.join("generated.bin").is_file());
         assert!(journal_recent(&journal, 10).is_empty());
+        let authority_journal = staging_authority_journal_path(&journal).unwrap();
+        let entries = journal_recent(&authority_journal, 10);
+        assert!(entries.iter().any(|entry| {
+            parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| complete)
+        }));
         for inspected_parent in [&parent, &moved_parent] {
             assert!(std::fs::read_dir(inspected_parent)
                 .unwrap()
@@ -2671,6 +2789,132 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".disksage-trash-")));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_child_failure_closes_durable_intent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let detached_parent = tmp.path().join("owner-parent-detached");
+        let parked_target = tmp.path().join("parked-node-modules");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let expected_parent_id = filesystem_object_id(&parent).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let hook_parent = parent.clone();
+        let hook_detached_parent = detached_parent.clone();
+        let hook_parked_target = parked_target.clone();
+        set_staging_creation_intent_published_hook(move || {
+            std::fs::rename(&hook_parent, &hook_detached_parent).unwrap();
+            std::fs::rename(
+                hook_detached_parent.join("node_modules"),
+                &hook_parked_target,
+            )
+            .unwrap();
+            std::fs::remove_dir(&hook_detached_parent).unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("mkdirat through an unlinked parent must fail");
+
+        assert!(error.to_string().contains("No such file or directory"));
+        assert!(!parent.exists());
+        assert!(!detached_parent.exists());
+        assert!(parked_target.join("generated.bin").is_file());
+        let authority_journal = staging_authority_journal_path(&journal).unwrap();
+        let entries = journal_recent(&authority_journal, 10);
+        assert_eq!(entries.len(), 2);
+        let (completed_intent, complete) = parse_staging_creation_intent(&entries[0].outcome)
+            .expect("the failed child creation must have a terminal intent");
+        let (pending_intent, pending_complete) = parse_staging_creation_intent(&entries[1].outcome)
+            .expect("the child attempt must be preceded by a durable intent");
+        assert!(complete);
+        assert!(!pending_complete);
+        assert_eq!(
+            staging_creation_intent_identity(&completed_intent),
+            staging_creation_intent_identity(&pending_intent)
+        );
+        assert_eq!(pending_intent.source_parent_object_id, expected_parent_id);
+        assert_eq!(pending_intent.target_object_id, object_id);
+        assert_eq!(pending_intent.catalog_root_object_id, None);
+
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::rename(&parked_target, &generated).unwrap();
+        assert_eq!(filesystem_object_id(&generated).unwrap(), object_id);
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 2).unwrap();
+        assert!(!generated.exists());
+        assert!(std::fs::read_dir(&parent).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
+        let mut successful_entries: Vec<_> = journal_recent(&authority_journal, 20)
+            .into_iter()
+            .filter(|entry| entry.ts_ms == 2)
+            .collect();
+        successful_entries.reverse();
+        let object_authority_index = successful_entries
+            .iter()
+            .position(|entry| parse_staging_cleanup_pending(&entry.outcome).is_some())
+            .expect("successful handoff requires durable object-bound authority");
+        let intent_completion_index = successful_entries
+            .iter()
+            .position(|entry| {
+                parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| complete)
+            })
+            .expect("successful handoff must close its pre-create intent");
+        assert!(object_authority_index < intent_completion_index);
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 3)
+            .expect("an absent-source retry must be idempotent");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_intent_completion_failure_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let authority_journal = staging_authority_journal_path(&journal).unwrap();
+        set_staging_creation_intent_completion_failure(true);
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("intent completion publication failure must fail closed");
+
+        set_staging_creation_intent_completion_failure(false);
+        let message = error.to_string();
+        assert_eq!(
+            message
+                .matches("staging creation intent completion failed")
+                .count(),
+            1
+        );
+        assert!(generated.join("generated.bin").is_file());
+        assert!(std::fs::read_dir(&parent).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
+        let entries = journal_recent(&authority_journal, 10);
+        assert!(entries
+            .iter()
+            .any(|entry| parse_staging_cleanup_pending(&entry.outcome).is_some()));
+        assert!(entries
+            .iter()
+            .any(|entry| parse_staging_cleanup_complete(&entry.outcome).is_some()));
+        assert!(entries.iter().any(|entry| {
+            parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| !complete)
+        }));
+        assert!(!entries.iter().any(|entry| {
+            parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| complete)
+        }));
     }
 
     #[cfg(unix)]
@@ -2712,6 +2956,9 @@ mod tests {
             .contains("staging creation cleanup remains pending"));
         let authority_journal = staging_authority_journal_path(&journal).unwrap();
         let entries = journal_recent(&authority_journal, 10);
+        assert!(!entries.iter().any(|entry| {
+            parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| complete)
+        }));
         let recovery = entries
             .iter()
             .find_map(|entry| parse_staging_cleanup_pending(&entry.outcome))
