@@ -21,6 +21,10 @@ describe('staging recovery source-parent identity contract', () => {
       'fn staging_cleanup_recovery(',
       'fn cleanup_verified_empty_staging_dir(',
     );
+    const stagingCreation = sliceBetween(
+      'fn create_private_staging_dir(',
+      'fn restore_staged_if_source_absent(',
+    );
 
     expect(
       recoveryStruct,
@@ -31,9 +35,13 @@ describe('staging recovery source-parent identity contract', () => {
       'source-parent identity must participate in receipt correlation',
     ).toMatch(/staging_cleanup_recovery_identity[\s\S]*source_parent_object_id/);
     expect(
+      stagingCreation,
+      'staging creation must capture the source-parent identity from the retained parent capability',
+    ).toMatch(/open_staging_parent[\s\S]*staging_parent_object_id[\s\S]*source_parent_object_id/);
+    expect(
       recoveryFactory,
-      'new receipts must capture the filesystem identity of the actual staging parent',
-    ).toMatch(/parent\(\)[\s\S]*filesystem_object_id[\s\S]*source_parent_object_id/);
+      'new receipts must use the parent identity captured while staging creation was bound to the parent object',
+    ).toMatch(/source_parent_object_id:\s*Some\(staging_dir\.source_parent_object_id\.clone\(\)\)/);
   });
 
   it('validates the recorded parent before a missing staging pathname can mean complete', () => {
