@@ -697,10 +697,8 @@ fn real_directory_object_id(path: &Path) -> std::io::Result<String> {
 struct StagingCreationGuard {
     parent: std::fs::File,
     object_id: Option<String>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     staging: Option<std::fs::File>,
-    #[cfg(not(unix))]
-    path: PathBuf,
     #[cfg(unix)]
     name: std::ffi::CString,
 }
@@ -755,9 +753,56 @@ impl StagingCreationGuard {
             }
             return Ok(());
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            std::fs::remove_dir(&self.path)
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::HANDLE;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            };
+
+            let staging = self.staging.as_ref().ok_or_else(|| {
+                std::io::Error::other("private staging directory handle is unavailable")
+            })?;
+            let info = winapi_util::file::information(staging)?;
+            let current_id = format!(
+                "windows:{}:{}",
+                info.volume_serial_number(),
+                info.file_index()
+            );
+            if self
+                .object_id
+                .as_deref()
+                .is_some_and(|id| id != current_id.as_str())
+            {
+                return Err(std::io::Error::other(
+                    "private staging directory identity changed during rollback",
+                ));
+            }
+
+            // Mark the retained filesystem object for deletion through its own handle. The child
+            // may have been renamed and its old pathname replaced after identity capture; no
+            // pathname lookup is allowed to choose what rollback removes.
+            let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+            if unsafe {
+                SetFileInformationByHandle(
+                    staging.as_raw_handle() as HANDLE,
+                    FileDispositionInfo,
+                    std::ptr::from_ref(&disposition).cast(),
+                    std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            return Ok(());
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "private staging rollback handles are unavailable on this platform",
+            ))
         }
     }
 }
@@ -903,12 +948,53 @@ fn secure_created_staging_child(
         }
         return Ok(object_id);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const DELETE: u32 = 0x0001_0000;
+        const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
         let _ = name;
-        let object_id = filesystem_object_id(_candidate)?;
+        let staging = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(_candidate)?;
+        let metadata = staging.metadata()?;
+        if !metadata.is_dir() || is_windows_reparse_point(&metadata) {
+            return Err(std::io::Error::other(
+                "private staging child is not a real directory",
+            ));
+        }
+        guard.staging = Some(staging);
+        let info = winapi_util::file::information(
+            guard
+                .staging
+                .as_ref()
+                .expect("staging handle was just retained"),
+        )?;
+        let object_id = format!(
+            "windows:{}:{}",
+            info.volume_serial_number(),
+            info.file_index()
+        );
         guard.object_id = Some(object_id.clone());
         Ok(object_id)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (guard, _candidate, name);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "private staging child handles are unavailable on this platform",
+        ))
     }
 }
 
@@ -1104,10 +1190,8 @@ fn create_private_staging_dir_inner(
                 let mut guard = StagingCreationGuard {
                     parent: parent_handle,
                     object_id: None,
-                    #[cfg(unix)]
+                    #[cfg(any(unix, windows))]
                     staging: None,
-                    #[cfg(not(unix))]
-                    path: candidate.clone(),
                     #[cfg(unix)]
                     name: staging_name_c_string(&name)
                         .expect("generated staging names contain no NUL bytes"),
@@ -2914,6 +2998,68 @@ mod tests {
         }));
         assert!(!entries.iter().any(|entry| {
             parse_staging_creation_intent(&entry.outcome).is_some_and(|(_, complete)| complete)
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn staging_creation_windows_substitution_does_not_delete_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let authority_journal = staging_authority_journal_path(&journal).unwrap();
+        let displaced = parent.join("displaced-staging");
+        let substitution = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let hook_parent = parent.clone();
+        let hook_displaced = displaced.clone();
+        let hook_substitution = std::sync::Arc::clone(&substitution);
+        set_staging_creation_intent_completion_failure(true);
+        set_staging_created_hook(move || {
+            let staging_name = std::fs::read_dir(&hook_parent)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .find(|name| name.to_string_lossy().starts_with(".disksage-trash-"))
+                .expect("the staging directory must exist before the substitution hook");
+            let staging_path = hook_parent.join(staging_name);
+            let original_id = filesystem_object_id(&staging_path).unwrap();
+            std::fs::rename(&staging_path, &hook_displaced).unwrap();
+            std::fs::create_dir(&staging_path).unwrap();
+            let replacement_id = filesystem_object_id(&staging_path).unwrap();
+            assert_ne!(original_id, replacement_id);
+            *hook_substitution.lock().unwrap() = Some((staging_path, original_id, replacement_id));
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("intent completion failure must trigger staging rollback");
+
+        set_staging_creation_intent_completion_failure(false);
+        assert!(error
+            .to_string()
+            .contains("staging creation intent completion failed"));
+        let (staging_path, original_id, replacement_id) =
+            substitution.lock().unwrap().take().unwrap();
+        assert_eq!(filesystem_object_id(&staging_path).unwrap(), replacement_id);
+        assert!(
+            staging_path.is_dir(),
+            "rollback must retain the replacement"
+        );
+        assert!(
+            !displaced.exists(),
+            "rollback must delete the original through its retained handle"
+        );
+        assert!(generated.join("generated.bin").is_file());
+        let entries = journal_recent(&authority_journal, 10);
+        assert!(entries.iter().any(|entry| {
+            parse_staging_cleanup_pending(&entry.outcome)
+                .is_some_and(|recovery| recovery.staging_object_id == original_id)
+        }));
+        assert!(!entries.iter().any(|entry| {
+            parse_staging_cleanup_pending(&entry.outcome)
+                .is_some_and(|recovery| recovery.staging_object_id == replacement_id)
         }));
     }
 

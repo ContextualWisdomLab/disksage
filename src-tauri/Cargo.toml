@@ -204,6 +204,7 @@ mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev 
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2.2"
