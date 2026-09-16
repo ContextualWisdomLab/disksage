@@ -160,10 +160,11 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
     assert!(runbook.contains(
         "cache-trash-identity-bound-permanent-delete-unavailable"
     ));
-    assert!(runbook.contains("empty the native Trash manually"));
+    assert!(runbook.contains("select and delete those exact reviewed cache candidates"));
+    assert!(runbook.contains("Do not empty the native Trash as a whole."));
     assert!(!runbook.contains("permanently removes only"));
 
-    assert!(legacy_adr.contains("**Status:** Superseded by ADR-0020"));
+    assert!(legacy_adr.contains("**Status:** Partially superseded by ADR-0020"));
     assert!(adr_index.contains(
         "0020-cache-trash-permanent-delete-fails-closed.md"
     ));
@@ -175,6 +176,7 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
         "cache-trash-identity-bound-permanent-delete-unavailable"
     ));
     assert!(current_adr.contains("before journal or filesystem mutation"));
+    assert!(current_adr.contains("They must not empty the native Trash as a"));
     assert!(!current_adr.contains("permanently removes only"));
     assert!(!current_adr.contains("may permanently remove only"));
 }
