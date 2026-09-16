@@ -4,11 +4,13 @@ use disksage_lib::container_orphan_reclaim::{
     probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
 };
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-fn runtime_with_escaped_info_writer() -> (tempfile::TempDir, ContainerRuntimeTarget) {
+fn runtime_with_escaped_info_writer() -> (tempfile::TempDir, ContainerRuntimeTarget, PathBuf) {
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let runtime = temp.path().join("docker");
+    let escaped_writer_ready = temp.path().join("escaped-writer-ready");
     std::fs::write(
         &runtime,
         r#"#!/bin/sh
@@ -17,7 +19,17 @@ case "${1:-}" in
   info)
     # Model a helper that escapes the runtime CLI's private process group but inherits its pipes.
     # The reviewed CLI has already exited; this descendant must not extend the public probe latency.
-    /usr/bin/setsid /bin/sh -c 'sleep 3' &
+    [ -x /usr/bin/setsid ] || exit 95
+    [ -x /usr/bin/sleep ] || exit 96
+    /usr/bin/setsid /bin/sh -c ': > "$1"; exec /usr/bin/sleep 3' sh "$2" &
+    escaped_writer_pid=$!
+    kill -0 "$escaped_writer_pid" 2>/dev/null || exit 97
+    attempt=0
+    while [ ! -f "$2" ] && [ "$attempt" -lt 20 ]; do
+      /usr/bin/sleep 0.01
+      attempt=$((attempt + 1))
+    done
+    [ -f "$2" ] || exit 98
     exit 0
     ;;
   container)
@@ -46,12 +58,12 @@ esac
     std::fs::set_permissions(&runtime, permissions).expect("make fake runtime executable");
     let target = ContainerRuntimeTarget::new(ContainerRuntimeKind::DockerNative, runtime, None)
         .expect("valid Docker target");
-    (temp, target)
+    (temp, target, escaped_writer_ready)
 }
 
 #[test]
 fn escaped_descendant_pipe_writer_does_not_extend_completed_probe() {
-    let (_runtime_dir, target) = runtime_with_escaped_info_writer();
+    let (_runtime_dir, target, escaped_writer_ready) = runtime_with_escaped_info_writer();
     let started = Instant::now();
 
     let plan = probe_container_orphans(&target);
@@ -67,6 +79,10 @@ fn escaped_descendant_pipe_writer_does_not_extend_completed_probe() {
         5,
         "escaped helper must not alter the healthy Docker category shape: {:?}",
         plan.issues
+    );
+    assert!(
+        escaped_writer_ready.exists(),
+        "the escaped descendant must start before checking probe latency"
     );
     assert!(
         elapsed < Duration::from_secs(2),
