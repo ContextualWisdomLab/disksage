@@ -217,6 +217,24 @@ jobs:
           } else {
             Write-Output 'SKIP provider_oauth_cli_process: owner source absent; no runtime regression executed'
           }
+      - name: Windows staging rollback safety regression when owner source is present
+        shell: pwsh
+        run: |
+          $regression = 'staging_creation_windows_substitution_does_not_delete_replacement'
+          $hasRegression = Select-String -Path 'src-tauri/src/safety.rs' -Pattern "fn $regression\(\)" -Quiet
+          if ($hasRegression) {
+            $output = & cargo test --manifest-path src-tauri/Cargo.toml --locked --lib "safety::tests::$regression" -- --exact 2>&1
+            $status = $LASTEXITCODE
+            $output | Write-Output
+            if ($status -ne 0) { exit $status }
+            $joined = $output -join "`n"
+            if ($joined -notmatch "test safety::tests::$regression \.\.\. ok") {
+              Write-Error 'Windows staging rollback regression did not execute'
+              exit 1
+            }
+          } else {
+            Write-Output "SKIP $regression: owner source absent; no runtime regression executed"
+          }
 
   llm-engine-build:
     runs-on: ubuntu-latest
