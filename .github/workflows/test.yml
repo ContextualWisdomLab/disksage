@@ -221,7 +221,7 @@ jobs:
         shell: pwsh
         run: |
           $regression = 'staging_creation_windows_substitution_does_not_delete_replacement'
-          $hasRegression = Select-String -Path 'src-tauri/src/safety.rs' -Pattern "fn $regression\(\)" -Quiet
+          $hasRegression = Select-String -Path 'src-tauri/src/safety.rs' -Pattern 'fn staging_creation_windows_substitution_does_not_delete_replacement()' -SimpleMatch -Quiet
           if ($hasRegression) {
             $output = & cargo test --manifest-path src-tauri/Cargo.toml --locked --lib "safety::tests::$regression" -- --exact 2>&1
             $status = $LASTEXITCODE
