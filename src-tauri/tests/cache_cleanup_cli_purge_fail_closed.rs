@@ -153,19 +153,20 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
     let adr_index = std::fs::read_to_string(repository_root.join("docs/architecture/adr/README.md"))
         .unwrap();
     let current_adr = std::fs::read_to_string(repository_root.join(
-        "docs/architecture/adr/0012-cache-trash-permanent-delete-fails-closed.md",
+        "docs/architecture/adr/0020-cache-trash-permanent-delete-fails-closed.md",
     ))
     .unwrap();
 
     assert!(runbook.contains(
         "cache-trash-identity-bound-permanent-delete-unavailable"
     ));
-    assert!(runbook.contains("empty the native Trash manually"));
+    assert!(runbook.contains("select and delete those exact reviewed cache candidates"));
+    assert!(runbook.contains("Do not empty the native Trash as a whole."));
     assert!(!runbook.contains("permanently removes only"));
 
-    assert!(legacy_adr.contains("**Status:** Superseded by ADR-0012"));
+    assert!(legacy_adr.contains("**Status:** Partially superseded by ADR-0020"));
     assert!(adr_index.contains(
-        "0012-cache-trash-permanent-delete-fails-closed.md"
+        "0020-cache-trash-permanent-delete-fails-closed.md"
     ));
     assert!(adr_index.contains("Cache Trash permanent deletion fails closed"));
     assert!(adr_index.contains("Proposed"));
@@ -175,6 +176,7 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
         "cache-trash-identity-bound-permanent-delete-unavailable"
     ));
     assert!(current_adr.contains("before journal or filesystem mutation"));
+    assert!(current_adr.contains("They must not empty the native Trash as a"));
     assert!(!current_adr.contains("permanently removes only"));
     assert!(!current_adr.contains("may permanently remove only"));
 }
