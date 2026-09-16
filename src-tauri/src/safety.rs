@@ -918,6 +918,28 @@ struct StagingRecoveryAuthority<'a> {
 }
 
 impl StagingRecoveryAuthority<'_> {
+    fn publish_creation_intent(
+        &self,
+        staging_name: &str,
+        source_parent_object_id: &str,
+        complete: bool,
+    ) -> Result<(), SafetyError> {
+        let intent = StagingCreationIntent {
+            source_parent_object_id: source_parent_object_id.into(),
+            staging_name: staging_name.into(),
+            target_object_id: self.expected_object_id.into(),
+            catalog_root_object_id: self.expected_catalog_root_id.map(str::to_owned),
+        };
+        let entry = JournalEntry {
+            ts_ms: self.now_ms,
+            op: self.op.into(),
+            path: self.source_path.to_string_lossy().into_owned(),
+            bytes: self.bytes,
+            outcome: staging_creation_intent_outcome(&intent, complete),
+        };
+        journal_append_staging_authority(self.journal_path, &entry)
+    }
+
     fn entry(
         &self,
         staging_dir: &PrivateStagingDir,
@@ -990,6 +1012,15 @@ fn create_private_staging_dir_inner(
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
         let name = format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial);
         let candidate = parent.join(&name);
+        if let Some(authority) = authority {
+            authority
+                .publish_creation_intent(&name, &source_parent_object_id, false)
+                .map_err(|error| {
+                    std::io::Error::other(format!(
+                        "staging creation intent publication failed: {error}"
+                    ))
+                })?;
+        }
         match create_staging_child(&parent_handle, &candidate, &name) {
             Ok(()) => {
                 let mut guard = StagingCreationGuard {
@@ -1021,6 +1052,8 @@ fn create_private_staging_dir_inner(
                     object_id,
                     source_parent_object_id,
                 };
+                #[cfg(test)]
+                run_staging_created_hook();
                 if let Some(authority) = authority {
                     if let Err(publication_error) = authority.publish(&staging_dir, false) {
                         let error = std::io::Error::other(format!(
@@ -1035,8 +1068,6 @@ fn create_private_staging_dir_inner(
                         ));
                     }
                 }
-                #[cfg(test)]
-                run_staging_created_hook();
                 let confirmed_parent_object_id = match real_directory_object_id(&parent) {
                     Ok(object_id) => object_id,
                     Err(error) => {
@@ -1079,7 +1110,18 @@ fn create_private_staging_dir_inner(
                 }
                 return Ok(staging_dir);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if let Some(authority) = authority {
+                    authority
+                        .publish_creation_intent(&name, &source_parent_object_id, true)
+                        .map_err(|publication_error| {
+                            std::io::Error::other(format!(
+                                "staging creation intent completion failed: {publication_error}"
+                            ))
+                        })?;
+                }
+                continue;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -1176,6 +1218,51 @@ fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
 
 const STAGING_CLEANUP_PENDING_PREFIX: &str = "mutated_cleanup_pending:";
 const STAGING_CLEANUP_COMPLETE_PREFIX: &str = "mutated_cleanup_complete:";
+const STAGING_CREATION_INTENT_PREFIX: &str = "staging_creation_intent:";
+const STAGING_CREATION_INTENT_COMPLETE_PREFIX: &str = "staging_creation_intent_complete:";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StagingCreationIntent {
+    source_parent_object_id: String,
+    staging_name: String,
+    target_object_id: String,
+    catalog_root_object_id: Option<String>,
+}
+
+type StagingCreationIntentIdentity = (String, String, String, Option<String>);
+
+fn staging_creation_intent_identity(
+    intent: &StagingCreationIntent,
+) -> StagingCreationIntentIdentity {
+    (
+        intent.source_parent_object_id.clone(),
+        intent.staging_name.clone(),
+        intent.target_object_id.clone(),
+        intent.catalog_root_object_id.clone(),
+    )
+}
+
+fn staging_creation_intent_outcome(intent: &StagingCreationIntent, complete: bool) -> String {
+    let encoded = serde_json::to_string(intent)
+        .expect("staging creation intent contains only serializable strings");
+    let prefix = if complete {
+        STAGING_CREATION_INTENT_COMPLETE_PREFIX
+    } else {
+        STAGING_CREATION_INTENT_PREFIX
+    };
+    format!("{prefix}{encoded}")
+}
+
+fn parse_staging_creation_intent(outcome: &str) -> Option<(StagingCreationIntent, bool)> {
+    if let Some(encoded) = outcome.strip_prefix(STAGING_CREATION_INTENT_COMPLETE_PREFIX) {
+        return serde_json::from_str(encoded)
+            .ok()
+            .map(|intent| (intent, true));
+    }
+    serde_json::from_str(outcome.strip_prefix(STAGING_CREATION_INTENT_PREFIX)?)
+        .ok()
+        .map(|intent| (intent, false))
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct StagingCleanupRecovery {
@@ -1466,8 +1553,14 @@ fn retry_pending_staging_cleanup(
         .filter(|entry| entry.op == op && entry.path == journal_path_value && entry.bytes == bytes)
         .collect();
     let mut recoveries = std::collections::HashMap::new();
+    let mut creation_intents = std::collections::HashMap::new();
     for (sequence, entry) in matching_entries.into_iter().enumerate() {
-        if let Some(recovery) = parse_staging_cleanup_pending(&entry.outcome) {
+        if let Some((intent, complete)) = parse_staging_creation_intent(&entry.outcome) {
+            creation_intents.insert(
+                staging_creation_intent_identity(&intent),
+                (intent, complete),
+            );
+        } else if let Some(recovery) = parse_staging_cleanup_pending(&entry.outcome) {
             recoveries.insert(
                 staging_cleanup_recovery_identity(&recovery),
                 (recovery, false, sequence),
@@ -1477,6 +1570,29 @@ fn retry_pending_staging_cleanup(
                 *state = (recovery, true, sequence);
             }
         }
+    }
+
+    creation_intents.retain(|_, (intent, complete)| {
+        !*complete
+            && !recoveries.values().any(|(recovery, _, _)| {
+                recovery.staging_name == intent.staging_name
+                    && recovery.source_parent_object_id.as_deref()
+                        == Some(intent.source_parent_object_id.as_str())
+                    && recovery.target_object_id == intent.target_object_id
+                    && recovery.catalog_root_object_id == intent.catalog_root_object_id
+            })
+    });
+    if creation_intents.values().any(|(intent, _)| {
+        intent.target_object_id == expected_object_id
+            && intent.catalog_root_object_id.as_deref() == expected_catalog_root_id
+    }) {
+        return Some(Err(SafetyError::Trash(
+            "staging creation intent remains pending; exact child identity was not durably published"
+                .into(),
+        )));
+    }
+    if !creation_intents.is_empty() {
+        return Some(Err(SafetyError::Protected(path.to_path_buf())));
     }
 
     let matches_expected = |recovery: &StagingCleanupRecovery| {
@@ -2596,8 +2712,9 @@ mod tests {
             .contains("staging creation cleanup remains pending"));
         let authority_journal = staging_authority_journal_path(&journal).unwrap();
         let entries = journal_recent(&authority_journal, 10);
-        assert_eq!(entries.len(), 1);
-        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
+        let recovery = entries
+            .iter()
+            .find_map(|entry| parse_staging_cleanup_pending(&entry.outcome))
             .expect("rollback failure must publish durable recovery evidence");
         let retained_staging = moved_parent.join(&recovery.staging_name);
         assert_eq!(
@@ -2633,14 +2750,27 @@ mod tests {
         let expected_parent_id = filesystem_object_id(&parent).unwrap();
         let journal = tmp.path().join("journal.jsonl");
         std::fs::create_dir(&journal).unwrap();
+        let authority_journal = staging_authority_journal_path(&journal).unwrap();
         let hook_parent = parent.clone();
         let hook_moved_parent = moved_parent.clone();
+        let hook_authority_journal = authority_journal.clone();
         set_staging_created_hook(move || {
+            use std::os::unix::fs::PermissionsExt;
+
             let staging_name = std::fs::read_dir(&hook_parent)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
                 .find(|name| name.to_string_lossy().starts_with(".disksage-trash-"))
                 .expect("the staging directory must exist before the race hook");
+            assert!(
+                hook_authority_journal.is_file(),
+                "creation intent must be durable before the staging child exists"
+            );
+            std::fs::set_permissions(
+                &hook_authority_journal,
+                std::fs::Permissions::from_mode(0o400),
+            )
+            .unwrap();
             std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
             std::fs::create_dir(&hook_parent).unwrap();
             std::fs::write(
@@ -2659,20 +2789,15 @@ mod tests {
             .to_string()
             .contains("staging creation cleanup remains pending"));
         assert!(journal_recent(&journal, 10).is_empty());
-        let authority_journal = staging_authority_journal_path(&journal).unwrap();
         let entries = journal_recent(&authority_journal, 10);
         assert_eq!(entries.len(), 1);
-        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
-            .expect("the pre-rollback journal must retain exact recovery authority");
-        let retained_staging = moved_parent.join(&recovery.staging_name);
-        assert_eq!(
-            recovery.source_parent_object_id.as_deref(),
-            Some(expected_parent_id.as_str())
-        );
-        assert_eq!(
-            filesystem_object_id(&retained_staging).unwrap(),
-            recovery.staging_object_id
-        );
+        let (intent, complete) = parse_staging_creation_intent(&entries[0].outcome)
+            .expect("the pre-create journal must retain exact recovery authority");
+        assert!(!complete);
+        let retained_staging = moved_parent.join(&intent.staging_name);
+        assert_eq!(intent.source_parent_object_id, expected_parent_id);
+        assert_eq!(intent.target_object_id, object_id);
+        assert_eq!(intent.catalog_root_object_id, None);
         assert!(retained_staging.join("rollback-blocker").is_file());
         assert_eq!(
             filesystem_object_id(&moved_parent.join("node_modules")).unwrap(),
@@ -2701,6 +2826,8 @@ mod tests {
         let hook_recovery_journal = recovery_journal.clone();
         let hook_authority_journal = authority_journal.clone();
         set_staging_created_hook(move || {
+            use std::os::unix::fs::PermissionsExt;
+
             let staging_name = std::fs::read_dir(&hook_parent)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
@@ -2710,6 +2837,11 @@ mod tests {
                 hook_authority_journal.is_file(),
                 "exact recovery authority must be durable before the rollback race"
             );
+            std::fs::set_permissions(
+                &hook_authority_journal,
+                std::fs::Permissions::from_mode(0o400),
+            )
+            .unwrap();
             std::fs::create_dir(&hook_journal).unwrap();
             std::fs::create_dir(&hook_recovery_journal).unwrap();
             std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
@@ -2742,17 +2874,16 @@ mod tests {
         );
         let entries = journal_recent(&authority_journal, 10);
         assert_eq!(entries.len(), 1);
-        let recovery = parse_staging_cleanup_pending(&entries[0].outcome)
-            .expect("pre-rollback authority must retain the exact staging identity");
-        let retained_staging = moved_parent.join(&recovery.staging_name);
+        let (intent, complete) = parse_staging_creation_intent(&entries[0].outcome)
+            .expect("pre-create authority must retain the exact planned staging child");
+        assert!(!complete);
+        let retained_staging = moved_parent.join(&intent.staging_name);
         assert_eq!(
-            recovery.source_parent_object_id.as_deref(),
-            Some(expected_parent_id.as_str())
+            intent.source_parent_object_id,
+            expected_parent_id
         );
-        assert_eq!(
-            filesystem_object_id(&retained_staging).unwrap(),
-            recovery.staging_object_id
-        );
+        assert_eq!(intent.target_object_id, object_id);
+        assert_eq!(intent.catalog_root_object_id, None);
         assert!(retained_staging.join("rollback-blocker").is_file());
         assert_eq!(
             filesystem_object_id(&moved_parent.join("node_modules")).unwrap(),
