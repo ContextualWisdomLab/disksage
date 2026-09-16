@@ -543,6 +543,8 @@ static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static CATALOG_ROOT_AUTHORIZATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    static STAGING_CREATED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]
@@ -558,6 +560,25 @@ where
 #[cfg(test)]
 fn run_catalog_root_authorization_hook() {
     CATALOG_ROOT_AUTHORIZATION_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(test)]
+fn set_staging_created_hook<F>(hook: F)
+where
+    F: FnOnce() + 'static,
+{
+    STAGING_CREATED_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_staging_created_hook() {
+    STAGING_CREATED_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
             hook();
         }
@@ -584,32 +605,201 @@ fn real_directory_object_id(path: &Path) -> std::io::Result<String> {
     filesystem_object_id(path)
 }
 
+/// Keeps rollback attached to the parent object until post-create validation succeeds.
+struct StagingCreationGuard {
+    parent: std::fs::File,
+    #[cfg(not(unix))]
+    path: PathBuf,
+    #[cfg(unix)]
+    name: std::ffi::CString,
+    armed: bool,
+}
+
+impl StagingCreationGuard {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StagingCreationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            // The parent descriptor still names the reviewed directory after a pathname rename.
+            unsafe {
+                libc::unlinkat(
+                    self.parent.as_raw_fd(),
+                    self.name.as_ptr(),
+                    libc::AT_REMOVEDIR,
+                );
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+fn open_staging_parent(parent: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        return std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        // Omitting FILE_SHARE_DELETE prevents parent rename/replacement while rollback is armed.
+        return std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(parent);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = parent;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "private staging parent handles are unavailable on this platform",
+        ))
+    }
+}
+
+fn staging_parent_object_id(
+    _parent_path: &Path,
+    parent: &std::fs::File,
+) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        return object_id_from_metadata(&parent.metadata()?).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem object identity is unavailable on this platform",
+            )
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        real_directory_object_id(_parent_path)
+    }
+}
+
+#[cfg(unix)]
+fn staging_name_c_string(name: &str) -> std::io::Result<std::ffi::CString> {
+    std::ffi::CString::new(name).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+fn create_staging_child(
+    parent: &std::fs::File,
+    _candidate: &Path,
+    name: &str,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let name = staging_name_c_string(name)?;
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(());
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, name);
+        std::fs::create_dir(_candidate)
+    }
+}
+
+fn secure_created_staging_child(
+    parent: &std::fs::File,
+    _candidate: &Path,
+    name: &str,
+) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let name = staging_name_c_string(name)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let staging = unsafe { std::fs::File::from_raw_fd(fd) };
+        if unsafe { libc::fchmod(staging.as_raw_fd(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return object_id_from_metadata(&staging.metadata()?).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem object identity is unavailable on this platform",
+            )
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, name);
+        filesystem_object_id(_candidate)
+    }
+}
+
 fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PrivateStagingDir> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-    let source_parent_object_id = real_directory_object_id(&parent)?;
+    let parent_handle = open_staging_parent(&parent)?;
+    let source_parent_object_id = staging_parent_object_id(&parent, &parent_handle)?;
     let pid = std::process::id();
     for _ in 0..32 {
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
         let name = format!(".disksage-trash-{}-{}-{}", pid, now_ms, serial);
         let candidate = parent.join(&name);
-        match std::fs::create_dir(&candidate) {
+        match create_staging_child(&parent_handle, &candidate, &name) {
             Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
-                }
-                let object_id = filesystem_object_id(&candidate)?;
+                let guard = StagingCreationGuard {
+                    parent: parent_handle,
+                    #[cfg(not(unix))]
+                    path: candidate.clone(),
+                    #[cfg(unix)]
+                    name: staging_name_c_string(&name)
+                        .expect("generated staging names contain no NUL bytes"),
+                    armed: true,
+                };
+                #[cfg(test)]
+                run_staging_created_hook();
+                let object_id = secure_created_staging_child(&guard.parent, &candidate, &name)?;
                 let confirmed_parent_object_id = real_directory_object_id(&parent)?;
                 if confirmed_parent_object_id != source_parent_object_id {
                     return Err(std::io::Error::other(
                         "private staging directory parent identity changed during creation",
                     ));
                 }
+                guard.disarm();
                 return Ok(PrivateStagingDir {
                     path: candidate,
                     name,
@@ -1911,6 +2101,45 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".disksage-trash-")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_creation_parent_replacement_fails_without_untracked_residue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("owner-parent");
+        let moved_parent = tmp.path().join("owner-parent-reviewed");
+        let generated = parent.join("node_modules");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let hook_parent = parent.clone();
+        let hook_moved_parent = moved_parent.clone();
+        set_staging_created_hook(move || {
+            std::fs::rename(&hook_parent, &hook_moved_parent).unwrap();
+            std::fs::create_dir(&hook_parent).unwrap();
+        });
+
+        let error = permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1)
+            .expect_err("a replaced staging parent must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("parent identity changed during creation"));
+        let moved_generated = moved_parent.join("node_modules");
+        assert_eq!(filesystem_object_id(&moved_generated).unwrap(), object_id);
+        assert!(moved_generated.join("generated.bin").is_file());
+        assert!(journal_recent(&journal, 10).is_empty());
+        for inspected_parent in [&parent, &moved_parent] {
+            assert!(std::fs::read_dir(inspected_parent)
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".disksage-trash-")));
+        }
     }
 
     #[test]
