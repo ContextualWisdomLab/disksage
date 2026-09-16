@@ -17,10 +17,16 @@ fn create_private_staging_dir(parent: &Path, name: &str) -> (String, String) {
     (staging_dir.to_string_lossy().into_owned(), object_id)
 }
 
-fn pending_outcome(staging_name: &str, staging_object_id: &str, target_object_id: &str) -> String {
+fn pending_outcome(
+    staging_name: &str,
+    staging_object_id: &str,
+    source_parent_object_id: &str,
+    target_object_id: &str,
+) -> String {
     let recovery = serde_json::json!({
         "staging_name": staging_name,
         "staging_object_id": staging_object_id,
+        "source_parent_object_id": source_parent_object_id,
         "target_object_id": target_object_id,
         "catalog_root_object_id": null,
         "error": "simulated post-mutation cleanup failure"
@@ -33,6 +39,8 @@ fn a_bare_terminal_receipt_cannot_falsely_complete_a_distinct_newer_recovery() {
     let fixture = tempfile::tempdir().expect("create recovery fixture");
     let source = fixture.path().join("recreated-same-path");
     let journal = fixture.path().join("journal.jsonl");
+    let source_parent_object_id =
+        filesystem_object_id(fixture.path()).expect("capture source-parent identity");
 
     let (staging_a_path, staging_a_id) =
         create_private_staging_dir(fixture.path(), ".disksage-trash-4242-10-0");
@@ -56,6 +64,7 @@ fn a_bare_terminal_receipt_cannot_falsely_complete_a_distinct_newer_recovery() {
             outcome: pending_outcome(
                 ".disksage-trash-4242-10-0",
                 &staging_a_id,
+                &source_parent_object_id,
                 target_a,
             ),
         },
@@ -71,6 +80,7 @@ fn a_bare_terminal_receipt_cannot_falsely_complete_a_distinct_newer_recovery() {
             outcome: pending_outcome(
                 ".disksage-trash-4242-11-0",
                 &staging_b_id,
+                &source_parent_object_id,
                 target_b,
             ),
         },
@@ -92,11 +102,12 @@ fn a_bare_terminal_receipt_cannot_falsely_complete_a_distinct_newer_recovery() {
     )
     .expect("persist ambiguous legacy terminal receipt");
 
-    let result = permanent_delete_dir_if_identity(&source, target_b, 0, &journal, 4);
+    permanent_delete_dir_if_identity(&source, target_b, 0, &journal, 4)
+        .expect("recovery B must be verified and cleaned independently of A's bare terminal");
 
     assert!(staging_a.exists(), "recovery A is unrelated to the B retry");
     assert!(
-        result.is_err() || !staging_b.exists(),
-        "a terminal receipt without recovery identity must not return success for B while B's staging directory is still present"
+        !staging_b.exists(),
+        "A's uncorrelated bare terminal must not satisfy B without B's verified cleanup"
     );
 }
