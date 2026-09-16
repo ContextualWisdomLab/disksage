@@ -8,12 +8,16 @@ const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/test.ym
 const windowsJob = workflow.split("  windows-home-resolution:\n")[1]?.split("  llm-engine-build:")[0] ?? "";
 
 const regression = "staging_creation_windows_substitution_does_not_delete_replacement";
+const ownerContract = "src/lib/stagingCreationWindowsRollbackContract.test.ts";
 
 describe("Windows deletion-safety Test admission", () => {
-  it("executes the exact staging rollback substitution regression when the owner source is present", () => {
-    expect(windowsJob).toContain("Windows staging rollback safety regression when owner source is present");
-    expect(windowsJob).toContain("src-tauri/src/safety.rs");
-    expect(windowsJob).toContain(`fn ${regression}()`);
+  it("uses the bounded-context contract as the admission marker instead of source-text discovery", () => {
+    expect(windowsJob).toContain(`Test-Path '${ownerContract}'`);
+    expect(windowsJob).not.toContain("Select-String -Path 'src-tauri/src/safety.rs'");
+  });
+
+  it("executes the exact staging rollback substitution regression when its owner contract is present", () => {
+    expect(windowsJob).toContain("Windows staging rollback safety regression when owner contract is present");
     expect(windowsJob).toContain(
       `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib safety::tests::${regression} -- --exact`,
     );
@@ -24,9 +28,9 @@ describe("Windows deletion-safety Test admission", () => {
     expect(windowsJob).toContain("Windows staging rollback regression did not execute");
   });
 
-  it("reports absent owner source without inventing Windows runtime evidence", () => {
+  it("reports absent owner contract without inventing Windows runtime evidence", () => {
     expect(windowsJob).toContain(
-      `SKIP ${regression}: owner source absent; no runtime regression executed`,
+      `SKIP ${regression}: owner contract absent; no runtime regression executed`,
     );
   });
 });
