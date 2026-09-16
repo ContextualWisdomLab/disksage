@@ -4,8 +4,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use sha1::{Digest as Sha1Digest, Sha1};
-use sha2::{Digest as Sha2Digest, Sha256};
+use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
 const REPORT_VERSION: u32 = 1;
