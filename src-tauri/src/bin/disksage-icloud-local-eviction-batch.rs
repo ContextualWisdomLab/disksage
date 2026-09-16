@@ -464,7 +464,7 @@ fn run() -> Result<(), String> {
     })
 }
 
-fn main() {
+pub(crate) fn main() {
     if let Err(error) = run() {
         if error == HELP_REQUESTED {
             println!("{}", usage());

@@ -5,6 +5,15 @@ const EMBED_PLIST_CALL: &str =
     "embed_plist::embed_info_plist!(\"../../disksage-cloud-plan.Info.plist\");";
 const GENERATED_EMBED_PLIST_CALL: &str =
     "embed_plist::embed_info_plist!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/disksage-cloud-plan.Info.plist\"));";
+const EMBEDDED_PROCESS_MAIN: &str = r#"#[cfg(not(coverage))]
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("DiskSage cloud planner: {error}");
+        std::process::exit(2);
+    }
+}
+
+"#;
 
 fn generate_cloud_plan_implementation() {
     let manifest_dir = PathBuf::from(
@@ -23,10 +32,15 @@ fn generate_cloud_plan_implementation() {
         1,
         "cloud-plan implementation must contain exactly one Info.plist embedding call"
     );
-    let generated =
-        source
-            .replacen("//!", "//", 1)
-            .replacen(EMBED_PLIST_CALL, GENERATED_EMBED_PLIST_CALL, 1);
+    assert_eq!(
+        source.matches(EMBEDDED_PROCESS_MAIN).count(),
+        1,
+        "cloud-plan implementation must contain exactly one process main owned by the outer binary boundary"
+    );
+    let generated = source
+        .replacen("//!", "//", 1)
+        .replacen(EMBED_PLIST_CALL, GENERATED_EMBED_PLIST_CALL, 1)
+        .replacen(EMBEDDED_PROCESS_MAIN, "", 1);
     let out_dir =
         PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR to build.rs"));
     fs::write(

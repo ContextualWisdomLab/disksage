@@ -8,6 +8,7 @@ use crate::icloud_sync_health::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 #[cfg(target_os = "macos")]

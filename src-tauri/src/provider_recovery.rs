@@ -456,7 +456,7 @@ pub fn recover_provider_client_with_options(
 ) -> Result<ProviderRecoveryOutput, String> {
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (provider, observed_at_ms);
+        let _ = (provider, observed_at_ms, allow_graceful_term);
         return Err("provider-recovery-platform-unsupported".into());
     }
     #[cfg(target_os = "macos")]
