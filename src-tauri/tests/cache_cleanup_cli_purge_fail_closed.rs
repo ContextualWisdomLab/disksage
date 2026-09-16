@@ -70,9 +70,7 @@ fn shipped_cli_honors_xdg_data_home_for_read_only_trash_evidence() {
     assert_eq!(candidates[0]["name"], "_cacache");
     assert_eq!(candidates[0]["path"], npm.to_string_lossy().as_ref());
     assert!(
-        !candidates
-            .iter()
-            .any(|candidate| candidate["name"] == "v11"),
+        !candidates.iter().any(|candidate| candidate["name"] == "v11"),
         "custom XDG_DATA_HOME must take precedence over the default home Trash"
     );
     assert!(
@@ -120,7 +118,11 @@ fn shipped_cli_rejects_duplicate_authority_singletons_before_side_effects() {
     let duplicate_execute = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
         .env("HOME", &home)
         .env_remove("XDG_DATA_HOME")
-        .args(["--execute", "--execute", "--purge-proven-cache-trash"])
+        .args([
+            "--execute",
+            "--execute",
+            "--purge-proven-cache-trash",
+        ])
         .output()
         .unwrap();
     assert_eq!(duplicate_execute.status.code(), Some(2));
@@ -142,31 +144,38 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
         repository_root.join("docs/development/cache-cleanup-operator-runbook.md"),
     )
     .unwrap();
+    let normalized_runbook = runbook.split_whitespace().collect::<Vec<_>>().join(" ");
     let legacy_adr = std::fs::read_to_string(
-        repository_root
-            .join("docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md"),
+        repository_root.join(
+            "docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md",
+        ),
     )
     .unwrap();
-    let adr_index =
-        std::fs::read_to_string(repository_root.join("docs/architecture/adr/README.md")).unwrap();
-    let current_adr = std::fs::read_to_string(
-        repository_root
-            .join("docs/architecture/adr/0020-cache-trash-permanent-delete-fails-closed.md"),
-    )
+    let adr_index = std::fs::read_to_string(repository_root.join("docs/architecture/adr/README.md"))
+        .unwrap();
+    let current_adr = std::fs::read_to_string(repository_root.join(
+        "docs/architecture/adr/0020-cache-trash-permanent-delete-fails-closed.md",
+    ))
     .unwrap();
 
-    assert!(runbook.contains("cache-trash-identity-bound-permanent-delete-unavailable"));
-    assert!(runbook.contains("select and delete those exact reviewed cache candidates"));
-    assert!(runbook.contains("Do not empty the native Trash as a whole."));
-    assert!(!runbook.contains("permanently removes only"));
+    assert!(normalized_runbook.contains(
+        "cache-trash-identity-bound-permanent-delete-unavailable"
+    ));
+    assert!(normalized_runbook.contains("select and delete those exact reviewed cache candidates"));
+    assert!(normalized_runbook.contains("Do not empty the native Trash as a whole."));
+    assert!(!normalized_runbook.contains("permanently removes only"));
 
     assert!(legacy_adr.contains("**Status:** Partially superseded by ADR-0020"));
-    assert!(adr_index.contains("0020-cache-trash-permanent-delete-fails-closed.md"));
+    assert!(adr_index.contains(
+        "0020-cache-trash-permanent-delete-fails-closed.md"
+    ));
     assert!(adr_index.contains("Cache Trash permanent deletion fails closed"));
     assert!(adr_index.contains("Proposed"));
 
     assert!(current_adr.contains("**Status:** Proposed"));
-    assert!(current_adr.contains("cache-trash-identity-bound-permanent-delete-unavailable"));
+    assert!(current_adr.contains(
+        "cache-trash-identity-bound-permanent-delete-unavailable"
+    ));
     assert!(current_adr.contains("before journal or filesystem mutation"));
     assert!(current_adr.contains("They must not empty the native Trash as a"));
     assert!(!current_adr.contains("permanently removes only"));
