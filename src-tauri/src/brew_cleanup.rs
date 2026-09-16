@@ -4,9 +4,9 @@
 //! existing human confirmation boundary; it never supplies a command or path.
 
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", all(test, unix)))]
+use std::io;
 use std::io::Write;
-#[cfg(target_os = "macos")]
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -14,6 +14,7 @@ pub const EXECUTABLE: &str = "brew";
 pub const DRY_RUN_ARGUMENTS: [&str; 3] = ["cleanup", "--prune-prefix", "--dry-run"];
 pub const EXECUTE_ARGUMENTS: [&str; 2] = ["cleanup", "--prune-prefix"];
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_BREW_SCRIPT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_REASON_CHARS: usize = 1_000;
 const COMMAND_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_JUDGMENT_AGE_MS: u64 = 5 * 60 * 1_000;
@@ -109,7 +110,7 @@ struct CommandOutput {
     truncated: bool,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 struct VerifiedBrewExecutable {
     file: std::fs::File,
     identity: String,
@@ -141,8 +142,9 @@ fn fixed_brew_path() -> Result<PathBuf, String> {
     Err("brew-cleanup-unsupported-platform".into())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
+    use std::io::{Read, Seek, SeekFrom};
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let path_metadata = std::fs::symlink_metadata(path)
@@ -153,9 +155,9 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
     {
         return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
     }
-    let file = std::fs::File::open(path)
+    let mut source = std::fs::File::open(path)
         .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
-    let opened_metadata = file
+    let opened_metadata = source
         .metadata()
         .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
     let current_metadata = std::fs::symlink_metadata(path)
@@ -168,18 +170,82 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
     {
         return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
     }
+    if opened_metadata.len() == 0 || opened_metadata.len() > MAX_BREW_SCRIPT_BYTES as u64 {
+        return Err("brew-cleanup-executable-size-invalid".into());
+    }
+
+    let mut snapshot = tempfile::tempfile()
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut captured_bytes = 0usize;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+        if read == 0 {
+            break;
+        }
+        captured_bytes = captured_bytes
+            .checked_add(read)
+            .ok_or_else(|| "brew-cleanup-executable-size-invalid".to_string())?;
+        if captured_bytes > MAX_BREW_SCRIPT_BYTES {
+            return Err("brew-cleanup-executable-size-invalid".into());
+        }
+        hasher.update(&buffer[..read]);
+        snapshot
+            .write_all(&buffer[..read])
+            .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    }
+    if captured_bytes == 0 {
+        return Err("brew-cleanup-executable-size-invalid".into());
+    }
+    snapshot
+        .sync_all()
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    snapshot
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+
+    let opened_after_snapshot = source
+        .metadata()
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    let current_after_snapshot = std::fs::symlink_metadata(path)
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    if !opened_after_snapshot.is_file()
+        || current_after_snapshot.file_type().is_symlink()
+        || !current_after_snapshot.is_file()
+        || current_after_snapshot.permissions().mode() & 0o111 == 0
+        || opened_metadata.dev() != opened_after_snapshot.dev()
+        || opened_metadata.ino() != opened_after_snapshot.ino()
+        || opened_after_snapshot.dev() != current_after_snapshot.dev()
+        || opened_after_snapshot.ino() != current_after_snapshot.ino()
+    {
+        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+    }
+
     Ok(VerifiedBrewExecutable {
-        identity: format!("{}:{}", opened_metadata.dev(), opened_metadata.ino()),
-        file,
+        identity: format!(
+            "{}:{}:{}",
+            opened_metadata.dev(),
+            opened_metadata.ino(),
+            hasher.finalize().to_hex()
+        ),
+        file: snapshot,
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn run_command(mut command: std::process::Command) -> Result<CommandOutput, String> {
+    use crate::unix_process_group::{
+        signal_private_process_group, spawn_bounded_cancellable_pipe_reader,
+        wait_for_child_without_reap, NoReapWaitOutcome, PipeReaderCancellation,
+    };
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     // Keep the verified brew wrapper and any descendants in one private group so a timeout cannot
     // leave a maintenance child holding the output pipes or continuing after the gate fails.
@@ -197,56 +263,102 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "brew-cleanup-spawn-failed".to_string())?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "brew-cleanup-stdout-unavailable".to_string())?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "brew-cleanup-stderr-unavailable".to_string())?;
-    let stdout_reader = thread::spawn(move || read_bounded(&mut stdout));
-    let stderr_reader = thread::spawn(move || read_bounded(&mut stderr));
     let child_pid = child.id();
-    let kill_group = || unsafe {
-        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-    };
-
-    let deadline = Instant::now() + Duration::from_millis(COMMAND_TIMEOUT_MS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                kill_group();
-                let _ = child.kill();
-                let _ = child.wait();
-                drop(stdout_reader);
-                drop(stderr_reader);
-                return Err("brew-cleanup-timeout".into());
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(_) => {
-                kill_group();
-                let _ = child.kill();
-                let _ = child.wait();
-                drop(stdout_reader);
-                drop(stderr_reader);
-                return Err("brew-cleanup-wait-failed".into());
-            }
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("brew-cleanup-stdout-unavailable".into());
         }
     };
-    let (stdout, stdout_truncated) = stdout_reader
-        .join()
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("brew-cleanup-stderr-unavailable".into());
+        }
+    };
+    let reader_cancellation = PipeReaderCancellation::new();
+    let stdout_reader = match spawn_bounded_cancellable_pipe_reader(
+        stdout,
+        MAX_OUTPUT_BYTES,
+        POLL_INTERVAL,
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(_) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("brew-cleanup-stdout-reader-failed".into());
+        }
+    };
+    let stderr_reader = match spawn_bounded_cancellable_pipe_reader(
+        stderr,
+        MAX_OUTPUT_BYTES,
+        POLL_INTERVAL,
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(_) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            reader_cancellation.cancel();
+            let _ = stdout_reader.join();
+            return Err("brew-cleanup-stderr-reader-failed".into());
+        }
+    };
+
+    let lifecycle_result = match wait_for_child_without_reap(
+        child_pid,
+        Duration::from_millis(COMMAND_TIMEOUT_MS),
+        POLL_INTERVAL,
+    ) {
+        Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+            // The unreaped leader pins the private PGID until inheriting descendants are settled.
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            child
+                .wait()
+                .map_err(|_| "brew-cleanup-wait-failed".to_string())
+        }
+        Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("brew-cleanup-timeout".into())
+        }
+        Err(_) => {
+            // Without a successful no-reap observation, only the direct child is safe to target.
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("brew-cleanup-wait-failed".into())
+        }
+    };
+
+    reader_cancellation.cancel();
+    let stdout_result = stdout_reader.join();
+    let stderr_result = stderr_reader.join();
+
+    let status = lifecycle_result?;
+    let (stdout, stdout_truncated) = stdout_result
         .map_err(|_| "brew-cleanup-stdout-reader-failed".to_string())?
         .map_err(|_| "brew-cleanup-stdout-read-failed".to_string())?;
-    let (stderr, stderr_truncated) = stderr_reader
-        .join()
+    let (stderr, stderr_truncated) = stderr_result
         .map_err(|_| "brew-cleanup-stderr-reader-failed".to_string())?
         .map_err(|_| "brew-cleanup-stderr-read-failed".to_string())?;
     Ok(CommandOutput {
         status_code: status.code().unwrap_or(-1),
-        stdout,
-        stderr,
+        stdout: String::from_utf8_lossy(&stdout)
+            .into_owned()
+            .replace('\0', ""),
+        stderr: String::from_utf8_lossy(&stderr)
+            .into_owned()
+            .replace('\0', ""),
         truncated: stdout_truncated || stderr_truncated,
     })
 }
@@ -285,30 +397,6 @@ fn run_brew_object_bound(path: &Path, args: &[&str]) -> Result<(String, CommandO
     let identity = verified.identity.clone();
     let output = run_verified_brew(path, verified, args)?;
     Ok((identity, output))
-}
-
-#[cfg(target_os = "macos")]
-fn read_bounded(reader: &mut impl Read) -> io::Result<(String, bool)> {
-    let mut retained = Vec::with_capacity(MAX_OUTPUT_BYTES);
-    let mut chunk = [0u8; 8 * 1024];
-    let mut truncated = false;
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        if retained.len() < MAX_OUTPUT_BYTES {
-            let keep = (MAX_OUTPUT_BYTES - retained.len()).min(read);
-            retained.extend_from_slice(&chunk[..keep]);
-            truncated |= keep < read;
-        } else {
-            truncated = true;
-        }
-    }
-    let text = String::from_utf8_lossy(&retained)
-        .into_owned()
-        .replace('\0', "");
-    Ok((text, truncated))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -810,13 +898,44 @@ mod tests {
         assert_eq!(EXECUTE_ARGUMENTS, ["cleanup", "--prune-prefix"]);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     #[test]
     fn command_output_reader_drains_without_retaining_unbounded_output() {
-        let mut reader = std::io::Cursor::new(vec![b'x'; MAX_OUTPUT_BYTES + 1]);
-        let (text, truncated) = read_bounded(&mut reader).unwrap();
-        assert_eq!(text.len(), MAX_OUTPUT_BYTES);
-        assert!(truncated);
+        let mut command = std::process::Command::new("/usr/bin/printf");
+        command.arg("%s").arg("x".repeat(MAX_OUTPUT_BYTES + 1));
+
+        let output = run_command(command).unwrap();
+
+        assert_eq!(output.stdout.len(), MAX_OUTPUT_BYTES);
+        assert!(output.truncated);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn escaped_inherited_pipe_writer_does_not_extend_command_completion() {
+        use std::time::{Duration, Instant};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let escaped_ready = fixture.path().join("escaped-ready");
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .env("DISKSAGE_ESCAPED_READY", &escaped_ready)
+            .args([
+                "-c",
+                "/usr/bin/setsid /bin/sh -c 'printf ready > \"$1\"; sleep 3' sh \"$DISKSAGE_ESCAPED_READY\" & while [ ! -s \"$DISKSAGE_ESCAPED_READY\" ]; do sleep 0.01; done; printf 'ready\\0'; printf 'warning' >&2",
+            ]);
+        let started = Instant::now();
+
+        let output = run_command(command).unwrap();
+
+        assert_eq!(output.status_code, 0);
+        assert_eq!(output.stdout, "ready");
+        assert_eq!(output.stderr, "warning");
+        assert!(!output.truncated);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "an escaped descendant retaining stdout/stderr delayed command completion"
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -832,6 +951,39 @@ mod tests {
         assert!(!identity.is_empty());
         assert_eq!(output.status_code, 0);
         assert_eq!(output.stdout, "object-bound\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_brew_snapshot_preserves_approved_bytes_after_same_inode_mutation() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let script = tempfile::NamedTempFile::new().unwrap();
+        let path = script.path().to_path_buf();
+        let approved = b"#!/bin/bash\nprintf 'approved\\n'\n";
+        let changed = b"#!/bin/bash\nprintf 'changed!\\n'\n";
+        std::fs::write(&path, approved).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut verified = open_verified_brew(&path).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(script.path())
+            .unwrap();
+        writer.write_all(changed).unwrap();
+        writer.sync_all().unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.dev(), after.dev());
+        assert_eq!(before.ino(), after.ino());
+
+        verified.file.seek(SeekFrom::Start(0)).unwrap();
+        let mut captured = Vec::new();
+        verified.file.read_to_end(&mut captured).unwrap();
+        assert_eq!(captured, approved);
+        assert_eq!(verified.identity.split(':').count(), 3);
     }
 
     #[cfg(unix)]
