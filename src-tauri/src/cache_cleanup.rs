@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     fn proven_fileprovider_temporary_sqlite_requires_exact_triplet() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
+        let trash = trash_directory(tmp.path()).expect("test home must have a Trash directory");
         let cloud = trash.join("com.apple.CloudDocs.iCloudDriveFileProvider");
         let account = cloud.join("75876723-DC8F-4F53-9282-AE20BDB9034C");
         fs::create_dir_all(&account).unwrap();
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn proven_uv_git_cache_requires_all_native_directories() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
+        let trash = trash_directory(tmp.path()).expect("test home must have a Trash directory");
         let git = trash.join("git-v0");
         fs::create_dir_all(git.join("locks")).unwrap();
         fs::create_dir(git.join("checkouts")).unwrap();
@@ -1136,7 +1136,8 @@ mod tests {
     #[test]
     fn proven_uv_archive_cache_requires_native_keys_and_never_authorizes_deletion() {
         let tmp = tempfile::tempdir().unwrap();
-        let archive = tmp.path().join(".Trash/archive-v0");
+        let trash = trash_directory(tmp.path()).expect("test home must have a Trash directory");
+        let archive = trash.join("archive-v0");
         let entry = archive.join("Ab12_-cdEF34ghIJ");
         fs::create_dir_all(&entry).unwrap();
         let outside = tmp.path().join("outside");
@@ -1159,7 +1160,7 @@ mod tests {
         assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep");
         assert!(!journal.exists());
 
-        let invalid = tmp.path().join(".Trash/archive-v0");
+        let invalid = trash.join("archive-v0");
         fs::create_dir_all(invalid.join("not-a-native-key!")).unwrap();
         assert!(proven_cache_trash_candidates(tmp.path()).is_empty());
     }
@@ -1186,7 +1187,7 @@ mod tests {
     #[test]
     fn proven_cache_accepts_only_native_trash_collision_names() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
+        let trash = trash_directory(tmp.path()).expect("test home must have a Trash directory");
         for name in [
             "git-v0 2",
             "git-v0 14-56-42-563",
@@ -1219,7 +1220,7 @@ mod tests {
     #[test]
     fn edge_code_sign_clone_signature_never_authorizes_deletion() {
         let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
+        let trash = trash_directory(tmp.path()).expect("test home must have a Trash directory");
         let clone = trash.join("code_sign_clone.Ab12zZ");
         let contents = clone.join("Microsoft Edge.app.bundle/Contents");
         fs::create_dir_all(contents.join("MacOS")).unwrap();
