@@ -9,14 +9,18 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const HOMEBREW_AUDIT_SCHEMA_KIND: &str = "disksage.homebrew-audit/v1";
 pub const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 pub const DEFAULT_STALE_AFTER_DAYS: u64 = 90;
 pub const DEFAULT_MAX_REPO_FILE_BYTES: u64 = 1_048_576;
 pub const DEFAULT_MAX_REPO_MATCHES_PER_PACKAGE: usize = 20;
+
+const MAX_COMMAND_OUTPUT_BYTES: usize = 1_048_576;
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 const TOOLCHAIN_FILE_NAMES: &[&str] = &[
     ".tool-versions",
@@ -148,21 +152,20 @@ fn reason_code(reason: &str) -> &str {
 }
 
 fn is_incomplete_evidence_reason(reason: &str) -> bool {
-    matches!(
-        reason_code(reason),
-        "last-use-evidence-missing"
-            | "atime-unreliable"
-            | "install-time-only-no-use-evidence"
-            | "brew-evidence-incomplete"
-            | "size-scan-incomplete"
-            | "prefix-unavailable"
-            | "brew-uses-failed"
-            | "active-use-probe-failed"
-            | "active-use-timeout"
-            | "brew-command-spawn-failed"
-            | "brew-command-timeout"
-            | "brew-command-wait-failed"
-    )
+    let code = reason_code(reason);
+    code.starts_with("brew-command-")
+        || matches!(
+            code,
+            "last-use-evidence-missing"
+                | "atime-unreliable"
+                | "install-time-only-no-use-evidence"
+                | "brew-evidence-incomplete"
+                | "size-scan-incomplete"
+                | "prefix-unavailable"
+                | "brew-uses-failed"
+                | "active-use-probe-failed"
+                | "active-use-timeout"
+        )
 }
 
 fn active_use_probe_error(error: String) -> String {
@@ -274,60 +277,151 @@ fn classification_key(value: HomebrewClassification) -> &'static str {
     }
 }
 
+#[cfg(unix)]
 fn run_bounded_command(
     program: &Path,
     args: &[&str],
     timeout_ms: u64,
+    max_output_bytes: usize,
 ) -> Result<(i32, String, String), String> {
-    use std::io::Read;
-    use std::sync::mpsc;
-    use std::thread;
+    use crate::unix_process_group::{
+        signal_private_process_group, spawn_bounded_cancellable_pipe_reader,
+        wait_for_child_without_reap, NoReapWaitOutcome, PipeReaderCancellation,
+    };
+    use std::os::unix::process::CommandExt;
 
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .env("HOMEBREW_NO_ENV_HINTS", "1")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command
         .spawn()
         .map_err(|error| format!("brew-command-spawn-failed:{error}"))?;
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let (tx_out, rx_out) = mpsc::channel();
-    let (tx_err, rx_err) = mpsc::channel();
-    if let Some(mut pipe) = stdout {
-        thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = pipe.read_to_string(&mut buf);
-            let _ = tx_out.send(buf);
-        });
-    }
-    if let Some(mut pipe) = stderr {
-        thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = pipe.read_to_string(&mut buf);
-            let _ = tx_err.send(buf);
-        });
-    }
-
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = rx_out.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-                let err = rx_err.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-                return Ok((status.code().unwrap_or(1), out, err));
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("brew-command-timeout".into());
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(error) => return Err(format!("brew-command-wait-failed:{error}")),
+    let child_pid = child.id();
+    let Some(stdout) = child.stdout.take() else {
+        let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("brew-command-stdout-unavailable".into());
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("brew-command-stderr-unavailable".into());
+    };
+    let cancellation = PipeReaderCancellation::new();
+    let stdout_reader = match spawn_bounded_cancellable_pipe_reader(
+        stdout,
+        max_output_bytes,
+        COMMAND_POLL_INTERVAL,
+        cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("brew-command-output-reader-failed:{error}"));
         }
+    };
+    let stderr_reader = match spawn_bounded_cancellable_pipe_reader(
+        stderr,
+        max_output_bytes,
+        COMMAND_POLL_INTERVAL,
+        cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            cancellation.cancel();
+            let _ = stdout_reader.join();
+            return Err(format!("brew-command-output-reader-failed:{error}"));
+        }
+    };
+
+    let status = match wait_for_child_without_reap(
+        child_pid,
+        Duration::from_millis(timeout_ms.max(1)),
+        COMMAND_POLL_INTERVAL,
+    ) {
+        Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+            // The leader remains waitable here, so its PGID cannot be recycled while any
+            // descendants retaining the output pipes are terminated.
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            match child.wait() {
+                Ok(status) => status,
+                Err(error) => {
+                    cancellation.cancel();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(format!("brew-command-wait-failed:{error}"));
+                }
+            }
+        }
+        Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+            let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+            let _ = child.kill();
+            let _ = child.wait();
+            cancellation.cancel();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err("brew-command-timeout".into());
+        }
+        Err(error) => {
+            // Without a pinned no-reap observation, avoid a negative-PID signal that could
+            // target a recycled process group. Settle only the child handle we still own.
+            let _ = child.kill();
+            let _ = child.wait();
+            cancellation.cancel();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(format!("brew-command-wait-failed:{error}"));
+        }
+    };
+
+    cancellation.cancel();
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| "brew-command-output-reader-panicked".to_string())?
+        .map_err(|error| format!("brew-command-output-read-failed:{error}"))?;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| "brew-command-output-reader-panicked".to_string())?
+        .map_err(|error| format!("brew-command-output-read-failed:{error}"))?;
+    if stdout_truncated || stderr_truncated {
+        return Err("brew-command-output-too-large".into());
     }
+
+    Ok((
+        status.code().unwrap_or(1),
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn run_bounded_command(
+    _program: &Path,
+    _args: &[&str],
+    _timeout_ms: u64,
+    _max_output_bytes: usize,
+) -> Result<(i32, String, String), String> {
+    Err("homebrew-audit-unsupported-platform".into())
 }
 
 fn resolve_brew_path() -> Result<PathBuf, String> {
@@ -359,6 +453,7 @@ fn directory_bytes(path: &Path, timeout_ms: u64) -> Result<u64, String> {
         Path::new("/usr/bin/du"),
         &["-sk", &path.to_string_lossy()],
         timeout_ms.min(60_000).max(5_000),
+        MAX_COMMAND_OUTPUT_BYTES,
     )?;
     if code != 0 {
         return Err(format!("size-scan-incomplete:{err}"));
@@ -431,35 +526,57 @@ fn formula_last_use(prefix: &Path, atime_unreliable_volume: bool) -> HomebrewLas
     }
 }
 
-fn cask_last_use(app_paths: &[PathBuf]) -> HomebrewLastUseEvidence {
+fn cask_last_use_with_mdls(
+    app_paths: &[PathBuf],
+    mdls_path: &Path,
+    timeout_ms: u64,
+    max_output_bytes: usize,
+) -> HomebrewLastUseEvidence {
     let mut paths_checked = Vec::new();
     let mut notes = Vec::new();
     let mut latest: Option<u64> = None;
     let mut complete = false;
+    let mut probe_incomplete = false;
 
     for app in app_paths {
         paths_checked.push(app.display().to_string());
         if !app.exists() {
             notes.push(format!("app-missing:{}", app.display()));
+            probe_incomplete = true;
             continue;
         }
-        let output = Command::new("mdls")
-            .args(["-name", "kMDItemLastUsedDate", "-raw", &app.to_string_lossy()])
-            .output();
+        let app_arg = app.to_string_lossy();
+        let output = run_bounded_command(
+            mdls_path,
+            &["-name", "kMDItemLastUsedDate", "-raw", &app_arg],
+            timeout_ms,
+            max_output_bytes,
+        );
         match output {
-            Ok(out) if out.status.success() => {
-                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            Ok((0, stdout, _)) => {
+                let text = stdout.trim().to_string();
                 if text.is_empty() || text == "(null)" {
                     notes.push(format!("spotlight-last-used-null:{}", app.display()));
+                    probe_incomplete = true;
                 } else if let Some(ms) = parse_mdls_date_to_ms(&text) {
                     latest = Some(latest.map_or(ms, |cur| cur.max(ms)));
                     complete = true;
                 } else {
                     notes.push(format!("spotlight-last-used-unparsed:{text}"));
+                    probe_incomplete = true;
                 }
             }
-            Ok(_) => notes.push(format!("spotlight-query-failed:{}", app.display())),
-            Err(error) => notes.push(format!("spotlight-spawn-failed:{error}")),
+            Ok((code, _, stderr)) => {
+                notes.push(format!(
+                    "spotlight-query-failed:{}:exit-status:{code}:stderr:{stderr}",
+                    app.display()
+                ));
+                probe_incomplete = true;
+            }
+            Err(error) => {
+                notes.push(format!("spotlight-query-failed:{}:{error}", app.display()));
+                probe_incomplete = true;
+            }
         }
     }
 
@@ -470,11 +587,20 @@ fn cask_last_use(app_paths: &[PathBuf]) -> HomebrewLastUseEvidence {
     HomebrewLastUseEvidence {
         method: "cask-app-spotlight-last-used".into(),
         observed_at_ms: latest,
-        evidence_complete: complete,
+        evidence_complete: complete && !probe_incomplete,
         atime_unreliable: false,
         paths_checked,
         notes,
     }
+}
+
+fn cask_last_use(app_paths: &[PathBuf], timeout_ms: u64) -> HomebrewLastUseEvidence {
+    cask_last_use_with_mdls(
+        app_paths,
+        Path::new("/usr/bin/mdls"),
+        timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
+    )
 }
 
 fn parse_mdls_date_to_ms(text: &str) -> Option<u64> {
@@ -554,24 +680,20 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
     false
 }
 
-fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>, String> {
-    if !prefix.exists() {
+fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
+    // lsof documents exit status 1 with no output as "no files were found". Every other
+    // non-zero outcome leaves active-use evidence incomplete.
+    if exit_code == 1 && stdout.is_empty() && stderr.is_empty() {
         return Ok(Vec::new());
     }
-    let (code, out, _err) = match run_bounded_command(
-        Path::new("/usr/sbin/lsof"),
-        &["-Fpc", "+D", &prefix.to_string_lossy()],
-        timeout_ms.min(30_000).max(5_000),
-    ) {
-        Ok(value) => value,
-        Err(error) => return Err(active_use_probe_error(error)),
-    };
-    // lsof returns 1 when no processes match; treat as empty.
-    if code != 0 && out.is_empty() {
-        return Ok(Vec::new());
+    if exit_code != 0 {
+        return Err(format!(
+            "active-use-probe-failed:lsof-exit-status:{exit_code}:stderr:{stderr}"
+        ));
     }
+
     let mut pids = BTreeSet::new();
-    for token in out.split(|c| c == '\n' || c == '\0') {
+    for token in stdout.split(|c| c == '\n' || c == '\0') {
         let token = token.trim();
         if let Some(pid) = token.strip_prefix('p') {
             if let Ok(value) = pid.parse::<u32>() {
@@ -580,6 +702,22 @@ fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>,
         }
     }
     Ok(pids.into_iter().collect())
+}
+
+fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>, String> {
+    if !prefix.exists() {
+        return Ok(Vec::new());
+    }
+    let (code, out, err) = match run_bounded_command(
+        Path::new("/usr/sbin/lsof"),
+        &["-Fpc", "+D", &prefix.to_string_lossy()],
+        timeout_ms.min(30_000).max(5_000),
+        MAX_COMMAND_OUTPUT_BYTES,
+    ) {
+        Ok(value) => value,
+        Err(error) => return Err(active_use_probe_error(error)),
+    };
+    classify_lsof_result(code, &out, &err)
 }
 
 fn record_running_pids(
@@ -781,23 +919,35 @@ pub fn audit_homebrew(
     let brew_path = resolve_brew_path()?;
     let mut issues = Vec::new();
 
-    let (code, prefix_out, prefix_err) =
-        run_bounded_command(&brew_path, &["--prefix"], options.command_timeout_ms)?;
+    let (code, prefix_out, prefix_err) = run_bounded_command(
+        &brew_path,
+        &["--prefix"],
+        options.command_timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
+    )?;
     if code != 0 {
         return Err(format!("brew-prefix-failed:{prefix_err}"));
     }
     let brew_prefix = PathBuf::from(prefix_out.trim());
     let atime_unreliable_volume = volume_atime_unreliable(&brew_prefix);
 
-    let (code, leaves_out, leaves_err) =
-        run_bounded_command(&brew_path, &["leaves", "-r"], options.command_timeout_ms)?;
+    let (code, leaves_out, leaves_err) = run_bounded_command(
+        &brew_path,
+        &["leaves", "-r"],
+        options.command_timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
+    )?;
     if code != 0 {
         return Err(format!("brew-leaves-failed:{leaves_err}"));
     }
     let mut leaf_names: BTreeSet<String> = lines_nonempty(&leaves_out).into_iter().collect();
 
-    let (code, cask_out, cask_err) =
-        run_bounded_command(&brew_path, &["list", "--cask"], options.command_timeout_ms)?;
+    let (code, cask_out, cask_err) = run_bounded_command(
+        &brew_path,
+        &["list", "--cask"],
+        options.command_timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
+    )?;
     if code != 0 {
         return Err(format!("brew-list-cask-failed:{cask_err}"));
     }
@@ -807,6 +957,7 @@ pub fn audit_homebrew(
         &brew_path,
         &["autoremove", "--dry-run"],
         options.command_timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
     )?;
     if code != 0 {
         issues.push(format!("brew-autoremove-dry-run-failed:{auto_err}"));
@@ -875,8 +1026,12 @@ pub fn audit_homebrew(
     }
     info_args.extend(info_targets.iter().cloned());
     let info_arg_refs: Vec<&str> = info_args.iter().map(String::as_str).collect();
-    let (code, info_out, info_err) =
-        run_bounded_command(&brew_path, &info_arg_refs, options.command_timeout_ms)?;
+    let (code, info_out, info_err) = run_bounded_command(
+        &brew_path,
+        &info_arg_refs,
+        options.command_timeout_ms,
+        MAX_COMMAND_OUTPUT_BYTES,
+    )?;
     if code != 0 {
         return Err(format!("brew-info-failed:{info_err}"));
     }
@@ -953,6 +1108,7 @@ pub fn audit_homebrew(
             &brew_path,
             &["uses", "--installed", &name],
             options.command_timeout_ms,
+            MAX_COMMAND_OUTPUT_BYTES,
         )?;
         let reverse_dependencies = if uses_code == 0 {
             lines_nonempty(&uses_out)
@@ -967,7 +1123,9 @@ pub fn audit_homebrew(
             &mut running_pid_set,
             &mut evidence_gaps,
         );
-        let running_pids = running_pid_set.into_iter().collect::<Vec<_>>();
+        let running_pids = running_pid_set
+            .into_iter()
+            .collect::<Vec<_>>();
 
         let last_use = formula_last_use(&opt_prefix, atime_unreliable_volume);
         let repo_references = repo_references_by_package
@@ -1038,7 +1196,7 @@ pub fn audit_homebrew(
             }
         };
         let app_paths = cask_app_paths(&item, &brew_prefix);
-        let last_use = cask_last_use(&app_paths);
+        let last_use = cask_last_use(&app_paths, options.command_timeout_ms);
         let mut running_pid_set = BTreeSet::new();
         for app in &app_paths {
             record_running_pids(
@@ -1047,9 +1205,7 @@ pub fn audit_homebrew(
                 &mut evidence_gaps,
             );
         }
-        let running_pids = running_pid_set
-            .into_iter()
-            .collect::<Vec<_>>();
+        let running_pids = running_pid_set.into_iter().collect::<Vec<_>>();
         let repo_references = repo_references_by_package
             .get(&name)
             .cloned()
@@ -1135,6 +1291,18 @@ pub fn audit_homebrew(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, body).expect("write executable fixture");
+        let mut permissions = std::fs::metadata(path)
+            .expect("stat executable fixture")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).expect("chmod executable fixture");
+    }
 
     fn base_evidence() -> HomebrewPackageEvidence {
         HomebrewPackageEvidence {
@@ -1249,6 +1417,19 @@ mod tests {
     }
 
     #[test]
+    fn lsof_exit_status_contract_only_accepts_documented_empty_no_match() {
+        assert_eq!(classify_lsof_result(1, "", ""), Ok(Vec::new()));
+        assert_eq!(
+            classify_lsof_result(1, "", "lsof: permission denied"),
+            Err("active-use-probe-failed:lsof-exit-status:1:stderr:lsof: permission denied".into())
+        );
+        assert_eq!(
+            classify_lsof_result(2, "", ""),
+            Err("active-use-probe-failed:lsof-exit-status:2:stderr:".into())
+        );
+    }
+
+    #[test]
     fn running_pid_collection_preserves_probe_errors_as_evidence_gaps() {
         let mut running_pids = BTreeSet::new();
         let mut evidence_gaps = Vec::new();
@@ -1344,5 +1525,36 @@ mod tests {
     fn mdls_date_parser_accepts_common_spotlight_format() {
         let ms = parse_mdls_date_to_ms("2024-01-02 03:04:05 +0000").expect("parse");
         assert!(ms > 1_700_000_000_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cask_spotlight_probe_obeys_timeout_and_output_cap() {
+        let fixture = tempfile::tempdir().expect("temp fixture");
+        let app = fixture.path().join("Fixture.app");
+        std::fs::create_dir(&app).expect("create app fixture");
+
+        let slow_mdls = fixture.path().join("slow-mdls");
+        write_executable(&slow_mdls, "#!/bin/sh\nsleep 30\n");
+        let started = std::time::Instant::now();
+        let timed_out = cask_last_use_with_mdls(&[app.clone()], &slow_mdls, 20, 64);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Spotlight probe exceeded its bounded timeout"
+        );
+        assert!(!timed_out.evidence_complete);
+        assert!(timed_out
+            .notes
+            .iter()
+            .any(|note| note.contains("brew-command-timeout")));
+
+        let noisy_mdls = fixture.path().join("noisy-mdls");
+        write_executable(&noisy_mdls, "#!/bin/sh\nprintf '0123456789abcdef'\n");
+        let over_cap = cask_last_use_with_mdls(&[app], &noisy_mdls, 1_000, 8);
+        assert!(!over_cap.evidence_complete);
+        assert!(over_cap
+            .notes
+            .iter()
+            .any(|note| note.contains("brew-command-output-too-large")));
     }
 }
