@@ -144,7 +144,6 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
         repository_root.join("docs/development/cache-cleanup-operator-runbook.md"),
     )
     .unwrap();
-    let normalized_runbook = runbook.split_whitespace().collect::<Vec<_>>().join(" ");
     let legacy_adr = std::fs::read_to_string(
         repository_root.join(
             "docs/architecture/adr/0002-cache-cleanup-is-per-item-evidence-bound.md",
@@ -158,12 +157,12 @@ fn operator_docs_match_the_fail_closed_permanent_delete_contract() {
     ))
     .unwrap();
 
-    assert!(normalized_runbook.contains(
+    assert!(runbook.contains(
         "cache-trash-identity-bound-permanent-delete-unavailable"
     ));
-    assert!(normalized_runbook.contains("select and delete those exact reviewed cache candidates"));
-    assert!(normalized_runbook.contains("Do not empty the native Trash as a whole."));
-    assert!(!normalized_runbook.contains("permanently removes only"));
+    assert!(runbook.contains("select and delete those exact reviewed cache candidates"));
+    assert!(runbook.contains("Do not empty the native Trash as a whole."));
+    assert!(!runbook.contains("permanently removes only"));
 
     assert!(legacy_adr.contains("**Status:** Partially superseded by ADR-0020"));
     assert!(adr_index.contains(
