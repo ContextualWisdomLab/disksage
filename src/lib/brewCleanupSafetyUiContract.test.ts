@@ -18,7 +18,7 @@ describe("Homebrew cleanup safety UX", () => {
 
     expect(panelStart).toBeGreaterThanOrEqual(0);
     expect(panelEnd).toBeGreaterThan(panelStart);
-    expect(panelIntroduction).toContain("Homebrew prefix 안의 끊어진 심볼릭 링크와 빈 디렉터리");
+    expect(panelIntroduction).toContain("Homebrew 안의 끊어진 심볼릭 링크와 빈 디렉터리");
     expect(source).not.toContain("Homebrew의 오래된 파일과 prefix");
     expect(source).not.toContain("오래된 Homebrew 파일");
   });

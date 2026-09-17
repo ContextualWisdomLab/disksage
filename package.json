@@ -7,6 +7,9 @@
     "dev": "vite dev",
     "verify:release-version": "node scripts/ci/release-version.mjs",
     "build": "npm run verify:release-version && vite build",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "test-storybook": "test-storybook",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -21,7 +24,9 @@
   },
   "overrides": {
     "cookie": "^0.7.2",
-    "postcss": "^8.5.18"
+    "nanoid": "^3.3.18",
+    "postcss": "^8.5.18",
+    "uuid": "^11.1.1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -29,12 +34,16 @@
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
+    "@storybook/addon-a11y": "^10.5.10",
+    "@storybook/sveltekit": "^10.5.10",
+    "@storybook/test-runner": "^0.24.4",
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/kit": "^2.70.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tauri-apps/cli": "^2",
     "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.11",
+    "storybook": "^10.5.10",
     "svelte": "^5.56.9",
     "svelte-check": "^4.7.6",
     "typescript": "~5.6.2",
