@@ -10,22 +10,22 @@ permissions:
 jobs:
   contextual-orchestrator-opencode:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    env:
-      ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}
-      ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
     steps:
       - name: Check orchestrator configuration
         id: config
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}
+          ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
         run: |
-          if [ -n "$ORCHESTRATOR_URL" ] && [ -n "$ORCHESTRATOR_TOKEN" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
+          set -euo pipefail
+          if [ -z "$ORCHESTRATOR_URL" ] || [ -z "$ORCHESTRATOR_TOKEN" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "contextual-orchestrator gateway URL/token are required; no provider or local fallback is permitted" >&2
+            exit 1
           fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact event commit
-        if: steps.config.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -33,7 +33,6 @@ jobs:
           persist-credentials: false
 
       - name: Collect bounded repository context
-        if: steps.config.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,22 +47,22 @@ jobs:
             '{repository:"ContextualWisdomLab/disksage", head_sha:$sha, open_prs:$prs[0], baseline:$baseline}' \
             > /tmp/context.json
 
-      - name: Discover model and run OpenCode Agent review
-        if: steps.config.outputs.configured == 'true'
+      - name: Run OpenCode Agent review through orchestrator/free
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}
+          ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
         run: |
           set -euo pipefail
           base="${ORCHESTRATOR_URL%/}"
           auth=(-H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}")
-          model="$(curl --fail-with-body --silent --show-error --max-time 30 "${auth[@]}" "${base}/v1/models" \
-            | jq -er '.data | map(select(.id | type == "string" and length > 0)) | .[0].id')"
-          jq -n --arg model "$model" --rawfile context /tmp/context.json '{model:$model,messages:[
+          jq -n --arg model "orchestrator/free" --rawfile context /tmp/context.json '{model:$model,messages:[
             {role:"system",content:"You are the contextual-orchestrator OpenCode Agent for DiskSage. Return exactly one JSON object with blocker, next_action, and merge_ready fields; keep blocker and next_action under 280 characters and merge_ready boolean. Never request or reveal secrets, tokens, raw private paths, or cloud file contents. Do not authorize deletion or eviction."},
             {role:"user",content:("Review this bounded repository context and update the hourly loop message:\n" + $context)}
           ],stream:false}' > /tmp/request.json
           response=/tmp/hourly-agent-response.json
           receipt=/tmp/hourly-product-loop-receipt.json
           trap 'rm -f "$response"' EXIT
-          if ! curl --fail-with-body --silent --show-error --max-time 120 --max-filesize 65536 \
+          if ! curl --fail-with-body --silent --show-error --connect-timeout 30 --max-filesize 65536 \
             "${auth[@]}" -H 'Content-Type: application/json' \
             --data-binary @/tmp/request.json "${base}/v1/chat/completions" > "$response"; then
             jq -n --arg repository "ContextualWisdomLab/disksage" \
@@ -89,7 +88,7 @@ jobs:
             exit 1
           fi
           jq -n --arg repository "ContextualWisdomLab/disksage" \
-            --arg head_sha "${GITHUB_SHA}" --arg model "$model" \
+            --arg head_sha "${GITHUB_SHA}" --arg model "orchestrator/free" \
             --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg response_sha256 "$response_sha256" --argjson response_bytes "$response_bytes" \
             '{schema_version:1,repository:$repository,head_sha:$head_sha,model:$model,observed_at:$observed_at,status:"completed",response_sha256:$response_sha256,response_bytes:$response_bytes}' > "$receipt"
@@ -101,10 +100,5 @@ jobs:
         with:
           name: hourly-product-loop-receipt-${{ github.run_id }}
           path: /tmp/hourly-product-loop-receipt.json
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
-
-      - name: Explain missing orchestrator configuration
-        if: steps.config.outputs.configured != 'true'
-        run: |
-          echo "Hourly loop skipped: CONTEXTUAL_ORCHESTRATOR_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required; no fallback agent, provider secret, KV mutation, or Copilot token is used." >> "$GITHUB_STEP_SUMMARY"
