@@ -338,7 +338,6 @@ fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(coverage))]
-#[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
     let path = settings_file_path(&app)?;
     match std::fs::read_to_string(&path) {
@@ -348,7 +347,6 @@ pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String>
 }
 
 #[cfg(not(coverage))]
-#[tauri::command]
 pub fn set_settings(
     online_mode: bool,
     app: AppHandle,
