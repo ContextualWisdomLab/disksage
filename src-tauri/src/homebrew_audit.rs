@@ -554,24 +554,20 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
     false
 }
 
-fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>, String> {
-    if !prefix.exists() {
+fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
+    // lsof documents exit status 1 with no output as "no files were found". Every other
+    // non-zero outcome leaves active-use evidence incomplete.
+    if exit_code == 1 && stdout.is_empty() && stderr.is_empty() {
         return Ok(Vec::new());
     }
-    let (code, out, _err) = match run_bounded_command(
-        Path::new("/usr/sbin/lsof"),
-        &["-Fpc", "+D", &prefix.to_string_lossy()],
-        timeout_ms.min(30_000).max(5_000),
-    ) {
-        Ok(value) => value,
-        Err(error) => return Err(active_use_probe_error(error)),
-    };
-    // lsof returns 1 when no processes match; treat as empty.
-    if code != 0 && out.is_empty() {
-        return Ok(Vec::new());
+    if exit_code != 0 {
+        return Err(format!(
+            "active-use-probe-failed:lsof-exit-status:{exit_code}:stderr:{stderr}"
+        ));
     }
+
     let mut pids = BTreeSet::new();
-    for token in out.split(|c| c == '\n' || c == '\0') {
+    for token in stdout.split(|c| c == '\n' || c == '\0') {
         let token = token.trim();
         if let Some(pid) = token.strip_prefix('p') {
             if let Ok(value) = pid.parse::<u32>() {
@@ -580,6 +576,21 @@ fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>,
         }
     }
     Ok(pids.into_iter().collect())
+}
+
+fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>, String> {
+    if !prefix.exists() {
+        return Ok(Vec::new());
+    }
+    let (code, out, err) = match run_bounded_command(
+        Path::new("/usr/sbin/lsof"),
+        &["-Fpc", "+D", &prefix.to_string_lossy()],
+        timeout_ms.min(30_000).max(5_000),
+    ) {
+        Ok(value) => value,
+        Err(error) => return Err(active_use_probe_error(error)),
+    };
+    classify_lsof_result(code, &out, &err)
 }
 
 fn record_running_pids(
@@ -1246,6 +1257,19 @@ mod tests {
                 "{gap}"
             );
         }
+    }
+
+    #[test]
+    fn lsof_exit_status_contract_only_accepts_documented_empty_no_match() {
+        assert_eq!(classify_lsof_result(1, "", ""), Ok(Vec::new()));
+        assert_eq!(
+            classify_lsof_result(1, "", "lsof: permission denied"),
+            Err("active-use-probe-failed:lsof-exit-status:1:stderr:lsof: permission denied".into())
+        );
+        assert_eq!(
+            classify_lsof_result(2, "", ""),
+            Err("active-use-probe-failed:lsof-exit-status:2:stderr:".into())
+        );
     }
 
     #[test]
