@@ -93,12 +93,23 @@ fn run_bounded(
     timeout: Duration,
     label: &str,
 ) -> Result<BoundedOutput, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| format!("{label}-spawn"))?;
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut child = command.spawn().map_err(|_| format!("{label}-spawn"))?;
     let stdout = child
         .stdout
         .take()
@@ -114,18 +125,18 @@ fn run_bounded(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
+                terminate_process_tree(&mut child);
                 let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(format!("{label}-timeout"));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
-                let _ = child.kill();
+                terminate_process_tree(&mut child);
                 let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(format!("{label}-wait"));
             }
         }
@@ -144,6 +155,15 @@ fn run_bounded(
     })
 }
 
+fn terminate_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+}
+
 fn run_text(
     executable: &Path,
     args: &[&str],
@@ -155,6 +175,16 @@ fn run_text(
         return Err(format!("{label}-failed"));
     }
     Ok(output.stdout)
+}
+
+/// Reuse the bounded native-provider process boundary for read-only sibling planners.
+pub(crate) fn run_bounded_provider_text(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+    label: &str,
+) -> Result<String, String> {
+    run_text(executable, args, timeout, label)
 }
 
 fn hash_frame(hasher: &mut Sha256, value: &[u8]) {
@@ -220,7 +250,10 @@ fn candidate_set_sha256(candidates: &[ExactCandidate]) -> String {
     lower_hex(&hasher.finalize())
 }
 
-fn list_exact_candidates(podman_bin: &Path, requested_machine: &str) -> Result<Vec<ExactCandidate>, String> {
+fn list_exact_candidates(
+    podman_bin: &Path,
+    requested_machine: &str,
+) -> Result<Vec<ExactCandidate>, String> {
     let output = run_text(
         podman_bin,
         &[
@@ -280,7 +313,9 @@ pub fn prune_dangling_images(
     let approved_candidates = list_exact_candidates(podman_bin, requested_machine)?;
     if approved_candidates.is_empty()
         || approved_candidates.len() > MAX_EXACT_DELETE_IDS
-        || approved_candidates.iter().any(|candidate| !candidate.tags.is_empty())
+        || approved_candidates
+            .iter()
+            .any(|candidate| !candidate.tags.is_empty())
     {
         return Err("podman-prune-tagged-empty-or-oversized-candidate-set".into());
     }
@@ -293,7 +328,9 @@ pub fn prune_dangling_images(
     let revalidated_candidates = list_exact_candidates(podman_bin, requested_machine)?;
     if revalidated_candidates != approved_candidates
         || candidate_set_sha256(&revalidated_candidates) != approved_sha
-        || revalidated_candidates.iter().any(|candidate| !candidate.tags.is_empty())
+        || revalidated_candidates
+            .iter()
+            .any(|candidate| !candidate.tags.is_empty())
     {
         return Err("podman-prune-candidate-set-changed".into());
     }
@@ -310,7 +347,11 @@ pub fn prune_dangling_images(
         "rm".to_string(),
         "--no-prune".to_string(),
     ];
-    remove_args.extend(revalidated_candidates.iter().map(|candidate| candidate.id.clone()));
+    remove_args.extend(
+        revalidated_candidates
+            .iter()
+            .map(|candidate| candidate.id.clone()),
+    );
     let remove_arg_refs = remove_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = run_bounded(
         podman_bin,
