@@ -3,10 +3,7 @@ use crate::rules::{cache_candidates, BaseDirs};
 #[test]
 fn cache_candidates_hide_managed_file_provider_roots() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let managed_temp = temporary
-        .path()
-        .join("File Provider Storage")
-        .join("cache");
+    let managed_temp = temporary.path().join("File Provider Storage").join("cache");
     std::fs::create_dir_all(&managed_temp).expect("managed provider cache fixture");
     std::fs::write(managed_temp.join("provider-state.bin"), b"provider-state")
         .expect("managed provider cache contents");
@@ -27,7 +24,8 @@ fn cache_candidates_hide_managed_file_provider_roots() {
 
 #[cfg(unix)]
 #[test]
-fn cache_candidates_mark_managed_file_provider_roots_reached_through_symlinked_ancestor_non_actionable() {
+fn cache_candidates_mark_managed_file_provider_roots_reached_through_symlinked_ancestor_non_actionable(
+) {
     use std::os::unix::fs::symlink;
 
     let temporary = tempfile::tempdir().expect("temporary directory");

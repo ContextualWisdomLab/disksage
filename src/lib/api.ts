@@ -229,6 +229,150 @@ export const executePodmanDanglingImagePrune = (
   rationale,
 });
 
+export type RuntimeStorageKind = "podman-machine" | "colima";
+
+export interface RuntimeStoragePlan {
+  schema_kind: "disksage.runtime-storage-plan";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  display_name: string;
+  executable_available: boolean;
+  guest_running: boolean | null;
+  guest_reachable: boolean | null;
+  trim_command: string[] | null;
+  recovery_command: string[][] | null;
+  host_compaction_supported: boolean;
+  host_compaction_blockers: string[];
+  observed_at_ms: number;
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  recovery_approval_phrase: string | null;
+  evidence_complete: boolean;
+  issue: string | null;
+}
+
+export interface RuntimeStorageExecution {
+  schema_kind: "disksage.runtime-storage-execution";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  rationale: string;
+  volume_comparison: LocalVolumeComparison | null;
+  volume_evidence_error: string | null;
+}
+
+export interface RuntimeStorageRecoveryExecution {
+  schema_kind: "disksage.runtime-storage-recovery-execution";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  command: string[][];
+  stop_status_code: number;
+  start_status_code: number;
+  guest_reachable_after_recovery: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const inspectRuntimeStorage = () =>
+  invoke<RuntimeStoragePlan[]>("inspect_runtime_storage");
+
+export const executeRuntimeStorageTrim = (
+  runtime: RuntimeStorageKind,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageExecution>("execute_runtime_storage_trim", {
+  runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export const executeRuntimeStorageRecovery = (
+  runtime: RuntimeStorageKind,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageRecoveryExecution>("execute_runtime_storage_recovery", {
+  runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export type ContainerRuntimeKind =
+  | "docker-native"
+  | "docker-colima-context"
+  | "podman-machine";
+
+export type OrphanCategory = "container" | "image" | "volume" | "network" | "build_cache";
+
+export interface ContainerOrphanPlan {
+  schema_kind: "disksage.container-orphan-plan";
+  schema_version: number;
+  platform: string;
+  evidence_complete: boolean;
+  elapsed_ms: number;
+  runtime: {
+    kind: ContainerRuntimeKind;
+    display_name: string;
+    healthy: boolean;
+    detail_issue: string | null;
+  };
+  categories: Array<{
+    category: OrphanCategory;
+    evidence_complete: boolean;
+    issue: string | null;
+    evidence: {
+      total_records: number;
+      candidate_records: number;
+      candidate_size_sum_bytes: number | null;
+      candidate_set_sha256: string;
+    } | null;
+    approval_phrase: string | null;
+    prune_command: string[] | null;
+  }>;
+  issues: string[];
+}
+
+export const inspectContainerOrphans = () =>
+  invoke<ContainerOrphanPlan[]>("inspect_container_orphans");
+
+export interface ContainerOrphanPruneExecution {
+  schema_version: number;
+  runtime_display_name: string;
+  category: OrphanCategory;
+  candidate_set_sha256: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  before_available_bytes: number | null;
+  after_available_bytes: number | null;
+  observed_available_gain_bytes: number | null;
+  rationale: string;
+}
+
+export const executeContainerOrphanPrune = (
+  runtimeKind: ContainerRuntimeKind,
+  scopeName: string | null,
+  category: OrphanCategory,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<ContainerOrphanPruneExecution>("execute_container_orphan_prune", {
+  runtimeKind,
+  scopeName,
+  category,
+  confirmationPhrase,
+  rationale,
+});
+
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>
@@ -253,6 +397,7 @@ export interface OntoClass {
   equivalents: string[];
   disjoints: string[];
   target_folder: string | null;
+  deletion_policy: string | null;
 }
 export interface Ontology {
   classes: OntoClass[];
@@ -486,7 +631,7 @@ export interface IcloudLocalState {
 
 export interface IcloudLocalEvictionPlan {
   version: number;
-  provider: "icloud";
+  provider: "icloud" | "onedrive";
   account_scope: CloudAccountScope;
   cloud_root: string;
   path: string;
@@ -531,7 +676,7 @@ export interface IcloudLocalEvictionResult {
 }
 
 export interface IcloudLocalCopyEvictionOutput {
-  action: "evict-icloud-local-copy";
+  action: "evict-cloud-local-copy";
   plan: IcloudLocalEvictionPlan;
   approval: IcloudLocalEvictionApproval;
   approval_path: string;
@@ -577,6 +722,10 @@ export interface GitWorktreeAuditEntry {
   status_clean: boolean | null;
   status_entry_count: number | null;
   contained_in_reference: boolean | null;
+  closed_pull_request_head: boolean;
+  completed_pull_request_commit: boolean;
+  open_pull_request_commit: boolean;
+  stale_open_pull_request_head: boolean;
   head_is_retained_tip: boolean;
   actor_cwd_inside: boolean | null;
   size: GitWorktreeSizeEvidence;
@@ -592,13 +741,15 @@ export interface GitWorktreeReferenceBinding {
 }
 
 export interface GitWorktreeAuditReport {
-  schema_kind: "disksage.git-worktree-audit/v2";
+  schema_kind: "disksage.git-worktree-audit/v4";
   version: number;
   repository_root: string;
   common_dir: string;
   generated_at_ms: number;
+  stale_open_pull_request_cutoff_ms: number | null;
   retention_references: GitWorktreeReferenceBinding[];
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   retention_reachable_commit_count: number;
   worktree_count: number;
   removal_candidate_count: number;
@@ -618,6 +769,7 @@ export interface GitWorktreeRemovalApproval {
   approval_id: string;
   removal_plan_fingerprint: string;
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   removal_candidate_count: number;
   removal_candidate_allocated_bytes: number;
   exact_approval_phrase: string;
@@ -647,6 +799,7 @@ export interface GitWorktreeRemovalResult {
   approval_id: string;
   removal_plan_fingerprint: string;
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   requested_at_ms: number;
   completed_at_ms: number;
   planned_candidate_count: number;
@@ -671,6 +824,59 @@ export interface StaleGitWorktreeRemovalOutput {
   result: GitWorktreeRemovalResult;
   result_path: string | null;
   result_record_error: string | null;
+}
+
+export interface GitCloneReclaimPlan {
+  schema_kind: "disksage.git-clone-reclaim-plan";
+  version: number;
+  generated_at_ms: number;
+  repository_root: string;
+  repository_object_id: string;
+  head: string;
+  branch: string;
+  closed_pull_request_head: boolean;
+  stale_open_pull_request_head: boolean;
+  stale_open_pull_request_cutoff_ms: number | null;
+  size: GitWorktreeSizeEvidence;
+  active_use: GitWorktreeActiveUseEvidence;
+  authority_fingerprint: string;
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  eligible_after_human_approval: boolean;
+  blockers: string[];
+  filesystem_mutation_executed: false;
+}
+
+export interface GitCloneReclaimApproval {
+  version: number;
+  approval_id: string;
+  plan_fingerprint: string;
+  exact_approval_phrase: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+}
+
+export interface GitCloneReclaimResult {
+  version: number;
+  approval_id: string;
+  plan_fingerprint: string;
+  requested_at_ms: number;
+  completed_at_ms: number;
+  allocated_bytes_upper_bound: number;
+  trash_move_executed: boolean;
+  path_absence_verified: boolean;
+  branch_delete_command_executed: false;
+  git_prune_executed: false;
+  physically_reclaimed_bytes: number | null;
+}
+
+export interface StaleGitCloneRemovalOutput {
+  action: "remove-stale-git-clone";
+  plan: GitCloneReclaimPlan;
+  approval: GitCloneReclaimApproval;
+  approval_path: string;
+  result: GitCloneReclaimResult;
 }
 
 export interface OAuthConnection {
@@ -821,6 +1027,27 @@ export interface LocalVolumeSnapshot {
   pressure: LocalVolumePressure;
   evidence_kind: string;
   limitations: string[];
+  evidence_fingerprint: string;
+}
+
+export interface LocalVolumeComparison {
+  schema_version: number;
+  before: LocalVolumeSnapshot;
+  after: LocalVolumeSnapshot;
+  observed_elapsed_ms: number;
+  total_bytes_stable: boolean;
+  available_change: {
+    direction: "increased" | "decreased" | "unchanged";
+    bytes: number;
+  };
+  free_change: {
+    direction: "increased" | "decreased" | "unchanged";
+    bytes: number;
+  };
+  logical_removed_bytes: number | null;
+  physical_reclaim_bytes: null;
+  physical_reclaim_attribution: "unproven";
+  reason_codes: string[];
   evidence_fingerprint: string;
 }
 
@@ -1215,20 +1442,56 @@ export const evictIcloudLocalCopy = (
 export const planStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null = null,
 ) => invoke<GitWorktreeAuditReport>("plan_stale_git_worktrees", {
   repositoryRoot,
   retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
 });
 export const removeStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null,
   approvedRemovalPlanFingerprint: string,
   confirmationExactApprovalPhrase: string,
   rationale: string,
 ) => invoke<StaleGitWorktreeRemovalOutput>("remove_stale_git_worktrees", {
   repositoryRoot,
   retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
   approvedRemovalPlanFingerprint,
+  confirmationExactApprovalPhrase,
+  rationale,
+});
+export const planStaleGitClone = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null = null,
+) => invoke<GitCloneReclaimPlan>("plan_stale_git_clone", {
+  repositoryRoot,
+  retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
+});
+export const removeStaleGitClone = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null,
+  approvedPlanFingerprint: string,
+  confirmationExactApprovalPhrase: string,
+  rationale: string,
+) => invoke<StaleGitCloneRemovalOutput>("remove_stale_git_clone", {
+  repositoryRoot,
+  retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
+  approvedPlanFingerprint,
   confirmationExactApprovalPhrase,
   rationale,
 });

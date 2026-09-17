@@ -1192,6 +1192,9 @@ pub fn collect_archive_files_bounded(
                 return true;
             }
             let path = entry.path();
+            if crate::safety::is_explicitly_protected(path) {
+                return false;
+            }
             if excluded.iter().any(|cloud| path.starts_with(cloud)) {
                 return false;
             }

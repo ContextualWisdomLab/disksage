@@ -49,6 +49,11 @@ path = "src/bin/disksage-icloud-local-eviction-batch.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-cloud-local-eviction-batch"
+path = "src/bin/disksage-icloud-local-eviction-batch.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-multipart-archive-audit"
 path = "src/bin/disksage-multipart-archive-audit.rs"
 required-features = ["cloud-cli"]
@@ -83,6 +88,14 @@ name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
 
 [[bin]]
+name = "disksage-git-worktree-metadata-prune"
+path = "src/bin/disksage-git-worktree-metadata-prune.rs"
+
+[[bin]]
+name = "disksage-git-clone-reclaim"
+path = "src/bin/disksage-git-clone-reclaim.rs"
+
+[[bin]]
 name = "disksage-git-worktree-remove"
 path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
@@ -90,6 +103,11 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-icloud-sync-health"
 path = "src/bin/disksage-icloud-sync-health.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-icloud-provider-recovery"
+path = "src/bin/disksage-icloud-provider-recovery.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
@@ -122,6 +140,10 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
+
+[[bin]]
+name = "disksage-container-orphan-plan"
+path = "src/bin/disksage-container-orphan-plan.rs"
 
 [[bin]]
 name = "disksage-provider-oauth"

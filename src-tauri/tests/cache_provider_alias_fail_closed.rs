@@ -24,6 +24,10 @@ mod cloud {
 mod safety {
     use std::path::Path;
 
+    pub(crate) fn is_user_owned_shared_temp_tree(_path: &Path) -> bool {
+        true
+    }
+
     pub(crate) fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
         Ok(path.to_string_lossy().into_owned())
     }
@@ -43,10 +47,7 @@ mod provider_alias_contract {
     fn symlinked_ancestor_into_managed_provider_storage_never_gets_cleanup_authority() {
         let temp = tempfile::tempdir().expect("temp root");
         let home = temp.path().join("home");
-        let managed_parent = home
-            .join("Library")
-            .join("CloudStorage")
-            .join("Provider");
+        let managed_parent = home.join("Library").join("CloudStorage").join("Provider");
         let managed_cache = managed_parent.join("cache");
         fs::create_dir_all(&managed_cache).expect("managed cache fixture");
         fs::write(managed_cache.join("customer-owned.bin"), b"keep")
@@ -70,7 +71,10 @@ mod provider_alias_contract {
             "a cache reached through a symlinked ancestor into managed provider storage must not be actionable"
         );
         assert_eq!(candidate.bytes, 0);
-        assert!(!production_rules::is_catalog_path(&bases, Path::new(&aliased_cache)));
+        assert!(!production_rules::is_catalog_path(
+            &bases,
+            Path::new(&aliased_cache)
+        ));
         assert!(production_rules::clean_targets(&aliased_cache).is_empty());
     }
 }
