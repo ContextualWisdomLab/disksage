@@ -1096,7 +1096,7 @@ fn resolve_common_dir(repository_root: &Path, timeout_ms: u64) -> Result<PathBuf
 
 fn list_worktrees(
     repository_root: &Path,
-    options: GitWorktreeAuditOptions,
+    options: &GitWorktreeAuditOptions,
 ) -> Result<Vec<RawWorktree>, String> {
     let result = run_git(
         repository_root,
@@ -1195,7 +1195,7 @@ fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
 /// The returned records intentionally retain evidence gaps, so no removal operation can use them.
 fn admin_fallback_worktrees(
     common_dir: &Path,
-    options: GitWorktreeAuditOptions,
+    options: &GitWorktreeAuditOptions,
 ) -> (Vec<RawWorktree>, Vec<String>) {
     let admin_dir = common_dir.join("worktrees");
     let mut issues = vec![
@@ -1445,13 +1445,13 @@ pub fn audit_git_worktrees(
         &retention_references,
         options.command_timeout_ms,
     )?;
-    let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options) {
+    let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, &options) {
         Ok(raw_worktrees) => (raw_worktrees, Vec::new()),
         // `run_git` appends `-timeout` to the operation reason. Only that typed-by-contract
         // condition permits the read-only admin fallback; malformed output and spawn failures
         // remain hard errors.
         Err(error) if error == GIT_WORKTREE_LIST_TIMEOUT => {
-            admin_fallback_worktrees(&common_dir, options)
+            admin_fallback_worktrees(&common_dir, &options)
         }
         Err(error) => return Err(error),
     };
@@ -1956,7 +1956,7 @@ fn branch_retained(repository_root: &Path, branch: &str, timeout_ms: u64) -> Res
 fn registration_absent(
     repository_root: &Path,
     removed_path: &Path,
-    options: GitWorktreeAuditOptions,
+    options: &GitWorktreeAuditOptions,
 ) -> Result<bool, String> {
     let worktrees = list_worktrees(repository_root, options)?;
     Ok(!worktrees.iter().any(|entry| {
@@ -2134,7 +2134,7 @@ pub fn execute_stale_worktree_removal(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound
         );
         item.registration_absence_verified =
-            registration_absent(&repository_root, Path::new(&candidate.path), options)
+            registration_absent(&repository_root, Path::new(&candidate.path), &options)
                 .unwrap_or(false);
         item.branch_retained = candidate.branch.as_deref().map(|branch| {
             branch_retained(&repository_root, branch, options.command_timeout_ms).unwrap_or(false)
@@ -2503,7 +2503,7 @@ mod tests {
         fs::write(admin.join("gitdir"), "/missing-worktree/.git\n").unwrap();
         fs::write(admin.join("HEAD"), "not-a-head\n").unwrap();
         let (entries, issues) =
-            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+            admin_fallback_worktrees(&common_dir, &GitWorktreeAuditOptions::default());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, PathBuf::from("/missing-worktree"));
         assert_eq!(entries[0].head, "admin-unknown-head");
@@ -2533,7 +2533,7 @@ mod tests {
         fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
 
         let (entries, _) =
-            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+            admin_fallback_worktrees(&common_dir, &GitWorktreeAuditOptions::default());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, worktree);
         assert!(is_oid(&entries[0].head));
