@@ -7,12 +7,16 @@
 //! It never mutates the filesystem.
 
 use crate::commands::{AppState, EntryView, NodeView};
-use crate::scanner::ScanResult;
+use crate::scanner::{is_within_managed_provider_scope, provider_home_root, ScanResult};
 use std::path::{Component, Path, PathBuf};
 
 const OUTSIDE_ROOT: &str = "path outside scanned root";
 
-fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, String> {
+fn canonical_navigation_path_with_home(
+    res: &ScanResult,
+    path: &Path,
+    provider_home: Option<&Path>,
+) -> Result<PathBuf, String> {
     if path.components().any(|component| matches!(component, Component::ParentDir)) {
         return Err(OUTSIDE_ROOT.into());
     }
@@ -25,7 +29,18 @@ fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, S
     if canonical_path != canonical_root && !canonical_path.starts_with(&canonical_root) {
         return Err(OUTSIDE_ROOT.into());
     }
+    if provider_home.is_some_and(|home| {
+        let canonical_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+        is_within_managed_provider_scope(&canonical_path, &canonical_home)
+    }) {
+        return Err("클라우드 전용 폴더는 열지 않습니다. 로컬 폴더를 선택하세요.".into());
+    }
     Ok(canonical_path)
+}
+
+fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, String> {
+    let provider_home = provider_home_root();
+    canonical_navigation_path_with_home(res, path, provider_home.as_deref())
 }
 
 fn entry_is_link_or_reparse(path: &Path, file_type: &std::fs::FileType) -> bool {
@@ -176,6 +191,35 @@ mod tests {
             canonical_navigation_path(&result, &root.path().join("missing")),
             Err(OUTSIDE_ROOT.to_string())
         );
+    }
+
+    fn managed_provider_root(home: &Path) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        return home.join("Library").join("CloudStorage");
+        #[cfg(not(target_os = "macos"))]
+        return home.join("OneDrive");
+    }
+
+    #[test]
+    fn managed_provider_root_navigation_fails_closed() {
+        let home = tempfile::tempdir().unwrap();
+        let root = managed_provider_root(home.path());
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("placeholder.bin"), b"placeholder").unwrap();
+        let result = scan(&root);
+
+        assert!(canonical_navigation_path_with_home(&result, &root, Some(home.path())).is_err());
+    }
+
+    #[test]
+    fn managed_provider_descendant_navigation_fails_closed() {
+        let home = tempfile::tempdir().unwrap();
+        let root = managed_provider_root(home.path());
+        let child = root.join("Account");
+        std::fs::create_dir_all(&child).unwrap();
+        let result = scan(&root);
+
+        assert!(canonical_navigation_path_with_home(&result, &child, Some(home.path())).is_err());
     }
 
     #[cfg(unix)]
