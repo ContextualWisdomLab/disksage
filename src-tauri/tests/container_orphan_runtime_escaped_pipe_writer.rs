@@ -22,15 +22,15 @@ case "${1:-}" in
     [ -x /usr/bin/setsid ] || exit 95
     [ -x /usr/bin/sleep ] || exit 96
     ready="${0%/*}/escaped-writer-ready"
-    /usr/bin/setsid /bin/sh -c ': > "$1"; exec /usr/bin/sleep 3' sh "$ready" &
-    escaped_writer_pid=$!
-    kill -0 "$escaped_writer_pid" 2>/dev/null || exit 97
-    attempt=0
-    while [ ! -f "$ready" ] && [ "$attempt" -lt 20 ]; do
-      /usr/bin/sleep 0.01
-      attempt=$((attempt + 1))
-    done
-    [ -f "$ready" ] || exit 98
+    /usr/bin/setsid /bin/sh -c '
+      /usr/bin/sleep 3 &
+      escaped_writer_pid=$!
+      kill -0 "$escaped_writer_pid" 2>/dev/null || exit 97
+      : > "$1"
+    ' sh "$ready" &
+    escaped_launcher_pid=$!
+    wait "$escaped_launcher_pid" || exit 98
+    [ -f "$ready" ] || exit 99
     exit 0
     ;;
   container)
