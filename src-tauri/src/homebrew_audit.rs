@@ -604,12 +604,27 @@ fn toolchain_tokens_for(name: &str) -> Vec<String> {
 
 fn scan_repo_references(
     roots: &[PathBuf],
-    package_name: &str,
+    package_names: &BTreeSet<String>,
     max_file_bytes: u64,
     max_matches: usize,
-) -> Result<Vec<HomebrewRepoReference>, String> {
-    let tokens = toolchain_tokens_for(package_name);
-    let mut matches = Vec::new();
+) -> BTreeMap<String, Vec<HomebrewRepoReference>> {
+    let mut packages_by_token: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut references: BTreeMap<String, Vec<HomebrewRepoReference>> = package_names
+        .iter()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
+    for package_name in package_names {
+        for token in toolchain_tokens_for(package_name) {
+            packages_by_token
+                .entry(token)
+                .or_default()
+                .push(package_name.clone());
+        }
+    }
+    if max_matches == 0 {
+        return references;
+    }
+
     for root in roots {
         if !root.is_dir() {
             continue;
@@ -657,21 +672,30 @@ fn scan_repo_references(
                 Ok(content) => content,
                 Err(_) => continue,
             };
-            for token in &tokens {
-                if content.contains(token) {
-                    matches.push(HomebrewRepoReference {
-                        path: entry.path().display().to_string(),
-                        matched_token: token.clone(),
-                    });
-                    if matches.len() >= max_matches {
-                        return Ok(matches);
+            let mut matched_packages = BTreeSet::new();
+            for (token, package_names) in &packages_by_token {
+                if !content.contains(token) {
+                    continue;
+                }
+                for package_name in package_names {
+                    if matched_packages.contains(package_name) {
+                        continue;
                     }
-                    break;
+                    if let Some(package_references) = references.get_mut(package_name) {
+                        if package_references.len() >= max_matches {
+                            continue;
+                        }
+                        package_references.push(HomebrewRepoReference {
+                            path: entry.path().display().to_string(),
+                            matched_token: token.clone(),
+                        });
+                        matched_packages.insert(package_name.clone());
+                    }
                 }
             }
         }
     }
-    Ok(matches)
+    references
 }
 
 fn parse_info_json(
@@ -859,6 +883,22 @@ pub fn audit_homebrew(
 
     let formula_filter: BTreeSet<String> = info_targets.iter().cloned().collect();
     let (formulae, casks) = parse_info_json(&info_out, &formula_filter, &cask_names)?;
+    let repo_package_names: BTreeSet<String> = formulae
+        .iter()
+        .filter_map(|item| item.get("name").and_then(|value| value.as_str()))
+        .chain(
+            casks
+                .iter()
+                .filter_map(|item| item.get("token").and_then(|value| value.as_str())),
+        )
+        .map(str::to_string)
+        .collect();
+    let repo_references_by_package = scan_repo_references(
+        &options.repository_roots,
+        &repo_package_names,
+        options.max_repo_file_bytes,
+        options.max_repo_matches_per_package,
+    );
 
     let mut packages = Vec::new();
 
@@ -930,16 +970,10 @@ pub fn audit_homebrew(
         let running_pids = running_pid_set.into_iter().collect::<Vec<_>>();
 
         let last_use = formula_last_use(&opt_prefix, atime_unreliable_volume);
-        let repo_references = scan_repo_references(
-            &options.repository_roots,
-            &name,
-            options.max_repo_file_bytes,
-            options.max_repo_matches_per_package,
-        )
-        .unwrap_or_else(|error| {
-            evidence_gaps.push(error);
-            Vec::new()
-        });
+        let repo_references = repo_references_by_package
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
 
         let evidence = HomebrewPackageEvidence {
             name: name.clone(),
@@ -1016,16 +1050,10 @@ pub fn audit_homebrew(
         let running_pids = running_pid_set
             .into_iter()
             .collect::<Vec<_>>();
-        let repo_references = scan_repo_references(
-            &options.repository_roots,
-            &name,
-            options.max_repo_file_bytes,
-            options.max_repo_matches_per_package,
-        )
-        .unwrap_or_else(|error| {
-            evidence_gaps.push(error);
-            Vec::new()
-        });
+        let repo_references = repo_references_by_package
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
 
         let evidence = HomebrewPackageEvidence {
             name: name.clone(),
@@ -1236,6 +1264,28 @@ mod tests {
             evidence_gaps,
             vec!["active-use-probe-failed:brew-command-spawn-failed:permission denied"]
         );
+    }
+
+    #[test]
+    fn repo_reference_scan_indexes_packages_and_preserves_limits() {
+        let repo = tempfile::tempdir().expect("temp repo");
+        std::fs::write(repo.path().join("Brewfile"), "alpha beta@2").expect("write Brewfile");
+        std::fs::write(repo.path().join("package.json"), "alpha beta@2")
+            .expect("write package.json");
+        std::fs::write(repo.path().join("mise.toml"), "gamma".repeat(20))
+            .expect("write oversized mise.toml");
+
+        let package_names = BTreeSet::from([
+            "alpha".to_string(),
+            "beta@2".to_string(),
+            "gamma".to_string(),
+        ]);
+        let references = scan_repo_references(&[repo.path().to_path_buf()], &package_names, 32, 1);
+
+        assert_eq!(references["alpha"].len(), 1);
+        assert_eq!(references["beta@2"].len(), 1);
+        assert_eq!(references["beta@2"][0].matched_token, "beta");
+        assert!(references["gamma"].is_empty());
     }
 
     #[test]
