@@ -3,9 +3,9 @@
 //!
 //! App-owned trees (reference managers, Photos bundles, Parallels VMs, macOS app
 //! Containers) are not user cold-data candidates. Copying them into
-//! `~/Library/CloudStorage` does not free local disk; DiskSage only credits freed
-//! bytes after provider confirmation plus a gated online-only / source-eviction
-//! path.
+//! `~/Library/CloudStorage` does not free local disk; DiskSage only credits an
+//! observed local allocation reduction after provider confirmation plus a gated
+//! online-only / source-eviction path.
 
 use crate::cloud_transfer::CloudOffloadGoalState;
 use std::path::Path;
@@ -131,13 +131,15 @@ fn containers_blocker(components: &[String]) -> bool {
 ///
 /// A verified copy into `~/Library/CloudStorage` (or any CloudOffload goal short of
 /// `source-evicted`) always credits **zero**. Only a DiskSage-gated source eviction
-/// after the provider-confirmed goal path may credit the source's logical bytes.
+/// after the provider-confirmed goal path may credit an observed allocation reduction,
+/// capped by the source allocation that existed before eviction.
 pub fn credited_free_bytes_after_cloud_offload(
     goal_state: CloudOffloadGoalState,
-    source_logical_bytes: u64,
+    source_allocated_bytes_before: u64,
+    observed_allocation_reduction_bytes: u64,
 ) -> u64 {
     match goal_state {
-        CloudOffloadGoalState::SourceEvicted => source_logical_bytes,
+        CloudOffloadGoalState::SourceEvicted => observed_allocation_reduction_bytes.min(source_allocated_bytes_before),
         CloudOffloadGoalState::CopyVerified
         | CloudOffloadGoalState::PendingProviderSync
         | CloudOffloadGoalState::ProviderSyncConfirmed
@@ -231,19 +233,24 @@ mod tests {
     }
 
     #[test]
-    fn free_accounting_red_copy_only_green_after_gated_eviction() {
-        // RED: copy into CloudStorage / pre-eviction goals never credit free space.
+    fn copy_and_pre_eviction_goal_states_credit_zero() {
+        // A copy into CloudStorage / pre-eviction goals never credit free space.
         assert_eq!(
             credited_free_bytes_for_cloud_storage_copy_only(750_000_000),
             0
         );
         assert_eq!(
-            credited_free_bytes_after_cloud_offload(CloudOffloadGoalState::CopyVerified, 750_000_000),
+            credited_free_bytes_after_cloud_offload(
+                CloudOffloadGoalState::CopyVerified,
+                750_000_000,
+                750_000_000,
+            ),
             0
         );
         assert_eq!(
             credited_free_bytes_after_cloud_offload(
                 CloudOffloadGoalState::PendingProviderSync,
+                750_000_000,
                 750_000_000
             ),
             0
@@ -251,12 +258,17 @@ mod tests {
         assert_eq!(
             credited_free_bytes_after_cloud_offload(
                 CloudOffloadGoalState::ProviderSyncConfirmed,
+                750_000_000,
                 750_000_000
             ),
             0
         );
         assert_eq!(
-            credited_free_bytes_after_cloud_offload(CloudOffloadGoalState::EvictionReady, 750_000_000),
+            credited_free_bytes_after_cloud_offload(
+                CloudOffloadGoalState::EvictionReady,
+                750_000_000,
+                750_000_000,
+            ),
             0
         );
         assert_eq!(
@@ -267,18 +279,33 @@ mod tests {
             credited_free_bytes_after_online_only_eviction(true, false, 100),
             0
         );
-
-        // GREEN: provider-confirmed + DiskSage-gated eviction/online-only may credit.
-        assert_eq!(
-            credited_free_bytes_after_cloud_offload(
-                CloudOffloadGoalState::SourceEvicted,
-                750_000_000
-            ),
-            750_000_000
-        );
         assert_eq!(
             credited_free_bytes_after_online_only_eviction(true, true, 42_000),
             42_000
+        );
+    }
+
+    #[test]
+    fn source_eviction_credit_uses_under_bound_observed_allocation_reduction() {
+        assert_eq!(
+            credited_free_bytes_after_cloud_offload(
+                CloudOffloadGoalState::SourceEvicted,
+                750_000_000,
+                420_000_000,
+            ),
+            420_000_000
+        );
+    }
+
+    #[test]
+    fn source_eviction_credit_caps_over_bound_observed_allocation_reduction() {
+        assert_eq!(
+            credited_free_bytes_after_cloud_offload(
+                CloudOffloadGoalState::SourceEvicted,
+                750_000_000,
+                900_000_000,
+            ),
+            750_000_000
         );
     }
 
