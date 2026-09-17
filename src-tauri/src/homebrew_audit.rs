@@ -143,9 +143,13 @@ pub struct HomebrewPackageEvidence {
     pub evidence_gaps: Vec<String>,
 }
 
+fn reason_code(reason: &str) -> &str {
+    reason.split_once(':').map_or(reason, |(code, _)| code)
+}
+
 fn is_incomplete_evidence_reason(reason: &str) -> bool {
     matches!(
-        reason.split_once(':').map_or(reason, |(code, _)| code),
+        reason_code(reason),
         "last-use-evidence-missing"
             | "atime-unreliable"
             | "install-time-only-no-use-evidence"
@@ -153,11 +157,21 @@ fn is_incomplete_evidence_reason(reason: &str) -> bool {
             | "size-scan-incomplete"
             | "prefix-unavailable"
             | "brew-uses-failed"
+            | "active-use-probe-failed"
             | "active-use-timeout"
             | "brew-command-spawn-failed"
             | "brew-command-timeout"
             | "brew-command-wait-failed"
     )
+}
+
+fn active_use_probe_error(error: String) -> String {
+    let code = if reason_code(&error) == "brew-command-timeout" {
+        "active-use-timeout"
+    } else {
+        "active-use-probe-failed"
+    };
+    format!("{code}:{error}")
 }
 
 /// Pure classifier: never returns `Stale` from last-use age alone.
@@ -550,11 +564,7 @@ fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>,
         timeout_ms.min(30_000).max(5_000),
     ) {
         Ok(value) => value,
-        Err(error) if error.contains("timeout") => return Err("active-use-timeout".into()),
-        Err(_) => {
-            // lsof exits non-zero when nothing is open; try without requiring success via spawn only.
-            return Ok(Vec::new());
-        }
+        Err(error) => return Err(active_use_probe_error(error)),
     };
     // lsof returns 1 when no processes match; treat as empty.
     if code != 0 && out.is_empty() {
@@ -570,6 +580,17 @@ fn running_pids_under_prefix(prefix: &Path, timeout_ms: u64) -> Result<Vec<u32>,
         }
     }
     Ok(pids.into_iter().collect())
+}
+
+fn record_running_pids(
+    result: Result<Vec<u32>, String>,
+    running_pids: &mut BTreeSet<u32>,
+    evidence_gaps: &mut Vec<String>,
+) {
+    match result {
+        Ok(pids) => running_pids.extend(pids),
+        Err(error) => evidence_gaps.push(error),
+    }
 }
 
 fn toolchain_tokens_for(name: &str) -> Vec<String> {
@@ -900,13 +921,13 @@ pub fn audit_homebrew(
             Vec::new()
         };
 
-        let running_pids = match running_pids_under_prefix(&opt_prefix, options.command_timeout_ms) {
-            Ok(pids) => pids,
-            Err(error) => {
-                evidence_gaps.push(error);
-                Vec::new()
-            }
-        };
+        let mut running_pid_set = BTreeSet::new();
+        record_running_pids(
+            running_pids_under_prefix(&opt_prefix, options.command_timeout_ms),
+            &mut running_pid_set,
+            &mut evidence_gaps,
+        );
+        let running_pids = running_pid_set.into_iter().collect::<Vec<_>>();
 
         let last_use = formula_last_use(&opt_prefix, atime_unreliable_volume);
         let repo_references = scan_repo_references(
@@ -984,11 +1005,15 @@ pub fn audit_homebrew(
         };
         let app_paths = cask_app_paths(&item, &brew_prefix);
         let last_use = cask_last_use(&app_paths);
-        let running_pids = app_paths
-            .iter()
-            .filter_map(|app| running_pids_under_prefix(app, options.command_timeout_ms).ok())
-            .flatten()
-            .collect::<BTreeSet<_>>()
+        let mut running_pid_set = BTreeSet::new();
+        for app in &app_paths {
+            record_running_pids(
+                running_pids_under_prefix(app, options.command_timeout_ms),
+                &mut running_pid_set,
+                &mut evidence_gaps,
+            );
+        }
+        let running_pids = running_pid_set
             .into_iter()
             .collect::<Vec<_>>();
         let repo_references = scan_repo_references(
@@ -1147,7 +1172,8 @@ mod tests {
             "size-scan-incomplete:permission denied",
             "prefix-unavailable",
             "brew-uses-failed:brew unavailable",
-            "active-use-timeout",
+            "active-use-probe-failed:brew-command-spawn-failed:permission denied",
+            "active-use-timeout:brew-command-timeout",
             "brew-command-spawn-failed:permission denied",
             "brew-command-timeout",
             "brew-command-wait-failed:interrupted",
@@ -1166,6 +1192,50 @@ mod tests {
         let now = 1_000_000 + 100 * 86_400_000;
         let (class, _) = classify_package(&evidence, now, 90);
         assert_eq!(class, HomebrewClassification::Unknown);
+    }
+
+    #[test]
+    fn active_use_probe_errors_retain_details_and_block_stale_classification() {
+        assert_eq!(
+            active_use_probe_error("brew-command-spawn-failed:permission denied".into()),
+            "active-use-probe-failed:brew-command-spawn-failed:permission denied"
+        );
+        assert_eq!(
+            active_use_probe_error("brew-command-timeout".into()),
+            "active-use-timeout:brew-command-timeout"
+        );
+
+        let now = 1_000_000 + 100 * 86_400_000;
+        for gap in [
+            "active-use-probe-failed:brew-command-spawn-failed:permission denied",
+            "active-use-timeout:brew-command-timeout",
+        ] {
+            let mut evidence = base_evidence();
+            evidence.evidence_gaps.push(gap.into());
+            assert_eq!(
+                classify_package(&evidence, now, 90).0,
+                HomebrewClassification::Unknown,
+                "{gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn running_pid_collection_preserves_probe_errors_as_evidence_gaps() {
+        let mut running_pids = BTreeSet::new();
+        let mut evidence_gaps = Vec::new();
+        record_running_pids(Ok(vec![42, 42]), &mut running_pids, &mut evidence_gaps);
+        record_running_pids(
+            Err("active-use-probe-failed:brew-command-spawn-failed:permission denied".into()),
+            &mut running_pids,
+            &mut evidence_gaps,
+        );
+
+        assert_eq!(running_pids.into_iter().collect::<Vec<_>>(), vec![42]);
+        assert_eq!(
+            evidence_gaps,
+            vec!["active-use-probe-failed:brew-command-spawn-failed:permission denied"]
+        );
     }
 
     #[test]
