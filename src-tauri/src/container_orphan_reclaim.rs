@@ -1229,6 +1229,7 @@ fn redacted_exact_delete_command(
     command
 }
 
+#[cfg(not(unix))]
 fn drain_bounded<R: std::io::Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
     let mut buffer = [0u8; 65_536];
     let mut captured = Vec::new();
@@ -1299,18 +1300,95 @@ fn command_capture(
         .stderr
         .take()
         .ok_or_else(|| format!("{label}-stderr-pipe-unavailable"))?;
+    #[cfg(unix)]
+    let reader_cancellation = crate::unix_process_group::PipeReaderCancellation::new();
+    #[cfg(unix)]
+    let stdout_reader = match crate::unix_process_group::spawn_bounded_cancellable_pipe_reader(
+        stdout,
+        MAX_CAPTURE_BYTES,
+        Duration::from_millis(25),
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{label}-stdout-reader-setup:{error}"));
+        }
+    };
+    #[cfg(unix)]
+    let stderr_reader = match crate::unix_process_group::spawn_bounded_cancellable_pipe_reader(
+        stderr,
+        MAX_CAPTURE_BYTES,
+        Duration::from_millis(25),
+        reader_cancellation.clone(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            reader_cancellation.cancel();
+            let _ = join_capture(stdout_reader, label, "stdout");
+            return Err(format!("{label}-stderr-reader-setup:{error}"));
+        }
+    };
+    #[cfg(not(unix))]
     let stdout_reader = thread::spawn(move || drain_bounded(stdout));
+    #[cfg(not(unix))]
     let stderr_reader = thread::spawn(move || drain_bounded(stderr));
 
+    #[cfg(not(unix))]
     let started = Instant::now();
+    #[cfg(unix)]
+    let status = {
+        use crate::unix_process_group::{
+            signal_private_process_group, wait_for_child_without_reap, NoReapWaitOutcome,
+        };
+        match wait_for_child_without_reap(child_pid, timeout, Duration::from_millis(25)) {
+            Ok(NoReapWaitOutcome::ExitedUnreaped) => {
+                // The direct CLI has exited but is deliberately still unreaped, so its
+                // numeric PID/PGID cannot be recycled. Terminate any descendants that
+                // still own the capture pipes, then reap the leader through `Child::wait`.
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                match child.wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        reader_cancellation.cancel();
+                        let _ = join_capture(stdout_reader, label, "stdout");
+                        let _ = join_capture(stderr_reader, label, "stderr");
+                        return Err(format!("{label}-wait:{error}"));
+                    }
+                }
+            }
+            Ok(NoReapWaitOutcome::TimedOutStillRunning) => {
+                // The leader is still live and unreaped here, so the group identity is safe
+                // to signal directly.
+                let _ = signal_private_process_group(child_pid, libc::SIGKILL);
+                let _ = child.kill();
+                let _ = child.wait();
+                reader_cancellation.cancel();
+                let _ = join_capture(stdout_reader, label, "stdout");
+                let _ = join_capture(stderr_reader, label, "stderr");
+                return Err(format!("{label}-timeout"));
+            }
+            Err(_) => {
+                // Without a pinned leader identity a negative-PID signal could target an
+                // unrelated recycled process group, so fail closed instead of guessing.
+                let _ = child.kill();
+                let _ = child.wait();
+                reader_cancellation.cancel();
+                let _ = join_capture(stdout_reader, label, "stdout");
+                let _ = join_capture(stderr_reader, label, "stderr");
+                return Err(format!("{label}-wait:no-reap-observation-failed"));
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_capture(stdout_reader, label, "stdout");
@@ -1319,10 +1397,6 @@ fn command_capture(
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(error) => {
-                #[cfg(unix)]
-                unsafe {
-                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-                }
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_capture(stdout_reader, label, "stdout");
@@ -1332,14 +1406,8 @@ fn command_capture(
         }
     };
 
-    // The direct CLI may exit while a descendant still owns the capture pipes. The child was
-    // isolated in its own process group, so terminate any such descendants before joining the
-    // reader threads; otherwise a successful probe can hang until the descendant exits.
     #[cfg(unix)]
-    unsafe {
-        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
-    }
-
+    reader_cancellation.cancel();
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
@@ -2535,6 +2603,81 @@ mod tests {
         assert_eq!(persisted.status_code, -1);
         assert_eq!(persisted.stderr, INDETERMINATE_MUTATION_OUTCOME);
         assert!(persisted.executed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_reap_exit_observation_keeps_leader_identity_pinned() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "exit 7"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+
+        assert_eq!(
+            crate::unix_process_group::wait_for_child_without_reap(
+                pid,
+                Duration::from_secs(5),
+                Duration::from_millis(10),
+            )
+            .expect("no-reap exit observation failed"),
+            crate::unix_process_group::NoReapWaitOutcome::ExitedUnreaped
+        );
+
+        // The leader has exited but was deliberately not reaped, so its PID/PGID must not
+        // have been returned to the OS pool: the group still resolves (ESRCH would mean the
+        // identity is already gone and a negative-PID signal would race a recycled number).
+        let group_probe = unsafe { libc::kill(-(pid as libc::pid_t), 0) };
+        if group_probe == -1 {
+            assert_ne!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+
+        // Only a still-waitable child can be reaped through `Child::wait()`.
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(7));
+
+        // Only after the reap may the numeric identity be recycled.
+        let after_reap = unsafe { libc::kill(-(pid as libc::pid_t), 0) };
+        assert_eq!(after_reap, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_reap_observation_fails_closed_for_non_child_pid() {
+        assert!(crate::unix_process_group::observe_child_without_reap(1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn success_path_terminates_descendants_holding_capture_pipes() {
+        let started = Instant::now();
+        let result = command_capture(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 30 & exit 0"],
+            Duration::from_secs(5),
+            "descendant-success",
+        );
+
+        let capture = result.unwrap();
+        assert_eq!(capture.status_code, 0);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]
