@@ -44,6 +44,10 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
+/// Unix-only identity-preserving child/process-group lifecycle mechanics.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_process_group;
 pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
