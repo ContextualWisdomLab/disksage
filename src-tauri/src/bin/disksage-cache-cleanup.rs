@@ -5,16 +5,27 @@
 
 use disksage_lib::cache_cleanup::{
     clean_catalog_cache_headless, clean_regenerable_caches_headless, plan_catalog_cache_headless,
-    proven_cache_trash_candidates, prune_uv_cache_headless, purge_proven_cache_trash,
+    proven_cache_trash_snapshot, prune_uv_cache_headless,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+const PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE: &str =
+    "cache-trash-identity-bound-permanent-delete-unavailable";
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--cache-id CATALOG_ID [--target-object-id OBJECT_ID] | --purge-proven-cache-trash | --prune-uv-cache] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash. --prune-uv-cache runs uv's native\n\
+inactive regenerable cache children to OS Trash. --purge-proven-cache-trash is read-only evidence;\n\
+permanent in-app deletion remains unavailable until the final syscall is object-bound.\n\
+--prune-uv-cache runs uv's native\n\
 in-use-aware dangling cache prune without force. --cache-id plans or cleans one fixed catalog root.";
+
+fn read_only_notice(purge_proven_cache_trash: bool) -> &'static str {
+    if purge_proven_cache_trash {
+        "proven cache-Trash review is read-only; select only the exact reviewed candidates in native Trash to reclaim space; --execute cannot enable permanent deletion"
+    } else {
+        "pass --execute to move guarded cache children to OS Trash"
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -77,11 +88,26 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     let mut cache_id = None;
     let mut target_object_id = None;
     let mut journal_path = default_journal_path()?;
+    let mut seen_execute = false;
+    let mut seen_purge_proven_cache_trash = false;
+    let mut seen_journal_path = false;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--execute") => execute = true,
-            Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
+            Some("--execute") => {
+                if seen_execute {
+                    return Err("--execute may be supplied once".into());
+                }
+                seen_execute = true;
+                execute = true;
+            }
+            Some("--purge-proven-cache-trash") => {
+                if seen_purge_proven_cache_trash {
+                    return Err("--purge-proven-cache-trash may be supplied once".into());
+                }
+                seen_purge_proven_cache_trash = true;
+                purge_proven_cache_trash = true;
+            }
             Some("--prune-uv-cache") => prune_uv_cache = true,
             Some("--cache-id") => {
                 let value = args
@@ -104,6 +130,10 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
                 }
             }
             Some("--journal-path") => {
+                if seen_journal_path {
+                    return Err("--journal-path may be supplied once".into());
+                }
+                seen_journal_path = true;
                 journal_path = PathBuf::from(
                     args.next()
                         .ok_or_else(|| "--journal-path requires PATH".to_string())?,
@@ -113,7 +143,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
                 }
             }
             Some("-h" | "--help") => return Err(format!("--help must be used alone\n{USAGE}")),
-            Some(value) => return Err(format!("unknown option: {value}\n{USAGE}")),
+            Some(_) => return Err(format!("cache-cleanup-invalid-argument\n{USAGE}")),
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
@@ -154,11 +184,18 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
             println!("{}", plan_catalog_cache_headless(cache_id)?);
             return Ok(());
         }
-        let cache_trash = if args.purge_proven_cache_trash {
-            serde_json::to_value(proven_cache_trash_candidates(&home_directory()?))
-                .map_err(|error| error.to_string())?
+        let notice = read_only_notice(args.purge_proven_cache_trash);
+        let (cache_trash, cache_trash_snapshot) = if args.purge_proven_cache_trash {
+            let snapshot = proven_cache_trash_snapshot(&home_directory()?);
+            let candidates =
+                serde_json::to_value(&snapshot.candidates).map_err(|error| error.to_string())?;
+            let snapshot = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+            (candidates, snapshot)
         } else {
-            serde_json::Value::Array(Vec::new())
+            (
+                serde_json::Value::Array(Vec::new()),
+                serde_json::Value::Null,
+            )
         };
         println!(
             "{}",
@@ -167,26 +204,17 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
-                "notice": "pass --execute to perform the guarded OS-Trash operation"
+                "proven_cache_trash_snapshot": cache_trash_snapshot,
+                "notice": notice
             })
         );
         return Ok(());
+    }
+    if args.purge_proven_cache_trash {
+        return Err(PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE.into());
     }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
-        println!(
-            "{}",
-            serde_json::json!({
-                "executed": true,
-                "purge_proven_cache_trash": true,
-                "journal_path": args.journal_path,
-                "results": results
-            })
-        );
-        return Ok(());
     }
     if args.prune_uv_cache {
         let result = prune_uv_cache_headless(&args.journal_path, now_ms())?;
@@ -265,6 +293,31 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_authority_singletons_are_rejected() {
+        let duplicate_execute =
+            parse_args([OsString::from("--execute"), OsString::from("--execute")]).unwrap_err();
+        assert_eq!(duplicate_execute, "--execute may be supplied once");
+
+        let duplicate_purge = parse_args([
+            OsString::from("--purge-proven-cache-trash"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            duplicate_purge,
+            "--purge-proven-cache-trash may be supplied once"
+        );
+    }
+
+    #[test]
+    fn unknown_argument_is_not_reflected() {
+        let payload = "--unknown-with-sensitive-value";
+        let error = parse_args([OsString::from(payload)]).unwrap_err();
+        assert!(error.contains("cache-cleanup-invalid-argument"));
+        assert!(!error.contains(payload));
+    }
+
+    #[test]
     fn purge_cache_trash_flag_is_explicit() {
         let args = parse_args([OsString::from("--purge-proven-cache-trash")])
             .unwrap()
@@ -316,5 +369,13 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(selected.target_object_id.as_deref(), Some("unix:1:2"));
+    }
+
+    #[test]
+    fn read_only_notice_matches_the_requested_action() {
+        assert!(read_only_notice(false).contains("pass --execute"));
+        assert!(read_only_notice(true).contains("read-only"));
+        assert!(read_only_notice(true).contains("exact reviewed candidates"));
+        assert!(!read_only_notice(true).contains("pass --execute to move"));
     }
 }

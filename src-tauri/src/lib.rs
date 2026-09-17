@@ -37,6 +37,8 @@ mod macos_temp_guard_tests;
 mod node_view_security_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
+#[cfg(test)]
+mod cache_candidate_provider_boundary_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -70,6 +72,9 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+/// Unix-only identity-preserving child/process-group lifecycle mechanics.
+#[cfg(unix)]
+pub(crate) mod unix_process_group;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim;
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.

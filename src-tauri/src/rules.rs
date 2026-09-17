@@ -344,6 +344,18 @@ impl CatalogRoot {
             return None;
         }
 
+        // Ancestor symlinks/reparse points may resolve a lexically safe catalog path into a
+        // managed File Provider tree. Resolve only after binding the directory handle, then open
+        // the resolved path and require it to identify that same object before trusting the
+        // resolved provider boundary. A concurrent pathname swap therefore fails closed.
+        let resolved_path = std::fs::canonicalize(path).ok()?;
+        let resolved = open_directory_handle(&resolved_path)?;
+        if handle != resolved
+            || crate::cloud::path_inside_managed_file_provider_storage(&resolved_path)
+        {
+            return None;
+        }
+
         Some(Self {
             handle,
             display_path: path.to_path_buf(),
@@ -569,6 +581,7 @@ fn measure_cache_candidate(id: &str, label: &str, path: PathBuf) -> CacheCandida
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
     catalog(bases)
         .into_iter()
+        .filter(|(_, _, path)| !crate::cloud::path_inside_managed_file_provider_storage(path))
         .map(|(id, label, path)| measure_cache_candidate(id, label, path))
         .collect()
 }
@@ -577,13 +590,18 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
 pub fn cache_candidate(bases: &BaseDirs, requested_id: &str) -> Option<CacheCandidate> {
     catalog(bases)
         .into_iter()
-        .find(|(id, _, _)| *id == requested_id)
+        .find(|(id, _, path)| {
+            *id == requested_id
+                && !crate::cloud::path_inside_managed_file_provider_storage(path)
+        })
         .map(|(id, label, path)| measure_cache_candidate(id, label, path))
 }
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
 pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
-    catalog(bases).iter().any(|(_, _, p)| p == dir) && CatalogRoot::open(dir).is_some()
+    !crate::cloud::path_inside_managed_file_provider_storage(dir)
+        && catalog(bases).iter().any(|(_, _, p)| p == dir)
+        && CatalogRoot::open(dir).is_some()
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.

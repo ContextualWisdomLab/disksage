@@ -26,10 +26,20 @@ If the Trash is consuming space, inspect only structurally proven cache entries 
 
 `cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --purge-proven-cache-trash --journal-path /ABSOLUTE/journal.jsonl`
 
-The command is read-only until both `--execute` and `--purge-proven-cache-trash` are supplied.
-That explicit path permanently removes only the known cache signatures already in OS Trash; it
-does not empty Trash generally and never targets cloud placeholders or user files. Review its JSON
-result and journal before treating the reported bytes as reclaimed.
+This command is read-only evidence. Supplying `--execute` together with
+`--purge-proven-cache-trash` is intentionally refused with
+`cache-trash-identity-bound-permanent-delete-unavailable` before journal or filesystem mutation,
+because DiskSage does not yet have an object-bound primitive for the final irreversible deletion
+syscall.
+
+If permanent reclaim is still required, review the JSON candidate evidence and use the native Trash
+interface only to select and delete those exact reviewed cache candidates. **Do not empty the native
+Trash as a whole.** Unrelated user files may be present there and are outside DiskSage's cache
+authority. If the operating system does not let the operator distinguish and select only the exact
+reviewed candidates, stop rather than perform permanent deletion. Do not treat candidate logical
+bytes as physically reclaimed until the operating system reports the resulting availability change.
+DiskSage never treats this review path as authority to mutate cloud placeholders, user files, or any
+other Trash entry.
 
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry cache/source roots when present. The Cargo registry source root is catalogued for explicit
