@@ -7,7 +7,7 @@ describe('merged Homebrew audit safety follow-up', () => {
   it('does not treat every non-zero lsof exit with empty stdout as a successful no-match', () => {
     expect(
       source,
-      'lsof exit 1 + empty stdout is the documented no-match case; other non-zero exits are incomplete active-use evidence',
+      'only lsof exit 1 with both stdout and stderr empty is an admissible no-match; all diagnostic/non-zero failures are incomplete active-use evidence',
     ).not.toContain('if code != 0 && out.is_empty()');
   });
 
