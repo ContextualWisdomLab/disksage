@@ -39,7 +39,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
@@ -216,6 +216,23 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             Write-Output 'SKIP provider_oauth_cli_process: owner source absent; no runtime regression executed'
+          }
+      - name: Windows staging rollback safety regression when owner contract is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src/lib/stagingCreationWindowsRollbackContract.test.ts') {
+            $output = & cargo test --manifest-path src-tauri/Cargo.toml --locked --lib safety::tests::staging_creation_windows_substitution_does_not_delete_replacement -- --exact 2>&1
+            $status = $LASTEXITCODE
+            $output | Write-Output
+            if ($status -ne 0) { exit $status }
+            $joined = $output -join "`n"
+            $expected = 'test safety::tests::staging_creation_windows_substitution_does_not_delete_replacement ... ok'
+            if ($joined -notmatch [regex]::Escape($expected)) {
+              Write-Error 'Windows staging rollback regression did not execute'
+              exit 1
+            }
+          } else {
+            Write-Output 'SKIP staging_creation_windows_substitution_does_not_delete_replacement: owner contract absent; no runtime regression executed'
           }
 
   llm-engine-build:
