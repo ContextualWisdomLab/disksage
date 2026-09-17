@@ -3465,22 +3465,29 @@ mod tests {
         assert!(nonempty.contains("not empty"));
         assert!(staging_dir.path.join("unexpected").exists());
         std::fs::remove_file(staging_dir.path.join("unexpected")).unwrap();
-        std::fs::remove_dir(&staging_dir.path).unwrap();
+        let displaced_staging = tmp.path().join("displaced-staging");
+        std::fs::rename(&staging_dir.path, &displaced_staging).unwrap();
         std::fs::create_dir(&staging_dir.path).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &staging_dir.path,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .unwrap();
+            std::fs::set_permissions(&staging_dir.path, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
         }
+        let replacement_id = filesystem_object_id(&staging_dir.path).unwrap();
+        assert_ne!(replacement_id, recovery.staging_object_id);
 
         let replaced = cleanup_verified_empty_staging_dir(&source, &recovery).unwrap_err();
 
         assert!(replaced.contains("identity changed"));
-        assert!(staging_dir.path.exists());
+        assert_eq!(
+            filesystem_object_id(&staging_dir.path).unwrap(),
+            replacement_id
+        );
+        assert_eq!(
+            filesystem_object_id(&displaced_staging).unwrap(),
+            recovery.staging_object_id
+        );
     }
 
     #[test]
