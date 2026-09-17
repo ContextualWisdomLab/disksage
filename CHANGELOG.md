@@ -8,18 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-<<<<<<< Updated upstream
 - Default-exclude app-managed libraries from cloud offload planning (Mendeley Desktop /
   Reference Manager, Zotero profile and `storage/`, Photos/`.photoslibrary` bundles, Parallels
   VM trees, and macOS `Library/Containers`), and credit local free space only after
   provider-confirmed DiskSage-gated source eviction or online-only allocation reduction — never
   after a mere copy into `~/Library/CloudStorage`.
-=======
 - Encode Orca reclaim protection criteria for `git-worktree-audit` and `dev-artifacts`: stable
   reason codes (`orca-terminal-live`, `open-pr-head`, `editable-install-target`, protected data
   paths, etc.), optional `--enable-orca-protections` audit pack that requires an explicit
   `--recent-write-window-secs` (no silent default), and public-summary `protection_reason_codes`.
->>>>>>> Stashed changes
 
 ### Changed
 
