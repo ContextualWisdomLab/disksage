@@ -23,31 +23,33 @@ function functionBody(name: string): string {
 }
 
 describe('Homebrew lsof completion evidence contract', () => {
-  it('uses one pure status/stdout/stderr interpreter before PID parsing', () => {
-    const helper = functionBody('interpret_lsof_completion');
+  it('classifies status/stdout/stderr before running PID parsing', () => {
+    const helper = functionBody('classify_lsof_result');
     const probe = functionBody('running_pids_under_prefix');
 
     expect(helper).toContain('exit_code');
     expect(helper).toContain('stdout');
     expect(helper).toContain('stderr');
-    expect(probe).toContain('interpret_lsof_completion');
+    expect(probe).toContain('classify_lsof_result');
     expect(probe).not.toContain('if code != 0 && out.is_empty()');
   });
 
-  it('admits exit 1 only when both output streams are empty', () => {
-    const helper = functionBody('interpret_lsof_completion');
+  it('admits exit 1 as no-match only when both output streams are empty', () => {
+    const helper = functionBody('classify_lsof_result');
 
-    expect(helper).toMatch(/exit_code\s*==\s*1/);
-    expect(helper).toMatch(/stdout\.(?:trim\(\)|is_empty\(\))/);
-    expect(helper).toMatch(/stderr\.(?:trim\(\)|is_empty\(\))/);
+    expect(helper).toMatch(
+      /exit_code\s*==\s*1\s*&&\s*stdout\.is_empty\(\)\s*&&\s*stderr\.is_empty\(\)/,
+    );
     expect(helper).toContain('active-use-probe-failed');
   });
 
-  it('retains failure status and stderr diagnostics instead of returning an empty PID set', () => {
-    const helper = functionBody('interpret_lsof_completion');
+  it('retains non-zero status and stderr before any PID parsing', () => {
+    const helper = functionBody('classify_lsof_result');
+    const failureBoundary = helper.indexOf('if exit_code != 0');
+    const pidParsing = helper.indexOf('for token in stdout.split');
 
-    expect(helper).toMatch(/exit(?:_|-)status|status|exit_code/);
-    expect(helper).toContain('stderr');
-    expect(helper).not.toContain('Ok(Vec::new())');
+    expect(failureBoundary).toBeGreaterThanOrEqual(0);
+    expect(pidParsing).toBeGreaterThan(failureBoundary);
+    expect(helper).toContain('lsof-exit-status:{exit_code}:stderr:{stderr}');
   });
 });
