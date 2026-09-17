@@ -216,9 +216,9 @@ fn prune_receipt_evidence_history(
     }
     records.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
     let prune_count = records.len() - MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT;
-    for (_, _, path) in records
+    for (_, _record_id, path) in records
         .into_iter()
-        .filter(|(_, record_id, _)| record_id.as_str() != protected_record_id)
+        .filter(|(_, record_id, _)| record_id != protected_record_id)
         .take(prune_count)
     {
         remove_retained_evidence_file(&path)?;
@@ -233,9 +233,9 @@ fn prune_receipt_evidence_history(
 /// Persist the full provider claim before it is used to authorize source eviction.
 ///
 /// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
-/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain a
-/// bounded per-receipt history while preserving the just-written immutable record even if the
-/// local clock moves backwards.
+/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain the
+/// newest bounded per-receipt history so background reconciliation cannot grow storage forever;
+/// the just-written protected record is retained even if the system clock regresses.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,

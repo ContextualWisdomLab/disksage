@@ -826,6 +826,8 @@ export interface LocalVolumeSnapshot {
 
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
+  /** Earliest retained observation for the current admission-blocker run. */
+  admission_blocked_since_ms?: number | null;
   evidence_complete: boolean;
   managed_database_allocated_bytes?: number;
   upload_queue: {
@@ -835,6 +837,12 @@ export interface IcloudSyncHealthReport {
     out_of_quota_count: number;
     item_error_count: number;
   };
+  native_status?: {
+    status_observed: boolean;
+    evidence_complete: boolean;
+    pending_scan_count?: number;
+    notices: string[];
+  } | null;
   file_provider_activity?: {
     command_succeeded: boolean;
     timed_out: boolean;
@@ -845,6 +853,7 @@ export interface IcloudSyncHealthReport {
     staged_item_missing_count: number;
     sync_excluded_filename_count: number;
     sync_excluded_root_count: number;
+    pending_indexable_count?: number | null;
     active_upload_count: number;
     active_download_count: number;
     active_upload_progress_millionths?: number | null;
@@ -865,6 +874,8 @@ export interface ProviderGlobalSyncReport {
   schema_version: number;
   provider: Exclude<CloudProvider, "icloud">;
   evidence_kind: string;
+  observed_at_ms: number;
+  admission_blocked_since_ms?: number | null;
   evidence_complete: boolean;
   state: ProviderGlobalSyncState;
   upload_progress_present: boolean;

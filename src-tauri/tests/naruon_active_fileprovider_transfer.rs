@@ -50,10 +50,12 @@ fn icloud_report() -> CloudPlanReport {
 
 fn active_transfer_health() -> IcloudSyncHealthReport {
     let blocker = "icloud-file-provider-transfer-active".to_string();
+    let disk_import_blocker = "icloud-file-provider-disk-import-active".to_string();
     IcloudSyncHealthReport {
         schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
         observed_at_ms: 30,
+        admission_blocked_since_ms: None,
         provider: "icloud".into(),
         evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
         evidence_complete: true,
@@ -81,16 +83,20 @@ fn active_transfer_health() -> IcloudSyncHealthReport {
             staged_item_missing_count: 0,
             sync_excluded_filename_count: 0,
             sync_excluded_root_count: 0,
+            pending_indexable_count: None,
             active_upload_count: 1,
             active_download_count: 0,
             active_upload_progress_millionths: Some(500_000),
             active_download_progress_millionths: None,
-            notices: vec!["icloud-file-provider-dump-read-only".into()],
+            notices: vec![
+                "icloud-file-provider-dump-read-only".into(),
+                disk_import_blocker.clone(),
+            ],
         }),
         sync_backlog_present: true,
         new_copy_admission_state: "blocked".into(),
-        new_copy_admission_blockers: vec![blocker.clone()],
-        blockers: vec![blocker],
+        new_copy_admission_blockers: vec![disk_import_blocker.clone(), blocker.clone()],
+        blockers: vec![disk_import_blocker, blocker],
         notices: Vec::new(),
         paths_redacted: true,
         user_filenames_read: false,
@@ -121,5 +127,9 @@ fn active_fileprovider_transfer_exports_blocked_readiness() {
         .blockers
         .iter()
         .any(|blocker| blocker == "icloud-file-provider-transfer-active"));
+    assert!(admission
+        .blockers
+        .iter()
+        .any(|blocker| blocker == "icloud-file-provider-disk-import-active"));
     assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
 }
