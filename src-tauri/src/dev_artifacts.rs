@@ -6,8 +6,28 @@ use crate::scanner;
 // A development tree can contain millions of generated entries. The inventory remains
 // fail-closed for cleanup when this bounded metadata manifest cannot finish; it must never turn
 // a partial observation into permission to move a recreated directory to the trash.
-const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
+
+/// UI / Tauri path keeps a short budget so incomplete large trees fail closed instead of
+/// blocking the interactive session. Headless `disksage-dev-artifacts` may raise this.
+pub const ARTIFACT_MANIFEST_BUDGET_UI: Duration = Duration::from_secs(3);
+/// Default for the CLI when neither `--manifest-budget-secs` nor the env override is set.
+/// Large Rust `target/` trees (1–5 GB) routinely exceed the UI 3s gate.
+pub const ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT: Duration = Duration::from_secs(300);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
+const MANIFEST_BUDGET_ENV: &str = "DISKSAGE_ARTIFACT_MANIFEST_BUDGET_SECS";
+
+/// Resolve the headless CLI manifest budget: explicit seconds win, else env, else 300s.
+pub fn resolve_cli_manifest_budget(explicit_secs: Option<u64>) -> Duration {
+    if let Some(secs) = explicit_secs {
+        return Duration::from_secs(secs);
+    }
+    if let Ok(raw) = std::env::var(MANIFEST_BUDGET_ENV) {
+        if let Ok(secs) = raw.trim().parse::<u64>() {
+            return Duration::from_secs(secs);
+        }
+    }
+    ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -71,7 +91,7 @@ struct ArtifactManifest {
 /// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
 /// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
 /// unusually large trees instead of blocking the UI indefinitely.
-fn artifact_manifest(root: &Path) -> ArtifactManifest {
+fn artifact_manifest(root: &Path, budget: Duration) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
@@ -81,7 +101,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         manifest.scan_complete = false;
     }
     manifest.object_id = root_object_id.unwrap_or_default();
-    let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let deadline = Instant::now() + budget;
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -178,7 +198,15 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
-pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+///
+/// `manifest_budget` bounds per-artifact metadata inventory. UI callers should pass
+/// [`ARTIFACT_MANIFEST_BUDGET_UI`]; headless CLI may pass a larger value.
+pub fn find_artifacts(
+    root: &Path,
+    min_age_days: u64,
+    now_ms: u64,
+    manifest_budget: Duration,
+) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -226,7 +254,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
-            let manifest = artifact_manifest(path);
+            let manifest = artifact_manifest(path, manifest_budget);
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -260,8 +288,9 @@ pub fn clean_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    manifest_budget: Duration,
 ) -> Vec<DevArtifactCleanResult> {
-    let current = find_artifacts(root, min_age_days, now_ms);
+    let current = find_artifacts(root, min_age_days, now_ms, manifest_budget);
     requests
         .iter()
         .map(|request| {
@@ -335,7 +364,7 @@ mod tests {
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         let kinds: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"node_modules"));
@@ -357,7 +386,7 @@ mod tests {
         fs::create_dir_all(&index).unwrap();
         fs::write(index.join("db"), b"generated").unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert!(found.iter().any(|artifact| {
             artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
@@ -373,9 +402,12 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
+        assert!(find_artifacts(tmp.path(), 30, now_ms, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
         // min_age_days=0이면 포함
-        assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
+        assert_eq!(
+            find_artifacts(tmp.path(), 0, now_ms, ARTIFACT_MANIFEST_BUDGET_UI).len(),
+            1
+        );
     }
 
     #[test]
@@ -387,14 +419,17 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
 
-        assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
+        assert_eq!(
+            find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).len(),
+            1
+        );
     }
 
     #[test]
     fn cleanup_fails_closed_when_artifact_identity_changes() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "app", "package.json", "node_modules");
-        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
         assert_eq!(candidates.len(), 1);
         let journal = tmp.path().join("journal.jsonl");
         let original = tmp.path().join("original-node-modules");
@@ -402,12 +437,81 @@ mod tests {
         std::fs::rename(&live, &original).unwrap();
         std::fs::create_dir(&live).unwrap();
         std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
-        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        let results = clean_artifacts(
+            &candidates,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_UI,
+        );
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
         assert!(!journal.exists(), "stale identity must not create a journal");
+    }
+
+    #[test]
+    fn zero_manifest_budget_fails_closed_larger_budget_completes() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "crate", "Cargo.toml", "target");
+
+        let red = find_artifacts(tmp.path(), 0, u64::MAX, Duration::ZERO);
+        assert_eq!(red.len(), 1);
+        assert!(
+            !red[0].scan_complete,
+            "zero budget must leave scan_complete=false (RED)"
+        );
+
+        let green = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert_eq!(green.len(), 1);
+        assert!(
+            green[0].scan_complete,
+            "UI budget must finish a small tree (GREEN)"
+        );
+        assert!(green[0].files >= 1);
+        assert!(!green[0].object_id.is_empty());
+        assert!(!green[0].fingerprint.is_empty());
+        assert_ne!(
+            red[0].fingerprint, green[0].fingerprint,
+            "incomplete marker must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn incomplete_manifest_cannot_be_trashed_even_with_generous_budget_on_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "crate", "Cargo.toml", "target");
+        let incomplete = find_artifacts(tmp.path(), 0, u64::MAX, Duration::ZERO);
+        assert!(!incomplete[0].scan_complete);
+        let journal = tmp.path().join("journal.jsonl");
+        let results = clean_artifacts(
+            &incomplete,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT,
+        );
+        assert!(!results[0].ok);
+        assert!(tmp.path().join("crate/target").exists());
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn resolve_cli_manifest_budget_prefers_explicit_then_default() {
+        assert_eq!(
+            resolve_cli_manifest_budget(Some(42)),
+            Duration::from_secs(42)
+        );
+        assert_eq!(ARTIFACT_MANIFEST_BUDGET_UI, Duration::from_secs(3));
+        assert_eq!(ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT, Duration::from_secs(300));
+        // Explicit None uses env-or-default; when env is unset this equals CLI default.
+        let resolved = resolve_cli_manifest_budget(None);
+        if std::env::var_os(MANIFEST_BUDGET_ENV).is_none() {
+            assert_eq!(resolved, ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT);
+        }
     }
 }
