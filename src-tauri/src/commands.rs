@@ -1001,7 +1001,7 @@ pub async fn remove_stale_git_worktrees(
         let report = git_worktree::audit_git_worktrees(
             Path::new(&repository_root),
             &retention_references,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {

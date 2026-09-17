@@ -329,7 +329,7 @@ struct ClassificationInput {
     active_use_active: bool,
 }
 
-fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
+fn validate_options(options: &GitWorktreeAuditOptions) -> Result<(), String> {
     if options.command_timeout_ms == 0 || options.command_timeout_ms > 300_000 {
         return Err("git-worktree-command-timeout-out-of-bounds".into());
     }
@@ -1423,7 +1423,7 @@ pub fn audit_git_worktrees(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_options(options)?;
+    validate_options(&options)?;
     if !repository_root.is_absolute() {
         return Err("git-worktree-repository-root-not-absolute".into());
     }
@@ -2028,7 +2028,7 @@ pub fn execute_stale_worktree_removal(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
-    validate_options(options)?;
+    validate_options(&options)?;
     validate_removal_approval(
         approved_report,
         approval,
@@ -2044,7 +2044,7 @@ pub fn execute_stale_worktree_removal(
         .map(|binding| binding.reference_ref.clone())
         .collect();
     let initial_live =
-        audit_git_worktrees(&repository_root, &reference_names, options, requested_at_ms)?;
+        audit_git_worktrees(&repository_root, &reference_names, options.clone(), requested_at_ms)?;
     live_audit_matches_approved(approved_report, &initial_live)?;
 
     let mut candidates: Vec<_> = initial_live
@@ -2064,7 +2064,7 @@ pub fn execute_stale_worktree_removal(
             match audit_git_worktrees(
                 &repository_root,
                 &reference_names,
-                options,
+                options.clone(),
                 current_unix_ms(),
             ) {
                 Ok(report) => report,
@@ -2744,8 +2744,8 @@ mod tests {
 
     #[test]
     fn options_and_reference_are_bounded() {
-        validate_options(GitWorktreeAuditOptions::default()).unwrap();
-        assert!(validate_options(GitWorktreeAuditOptions {
+        validate_options(&GitWorktreeAuditOptions::default()).unwrap();
+        assert!(validate_options(&GitWorktreeAuditOptions {
             command_timeout_ms: 0,
             ..GitWorktreeAuditOptions::default()
         })
