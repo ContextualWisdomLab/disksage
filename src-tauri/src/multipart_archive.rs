@@ -5,8 +5,9 @@
 //! contiguous local sequence remains terminal-unverified without an authoritative manifest, so no
 //! result from this module authorizes automatic deletion.
 
+use crate::duplicate_audit::bound_read_root::BoundReadRoot;
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
 pub const MULTIPART_AUDIT_SCHEMA_VERSION: u32 = 1;
@@ -445,22 +446,20 @@ pub fn collect_multipart_archive_audit(
     if !source_root.is_absolute() {
         return Err("multipart-audit-root-must-be-absolute".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
-        .map_err(|_| "multipart-audit-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "multipart-audit-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
-        return Err("multipart-audit-root-unsafe".into());
-    }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "multipart-audit-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "multipart-audit-root-unsafe".to_string())?;
     let max_entries = max_entries.clamp(1, DEFAULT_MAX_ENTRIES);
     let mut evidence_complete = true;
     let mut issue_counts = BTreeMap::new();
     let mut entries_seen = 0usize;
     let mut observations = Vec::new();
-    let mut pending = vec![(canonical_root.clone(), 0usize)];
+    let mut pending = vec![(PathBuf::new(), 0usize)];
 
     while let Some((directory, depth)) = pending.pop() {
-        let entries = match std::fs::read_dir(&directory) {
+        let entries = match root_guard.read_dir_names(&directory) {
             Ok(entries) => entries,
             Err(_) => {
                 evidence_complete = false;
@@ -468,12 +467,8 @@ pub fn collect_multipart_archive_audit(
                 continue;
             }
         };
-        let mut entries = entries.collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            let left = left.as_ref().ok().map(|entry| entry.file_name());
-            let right = right.as_ref().ok().map(|entry| entry.file_name());
-            left.cmp(&right)
-        });
+        let mut entries = entries;
+        entries.sort();
         for entry in entries {
             if entries_seen >= max_entries {
                 evidence_complete = false;
@@ -482,39 +477,40 @@ pub fn collect_multipart_archive_audit(
                 break;
             }
             entries_seen += 1;
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    evidence_complete = false;
-                    increment_issue(&mut issue_counts, "directory-entry-read-failed");
-                    continue;
-                }
-            };
-            let path = entry.path();
-            let metadata = match std::fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
+            let relative = directory.join(&entry);
+            let entry_kind = match root_guard.entry_kind(&relative) {
+                Ok(kind) => kind,
                 Err(_) => {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "entry-stat-failed");
                     continue;
                 }
             };
-            if metadata.file_type().is_symlink() {
+            if matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::Symlink
+            ) {
                 continue;
             }
-            if metadata.is_dir() {
+            if matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::Directory
+            ) {
                 if depth >= MAX_SCAN_DEPTH {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "depth-limit-reached");
                 } else {
-                    pending.push((path, depth + 1));
+                    pending.push((relative, depth + 1));
                 }
                 continue;
             }
-            if !metadata.is_file() {
+            if !matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::File
+            ) {
                 continue;
             }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            let Some(name) = entry.to_str() else {
                 evidence_complete = false;
                 increment_issue(&mut issue_counts, "multipart-name-not-unicode");
                 continue;
@@ -522,14 +518,22 @@ pub fn collect_multipart_archive_audit(
             let Some((base_name, part_index)) = parse_multipart_archive_name(name) else {
                 continue;
             };
-            let relative = match path.strip_prefix(&canonical_root) {
-                Ok(relative) if valid_relative_path(relative) => relative,
-                _ => {
+            let metadata = match root_guard
+                .open_file(&relative)
+                .and_then(|file| file.metadata())
+            {
+                Ok(metadata) => metadata,
+                Err(_) => {
                     evidence_complete = false;
-                    increment_issue(&mut issue_counts, "relative-path-invalid");
+                    increment_issue(&mut issue_counts, "entry-stat-failed");
                     continue;
                 }
             };
+            if !valid_relative_path(&relative) {
+                evidence_complete = false;
+                increment_issue(&mut issue_counts, "relative-path-invalid");
+                continue;
+            }
             let Some(modified_ms) = modified_ms(&metadata) else {
                 evidence_complete = false;
                 increment_issue(&mut issue_counts, "modified-time-unavailable");
@@ -545,6 +549,9 @@ pub fn collect_multipart_archive_audit(
         }
     }
 
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("multipart-audit-root-unsafe".into());
+    }
     Ok(build_report(
         normalized(&canonical_root.to_string_lossy()),
         observed_at_ms,
