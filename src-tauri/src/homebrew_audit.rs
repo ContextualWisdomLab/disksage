@@ -143,6 +143,23 @@ pub struct HomebrewPackageEvidence {
     pub evidence_gaps: Vec<String>,
 }
 
+fn is_incomplete_evidence_reason(reason: &str) -> bool {
+    matches!(
+        reason.split_once(':').map_or(reason, |(code, _)| code),
+        "last-use-evidence-missing"
+            | "atime-unreliable"
+            | "install-time-only-no-use-evidence"
+            | "brew-evidence-incomplete"
+            | "size-scan-incomplete"
+            | "prefix-unavailable"
+            | "brew-uses-failed"
+            | "active-use-timeout"
+            | "brew-command-spawn-failed"
+            | "brew-command-timeout"
+            | "brew-command-wait-failed"
+    )
+}
+
 /// Pure classifier: never returns `Stale` from last-use age alone.
 pub fn classify_package(
     evidence: &HomebrewPackageEvidence,
@@ -211,17 +228,9 @@ pub fn classify_package(
         return (HomebrewClassification::Orphan, reasons);
     }
 
-    let blocking_unknown = reasons.iter().any(|r| {
-        matches!(
-            r.as_str(),
-            "last-use-evidence-missing"
-                | "atime-unreliable"
-                | "install-time-only-no-use-evidence"
-                | "brew-evidence-incomplete"
-                | "size-scan-incomplete"
-                | "prefix-unavailable"
-        )
-    });
+    let blocking_unknown = reasons
+        .iter()
+        .any(|reason| is_incomplete_evidence_reason(reason));
     if blocking_unknown {
         return (HomebrewClassification::Unknown, reasons);
     }
@@ -1046,7 +1055,7 @@ pub fn audit_homebrew(
             !package
                 .reason_codes
                 .iter()
-                .any(|code| code == "brew-evidence-incomplete")
+                .any(|reason| is_incomplete_evidence_reason(reason))
         });
 
     Ok(HomebrewAuditReport {
@@ -1123,6 +1132,37 @@ mod tests {
         let mut evidence = base_evidence();
         evidence.last_use.observed_at_ms = None;
         evidence.last_use.evidence_complete = false;
+        let now = 1_000_000 + 100 * 86_400_000;
+        let (class, _) = classify_package(&evidence, now, 90);
+        assert_eq!(class, HomebrewClassification::Unknown);
+    }
+
+    #[test]
+    fn incomplete_evidence_reasons_match_generated_details() {
+        for reason in [
+            "last-use-evidence-missing",
+            "atime-unreliable",
+            "install-time-only-no-use-evidence",
+            "brew-evidence-incomplete",
+            "size-scan-incomplete:permission denied",
+            "prefix-unavailable",
+            "brew-uses-failed:brew unavailable",
+            "active-use-timeout",
+            "brew-command-spawn-failed:permission denied",
+            "brew-command-timeout",
+            "brew-command-wait-failed:interrupted",
+        ] {
+            assert!(is_incomplete_evidence_reason(reason), "{reason}");
+        }
+        assert!(!is_incomplete_evidence_reason("last-use-exceeds-threshold"));
+    }
+
+    #[test]
+    fn generated_evidence_gap_with_details_blocks_stale_classification() {
+        let mut evidence = base_evidence();
+        evidence
+            .evidence_gaps
+            .push("brew-uses-failed:brew unavailable".into());
         let now = 1_000_000 + 100 * 86_400_000;
         let (class, _) = classify_package(&evidence, now, 90);
         assert_eq!(class, HomebrewClassification::Unknown);
