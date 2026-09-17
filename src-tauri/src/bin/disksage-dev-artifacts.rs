@@ -3,11 +3,16 @@
 //! The default operation is read-only. `--execute` re-scans every requested artifact and moves it
 //! to OS Trash only when its path, metadata manifest, and filesystem identity still match.
 
-use disksage_lib::dev_artifacts::{clean_artifacts, find_artifacts, DevArtifactCleanResult};
+use disksage_lib::dev_artifacts::{
+    clean_artifacts, find_artifacts, resolve_cli_manifest_budget, DevArtifactCleanResult,
+};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 const MAX_AGE_DAYS: u64 = 3_650;
-const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute]";
+const MAX_MANIFEST_BUDGET_SECS: u64 = 86_400;
+const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--min-age-days N] [--manifest-budget-secs N] [--journal-path ABSOLUTE_PATH] [--execute]\n\
+env: DISKSAGE_ARTIFACT_MANIFEST_BUDGET_SECS (default 300; UI path stays at 3s fail-closed)";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -15,6 +20,7 @@ struct Args {
     min_age_days: u64,
     journal_path: PathBuf,
     execute: bool,
+    manifest_budget: Duration,
 }
 
 fn absolute_without_parent(path: &Path) -> bool {
@@ -57,6 +63,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut min_age_days = 30;
     let mut journal_path = default_journal_path()?;
     let mut execute = false;
+    let mut manifest_budget_secs = None;
     let mut index = 0usize;
     while index < raw.len() {
         match raw[index].as_str() {
@@ -78,6 +85,21 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 if min_age_days > MAX_AGE_DAYS {
                     return Err(format!("--min-age-days는 {MAX_AGE_DAYS} 이하이어야 함"));
                 }
+            }
+            "--manifest-budget-secs" => {
+                index += 1;
+                let value = raw
+                    .get(index)
+                    .ok_or_else(|| "--manifest-budget-secs 값이 필요함".to_string())?;
+                let secs = value
+                    .parse::<u64>()
+                    .map_err(|_| "--manifest-budget-secs는 정수여야 함".to_string())?;
+                if secs > MAX_MANIFEST_BUDGET_SECS {
+                    return Err(format!(
+                        "--manifest-budget-secs는 {MAX_MANIFEST_BUDGET_SECS} 이하이어야 함"
+                    ));
+                }
+                manifest_budget_secs = Some(secs);
             }
             "--journal-path" => {
                 index += 1;
@@ -104,6 +126,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         min_age_days,
         journal_path,
         execute,
+        manifest_budget: resolve_cli_manifest_budget(manifest_budget_secs),
     })
 }
 
@@ -116,7 +139,12 @@ fn now_ms() -> u64 {
 
 fn run(args: Args) -> Result<serde_json::Value, String> {
     let observed_at_ms = now_ms();
-    let candidates = find_artifacts(&args.root, args.min_age_days, observed_at_ms);
+    let candidates = find_artifacts(
+        &args.root,
+        args.min_age_days,
+        observed_at_ms,
+        args.manifest_budget,
+    );
     let results: Vec<DevArtifactCleanResult> = if args.execute {
         if let Some(parent) = args.journal_path.parent() {
             std::fs::create_dir_all(parent)
@@ -128,6 +156,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
             args.min_age_days,
             &args.journal_path,
             observed_at_ms,
+            args.manifest_budget,
         )
     } else {
         Vec::new()
@@ -137,6 +166,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         "schema_kind": "disksage.dev-artifact-cleanup",
         "root": args.root,
         "min_age_days": args.min_age_days,
+        "manifest_budget_secs": args.manifest_budget.as_secs(),
         "observed_at_ms": observed_at_ms,
         "executed": args.execute,
         "candidate_count": candidates.len(),
@@ -177,6 +207,11 @@ mod tests {
         let parsed = parse_args(&["--root".into(), root.to_string_lossy().into_owned()]).unwrap();
         assert_eq!(parsed.min_age_days, 30);
         assert!(!parsed.execute);
+        assert_eq!(
+            parsed.manifest_budget,
+            resolve_cli_manifest_budget(None),
+            "CLI default must come from resolve_cli_manifest_budget"
+        );
         assert!(parse_args(&["--root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
             "--root".into(),
@@ -188,13 +223,15 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_explicit_execute_and_journal() {
+    fn parser_accepts_explicit_execute_journal_and_manifest_budget() {
         let root = std::env::temp_dir();
         let parsed = parse_args(&[
             "--root".into(),
             root.to_string_lossy().into_owned(),
             "--min-age-days".into(),
             "7".into(),
+            "--manifest-budget-secs".into(),
+            "600".into(),
             "--journal-path".into(),
             "/tmp/disksage-dev-artifacts-journal.jsonl".into(),
             "--execute".into(),
@@ -202,6 +239,7 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.min_age_days, 7);
         assert!(parsed.execute);
+        assert_eq!(parsed.manifest_budget, Duration::from_secs(600));
         assert_eq!(
             parsed.journal_path,
             PathBuf::from("/tmp/disksage-dev-artifacts-journal.jsonl")

@@ -168,7 +168,14 @@ pub fn clean_dev_artifacts_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
+    dev_artifacts::clean_artifacts(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    )
         .into_iter()
         .map(|result| CleanResult {
             path: result.path,
@@ -720,6 +727,7 @@ pub fn list_dev_artifacts(
         Path::new(&root),
         min_age_days,
         now_ms(),
+        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
     ))
 }
 
@@ -3628,7 +3636,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
+        let observed = crate::dev_artifacts::find_artifacts(
+            tmp.path(),
+            0,
+            now,
+            crate::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+        );
         assert_eq!(observed.len(), 1);
         fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
         let results = clean_dev_artifacts_inner(
