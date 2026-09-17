@@ -1683,14 +1683,26 @@ fn write_immutable_receipt(
     if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
         return Err("receipt-directory-unsafe".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if directory_metadata.permissions().mode() & 0o022 != 0 {
+            return Err("receipt-directory-writable-by-others".into());
+        }
+    }
     let path = receipt_dir.join(format!("{}.json", receipt.receipt_id));
     let encoded = serde_json::to_vec_pretty(receipt).map_err(|error| error.to_string())?;
     if encoded.len() as u64 > MAX_RECEIPT_BYTES {
         return Err("receipt-too-large".into());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|error| error.to_string())?;
     let result = (|| -> Result<(), String> {
@@ -1708,7 +1720,8 @@ fn write_immutable_receipt(
         }
         #[cfg(not(unix))]
         permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions).map_err(|error| error.to_string())?;
+        file.set_permissions(permissions)
+            .map_err(|error| error.to_string())?;
         #[cfg(unix)]
         std::fs::File::open(receipt_dir)
             .and_then(|directory| directory.sync_all())
