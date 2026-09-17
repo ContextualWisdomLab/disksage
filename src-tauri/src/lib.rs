@@ -71,6 +71,8 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// Stable Orca/dev reclaim protection reason codes and pure assessors.
+pub mod reclaim_protection;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;

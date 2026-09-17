@@ -34,7 +34,7 @@ const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
 const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitWorktreeAuditOptions {
     pub command_timeout_ms: u64,
@@ -42,6 +42,19 @@ pub struct GitWorktreeAuditOptions {
     pub max_worktrees: usize,
     pub max_entries_per_worktree: u64,
     pub max_active_pids: usize,
+    /// Extended Orca/dev protection evidence. Recent-write checks require an explicit
+    /// `recent_write_window_secs` inside the context (no silent default).
+    #[serde(default)]
+    pub protection: crate::reclaim_protection::ProtectionContext,
+    /// When true, scan each worktree for protected data paths and editable installs.
+    #[serde(default)]
+    pub assess_filesystem_protections: bool,
+    /// When true, treat HEAD not contained in any remote-tracking branch as a blocker.
+    #[serde(default)]
+    pub assess_unpushed_commits: bool,
+    /// When true, treat a non-empty `git stash list` as a blocker.
+    #[serde(default)]
+    pub assess_stash: bool,
 }
 
 impl Default for GitWorktreeAuditOptions {
@@ -52,6 +65,10 @@ impl Default for GitWorktreeAuditOptions {
             max_worktrees: 512,
             max_entries_per_worktree: 2_000_000,
             max_active_pids: 64,
+            protection: crate::reclaim_protection::ProtectionContext::default(),
+            assess_filesystem_protections: false,
+            assess_unpushed_commits: false,
+            assess_stash: false,
         }
     }
 }
@@ -166,6 +183,8 @@ pub struct GitWorktreeAuditPublicSummary {
     pub branch_names_redacted: bool,
     pub metadata_semantics: Vec<String>,
     pub notices: Vec<String>,
+    /// Stable protection reason codes observed across entries (paths redacted).
+    pub protection_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -325,6 +344,11 @@ fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
     }
     if options.max_active_pids == 0 || options.max_active_pids > 4_096 {
         return Err("git-worktree-active-pid-limit-out-of-bounds".into());
+    }
+    if let Some(window) = options.protection.recent_write_window_secs {
+        if window == 0 || window > 366 * 24 * 60 * 60 {
+            return Err("git-worktree-recent-write-window-out-of-bounds".into());
+        }
     }
     Ok(())
 }
@@ -1272,6 +1296,74 @@ fn status_observation(path: &Path, timeout_ms: u64) -> (Option<bool>, Option<u64
     (Some(count == 0), Some(count))
 }
 
+/// Returns `(uncommitted_tracked_or_staged, untracked_nonignored)` when status evidence is complete.
+fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool)> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("status"),
+            OsString::from("--porcelain=v1"),
+            OsString::from("-z"),
+            OsString::from("--untracked-files=all"),
+            OsString::from("--ignore-submodules=none"),
+        ],
+        timeout_ms,
+        "git-status-kinds",
+    )
+    .ok()?;
+    if result.status_code != Some(0) {
+        return None;
+    }
+    let mut uncommitted = false;
+    let mut untracked = false;
+    for field in result.stdout.split(|byte| *byte == 0) {
+        if field.len() < 3 {
+            continue;
+        }
+        // porcelain v1: XY<space>path — untracked is "??"
+        if field.starts_with(b"??") {
+            untracked = true;
+        } else {
+            uncommitted = true;
+        }
+    }
+    Some((uncommitted, untracked))
+}
+
+fn stash_present_observation(path: &Path, timeout_ms: u64) -> Option<bool> {
+    let result = run_git(
+        path,
+        &[OsString::from("stash"), OsString::from("list")],
+        timeout_ms,
+        "git-stash-list",
+    )
+    .ok()?;
+    if result.status_code != Some(0) {
+        return None;
+    }
+    Some(!result.stdout.is_empty())
+}
+
+fn commits_not_on_any_remote_branch(path: &Path, timeout_ms: u64) -> Option<bool> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("branch"),
+            OsString::from("-r"),
+            OsString::from("--contains"),
+            OsString::from("HEAD"),
+        ],
+        timeout_ms,
+        "git-branch-r-contains",
+    )
+    .ok()?;
+    if result.status_code != Some(0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&result.stdout);
+    Some(text.lines().all(|line| line.trim().is_empty()))
+}
+
 fn reachable_commit_set(
     repository_root: &Path,
     references: &[GitWorktreeReferenceBinding],
@@ -1442,6 +1534,40 @@ pub fn audit_git_worktrees(
         if raw.fallback_evidence_incomplete {
             blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
         }
+        // Extended Orca/dev protection criteria (stable reason codes).
+        let process_cwd_inside = actor_cwd_inside == Some(true) || active_use.active;
+        let status_kinds = if path_valid && !raw.bare {
+            status_dirty_kinds(canonical_path, options.command_timeout_ms)
+        } else {
+            None
+        };
+        let stash_present = if options.assess_stash && path_valid && !raw.bare {
+            stash_present_observation(canonical_path, options.command_timeout_ms).unwrap_or(false)
+        } else {
+            false
+        };
+        let commits_not_on_remote = if options.assess_unpushed_commits && path_valid && !raw.bare {
+            commits_not_on_any_remote_branch(canonical_path, options.command_timeout_ms)
+        } else {
+            None
+        };
+        let extended = crate::reclaim_protection::assess_worktree_protections(
+            canonical_path,
+            Some(raw.head.as_str()),
+            raw.branch.as_deref(),
+            &options.protection,
+            process_cwd_inside,
+            false,
+            status_kinds,
+            stash_present,
+            commits_not_on_remote,
+            options.assess_filesystem_protections,
+        );
+        for code in crate::reclaim_protection::whole_worktree_blocking_reason_codes(&extended) {
+            if !blockers.iter().any(|existing| existing == &code) {
+                blockers.push(code);
+            }
+        }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -1531,6 +1657,33 @@ pub fn audit_git_worktrees(
 }
 
 pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublicSummary {
+    let mut protection_reason_codes: Vec<String> = report
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blockers.iter().cloned())
+        .filter(|code| {
+            matches!(
+                code.as_str(),
+                crate::reclaim_protection::REASON_ORCA_TERMINAL_LIVE
+                    | crate::reclaim_protection::REASON_PROCESS_CWD_INSIDE
+                    | crate::reclaim_protection::REASON_ORCHESTRATION_LEAD
+                    | crate::reclaim_protection::REASON_LISTED_IN_LEAD_QUEUE
+                    | crate::reclaim_protection::REASON_OPEN_PR_HEAD
+                    | crate::reclaim_protection::REASON_UNCOMMITTED_CHANGES
+                    | crate::reclaim_protection::REASON_UNTRACKED_NONIGNORED
+                    | crate::reclaim_protection::REASON_STASH_PRESENT
+                    | crate::reclaim_protection::REASON_COMMITS_NOT_ON_REMOTE
+                    | crate::reclaim_protection::REASON_RECENT_WRITES
+                    | crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL
+                    | crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS
+                    | crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+                    | crate::reclaim_protection::REASON_EDITABLE_INSTALL
+                    | crate::reclaim_protection::REASON_BUILD_TOOL_ACTIVE
+            )
+        })
+        .collect();
+    protection_reason_codes.sort();
+    protection_reason_codes.dedup();
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
@@ -1554,6 +1707,7 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "user-file-production-time-not-inferred".into(),
             "filename-date-not-used".into(),
             "filesystem-created-or-modified-time-not-used-for-removal".into(),
+            "orca-reclaim-protection-reason-codes".into(),
         ],
         notices: vec![
             "read-only-audit".into(),
@@ -1566,7 +1720,9 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "approval-phrase-is-not-execution".into(),
             "no-worktree-prune-remove-or-branch-delete".into(),
             "no-user-file-or-cloud-provider-mutation".into(),
+            "recent-write-window-requires-explicit-caller-value".into(),
         ],
+        protection_reason_codes,
     }
 }
 

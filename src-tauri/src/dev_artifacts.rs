@@ -277,6 +277,126 @@ pub fn find_artifacts(
     found
 }
 
+/// Locate the nearest enclosing worktree root (directory containing `.git`) for an artifact path.
+pub fn enclosing_worktree_root(artifact: &Path) -> Option<PathBuf> {
+    for ancestor in artifact.ancestors() {
+        if ancestor.join(".git").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Assess whether a rebuildable artifact should be withheld under Orca/dev protection criteria.
+pub fn assess_dev_artifact_protection(
+    artifact: &DevArtifact,
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> crate::reclaim_protection::ProtectionAssessment {
+    let path = Path::new(&artifact.path);
+    let mut reasons = Vec::new();
+
+    // Never reclaim protected data directory names if they somehow appear as candidates.
+    if crate::reclaim_protection::is_protected_data_dir_name(&artifact.kind) {
+        match artifact.kind.as_str() {
+            "local" => reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into()),
+            "results" => {
+                reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into())
+            }
+            _ => {}
+        }
+    }
+    for component in path.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name = name.to_string_lossy();
+            if crate::reclaim_protection::is_protected_data_dir_name(&name) {
+                match name.as_ref() {
+                    "local" => reasons
+                        .push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into()),
+                    "results" => reasons
+                        .push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into()),
+                    _ => {}
+                }
+            }
+            if crate::reclaim_protection::is_orchestration_lead_name(&name) {
+                reasons.push(crate::reclaim_protection::REASON_ORCHESTRATION_LEAD.into());
+            }
+        }
+    }
+
+    if let Some(worktree) = enclosing_worktree_root(path) {
+        let assessment = crate::reclaim_protection::assess_worktree_protections(
+            &worktree,
+            None,
+            None,
+            context,
+            crate::reclaim_protection::path_is_under_any(&worktree, &context.orca_live_worktree_paths),
+            false,
+            None,
+            false,
+            None,
+            true,
+        );
+        reasons.extend(
+            crate::reclaim_protection::artifact_blocking_reason_codes(&assessment).into_iter(),
+        );
+        // Editable install specifically protects target/python trees under the worktree.
+        if assessment
+            .reason_codes
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_EDITABLE_INSTALL)
+            && (artifact.kind == "target"
+                || artifact.kind == ".venv"
+                || artifact.kind == "venv"
+                || path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::Normal(n) if n == "python")))
+        {
+            if !reasons
+                .iter()
+                .any(|code| code == crate::reclaim_protection::REASON_EDITABLE_INSTALL)
+            {
+                reasons.push(crate::reclaim_protection::REASON_EDITABLE_INSTALL.into());
+            }
+        }
+    }
+
+    if let Some(window) = context.recent_write_window_secs {
+        let now = context
+            .now_unix_secs
+            .unwrap_or_else(crate::reclaim_protection::now_unix_secs);
+        if let Some(code) = crate::reclaim_protection::recent_write_reason(path, window, now) {
+            reasons.push(code.to_string());
+        }
+    }
+
+    crate::reclaim_protection::ProtectionAssessment::with_reasons(reasons)
+}
+
+/// Partition artifacts into reclaimable vs protected using stable reason codes.
+pub fn partition_artifacts_by_protection(
+    artifacts: &[DevArtifact],
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> (Vec<DevArtifact>, Vec<(DevArtifact, crate::reclaim_protection::ProtectionAssessment)>) {
+    let mut reclaimable = Vec::new();
+    let mut protected = Vec::new();
+    for artifact in artifacts {
+        let assessment = assess_dev_artifact_protection(artifact, context);
+        let blockers =
+            crate::reclaim_protection::artifact_blocking_reason_codes(&assessment);
+        // Also block protected-data path hits for artifact cleanup.
+        let data_blocked = assessment.reason_codes.iter().any(|code| {
+            code.starts_with("protected-data-path:")
+                || code == crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+        });
+        if blockers.is_empty() && !data_blocked {
+            reclaimable.push(artifact.clone());
+        } else {
+            protected.push((artifact.clone(), assessment));
+        }
+    }
+    (reclaimable, protected)
+}
+
 /// Re-scan and move only unchanged development artifacts to OS Trash.
 ///
 /// The request manifest is deliberately compared against a fresh bounded scan. A path match is
@@ -290,10 +410,51 @@ pub fn clean_artifacts(
     now_ms: u64,
     manifest_budget: Duration,
 ) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_protection(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        manifest_budget,
+        None,
+    )
+}
+
+/// Like [`clean_artifacts`], but refuses paths blocked by an optional protection context.
+pub fn clean_artifacts_with_protection(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    manifest_budget: Duration,
+    protection: Option<&crate::reclaim_protection::ProtectionContext>,
+) -> Vec<DevArtifactCleanResult> {
     let current = find_artifacts(root, min_age_days, now_ms, manifest_budget);
     requests
         .iter()
         .map(|request| {
+            if let Some(context) = protection {
+                let assessment = assess_dev_artifact_protection(request, context);
+                let blockers =
+                    crate::reclaim_protection::artifact_blocking_reason_codes(&assessment);
+                let data_blocked = assessment.reason_codes.iter().any(|code| {
+                    code.starts_with("protected-data-path:")
+                        || code == crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+                });
+                if !blockers.is_empty() || data_blocked {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: format!(
+                            "protected-by-criteria:{}",
+                            assessment.reason_codes.join(",")
+                        ),
+                    };
+                }
+            }
+
             let matches = current.iter().find(|candidate| {
                 candidate.path == request.path
                     && candidate.kind == request.kind
@@ -513,5 +674,38 @@ mod tests {
         if std::env::var_os(MANIFEST_BUDGET_ENV).is_none() {
             assert_eq!(resolved, ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT);
         }
+    }
+
+    #[test]
+    fn partition_protects_orchestration_lead_and_editable_target_red_to_green() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lead = tmp.path().join("orchestration-lead-demo");
+        fs::create_dir_all(lead.join("target")).unwrap();
+        fs::write(lead.join("Cargo.toml"), b"[package]\nname=\"x\"\n").unwrap();
+        fs::write(lead.join("target/x.bin"), vec![0u8; 64]).unwrap();
+        fs::write(lead.join(".git"), b"gitdir: /tmp/fake\n").unwrap();
+
+        let idle = project(tmp.path(), "idle-crate", "Cargo.toml", "target");
+        fs::write(idle.parent().unwrap().join(".git"), b"gitdir: /tmp/fake2\n").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert!(found.len() >= 2);
+
+        // RED: lead worktree artifacts are blocked.
+        let context = crate::reclaim_protection::ProtectionContext::default();
+        let (reclaimable, protected) = partition_artifacts_by_protection(&found, &context);
+        assert!(protected.iter().any(|(artifact, assessment)| {
+            artifact.path.contains("orchestration-lead-demo")
+                && assessment
+                    .reason_codes
+                    .iter()
+                    .any(|code| code == crate::reclaim_protection::REASON_ORCHESTRATION_LEAD)
+        }));
+        assert!(reclaimable.iter().any(|artifact| artifact.path.contains("idle-crate")));
+
+        // GREEN: idle crate remains reclaimable without recent-write window.
+        assert!(reclaimable.iter().any(|artifact| {
+            artifact.kind == "target" && artifact.path.contains("idle-crate")
+        }));
     }
 }

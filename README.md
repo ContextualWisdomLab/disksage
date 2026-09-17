@@ -125,6 +125,44 @@ cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
   --private-output /absolute/private/new-git-worktree-audit.json
 ```
 
+### Orca / reclaim protection criteria
+
+DiskSage encodes stable protection reason codes shared by `git-worktree-audit` and
+`dev-artifacts` (see `reclaim_protection`):
+
+| Reason code | Meaning |
+| --- | --- |
+| `orca-terminal-live` | Live Orca terminal bound to the worktree (`orca terminal list`) |
+| `process-cwd-inside` / `active-use-detected` | Process CWD or open handles inside the path |
+| `orchestration-lead-worktree` | Directory name `orchestration-lead-*` |
+| `listed-in-lead-queue` | Path/name mentioned in a `LEAD_QUEUE.md` |
+| `open-pr-head` | HEAD OID/branch is an open PR tip |
+| `uncommitted-changes` / `untracked-nonignored` / `stash-present` | Dirty git state |
+| `commits-not-on-any-remote-branch` | HEAD not on any remote-tracking branch |
+| `recent-writes-within-window` | mtime inside caller-supplied window (**required arg; no silent default**) |
+| `protected-data-path:local` / `protected-data-path:results` | Analytical/local data dirs |
+| `protected-credentials-path` | `.env` / credentials files |
+| `editable-install-target` | `pip -e` / maturin editable install points into the tree |
+
+Enable the extended audit pack explicitly:
+
+```sh
+cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
+  --repository-root /absolute/repository/worktree \
+  --reference-ref origin/main \
+  --enable-orca-protections \
+  --recent-write-window-secs 604800 \
+  --orca-terminal-json /absolute/orca-terminal-list.json \
+  --open-pr-head-oid CURRENT_OPEN_PR_HEAD_OID \
+  --lead-queue-file /absolute/LEAD_QUEUE.md \
+  --private-output /absolute/private/new-git-worktree-audit.json
+```
+
+`--enable-orca-protections` requires `--recent-write-window-secs` (cite your own window;
+the 7-day / `604800` figure used in the 2026-09-17 Orca review is operator-supplied evidence,
+not a hidden library default). The public summary includes `protection_reason_codes` with paths
+redacted.
+
 After reviewing that exact private report, the mutating command repeats the full audit immediately
 before removal. It requires the unchanged plan fingerprint, exact approval phrase, attributed
 reviewer, rationale, and a record root outside every audited worktree. It removes only the
