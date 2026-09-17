@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   leadingRustModuleInnerAttributes,
-  missingDocsLintLevels
+  missingDocsLintLevels,
+  publicRustModuleHasOuterDoc
 } from './rustModuleInnerAttributes.testSupport';
 
 describe('Rust module inner-attribute inspection', () => {
@@ -27,5 +28,31 @@ use std::path::Path;
 
     expect(missingDocsLintLevels(first).has('allow')).toBe(true);
     expect(missingDocsLintLevels(second).has('allow')).toBe(true);
+  });
+
+  it('does not treat comments or lint reasons as missing_docs lint paths', () => {
+    const commentOnly = `#![deny(dead_code /* missing_docs */)]\nuse std::path::Path;\n`;
+    const reasonOnly = `#![deny(dead_code, reason = "missing_docs")]\nuse std::path::Path;\n`;
+    const realLint = `#![deny(dead_code, missing_docs, reason = "documentation contract")]\nuse std::path::Path;\n`;
+
+    expect(missingDocsLintLevels(commentOnly).has('deny')).toBe(false);
+    expect(missingDocsLintLevels(reasonOnly).has('deny')).toBe(false);
+    expect(missingDocsLintLevels(realLint).has('deny')).toBe(true);
+  });
+
+  it('ignores documented-looking module declarations inside block comments', () => {
+    const spoofed = `/*
+/// Looks documented but is not Rust code.
+pub mod cloud_plan_view;
+*/
+pub mod cloud_plan_view;
+`;
+    const documented = `/* unrelated comment */
+/// Real module documentation.
+pub mod cloud_plan_view;
+`;
+
+    expect(publicRustModuleHasOuterDoc(spoofed, 'cloud_plan_view')).toBe(false);
+    expect(publicRustModuleHasOuterDoc(documented, 'cloud_plan_view')).toBe(true);
   });
 });

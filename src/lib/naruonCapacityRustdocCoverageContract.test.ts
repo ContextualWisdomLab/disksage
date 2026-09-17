@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
+import {
+  missingDocsLintLevels,
+  publicRustModuleHasOuterDoc
+} from './rustModuleInnerAttributes.testSupport';
 
 const naruonCapacitySource = readFileSync(
   new URL('../../src-tauri/src/naruon_capacity.rs', import.meta.url),
@@ -19,8 +22,6 @@ describe('Naruon capacity rustdoc ownership', () => {
   });
 
   it('documents the redacted capacity handoff at the crate root', () => {
-    expect(crateRootSource).toMatch(
-      /\/\/\/[^\n]+\n\s*pub mod naruon_capacity;/
-    );
+    expect(publicRustModuleHasOuterDoc(crateRootSource, 'naruon_capacity')).toBe(true);
   });
 });

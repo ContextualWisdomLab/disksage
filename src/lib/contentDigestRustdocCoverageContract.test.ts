@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
+import {
+  missingDocsLintLevels,
+  publicRustModuleHasOuterDoc
+} from './rustModuleInnerAttributes.testSupport';
 
 const contentDigestSource = readFileSync(
   new URL('../../src-tauri/src/content_digest.rs', import.meta.url),
@@ -19,8 +22,6 @@ describe('content digest rustdoc ownership', () => {
   });
 
   it('documents the public module boundary at the crate root', () => {
-    expect(crateRootSource).toMatch(
-      /\/\/\/[^\n]+\n\s*pub mod content_digest;/
-    );
+    expect(publicRustModuleHasOuterDoc(crateRootSource, 'content_digest')).toBe(true);
   });
 });

@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { missingDocsLintLevels } from './rustModuleInnerAttributes.testSupport';
+import {
+  missingDocsLintLevels,
+  publicRustModuleHasOuterDoc
+} from './rustModuleInnerAttributes.testSupport';
 
 const judgeCalibrationSource = readFileSync(
   new URL('../../src-tauri/src/judge_calibration.rs', import.meta.url),
@@ -19,8 +22,6 @@ describe('judge calibration rustdoc ownership', () => {
   });
 
   it('documents the calibration authority at the crate root', () => {
-    expect(crateRootSource).toMatch(
-      /\/\/\/[^\n]+\n\s*pub mod judge_calibration;/
-    );
+    expect(publicRustModuleHasOuterDoc(crateRootSource, 'judge_calibration')).toBe(true);
   });
 });
