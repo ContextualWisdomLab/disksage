@@ -32,17 +32,40 @@ enum ParseResult {
     Help,
 }
 
+/// Detect option-shaped native arguments without requiring them to be valid Unicode.
+///
+/// Lossy conversion is used only for the leading `-` classification and is never reflected in a
+/// diagnostic. This keeps invalid-Unicode option tokens fail-closed on Windows as well as Unix,
+/// while non-option native paths remain available to the planner unchanged.
+fn native_argument_is_option_like(argument: &OsString) -> bool {
+    argument.to_string_lossy().starts_with('-')
+}
+
 /// Parses bounded options while preserving non-option values as native operating-system strings.
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
+    let raw_args: Vec<OsString> = raw_args.into_iter().collect();
+    if raw_args.len() == 1
+        && matches!(raw_args[0].to_str(), Some("-h") | Some("--help"))
+    {
+        return Ok(ParseResult::Help);
+    }
+
     let mut operation = PlannedOperation::Trash;
+    let mut operation_seen = false;
     let mut pretty = false;
+    let mut pretty_seen = false;
     let mut check_active_use = false;
+    let mut check_active_use_seen = false;
     let mut paths = Vec::new();
     let mut args = raw_args.into_iter();
 
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--operation") => {
+                if operation_seen {
+                    return Err("--operation may be supplied once".to_string());
+                }
+                operation_seen = true;
                 let value = args
                     .next()
                     .ok_or_else(|| "--operation requires trash or delete".to_string())?;
@@ -51,17 +74,33 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 })?;
                 operation = value.parse()?;
             }
-            Some("--pretty") => pretty = true,
-            Some("--check-active-use") => check_active_use = true,
-            Some("-h" | "--help") => return Ok(ParseResult::Help),
+            Some("--pretty") => {
+                if pretty_seen {
+                    return Err("--pretty may be supplied once".to_string());
+                }
+                pretty_seen = true;
+                pretty = true;
+            }
+            Some("--check-active-use") => {
+                if check_active_use_seen {
+                    return Err("--check-active-use may be supplied once".to_string());
+                }
+                check_active_use_seen = true;
+                check_active_use = true;
+            }
+            Some("-h" | "--help") => return Err(format!("help must be used alone\n{USAGE}")),
             Some("--") => {
                 paths.extend(args.map(PathBuf::from));
                 break;
             }
             Some(value) if value.starts_with('-') => {
-                return Err(format!("unknown option: {value}\n{USAGE}"));
+                return Err(format!("unknown option\n{USAGE}"));
             }
-            _ => paths.push(PathBuf::from(arg)),
+            None if native_argument_is_option_like(&arg) => {
+                return Err(format!("unknown option\n{USAGE}"));
+            }
+            None => paths.push(PathBuf::from(arg)),
+            Some(_) => paths.push(PathBuf::from(arg)),
         }
     }
 
@@ -143,6 +182,12 @@ mod tests {
     }
 
     #[test]
+    fn option_shape_classification_is_platform_independent() {
+        assert!(native_argument_is_option_like(&OsString::from("--opaque")));
+        assert!(!native_argument_is_option_like(&OsString::from("relative-path")));
+    }
+
+    #[test]
     fn double_dash_preserves_option_like_paths() {
         let parsed = expect_run(
             parse_args([OsString::from("--"), OsString::from("--not-an-option")]).unwrap(),
@@ -169,6 +214,42 @@ mod tests {
         let parsed = expect_run(parse_args([path.clone()]).unwrap());
 
         assert_eq!(parsed.paths, [PathBuf::from(path)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_option_shaped_argument_is_rejected_without_becoming_a_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let option = OsString::from_vec(vec![
+            b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0x80,
+        ]);
+        let error = parse_args([option]).unwrap_err();
+
+        assert!(error.starts_with("unknown option"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn invalid_unicode_option_shaped_argument_is_rejected_on_windows() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let option = OsString::from_wide(&[
+            b'-' as u16,
+            b'-' as u16,
+            b'o' as u16,
+            b'p' as u16,
+            b'a' as u16,
+            b'q' as u16,
+            b'u' as u16,
+            b'e' as u16,
+            0xD800,
+        ]);
+        assert!(option.to_str().is_none(), "fixture must be invalid Unicode");
+        let error = parse_args([option]).unwrap_err();
+
+        assert!(error.starts_with("unknown option"), "{error}");
+        assert!(!error.contains("opaque"), "diagnostic must not reflect payload");
     }
 
     #[cfg(unix)]
