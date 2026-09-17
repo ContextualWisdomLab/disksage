@@ -26,7 +26,7 @@ enum ParseOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]"
+    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]"
 }
 
 fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -75,6 +75,12 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut seen_max_worktrees = false;
     let mut seen_max_entries = false;
     let mut seen_max_active_pids = false;
+    let mut enable_orca_protections = false;
+    let mut seen_recent_write = false;
+    let mut seen_orca_terminal_json = false;
+    let mut assess_filesystem = false;
+    let mut assess_unpushed = false;
+    let mut assess_stash = false;
     let mut index = 0usize;
     while index < args.len() {
         let flag = args[index]
@@ -125,6 +131,65 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                 mark_singleton(&mut seen_max_active_pids)?;
                 options.max_active_pids = parse_number(args, &mut index, "--max-active-pids")?;
             }
+            "--enable-orca-protections" => {
+                enable_orca_protections = true;
+            }
+            "--recent-write-window-secs" => {
+                mark_singleton(&mut seen_recent_write)?;
+                options.protection.recent_write_window_secs =
+                    Some(parse_number(args, &mut index, "--recent-write-window-secs")?);
+            }
+            "--orca-terminal-json" => {
+                mark_singleton(&mut seen_orca_terminal_json)?;
+                let path = PathBuf::from(value(args, &mut index, "--orca-terminal-json")?);
+                if !path.is_absolute() {
+                    return Err("--orca-terminal-json은 절대 경로여야 함".into());
+                }
+                let bytes = std::fs::read(&path)
+                    .map_err(|_| "orca-terminal-json-read-failed".to_string())?;
+                options.protection.orca_live_worktree_paths =
+                    disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+            }
+            "--open-pr-head-oid" => {
+                options
+                    .protection
+                    .open_pr_head_oids
+                    .push(utf8_value(args, &mut index, "--open-pr-head-oid")?);
+            }
+            "--open-pr-head-branch" => {
+                options
+                    .protection
+                    .open_pr_head_branches
+                    .push(utf8_value(args, &mut index, "--open-pr-head-branch")?);
+            }
+            "--lead-queue-file" => {
+                let path = PathBuf::from(value(args, &mut index, "--lead-queue-file")?);
+                if !path.is_absolute() {
+                    return Err("--lead-queue-file은 절대 경로여야 함".into());
+                }
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|_| "lead-queue-file-read-failed".to_string())?;
+                let workspace_root = path
+                    .parent()
+                    .unwrap_or(path.as_path())
+                    .to_path_buf();
+                options
+                    .protection
+                    .lead_queue_worktree_paths
+                    .extend(disksage_lib::reclaim_protection::lead_queue_mentioned_paths(
+                        &text,
+                        &workspace_root,
+                    ));
+            }
+            "--assess-filesystem-protections" => {
+                assess_filesystem = true;
+            }
+            "--assess-unpushed-commits" => {
+                assess_unpushed = true;
+            }
+            "--assess-stash" => {
+                assess_stash = true;
+            }
             "--help" | "-h" => return Err("help-cannot-be-combined-with-runtime-input".into()),
             _ => return Err("unknown-argument".into()),
         }
@@ -144,6 +209,17 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     if retention_references.is_empty() {
         return Err("--reference-ref 값이 하나 이상 필요함".into());
     }
+    if enable_orca_protections {
+        if options.protection.recent_write_window_secs.is_none() {
+            return Err("--enable-orca-protections requires --recent-write-window-secs (no silent default)".into());
+        }
+        assess_filesystem = true;
+        assess_unpushed = true;
+        assess_stash = true;
+    }
+    options.assess_filesystem_protections = assess_filesystem;
+    options.assess_unpushed_commits = assess_unpushed;
+    options.assess_stash = assess_stash;
     Ok(ParseOutcome::Run(Args {
         repository_root,
         retention_references,

@@ -44,9 +44,16 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
+/// Unix-only identity-preserving child/process-group lifecycle mechanics.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_process_group;
+pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+/// Default app-managed library exclusions and free-space accounting for cloud offload.
+pub mod cloud_app_managed;
 pub mod cloud_adr;
 /// Typed backend-authored presentation contract for cloud archive plans.
 pub mod cloud_plan_view;
@@ -68,6 +75,8 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// Stable Orca/dev reclaim protection reason codes and pure assessors.
+pub mod reclaim_protection;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
