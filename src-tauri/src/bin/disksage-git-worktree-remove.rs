@@ -134,7 +134,7 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
     let report = git_worktree::audit_git_worktrees(
         &args.repository_root,
         &args.retention_references,
-        options,
+        options.clone(),
         audited_at_ms,
     )?;
     if report.removal_plan_fingerprint != args.plan_fingerprint {
