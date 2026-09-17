@@ -27,6 +27,8 @@ mod safety;
 pub use safety::{bind_retained_ontology_class, filesystem_object_id, is_protected};
 #[cfg(test)]
 mod staging_cleanup_recovery_idempotency_tests;
+#[cfg(test)]
+mod staging_cleanup_recovery_interleaving_tests;
 #[cfg(all(test, unix))]
 mod safety_non_utf8_tests;
 #[cfg(all(test, target_os = "macos"))]
