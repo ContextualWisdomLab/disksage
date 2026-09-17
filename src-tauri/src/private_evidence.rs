@@ -17,77 +17,325 @@ pub struct PrivateEvidenceReceipt {
     pub is_approval: bool,
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObjectBoundPublicationError {
+    ParentMissing,
+    ParentUnavailable,
+    ParentUnsafe,
+    ParentWritableByOthers,
+    ParentIdentityDrift,
+    ForbiddenRootUnavailable,
+    InsideForbiddenRoot,
+    NameInvalid,
+    CreateFailed,
+    ModeInvalid,
+    WriteFailed,
+    MetadataFailed,
+    ParentSyncFailed,
+    RecordIdentityDrift,
+    InvalidationFailed,
+}
+
+#[cfg(unix)]
+fn revalidate_private_parent(
+    directory: &std::fs::File,
+    canonical_parent: &Path,
+    expected_dev: u64,
+    expected_ino: u64,
+) -> Result<(), ObjectBoundPublicationError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let opened = directory
+        .metadata()
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    if !opened.is_dir() || opened.file_type().is_symlink() {
+        return Err(ObjectBoundPublicationError::ParentUnsafe);
+    }
+    if opened.permissions().mode() & 0o022 != 0 {
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
+    }
+
+    let named = std::fs::symlink_metadata(canonical_parent)
+        .map_err(|_| ObjectBoundPublicationError::ParentIdentityDrift)?;
+    if named.file_type().is_symlink()
+        || !named.is_dir()
+        || named.dev() != expected_dev
+        || named.ino() != expected_ino
+    {
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
+    }
+    if named.permissions().mode() & 0o022 != 0 {
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn publication_error_string(error: ObjectBoundPublicationError) -> String {
+    match error {
+        ObjectBoundPublicationError::ParentMissing => "private-evidence-parent-missing",
+        ObjectBoundPublicationError::ParentUnavailable => "private-evidence-parent-unavailable",
+        ObjectBoundPublicationError::ParentUnsafe => "private-evidence-parent-unsafe",
+        ObjectBoundPublicationError::ParentWritableByOthers => {
+            "private-evidence-parent-writable-by-others"
+        }
+        ObjectBoundPublicationError::ParentIdentityDrift => {
+            "private-evidence-parent-identity-drift"
+        }
+        ObjectBoundPublicationError::ForbiddenRootUnavailable => {
+            "private-evidence-source-root-unavailable"
+        }
+        ObjectBoundPublicationError::InsideForbiddenRoot => "private-evidence-inside-source-root",
+        ObjectBoundPublicationError::NameInvalid => "private-evidence-name-invalid",
+        ObjectBoundPublicationError::CreateFailed => "private-evidence-create-failed",
+        ObjectBoundPublicationError::ModeInvalid => "private-evidence-mode-invalid",
+        ObjectBoundPublicationError::WriteFailed => "private-evidence-write-failed",
+        ObjectBoundPublicationError::MetadataFailed => "private-evidence-metadata-failed",
+        ObjectBoundPublicationError::ParentSyncFailed => "private-evidence-parent-sync-failed",
+        ObjectBoundPublicationError::RecordIdentityDrift => {
+            "private-evidence-record-identity-drift"
+        }
+        ObjectBoundPublicationError::InvalidationFailed => "private-evidence-invalidation-failed",
+    }
+    .to_string()
+}
+
+/// Create and durably publish one immutable byte record relative to the exact private parent
+/// directory object admitted by the caller-supplied pathname.
+///
+/// The parent must already exist and must not be writable by group or other principals. The
+/// pathname is opened with `O_NOFOLLOW` before canonicalization and the opened directory is bound to
+/// the device/inode observed during initial admission. Record creation is descriptor-relative and
+/// create-new. `forbidden_root`, when present, is checked only after the opened parent has been bound
+/// and revalidated, so a pathname replacement cannot redirect publication into that root.
+#[cfg(unix)]
+pub(crate) fn write_object_bound_bytes_create_new(
+    path: &Path,
+    encoded: &[u8],
+    unix_mode: u32,
+    forbidden_root: Option<&Path>,
+) -> Result<(), ObjectBoundPublicationError> {
+    write_object_bound_bytes_create_new_with_hooks(
+        path,
+        encoded,
+        unix_mode,
+        forbidden_root,
+        || {},
+        || {},
+        || {},
+    )
+}
+
+/// Internal deterministic seam for dependent authority writers to prove directory-replacement
+/// handling while exercising the same descriptor-bound publication implementation used in production.
+#[cfg(unix)]
+pub(crate) fn write_object_bound_bytes_create_new_with_hooks<F, G, H>(
+    path: &Path,
+    encoded: &[u8],
+    unix_mode: u32,
+    forbidden_root: Option<&Path>,
+    before_parent_open: F,
+    before_create: G,
+    before_finalize: H,
+) -> Result<(), ObjectBoundPublicationError>
+where
+    F: FnOnce(),
+    G: FnOnce(),
+    H: FnOnce(),
+{
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(ObjectBoundPublicationError::ParentMissing)?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err(ObjectBoundPublicationError::ParentUnsafe);
+    }
+    if parent_metadata.permissions().mode() & 0o022 != 0 {
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
+    }
+    let expected_parent_dev = parent_metadata.dev();
+    let expected_parent_ino = parent_metadata.ino();
+
+    before_parent_open();
+
+    let parent_c = CString::new(parent.as_os_str().as_bytes())
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    let directory_fd = unsafe {
+        libc::open(
+            parent_c.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if directory_fd < 0 {
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
+    }
+    let directory = unsafe { std::fs::File::from_raw_fd(directory_fd) };
+    let opened_parent_metadata = directory
+        .metadata()
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    if opened_parent_metadata.dev() != expected_parent_dev
+        || opened_parent_metadata.ino() != expected_parent_ino
+    {
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
+    }
+
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| ObjectBoundPublicationError::ParentIdentityDrift)?;
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        expected_parent_dev,
+        expected_parent_ino,
+    )?;
+
+    if let Some(forbidden_root) = forbidden_root {
+        let canonical_forbidden = std::fs::canonicalize(forbidden_root)
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
+        if canonical_parent.starts_with(canonical_forbidden) {
+            return Err(ObjectBoundPublicationError::InsideForbiddenRoot);
+        }
+    }
+
+    let file_name = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or(ObjectBoundPublicationError::NameInvalid)?;
+    let final_path = canonical_parent.join(file_name);
+    let file_name_c =
+        CString::new(file_name.as_bytes()).map_err(|_| ObjectBoundPublicationError::NameInvalid)?;
+
+    before_create();
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        expected_parent_dev,
+        expected_parent_ino,
+    )?;
+
+    let file_fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            file_name_c.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            unix_mode as libc::c_uint,
+        )
+    };
+    if file_fd < 0 {
+        return Err(ObjectBoundPublicationError::CreateFailed);
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(file_fd) };
+
+    let publication = (|| -> Result<(), ObjectBoundPublicationError> {
+        file.set_permissions(std::fs::Permissions::from_mode(unix_mode))
+            .map_err(|_| ObjectBoundPublicationError::ModeInvalid)?;
+        file.write_all(encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| ObjectBoundPublicationError::WriteFailed)?;
+        let opened_file_metadata = file
+            .metadata()
+            .map_err(|_| ObjectBoundPublicationError::MetadataFailed)?;
+        if !opened_file_metadata.is_file()
+            || opened_file_metadata.file_type().is_symlink()
+            || opened_file_metadata.permissions().mode() & 0o777 != unix_mode
+        {
+            return Err(ObjectBoundPublicationError::ModeInvalid);
+        }
+        directory
+            .sync_all()
+            .map_err(|_| ObjectBoundPublicationError::ParentSyncFailed)?;
+
+        before_finalize();
+
+        revalidate_private_parent(
+            &directory,
+            &canonical_parent,
+            expected_parent_dev,
+            expected_parent_ino,
+        )?;
+
+        let final_file_metadata = std::fs::symlink_metadata(&final_path)
+            .map_err(|_| ObjectBoundPublicationError::RecordIdentityDrift)?;
+        if final_file_metadata.file_type().is_symlink()
+            || !final_file_metadata.is_file()
+            || final_file_metadata.dev() != opened_file_metadata.dev()
+            || final_file_metadata.ino() != opened_file_metadata.ino()
+        {
+            return Err(ObjectBoundPublicationError::RecordIdentityDrift);
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = publication {
+        let invalidation = file
+            .set_len(0)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| directory.sync_all());
+        if invalidation.is_err() {
+            return Err(ObjectBoundPublicationError::InvalidationFailed);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Persist exact local evidence outside the audited source tree.
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
-/// group or other principals. The file is created once with mode 0600, synced, and never
-/// overwritten. A failed write is removed before returning.
+/// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
+/// directory object admitted before canonicalization, so a same-user pathname replacement cannot
+/// redirect either canonicalization or the later write. The file is created once with mode 0600,
+/// synced, and never overwritten. After a post-create failure, the still-open record is truncated
+/// and synced through its descriptor. The pathname is deliberately not unlinked because a same-user
+/// process may already have replaced that name; this can leave a zero-length mode-0600 create-new
+/// tombstone that requires explicit operator cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
     path: &Path,
     value: &impl Serialize,
 ) -> Result<PrivateEvidenceReceipt, String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    write_private_json_create_new_unix_with_hooks(source_root, path, value, || {}, || {}, || {})
+}
 
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "private-evidence-parent-missing".to_string())?;
-    let parent_metadata = std::fs::symlink_metadata(parent)
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
-        return Err("private-evidence-parent-unsafe".into());
-    }
-    if parent_metadata.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
-    }
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    let canonical_source = std::fs::canonicalize(source_root)
-        .map_err(|_| "private-evidence-source-root-unavailable".to_string())?;
-    if canonical_parent.starts_with(&canonical_source) {
-        return Err("private-evidence-inside-source-root".into());
-    }
-    let file_name = path
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "private-evidence-name-invalid".to_string())?;
-    let final_path = canonical_parent.join(file_name);
+#[cfg(unix)]
+fn write_private_json_create_new_unix_with_hooks<F, G, H>(
+    source_root: &Path,
+    path: &Path,
+    value: &impl Serialize,
+    before_parent_open: F,
+    before_create: G,
+    before_finalize: H,
+) -> Result<PrivateEvidenceReceipt, String>
+where
+    F: FnOnce(),
+    G: FnOnce(),
+    H: FnOnce(),
+{
     let encoded = serde_json::to_vec_pretty(value)
         .map_err(|_| "private-evidence-json-invalid".to_string())?;
     if encoded.len() > MAX_PRIVATE_EVIDENCE_BYTES {
         return Err("private-evidence-too-large".into());
     }
 
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&final_path)
-        .map_err(|_| "private-evidence-create-failed".to_string())?;
-    let result = (|| -> Result<(), String> {
-        file.write_all(&encoded)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "private-evidence-write-failed".to_string())?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| "private-evidence-metadata-failed".to_string())?;
-        if !metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || metadata.permissions().mode() & 0o777 != 0o600
-        {
-            return Err("private-evidence-mode-invalid".into());
-        }
-        std::fs::File::open(&canonical_parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "private-evidence-parent-sync-failed".to_string())
-    })();
-    if let Err(error) = result {
-        drop(file);
-        let _ = std::fs::remove_file(&final_path);
-        return Err(error);
-    }
+    write_object_bound_bytes_create_new_with_hooks(
+        path,
+        &encoded,
+        0o600,
+        Some(source_root),
+        before_parent_open,
+        before_create,
+        before_finalize,
+    )
+    .map_err(publication_error_string)?;
+
     let sha256 = Sha256::digest(&encoded)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -163,5 +411,206 @@ mod tests {
 
         assert_eq!(error, "private-evidence-parent-writable-by-others");
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fails_closed_if_parent_is_replaced_before_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            },
+            || {},
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(!parent.join("audit.json").exists());
+        assert!(!moved_parent.join("audit.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fails_closed_if_parent_becomes_shared_writable_after_authorization() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let parent_for_hook = private.path().to_path_buf();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            move || {
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o770))
+                    .unwrap();
+            },
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-writable-by-others");
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_post_create_validation_leaves_private_zero_length_tombstone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let parent_for_hook = private.path().to_path_buf();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            || {},
+            move || {
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o770))
+                    .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-writable-by-others");
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fails_closed_if_private_parent_is_replaced_after_authorization() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let replacement_parent = parent.clone();
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            },
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(!replacement_parent.join("audit.json").exists());
+        assert!(!moved_parent.join("audit.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn post_create_parent_replacement_invalidates_only_authorized_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let replacement_parent = parent.clone();
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            || {},
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(&parent_for_hook, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(
+            !replacement_parent.join("audit.json").exists(),
+            "replacement directory must never receive the authorized record"
+        );
+        let tombstone = moved_parent.join("audit.json");
+        let metadata = std::fs::metadata(&tombstone).unwrap();
+        assert_eq!(metadata.len(), 0, "authorized record must be invalidated");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_final_identity_check_preserves_unrelated_replacement_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let path_for_hook = path.clone();
+        let replacement = b"attacker-replacement".to_vec();
+        let replacement_for_hook = replacement.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            || {},
+            move || {
+                std::fs::remove_file(&path_for_hook).unwrap();
+                std::fs::write(&path_for_hook, &replacement_for_hook).unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-record-identity-drift");
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
     }
 }
