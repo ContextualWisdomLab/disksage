@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Default-exclude app-managed libraries from cloud offload planning (Mendeley Desktop /
+  Reference Manager, Zotero profile and `storage/`, Photos/`.photoslibrary` bundles, Parallels
+  VM trees, and macOS `Library/Containers`), and credit local free space only after
+  provider-confirmed DiskSage-gated source eviction or online-only allocation reduction — never
+  after a mere copy into `~/Library/CloudStorage`.
+
 ### Changed
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy

@@ -48,6 +48,8 @@ pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+/// Default app-managed library exclusions and free-space accounting for cloud offload.
+pub mod cloud_app_managed;
 pub mod cloud_adr;
 /// Typed backend-authored presentation contract for cloud archive plans.
 pub mod cloud_plan_view;
