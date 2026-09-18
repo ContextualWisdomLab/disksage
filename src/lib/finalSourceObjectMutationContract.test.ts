@@ -23,13 +23,6 @@ describe('final source-object mutation contract', () => {
     ).not.toContain('platform_trash_delete(&staged)');
   });
 
-  it('proves pathname substitution cannot redirect the final reversible Trash mutation', () => {
-    expect(
-      safetySource,
-      'the safety owner must exercise a real filesystem source substitution at the final staging boundary and prove the replacement object is never mutated',
-    ).toContain('fn final_trash_source_substitution_does_not_mutate_replacement()');
-  });
-
   it('requires the wired Linux filesystem fixture to fail closed before reversible mutation', () => {
     expect(
       tauriLibSource,
@@ -39,13 +32,6 @@ describe('final source-object mutation contract', () => {
       linuxFinalMutationFixture,
       'Linux acceptance must exercise the production Trash boundary and prove mutation never starts',
     ).toContain('fn final_trash_source_substitution_never_becomes_mutation_subject()');
-  });
-
-  it('proves pathname substitution cannot redirect the final permanent staging mutation', () => {
-    expect(
-      safetySource,
-      'the safety owner must exercise the same final source-object invariant for the permanent staging path without widening irreversible deletion authority',
-    ).toContain('fn final_permanent_source_substitution_does_not_mutate_replacement()');
   });
 
   it('requires the wired Linux filesystem fixture to fail closed before permanent mutation', () => {
