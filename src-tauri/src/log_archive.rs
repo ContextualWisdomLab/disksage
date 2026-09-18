@@ -401,6 +401,34 @@ fn retirement_retry_evidence(
     evidence
 }
 
+/// Walk filter for log archive: yield symlink leaves so [`skip_reason_for`] can report
+/// [`SkipReason::Symlink`], while still refusing Windows junction/reparse descent.
+///
+/// Do not reuse [`crate::scanner::keep_entry`] here — that drops every symlink from the
+/// walk, which hides them from skip classification and breaks the explicit Symlink skip
+/// contract.
+fn keep_log_archive_walk_entry(entry: &walkdir::DirEntry) -> bool {
+    if entry.file_type().is_symlink() {
+        // follow_links(false): walkdir will not descend into Unix symlink directories.
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        // Junctions appear as directories with the reparse attribute (not as symlinks).
+        // Refuse descent so outside targets are never scanned or mutated.
+        if entry.file_type().is_dir() {
+            if let Ok(md) = fs::symlink_metadata(entry.path()) {
+                if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Returns `None` when the file is eligible; `Some(skip)` when it should be skipped.
 fn skip_reason_for(
     path: &Path,
@@ -990,7 +1018,7 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
     let paths: Vec<PathBuf> = WalkDir::new(&options.root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(crate::scanner::keep_entry)
+        .filter_entry(keep_log_archive_walk_entry)
         .filter_map(Result::ok)
         .filter(|entry| {
             let path = entry.path();
