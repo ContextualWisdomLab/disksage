@@ -20,8 +20,9 @@ use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
-    organization_lineage,
+    cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
+    git_worktree_github_evidence,
+    icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
     provider_recovery, provider_sync, rules, orphan,
@@ -70,46 +71,6 @@ pub struct NodeView {
     pub path: String,
     pub size: u64,
     pub entries: Vec<EntryView>,
-}
-
-/// 스캔 결과 + 실시간 read_dir로 한 레벨을 조회 (순수 함수 — 테스트 대상)
-pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
-    // '..'는 lexical starts_with를 우회해 루트 밖을 열람할 수 있음 — 컴포넌트 단위로 거부
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err("path outside scanned root".into());
-    }
-    if !path.starts_with(&res.root) {
-        return Err("path outside scanned root".into());
-    }
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-        let Ok(entry) = entry else { continue };
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_symlink() {
-            continue;
-        }
-        let p = entry.path();
-        let (size, is_dir) = if ft.is_dir() {
-            (res.dir_sizes.get(&p).copied().unwrap_or(0), true)
-        } else {
-            (entry.metadata().map(|m| m.len()).unwrap_or(0), false)
-        };
-        entries.push(EntryView {
-            name: entry.file_name().to_string_lossy().into_owned(),
-            path: p.to_string_lossy().into_owned(),
-            size,
-            is_dir,
-        });
-    }
-    entries.sort_by(|a, b| b.size.cmp(&a.size));
-    Ok(NodeView {
-        path: path.to_string_lossy().into_owned(),
-        size: res.dir_sizes.get(path).copied().unwrap_or(0),
-        entries,
-    })
 }
 
 #[derive(serde::Serialize)]
@@ -168,14 +129,7 @@ pub fn clean_dev_artifacts_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    dev_artifacts::clean_artifacts(
-        requests,
-        root,
-        min_age_days,
-        journal_path,
-        now_ms,
-        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
-    )
+    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
         .into_iter()
         .map(|result| CleanResult {
             path: result.path,
@@ -419,14 +373,6 @@ pub fn cancel_cloud_copy(
 
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn get_node(path: String, state: State<AppState>) -> Result<NodeView, String> {
-    let guard = state.result.lock().unwrap();
-    let res = guard.as_ref().ok_or("no scan result")?;
-    node_view(res, &PathBuf::from(path))
-}
-
-#[cfg(not(coverage))]
-#[tauri::command]
 pub fn top_files(limit: usize, state: State<AppState>) -> Result<Vec<EntryView>, String> {
     let guard = state.result.lock().unwrap();
     let res = guard.as_ref().ok_or("no scan result")?;
@@ -489,8 +435,7 @@ fn podman_binary() -> PathBuf {
     .into_iter()
     .map(PathBuf::from)
     .find(|path| {
-        std::fs::symlink_metadata(path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
     })
     .unwrap_or_else(|| PathBuf::from("podman"))
 }
@@ -523,6 +468,46 @@ pub fn execute_podman_dangling_image_prune(
         &rationale,
         now_ms(),
     )
+}
+
+/// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn execute_runtime_storage_trim(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-trim-task-failed".to_string())?
+}
+
+/// Restarts a runtime that reports running but cannot serve guest commands.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn execute_runtime_storage_recovery(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageRecoveryExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-recovery-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -727,7 +712,6 @@ pub fn list_dev_artifacts(
         Path::new(&root),
         min_age_days,
         now_ms(),
-        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
     ))
 }
 
@@ -844,8 +828,11 @@ pub async fn plan_icloud_local_copy_eviction(
     app: AppHandle,
 ) -> Result<cloud_local_eviction::IcloudLocalEvictionPlan, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -882,8 +869,11 @@ pub async fn evict_icloud_local_copy(
         return Err("icloud-local-eviction-double-confirmation-mismatch".into());
     }
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -892,7 +882,7 @@ pub async fn evict_icloud_local_copy(
         .path()
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
-    let record_dir = app_data_dir.join("icloud-local-evictions");
+    let record_dir = app_data_dir.join("cloud-local-evictions");
     if record_dir.starts_with(Path::new(&selected.path)) || path.starts_with(&record_dir) {
         return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
     }
@@ -901,7 +891,7 @@ pub async fn evict_icloud_local_copy(
         let record_dir = cloud_local_eviction::prepare_immutable_record_directory(
             &app_data_dir,
             Path::new(&selected.path),
-            "icloud-local-evictions",
+            "cloud-local-evictions",
         )?;
         let plan = cloud_local_eviction::plan_icloud_local_eviction(
             &selected,
@@ -937,7 +927,7 @@ pub async fn evict_icloud_local_copy(
             Err(error) => (None, Some(error)),
         };
         Ok(IcloudLocalCopyEvictionOutput {
-            action: "evict-icloud-local-copy",
+            action: "evict-cloud-local-copy",
             plan,
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
@@ -955,12 +945,25 @@ pub async fn evict_icloud_local_copy(
 pub async fn plan_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_worktree::audit_git_worktrees(
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
+        git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            git_worktree::GitWorktreeAuditOptions::default(),
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
+            stale_open_pull_request_cutoff_ms,
+            options,
             cloud::system_now_ms(),
         )
     })
@@ -985,6 +988,8 @@ pub struct StaleGitWorktreeRemovalOutput {
 pub async fn remove_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     approved_removal_plan_fingerprint: String,
     confirmation_exact_approval_phrase: String,
     rationale: String,
@@ -998,10 +1003,20 @@ pub async fn remove_stale_git_worktrees(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let report = git_worktree::audit_git_worktrees(
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+        )?;
+        let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            options.clone(),
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
+            stale_open_pull_request_cutoff_ms,
+            options,
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
@@ -1024,10 +1039,12 @@ pub async fn remove_stale_git_worktrees(
             &format!("{}.approval.json", approval.approval_id),
             &approval,
         )?;
-        let result = git_worktree::execute_stale_worktree_removal(
+        let result = git_worktree::execute_stale_worktree_removal_with_github_pull_requests(
             &report,
             &approval,
             &confirmation_exact_approval_phrase,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),
         )?;
@@ -1052,6 +1069,106 @@ pub async fn remove_stale_git_worktrees(
     })
     .await
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+) -> Result<git_clone_reclaim::GitCloneReclaimPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            git_worktree::GitWorktreeAuditOptions::default(),
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-plan-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct StaleGitCloneRemovalOutput {
+    pub action: &'static str,
+    pub plan: git_clone_reclaim::GitCloneReclaimPlan,
+    pub approval: git_clone_reclaim::GitCloneReclaimApproval,
+    pub approval_path: String,
+    pub result: git_clone_reclaim::GitCloneReclaimResult,
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn remove_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    approved_plan_fingerprint: String,
+    confirmation_exact_approval_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<StaleGitCloneRemovalOutput, String> {
+    use tauri::Manager;
+    let journal_path = journal_file_path(&app)?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let plan = git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+            cloud::system_now_ms(),
+        )?;
+        if plan.plan_fingerprint != approved_plan_fingerprint {
+            return Err("git-clone-reclaim-plan-fingerprint-mismatch".into());
+        }
+        let approval = git_clone_reclaim::approve_git_clone_reclaim(
+            &plan,
+            &confirmation_exact_approval_phrase,
+            cloud::system_now_ms(),
+            &approved_by,
+            &rationale,
+        )?;
+        let approval_path =
+            app_data_dir.join(format!("{}.git-clone-approval.json", approval.approval_id));
+        crate::private_evidence::write_private_json_create_new(
+            Path::new(&plan.repository_root),
+            &approval_path,
+            &approval,
+        )?;
+        let result = git_clone_reclaim::execute_git_clone_reclaim(
+            &plan,
+            &approval,
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+            &journal_path,
+            cloud::system_now_ms(),
+        )?;
+        Ok(StaleGitCloneRemovalOutput {
+            action: "remove-stale-git-clone",
+            plan,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            result,
+        })
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-task-failed".to_string())?
 }
 
 /// Build a bounded, path-free ontology plan for uninstalled macOS application data.
@@ -3253,9 +3370,7 @@ pub fn reason_unknown_extensions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::scan_dir_with_interval;
     use std::fs;
-    use std::sync::atomic::AtomicBool;
 
     use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
@@ -3409,10 +3524,6 @@ mod tests {
         let _ = out;
     }
 
-    fn scan(root: &Path) -> ScanResult {
-        scan_dir_with_interval(root, &AtomicBool::new(false), 1, |_| {})
-    }
-
     #[test]
     fn load_ontology_from_valid_ttl_ok() {
         let ttl = r#"
@@ -3428,85 +3539,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn load_ontology_from_garbage_is_err() {
         assert!(load_ontology_from("@@@ not turtle").is_err());
-    }
-
-    #[test]
-    fn node_view_lists_entries_sorted_by_size_desc() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::create_dir(root.join("sub")).unwrap();
-        fs::write(root.join("sub").join("inner.bin"), vec![0u8; 500]).unwrap();
-        fs::write(root.join("small.txt"), vec![0u8; 10]).unwrap();
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert_eq!(view.size, 510);
-        assert_eq!(view.entries.len(), 2);
-        assert_eq!(view.entries[0].name, "sub");
-        assert!(view.entries[0].is_dir);
-        assert_eq!(view.entries[0].size, 500);
-        assert_eq!(view.entries[1].name, "small.txt");
-        assert!(!view.entries[1].is_dir);
-    }
-
-    #[test]
-    fn node_view_rejects_path_outside_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, &std::env::temp_dir().join("..")).is_err());
-    }
-
-    #[test]
-    fn node_view_rejects_parent_dir_components() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        let sneaky = tmp.path().join("..");
-        assert!(node_view(&res, &sneaky).is_err());
-    }
-
-    #[test]
-    fn node_view_rejects_sibling_path_outside_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let other = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, other.path()).is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn node_view_skips_junctions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::create_dir(root.join("real")).unwrap();
-        let junction = root.join("junc");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&junction)
-            .arg(root.join("real"))
-            .status()
-            .unwrap();
-        assert!(status.success(), "mklink /J failed");
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert!(view.entries.iter().all(|e| e.name != "junc"));
-    }
-
-    #[test]
-    fn node_view_errors_on_unreadable_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn node_view_skips_symlinks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("real.bin"), vec![0u8; 5]).unwrap();
-        std::os::unix::fs::symlink(root.join("real.bin"), root.join("link.bin")).unwrap();
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert!(view.entries.iter().all(|e| e.name != "link.bin"));
     }
 
     #[test]
@@ -3596,8 +3628,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
+                "edge-code-sign-clones",
                 "uv-cache",
                 "trivy-cache",
+                "appmap-download-cache",
+                "superset-http-cache",
+                "superset-code-cache",
+                "playwright-cache",
             ]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3612,15 +3649,22 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                "edge-code-sign-clones" => tmp
+                    .path()
+                    .join("X/com.microsoft.edgemac.code_sign_clone"),
                 "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
+                "appmap-download-cache" => bases.home.join(".appmap/lib"),
+                "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
+                "superset-code-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+                "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 6);
+        assert_eq!(results.len(), 11);
         assert!(results.iter().all(|result| result.ok));
     }
 
@@ -3636,12 +3680,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let observed = crate::dev_artifacts::find_artifacts(
-            tmp.path(),
-            0,
-            now,
-            crate::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
-        );
+        let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
         assert_eq!(observed.len(), 1);
         fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
         let results = clean_dev_artifacts_inner(

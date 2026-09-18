@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod backend;
 mod cache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
@@ -13,15 +14,15 @@ mod prompt;
 mod verdict;
 // coverage 빌드에서는 아직 이 재-export를 쓰는 소비자(commands 등)가 없어 unused_imports 경고 발생 — dead_code와 함께 억제
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use backend::{choose_backend, Backend};
-#[cfg_attr(coverage, allow(unused_imports))]
 pub use cache::VerdictCache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 pub use engine::LlamaEngine;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use model::{download_to, verify_sha256, ModelSpec, DEFAULT};
+pub use model::{download_to, DEFAULT};
+#[cfg(test)]
+pub use model::ModelSpec;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full};
+pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use prompt::{classify_prompt, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta};
 #[cfg_attr(coverage, allow(unused_imports))]

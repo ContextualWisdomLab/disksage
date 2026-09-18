@@ -6,15 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use disksage_lib::git_worktree::MAX_REFERENCE_BYTES;
-use disksage_lib::git_worktree::{
-    audit_git_worktrees, public_summary, validate_reference, GitWorktreeAuditOptions,
-};
+use disksage_lib::git_worktree::{public_summary, validate_reference, GitWorktreeAuditOptions};
 use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     repository_root: PathBuf,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     private_output: Option<PathBuf>,
     options: GitWorktreeAuditOptions,
 }
@@ -26,7 +26,7 @@ enum ParseOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]"
+    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]"
 }
 
 fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -67,6 +67,8 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut private_output = None;
+    let mut include_closed_pull_requests = false;
+    let mut stale_open_pull_request_cutoff_ms = None;
     let mut options = GitWorktreeAuditOptions::default();
     let mut seen_repository_root = false;
     let mut seen_private_output = false;
@@ -75,12 +77,6 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut seen_max_worktrees = false;
     let mut seen_max_entries = false;
     let mut seen_max_active_pids = false;
-    let mut enable_orca_protections = false;
-    let mut seen_recent_write = false;
-    let mut seen_orca_terminal_json = false;
-    let mut assess_filesystem = false;
-    let mut assess_unpushed = false;
-    let mut assess_stash = false;
     let mut index = 0usize;
     while index < args.len() {
         let flag = args[index]
@@ -89,24 +85,31 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
         match flag {
             "--repository-root" => {
                 mark_singleton(&mut seen_repository_root)?;
-                repository_root = Some(PathBuf::from(value(
-                    args,
-                    &mut index,
-                    "--repository-root",
-                )?));
+                repository_root =
+                    Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
             }
             "--reference-ref" => {
                 let reference = utf8_value(args, &mut index, "--reference-ref")?;
                 validate_reference(&reference)?;
                 retention_references.push(reference);
             }
-            "--private-output" => {
-                mark_singleton(&mut seen_private_output)?;
-                private_output = Some(PathBuf::from(value(
+            "--include-closed-pull-requests" if !include_closed_pull_requests => {
+                include_closed_pull_requests = true;
+            }
+            "--include-closed-pull-requests" => return Err("duplicate-option".into()),
+            "--stale-open-pull-request-cutoff-ms" => {
+                if stale_open_pull_request_cutoff_ms.is_some() {
+                    return Err("duplicate-option".into());
+                }
+                stale_open_pull_request_cutoff_ms = Some(parse_number(
                     args,
                     &mut index,
-                    "--private-output",
-                )?));
+                    "--stale-open-pull-request-cutoff-ms",
+                )?);
+            }
+            "--private-output" => {
+                mark_singleton(&mut seen_private_output)?;
+                private_output = Some(PathBuf::from(value(args, &mut index, "--private-output")?));
             }
             "--command-timeout-ms" => {
                 mark_singleton(&mut seen_command_timeout)?;
@@ -131,65 +134,6 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                 mark_singleton(&mut seen_max_active_pids)?;
                 options.max_active_pids = parse_number(args, &mut index, "--max-active-pids")?;
             }
-            "--enable-orca-protections" => {
-                enable_orca_protections = true;
-            }
-            "--recent-write-window-secs" => {
-                mark_singleton(&mut seen_recent_write)?;
-                options.protection.recent_write_window_secs =
-                    Some(parse_number(args, &mut index, "--recent-write-window-secs")?);
-            }
-            "--orca-terminal-json" => {
-                mark_singleton(&mut seen_orca_terminal_json)?;
-                let path = PathBuf::from(value(args, &mut index, "--orca-terminal-json")?);
-                if !path.is_absolute() {
-                    return Err("--orca-terminal-json은 절대 경로여야 함".into());
-                }
-                let bytes = std::fs::read(&path)
-                    .map_err(|_| "orca-terminal-json-read-failed".to_string())?;
-                options.protection.orca_live_worktree_paths =
-                    disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
-            }
-            "--open-pr-head-oid" => {
-                options
-                    .protection
-                    .open_pr_head_oids
-                    .push(utf8_value(args, &mut index, "--open-pr-head-oid")?);
-            }
-            "--open-pr-head-branch" => {
-                options
-                    .protection
-                    .open_pr_head_branches
-                    .push(utf8_value(args, &mut index, "--open-pr-head-branch")?);
-            }
-            "--lead-queue-file" => {
-                let path = PathBuf::from(value(args, &mut index, "--lead-queue-file")?);
-                if !path.is_absolute() {
-                    return Err("--lead-queue-file은 절대 경로여야 함".into());
-                }
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|_| "lead-queue-file-read-failed".to_string())?;
-                let workspace_root = path
-                    .parent()
-                    .unwrap_or(path.as_path())
-                    .to_path_buf();
-                options
-                    .protection
-                    .lead_queue_worktree_paths
-                    .extend(disksage_lib::reclaim_protection::lead_queue_mentioned_paths(
-                        &text,
-                        &workspace_root,
-                    ));
-            }
-            "--assess-filesystem-protections" => {
-                assess_filesystem = true;
-            }
-            "--assess-unpushed-commits" => {
-                assess_unpushed = true;
-            }
-            "--assess-stash" => {
-                assess_stash = true;
-            }
             "--help" | "-h" => return Err("help-cannot-be-combined-with-runtime-input".into()),
             _ => return Err("unknown-argument".into()),
         }
@@ -209,20 +153,11 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     if retention_references.is_empty() {
         return Err("--reference-ref 값이 하나 이상 필요함".into());
     }
-    if enable_orca_protections {
-        if options.protection.recent_write_window_secs.is_none() {
-            return Err("--enable-orca-protections requires --recent-write-window-secs (no silent default)".into());
-        }
-        assess_filesystem = true;
-        assess_unpushed = true;
-        assess_stash = true;
-    }
-    options.assess_filesystem_protections = assess_filesystem;
-    options.assess_unpushed_commits = assess_unpushed;
-    options.assess_stash = assess_stash;
     Ok(ParseOutcome::Run(Args {
         repository_root,
         retention_references,
+        include_closed_pull_requests,
+        stale_open_pull_request_cutoff_ms,
         private_output,
         options,
     }))
@@ -272,9 +207,19 @@ fn write_private_report(
 }
 
 fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, String> {
-    let report = audit_git_worktrees(
+    let evidence = disksage_lib::git_worktree_github_evidence::collect(
+        &args.repository_root,
+        args.include_closed_pull_requests,
+        args.stale_open_pull_request_cutoff_ms,
+        args.options,
+    )?;
+    let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
         &args.retention_references,
+        &evidence.closed_heads,
+        &evidence.stale_open_heads,
+        &evidence.pull_request_commits,
+        args.stale_open_pull_request_cutoff_ms,
         args.options,
         observed_at_ms,
     )?;
@@ -330,10 +275,7 @@ mod tests {
     use super::*;
 
     fn run_args(values: &[&str]) -> Args {
-        let raw: Vec<OsString> = values
-            .iter()
-            .map(|value| OsString::from(*value))
-            .collect();
+        let raw: Vec<OsString> = values.iter().map(|value| OsString::from(*value)).collect();
         match parse_args(&raw).unwrap() {
             ParseOutcome::Run(args) => args,
             ParseOutcome::Help => panic!("runtime arguments must not parse as help"),

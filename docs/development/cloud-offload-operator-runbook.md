@@ -94,20 +94,8 @@ The runtime sequence is:
    DiskSage never treats provider staging bytes as user-owned cleanup candidates.
 6. Files inside a `.photoslibrary`/`.photolibrary` bundle are non-overridable
    `system-managed-photos-library-data` blockers; individual SQLite members are never copied.
-   Cloud offload planning also default-excludes other app-managed libraries: Mendeley Desktop /
-   Reference Manager under `Library/Application Support`, Zotero profile and `~/Zotero/storage`,
-   Parallels VM trees (`~/Parallels`, `Library/Parallels`, `.pvm` / `.macvm`), and macOS
-   `Library/Containers`. Stable blocker codes are `app-managed-mendeley-library`,
-   `app-managed-zotero-storage`, `app-managed-parallels-data`, and
-   `app-managed-macos-containers`.
 7. Only a fresh attestation plus the separate receipt-bound human approval may move the source to
    the OS Trash. The destination and Trash are never emptied by DiskSage.
-   **Free-space accounting:** do not treat a verified copy into `~/Library/CloudStorage` as freed
-   disk. Credited local free bytes require provider sync confirmation and a DiskSage-gated
-   online-only / source-eviction step. A `source-evicted` goal credits only the observed local
-   allocation reduction, capped by the source allocation measured before eviction; logical file
-   length is not reclaimed-space evidence. A successful gated local-eviction request likewise
-   requires observed allocation reduction. Copy-only and pre-eviction goal states credit zero.
 8. Keep DiskSage repositories, Git worktrees, and temporary evidence outside macOS-managed
    File Provider roots (for example `~/Documents` when it carries a provider-domain marker).
    A dataless `.git` file or a Git operation that waits on materialization is provider evidence,

@@ -203,4 +203,24 @@ mod tests {
         let view = node_view(&result, root.path()).unwrap();
         assert!(view.entries.iter().all(|entry| entry.name != "linked.bin"));
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn child_junction_entries_remain_hidden() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let junction = root.path().join("junction");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&real)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+        let result = scan(root.path());
+
+        let view = node_view(&result, root.path()).unwrap();
+        assert!(view.entries.iter().all(|entry| entry.name != "junction"));
+    }
 }
