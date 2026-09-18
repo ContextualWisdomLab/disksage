@@ -98,6 +98,12 @@ pub struct LogArchiveReport {
     pub results: Vec<ArchiveFileResult>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetirementRetryEvidence {
+    object_id: String,
+    digest: String,
+}
+
 fn absolute_without_parent(path: &Path) -> bool {
     path.is_absolute()
         && !path
@@ -318,17 +324,54 @@ fn journal(
     .map_err(|error| error.to_string())
 }
 
-/// Returns true only when the newest log-archive ledger record for this path proves that DiskSage
-/// itself had already verified an archive and reached the reversible source-retirement boundary.
-fn retirement_retry_authorized(journal_path: &Path, path: &Path) -> bool {
+/// Encode the one-shot recovery lease only after archive verification and source identity/content
+/// revalidation. Object IDs and SHA-256 values contain no `|`, so the delimiter is unambiguous.
+fn retirement_pending_outcome(object_id: &str, digest: &str) -> String {
+    format!(
+        "archive_verified_retirement_pending|object_id={object_id}|sha256={digest}"
+    )
+}
+
+/// Parse a recovery lease. Missing identity or digest evidence fails closed rather than granting
+/// deletion authority from a path-only or legacy journal record.
+fn parse_retirement_pending(outcome: &str) -> Option<RetirementRetryEvidence> {
+    let mut parts = outcome.split('|');
+    if parts.next()? != "archive_verified_retirement_pending" {
+        return None;
+    }
+    let mut object_id = None;
+    let mut digest = None;
+    for part in parts {
+        if let Some(value) = part.strip_prefix("object_id=") {
+            if !value.is_empty() {
+                object_id = Some(value.to_string());
+            }
+        } else if let Some(value) = part.strip_prefix("sha256=") {
+            if !value.is_empty() {
+                digest = Some(value.to_string());
+            }
+        }
+    }
+    Some(RetirementRetryEvidence {
+        object_id: object_id?,
+        digest: digest?,
+    })
+}
+
+/// Return recovery evidence only when the newest archive/retry ledger transition for this path is
+/// an unconsumed, identity-bound verified-retirement lease. A later `ok` consumes the lease.
+fn retirement_retry_evidence(journal_path: &Path, path: &Path) -> Option<RetirementRetryEvidence> {
     let path_string = path.to_string_lossy();
     safety::journal_recent(journal_path, usize::MAX)
         .into_iter()
-        .find(|entry| entry.op == "log_archive_compress" && entry.path == path_string)
-        .is_some_and(|entry| {
-            entry.outcome == "archive_verified_retirement_pending"
-                || entry.outcome.starts_with("failed:original-trash-failed:")
+        .find(|entry| {
+            entry.path == path_string.as_ref()
+                && matches!(
+                    entry.op.as_str(),
+                    "log_archive_compress" | "log_archive_retirement_retry"
+                )
         })
+        .and_then(|entry| parse_retirement_pending(&entry.outcome))
 }
 
 /// Returns `None` when the file is eligible; `Some(skip)` when it should be skipped.
@@ -352,7 +395,7 @@ fn skip_reason_for(
         return Some((SkipReason::ExcludedSuffix, bytes, None));
     }
     if archive_path_for(path).exists()
-        && (!options.execute || !retirement_retry_authorized(&options.journal_path, path))
+        && (!options.execute || retirement_retry_evidence(&options.journal_path, path).is_none())
     {
         return Some((SkipReason::AlreadyArchivedSibling, bytes, None));
     }
@@ -412,7 +455,8 @@ fn mutation_blocked(path: &Path) -> Option<String> {
 }
 
 /// Resume only a DiskSage-ledger-correlated retirement after re-verifying both the durable archive
-/// and the unchanged source. Pre-existing archives are never overwritten or removed on this path.
+/// and the exact source object/content recorded by the unconsumed recovery lease. Pre-existing
+/// archives are never overwritten or removed on this path.
 fn resume_verified_archive_retirement(
     path: &Path,
     options: &LogArchiveOptions,
@@ -430,6 +474,17 @@ fn resume_verified_archive_retirement(
         outcome: ArchiveOutcome::Failed(message),
     };
 
+    let Some(evidence) = retirement_retry_evidence(&options.journal_path, path) else {
+        return ArchiveFileResult {
+            path: path_string,
+            bytes_original,
+            bytes_archive: None,
+            bytes_reclaimed: None,
+            age_days: Some(age_days),
+            outcome: ArchiveOutcome::Skipped(SkipReason::AlreadyArchivedSibling),
+        };
+    };
+
     if let Some(reason) = mutation_blocked(path) {
         return fail(format!("mutation-authority-rejected:{reason}"), None);
     }
@@ -444,14 +499,17 @@ fn resume_verified_archive_retirement(
         Ok(value) => value,
         Err(error) => return fail(format!("existing-archive-{error}"), Some(archive_bytes)),
     };
-    let original_object_id = match capture_object_id(path) {
-        Ok(value) => value,
+
+    match capture_object_id(path) {
+        Ok(current) if current == evidence.object_id => {}
+        Ok(_) => return fail("object-identity-changed-before-retry".into(), Some(archive_bytes)),
         Err(error) => return fail(error, Some(archive_bytes)),
-    };
-    let original_digest = match sha256_file(path) {
-        Ok(value) => value,
+    }
+    match sha256_file(path) {
+        Ok(current) if current == evidence.digest => {}
+        Ok(_) => return fail("live-content-changed-before-retry".into(), Some(archive_bytes)),
         Err(error) => return fail(error, Some(archive_bytes)),
-    };
+    }
 
     if let Err(error) = run_zstd_test(&options.zstd_bin, &archive) {
         return fail(format!("existing-archive-unverified:{error}"), Some(archive_bytes));
@@ -465,7 +523,7 @@ fn resume_verified_archive_retirement(
             )
         }
     };
-    if decompressed != original_digest {
+    if decompressed != evidence.digest {
         return fail("existing-archive-content-mismatch".into(), Some(archive_bytes));
     }
 
@@ -476,12 +534,12 @@ fn resume_verified_archive_retirement(
         );
     }
     match capture_object_id(path) {
-        Ok(current) if current == original_object_id => {}
+        Ok(current) if current == evidence.object_id => {}
         Ok(_) => return fail("object-identity-changed-before-retire".into(), Some(archive_bytes)),
         Err(error) => return fail(error, Some(archive_bytes)),
     }
     match sha256_file(path) {
-        Ok(live_digest) if live_digest == original_digest => {}
+        Ok(live_digest) if live_digest == evidence.digest => {}
         Ok(_) => return fail("live-content-changed-before-retire".into(), Some(archive_bytes)),
         Err(error) => return fail(error, Some(archive_bytes)),
     }
@@ -496,7 +554,7 @@ fn resume_verified_archive_retirement(
         }
     }
     match decompressed_sha256(&options.zstd_bin, &archive) {
-        Ok(live_digest) if live_digest == original_digest => {}
+        Ok(live_digest) if live_digest == evidence.digest => {}
         Ok(_) => return fail("existing-archive-content-changed".into(), Some(archive_bytes)),
         Err(error) => {
             return fail(
@@ -506,19 +564,20 @@ fn resume_verified_archive_retirement(
         }
     }
 
+    let retry_marker = retirement_pending_outcome(&evidence.object_id, &evidence.digest);
     if let Err(error) = journal(
         &options.journal_path,
         "log_archive_retirement_retry",
         path,
         bytes_original,
-        "archive_verified_retirement_pending",
+        &retry_marker,
         now_ms(),
     ) {
         return fail(error, Some(archive_bytes));
     }
     if let Err(error) = safety::trash_delete_if_identity(
         path,
-        &original_object_id,
+        &evidence.object_id,
         bytes_original,
         &options.journal_path,
         now_ms(),
@@ -527,6 +586,14 @@ fn resume_verified_archive_retirement(
         let _ = journal(
             &options.journal_path,
             "log_archive_retirement_retry",
+            path,
+            bytes_original,
+            &retry_marker,
+            now_ms(),
+        );
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_retirement_error",
             path,
             bytes_original,
             &format!("failed:{message}"),
@@ -782,12 +849,13 @@ fn archive_one(
     }
 
     let archive_bytes = fs::metadata(&archive).map(|metadata| metadata.len()).unwrap_or(0);
+    let retirement_marker = retirement_pending_outcome(&original_object_id, &original_digest);
     if let Err(error) = journal(
         &options.journal_path,
         "log_archive_compress",
         path,
         bytes_original,
-        "archive_verified_retirement_pending",
+        &retirement_marker,
         now_ms(),
     ) {
         let _ = fs::remove_file(&archive);
@@ -804,6 +872,14 @@ fn archive_one(
         let _ = journal(
             &options.journal_path,
             "log_archive_compress",
+            path,
+            bytes_original,
+            &retirement_marker,
+            now_ms(),
+        );
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_retirement_error",
             path,
             bytes_original,
             &format!("failed:{message}"),
@@ -1006,6 +1082,24 @@ mod tests {
                 .map(|value| (*value).to_string())
                 .collect(),
         }
+    }
+
+    #[test]
+    fn retirement_marker_requires_identity_and_digest() {
+        assert_eq!(parse_retirement_pending("pending"), None);
+        assert_eq!(
+            parse_retirement_pending("archive_verified_retirement_pending|object_id=unix:1:2"),
+            None
+        );
+        assert_eq!(
+            parse_retirement_pending(
+                "archive_verified_retirement_pending|object_id=unix:1:2|sha256=abc"
+            ),
+            Some(RetirementRetryEvidence {
+                object_id: "unix:1:2".into(),
+                digest: "abc".into(),
+            })
+        );
     }
 
     #[test]
