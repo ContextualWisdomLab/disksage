@@ -9,8 +9,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 #[cfg(unix)]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 pub const HOMEBREW_AUDIT_SCHEMA_KIND: &str = "disksage.homebrew-audit/v1";
