@@ -14,4 +14,10 @@ describe('scan-tree navigation single-owner contract', () => {
     expect(commands).not.toMatch(/\bpub fn node_view\s*\(/);
     expect(commands).not.toMatch(/#\[tauri::command\]\s*\npub fn get_node\s*\(/);
   });
+
+  it('preserves the Windows reparse-point edge case under the canonical owner', () => {
+    expect(navigation).toMatch(
+      /#\[cfg\(windows\)\][\s\S]*fn child_junction_entries_remain_hidden\s*\(/,
+    );
+  });
 });
