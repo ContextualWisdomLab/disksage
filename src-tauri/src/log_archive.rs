@@ -245,16 +245,29 @@ fn decompressed_sha256(zstd_bin: &Path, archive: &Path) -> Result<String, String
 }
 
 fn compress_to_partial(zstd_bin: &Path, source: &Path, partial: &Path) -> Result<(), String> {
-    // Refuse to reuse a path: temps are invocation-unique and must be create-new semantics.
-    if partial.exists() {
-        return Err("partial-already-exists".into());
-    }
+    // Atomically reserve the partial (create-new). Existence pre-check + `zstd -o` is TOCTOU;
+    // own the path first, then direct zstd stdout into the reserved file.
+    let reserved = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(partial)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                "partial-already-exists".into()
+            } else {
+                format!("partial-create-failed:{error}")
+            }
+        })?;
     let status = Command::new(zstd_bin)
-        .args(["-q", "-o"])
-        .arg(partial)
+        .args(["-q", "-c"])
         .arg(source)
+        .stdout(Stdio::from(reserved))
+        .stderr(Stdio::null())
         .status()
-        .map_err(|error| format!("zstd-compress-spawn-failed:{error}"))?;
+        .map_err(|error| {
+            let _ = fs::remove_file(partial);
+            format!("zstd-compress-spawn-failed:{error}")
+        })?;
     if status.success() {
         Ok(())
     } else {
@@ -372,7 +385,11 @@ fn mutation_blocked(path: &Path) -> Option<String> {
     if let Some(reason) = app_managed_library_blocker(path) {
         return Some(format!("app-managed:{reason}"));
     }
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // Fail closed: lexical fallback would bypass protected-root authority on canonicalize errors.
+    let canonical = match fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => return Some("canonicalize-failed".into()),
+    };
     if safety::is_protected(&canonical) || safety::is_protected(path) {
         return Some("protected-path".into());
     }
@@ -968,6 +985,162 @@ mod tests {
             matches!(
                 result.outcome,
                 ArchiveOutcome::Skipped(SkipReason::AppManaged(_))
+            )
+        }));
+    }
+
+    #[test]
+    fn compress_to_partial_uses_create_new_and_preserves_preexisting() {
+        let tmp = tempdir().unwrap();
+        let source = tmp.path().join("session.jsonl");
+        fs::write(&source, b"{\"session\":1}\n".repeat(200)).unwrap();
+        let partial = tmp.path().join("session.jsonl.zst.partial.reserved");
+        fs::write(&partial, b"foreign-partial").unwrap();
+        let zstd = resolve_zstd_bin().expect("zstd required for tests");
+        let error = compress_to_partial(&zstd, &source, &partial).unwrap_err();
+        assert_eq!(error, "partial-already-exists");
+        assert_eq!(fs::read(&partial).unwrap(), b"foreign-partial");
+    }
+
+    #[test]
+    fn mutation_blocked_fail_closed_when_canonicalize_fails() {
+        let missing = tempdir()
+            .unwrap()
+            .path()
+            .join("never-created")
+            .join("session.jsonl");
+        assert_eq!(
+            mutation_blocked(&missing).as_deref(),
+            Some("canonicalize-failed")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_is_skipped_and_not_followed_for_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let target = tmp.path().join("outside.jsonl");
+        fs::write(&target, b"{\"session\":1}\n".repeat(200)).unwrap();
+        touch_aged(&target, 40);
+        let link = root.join("session.jsonl");
+        symlink(&target, &link).unwrap();
+
+        let journal = tmp.path().join("journal.jsonl");
+        let report = archive_logs(&options_for(&root, &journal, true)).unwrap();
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.candidates, 0);
+        assert!(target.exists(), "symlink target must not be retired");
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "symlink entry must remain a symlink"
+        );
+        assert!(report.results.iter().any(|result| {
+            matches!(
+                result.outcome,
+                ArchiveOutcome::Skipped(SkipReason::Symlink)
+            )
+        }));
+        assert_eq!(
+            mutation_blocked(&link).as_deref(),
+            Some("symlink-at-mutation")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_denied_source_fails_closed_without_retirement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("locked.jsonl");
+        fs::write(&old, b"{\"session\":1}\n".repeat(200)).unwrap();
+        touch_aged(&old, 40);
+        let mut permissions = fs::metadata(&old).unwrap().permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&old, permissions).unwrap();
+
+        let journal = tmp.path().join("journal.jsonl");
+        let report = archive_logs(&options_for(&root, &journal, true)).unwrap();
+
+        let mut restore = fs::metadata(&old).unwrap().permissions();
+        restore.set_mode(0o600);
+        fs::set_permissions(&old, restore).unwrap();
+
+        assert_eq!(report.archived, 0);
+        assert!(old.exists(), "unreadable source must not be trashed");
+        assert!(!archive_path_for(&old).exists());
+        assert!(report.results.iter().any(|result| {
+            matches!(
+                &result.outcome,
+                ArchiveOutcome::Failed(message) if message.contains("sha256-open-failed")
+                    || message.contains("mutation-authority-rejected")
+                    || message.contains("object-identity-unavailable")
+            )
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_verification_removes_published_archive_and_keeps_source() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("session.jsonl");
+        let payload = b"{\"session\":1}\n".repeat(200);
+        fs::write(&old, &payload).unwrap();
+        touch_aged(&old, 40);
+
+        let fake_zstd = tmp.path().join("fake-zstd-verify-fail");
+        fs::write(
+            &fake_zstd,
+            "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -q)\n    cat \"$3\"\n    ;;\n  -t)\n    exit 1\n    ;;\n  -dc)\n    cat \"$3\"\n    ;;\n  *)\n    exit 64\n    ;;\nesac\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_zstd).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_zstd, permissions).unwrap();
+
+        let journal = tmp.path().join("journal.jsonl");
+        let options = LogArchiveOptions {
+            root: root.clone(),
+            older_than_days: 30,
+            execute: true,
+            journal_path: journal,
+            min_stable_secs: 1,
+            zstd_bin: fake_zstd,
+            exclude_suffixes: DEFAULT_EXCLUDE_SUFFIXES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+        };
+        let report = archive_logs(&options).unwrap();
+        assert_eq!(report.archived, 0);
+        assert_eq!(report.failed, 1);
+        assert!(old.exists(), "source must survive interrupted verification");
+        assert_eq!(fs::read(&old).unwrap(), payload);
+        assert!(
+            !archive_path_for(&old).exists(),
+            "failed verification must not leave a published archive"
+        );
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| entry.file_name() == "session.jsonl"),
+            "partial artifacts must be cleaned after interrupted verification"
+        );
+        assert!(report.results.iter().any(|result| {
+            matches!(
+                &result.outcome,
+                ArchiveOutcome::Failed(message) if message.contains("zstd-test-failed")
             )
         }));
     }

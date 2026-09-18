@@ -16,7 +16,7 @@ fn shell_quote(path: &Path) -> String {
 
 fn write_fake_zstd(script_path: &Path, signal_path: &Path) {
     let script = format!(
-        "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -q)\n    cp \"$4\" \"$3\"\n    ;;\n  -t)\n    exit 0\n    ;;\n  -dc)\n    printf ready > {}\n    cat \"$3\"\n    sleep 1\n    ;;\n  *)\n    exit 64\n    ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -q)\n    # create-new reserved fd: argv is `-q -c <source>`; emit bytes on stdout\n    cat \"$3\"\n    ;;\n  -t)\n    exit 0\n    ;;\n  -dc)\n    printf ready > {}\n    cat \"$3\"\n    sleep 1\n    ;;\n  *)\n    exit 64\n    ;;\nesac\n",
         shell_quote(signal_path)
     );
     fs::write(script_path, script).expect("fake zstd should be writable");

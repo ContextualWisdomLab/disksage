@@ -181,7 +181,6 @@ cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
 
 ## Log archive CLI
 
-Lossless in-place zstd compression for text logs / transcripts (e.g. Codex session
 Lossless Codex session archives (`disksage-log-archive`, `--older-than-days 0`) verify a
 `.zst` then retire the reviewed source through DiskSage's identity-bound OS Trash path.
 That remains a destructive user-file action (recoverable via Trash), not a permanent-delete
