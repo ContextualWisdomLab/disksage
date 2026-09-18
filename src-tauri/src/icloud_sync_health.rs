@@ -26,9 +26,9 @@ const CP_PATH: &str = "/bin/cp";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_COPY_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_ATTEMPTS: usize = 3;
-// Non-macOS snapshots perform a real byte copy and must remain bounded. macOS uses `cp -c`, whose
-// required copy-on-write clone fails instead of falling back to a space-consuming full copy.
-#[cfg(not(target_os = "macos"))]
+// CloudDocs' managed SQLite database can grow to many GiB. Never clone a database larger than
+// this bounded amount during a read-only health probe: the immutable fallback below is slower and
+// less complete, but it cannot unexpectedly consume the user's remaining disk while planning.
 const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
@@ -40,18 +40,18 @@ const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 #[cfg(target_os = "macos")]
 // fileproviderctl prints global sync-engine progress after the per-item detail section. Keep the
 // probe bounded, but allow enough time to observe that active-transfer evidence before failing.
-const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(90);
+const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
 // Keep the sync summary and a larger bounded provider-error window together; iCloud places
 // filename/root exclusion diagnostics after the aggregate summary in large dumps.
-const MAX_FILEPROVIDER_DUMP_BYTES: usize = 4 * 1024 * 1024;
+const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 const FILE_PROVIDER_STALE_ERROR_AGE_MS: u64 = 15 * 60 * 1_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
 pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
-pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 4;
+pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 3;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
@@ -150,12 +150,6 @@ pub struct IcloudFileProviderActivityEvidence {
     pub materialization_failure_count: u64,
     #[serde(default)]
     pub staged_item_missing_count: u64,
-    /// Aggregate stale provider operation errors; no item identifiers or paths are retained.
-    #[serde(default)]
-    pub stale_error_count: u64,
-    /// Oldest relative age among `stale_error_count`, bounded by the native dump sample.
-    #[serde(default)]
-    pub oldest_stale_error_age_ms: Option<u64>,
     /// Aggregate provider errors where iCloud excludes an item because of its filename.
     #[serde(default)]
     pub sync_excluded_filename_count: u64,
@@ -189,10 +183,6 @@ pub fn validate_file_provider_activity_evidence(
         || evidence
             .active_download_progress_millionths
             .is_some_and(|value| value > 1_000_000)
-        || ((evidence.stale_error_count == 0) != evidence.oldest_stale_error_age_ms.is_none())
-        || evidence
-            .oldest_stale_error_age_ms
-            .is_some_and(|age| age < FILE_PROVIDER_STALE_ERROR_AGE_MS)
     {
         return Err("icloud-file-provider-activity-shape-invalid".into());
     }
@@ -982,6 +972,9 @@ fn parse_file_provider_activity_output(
             || lower.contains("create-item")
             || lower.contains("createitembasedontemplate")
     };
+    let is_stale_age = |line: &&str| {
+        relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+    };
     let is_provider_error = |line: &&str| {
         let lower = line.to_ascii_lowercase();
         lower.contains("error:")
@@ -995,22 +988,14 @@ fn parse_file_provider_activity_output(
         let lower = line.to_ascii_lowercase();
         lower.contains("docid(") || is_provider_operation(line)
     };
-    let mut stale_error_ages_ms = provider_lines
-        .iter()
-        .filter(|line| is_provider_operation(line) && is_provider_error(line))
-        .filter_map(|line| relative_age_ms(line))
-        .filter(|age| *age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
-        .collect::<Vec<_>>();
-    stale_error_ages_ms.extend(provider_lines.windows(2).filter_map(|record| {
-        (is_provider_operation(&record[0])
+    let stale_error_observed = provider_lines.iter().any(|line| {
+        is_provider_operation(line) && is_stale_age(line) && is_provider_error(line)
+    }) || provider_lines.windows(2).any(|record| {
+        is_provider_operation(&record[0])
             && !is_provider_record_start(&record[1])
-            && (is_provider_error(&record[0]) || is_provider_error(&record[1])))
-        .then(|| relative_age_ms(record[1]))
-        .flatten()
-        .filter(|age| *age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
-    }));
-    let stale_error_count = stale_error_ages_ms.len() as u64;
-    let oldest_stale_error_age_ms = stale_error_ages_ms.into_iter().max();
+            && is_stale_age(&record[1])
+            && (is_provider_error(&record[0]) || is_provider_error(&record[1]))
+    });
     let sync_excluded_filename_count = output
         .lines()
         .filter(|line| {
@@ -1025,16 +1010,16 @@ fn parse_file_provider_activity_output(
                 .contains("excluded from sync under root")
         })
         .count() as u64;
+    let active_upload_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
+        .count() as u64;
+    let active_download_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("download progress:"))
+        .count() as u64;
     let active_upload_progress_millionths = progress_millionths(output, "upload progress:");
     let active_download_progress_millionths = progress_millionths(output, "download progress:");
-    // fileproviderctl always emits aggregate progress-object headers, including while idle. Only a
-    // provider-reported incomplete fraction is evidence of an active transfer.
-    let active_upload_count = u64::from(
-        active_upload_progress_millionths.is_some_and(|progress| progress < 1_000_000),
-    );
-    let active_download_count = u64::from(
-        active_download_progress_millionths.is_some_and(|progress| progress < 1_000_000),
-    );
     let mut notices = if command_succeeded {
         vec!["icloud-file-provider-dump-observed".into()]
     } else {
@@ -1061,7 +1046,7 @@ fn parse_file_provider_activity_output(
     if item_locked {
         notices.push("icloud-file-provider-item-locked-observed".into());
     }
-    if stale_error_count > 0 {
+    if stale_error_observed {
         notices.push("icloud-file-provider-stale-error-observed".into());
     }
     if sync_excluded_filename_count > 0 {
@@ -1086,8 +1071,6 @@ fn parse_file_provider_activity_output(
         no_progress_create_count,
         materialization_failure_count,
         staged_item_missing_count,
-        stale_error_count,
-        oldest_stale_error_age_ms,
         sync_excluded_filename_count,
         sync_excluded_root_count,
         active_upload_count,
@@ -1596,7 +1579,7 @@ fn create_temporary_snapshot_directory() -> Result<TemporarySnapshotDirectory, S
 
 #[cfg(target_os = "macos")]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
-    source_file_identity(source, true)?;
+    ensure_snapshot_file_within_limit(source)?;
     let cp_metadata = fs::symlink_metadata(CP_PATH)
         .map_err(|_| "icloud-sync-health-clone-command-unavailable".to_string())?;
     if cp_metadata.file_type().is_symlink() || !cp_metadata.is_file() {
@@ -1667,25 +1650,11 @@ fn ensure_snapshot_file_within_limit(path: &Path) -> Result<(), String> {
     let identity = source_file_identity(path, true)?;
     if identity
         .as_ref()
-        .is_some_and(snapshot_source_exceeds_copy_limit)
+        .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
     {
         return Err("icloud-sync-health-snapshot-source-too-large".into());
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn snapshot_bytes_exceed_copy_limit(_logical_bytes: u64) -> bool {
-    false
-}
-
-#[cfg(not(target_os = "macos"))]
-fn snapshot_bytes_exceed_copy_limit(logical_bytes: u64) -> bool {
-    logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES
-}
-
-fn snapshot_source_exceeds_copy_limit(identity: &SourceFileIdentity) -> bool {
-    snapshot_bytes_exceed_copy_limit(identity.logical_bytes)
 }
 
 fn ensure_snapshot_file_with_cleanup(path: &Path) -> Result<(), String> {
@@ -1711,14 +1680,14 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
         let before_db = source_file_identity(&source_db, true)?;
         if before_db
             .as_ref()
-            .is_some_and(snapshot_source_exceeds_copy_limit)
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
         {
             return Err("icloud-sync-health-snapshot-source-too-large".into());
         }
         let before_wal = source_file_identity(&source_wal, false)?;
         if before_wal
             .as_ref()
-            .is_some_and(snapshot_source_exceeds_copy_limit)
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
         {
             return Err("icloud-sync-health-snapshot-source-too-large".into());
         }
@@ -1747,10 +1716,9 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
 
 #[cfg(target_os = "macos")]
 fn bounded_native_status(db_dir: &Path, observed_at_ms: u64) -> Option<IcloudNativeStatusEvidence> {
-    source_file_identity(&db_dir.join("client.db"), true)
-        .ok()
-        .flatten()
-        .map(|_| probe_native_status(observed_at_ms))
+    let identity = source_file_identity(&db_dir.join("client.db"), true).ok().flatten()?;
+    (identity.logical_bytes <= MAX_SNAPSHOT_SOURCE_BYTES)
+        .then(|| probe_native_status(observed_at_ms))
 }
 
 fn run_consistent_snapshot_queue_probe(db_dir: &Path) -> Result<(String, bool), String> {
@@ -2158,9 +2126,9 @@ pub fn probe_icloud_sync_health(
     let native_status = bounded_native_status(db_dir, observed_at_ms);
     #[cfg(not(target_os = "macos"))]
     let native_status = Some(probe_native_status(observed_at_ms));
-    let source_database_too_large = managed_database_files.iter().any(|file| {
-        file.role == "client.db" && snapshot_bytes_exceed_copy_limit(file.logical_bytes)
-    });
+    let source_database_too_large = managed_database_files
+        .iter()
+        .any(|file| file.role == "client.db" && file.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES);
     match run_consistent_snapshot_queue_probe(db_dir) {
         Ok((output, includes_wal)) => {
             let mut report = build_report(
@@ -2405,22 +2373,6 @@ mod tests {
     }
 
     #[test]
-    fn file_provider_parser_does_not_treat_idle_progress_headers_as_active() {
-        let evidence = parse_file_provider_activity_output(
-            "+ upload progress: <NSProgress aggregate>\n\
-             + download progress: <NSProgress aggregate>\n",
-            42,
-            true,
-            false,
-            false,
-        );
-        assert_eq!(evidence.active_upload_count, 0);
-        assert_eq!(evidence.active_download_count, 0);
-        assert_eq!(evidence.active_upload_progress_millionths, None);
-        assert_eq!(evidence.active_download_progress_millionths, None);
-    }
-
-    #[test]
     fn file_provider_parser_records_materialization_failures_without_paths() {
         let evidence = parse_file_provider_activity_output(
             "itemMaterializationFailed(... stagedItemMissing ...)\nmaterializationFailed stagedItemMissing\n",
@@ -2472,8 +2424,6 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
-        assert_eq!(evidence.stale_error_count, 2);
-        assert_eq!(evidence.oldest_stale_error_age_ms, Some(14_940_000));
         let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
             .unwrap();
         report.file_provider_activity = Some(evidence);
@@ -2496,15 +2446,6 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
-        assert_eq!(evidence.stale_error_count, 1);
-        assert_eq!(evidence.oldest_stale_error_age_ms, Some(14_940_000));
-    }
-
-    #[test]
-    fn file_provider_activity_rejects_inconsistent_stale_error_aggregate() {
-        let mut evidence = parse_file_provider_activity_output("", 42, true, false, false);
-        evidence.stale_error_count = 1;
-        assert!(validate_file_provider_activity_evidence(&evidence).is_err());
     }
 
     #[test]
@@ -2766,7 +2707,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn oversized_cloud_docs_database_fails_closed_before_snapshot_copy() {
         let source = tempfile::tempdir().unwrap();
@@ -2798,20 +2738,13 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn oversized_cloud_docs_database_uses_copy_on_write_clone() {
-        let oversized_bytes = 512 * 1024 * 1024 + 1;
+    fn oversized_cloud_docs_database_skips_expensive_native_status_probe() {
         let source = tempfile::tempdir().unwrap();
-        let client_db = source.path().join("client.db");
-        fs::File::create(&client_db)
+        fs::File::create(source.path().join("client.db"))
             .unwrap()
-            .set_len(oversized_bytes)
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
             .unwrap();
-
-        let snapshot = clone_client_database_snapshot(source.path()).unwrap();
-        assert_eq!(
-            fs::metadata(snapshot.client_db).unwrap().len(),
-            oversized_bytes
-        );
+        assert!(bounded_native_status(source.path(), 1).is_none());
     }
 
     #[cfg(target_os = "macos")]

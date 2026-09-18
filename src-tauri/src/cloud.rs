@@ -1192,9 +1192,6 @@ pub fn collect_archive_files_bounded(
                 return true;
             }
             let path = entry.path();
-            if crate::safety::is_explicitly_protected(path) {
-                return false;
-            }
             if excluded.iter().any(|cloud| path.starts_with(cloud)) {
                 return false;
             }
@@ -4125,6 +4122,9 @@ fn source_blocked_reason(
     if path_inside_managed_file_provider_storage(path) {
         return Some("system-managed-file-provider-storage".into());
     }
+    if let Some(reason) = crate::cloud_app_managed::app_managed_library_blocker(path) {
+        return Some(reason.into());
+    }
     if path_inside_managed_photo_library(path) {
         return Some("system-managed-photos-library-data".into());
     }
@@ -6363,6 +6363,55 @@ mod tests {
                 &ContentMetadata::default(),
                 destination,
                 CloudProvider::Icloud,
+                0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn app_managed_libraries_are_non_overridable_planner_blocks() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        let cases = [
+            (
+                "/Users/test/Library/Application Support/Mendeley Desktop/library.sqlite",
+                "app-managed-mendeley-library",
+            ),
+            (
+                "/Users/test/Zotero/storage/ABCD1234/paper.pdf",
+                "app-managed-zotero-storage",
+            ),
+            (
+                "/Users/test/Parallels/Windows.pvm/config.pvs",
+                "app-managed-parallels-data",
+            ),
+            (
+                "/Users/test/Library/Containers/com.apple.mail/Data/Library/mail.db",
+                "app-managed-macos-containers",
+            ),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                planner_blocked_reason(
+                    Path::new(path),
+                    ArchiveKind::Document,
+                    &ContentMetadata::default(),
+                    destination,
+                    CloudProvider::GoogleDrive,
+                    0,
+                )
+                .as_deref(),
+                Some(expected),
+                "path {path}"
+            );
+        }
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("/Users/test/Documents/cold/report.pdf"),
+                ArchiveKind::Document,
+                &ContentMetadata::default(),
+                destination,
+                CloudProvider::GoogleDrive,
                 0,
             ),
             None

@@ -9,7 +9,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 const BINARIES: [&str; 2] = [
-    "disksage-cloud-local-eviction-batch",
+    "disksage-icloud-local-eviction-batch",
     "disksage-incomplete-download-destination-plan",
 ];
 
