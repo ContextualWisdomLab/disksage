@@ -719,6 +719,7 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
     for entry in WalkDir::new(&options.root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
     {
         let path = entry.path();
@@ -1143,5 +1144,63 @@ mod tests {
                 ArchiveOutcome::Failed(message) if message.contains("zstd-test-failed")
             )
         }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_is_not_traversed_for_archive_mutation() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let outside_file = outside.join("outside.jsonl");
+        fs::write(&outside_file, b"{\"outside\":true}\n".repeat(200)).unwrap();
+        touch_aged(&outside_file, 40);
+
+        let junction = root.join("outside-junction");
+        let output = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .expect("cmd /C mklink /J must be available for the Windows junction fixture");
+        assert!(
+            output.status.success(),
+            "failed to create Windows junction: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let journal = tmp.path().join("journal.jsonl");
+        let options = LogArchiveOptions {
+            root: root.clone(),
+            older_than_days: 30,
+            execute: true,
+            journal_path: journal,
+            min_stable_secs: 1,
+            zstd_bin: std::env::current_exe().expect("current test executable is a real file"),
+            exclude_suffixes: DEFAULT_EXCLUDE_SUFFIXES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+        };
+
+        let report = archive_logs(&options).unwrap();
+        assert_eq!(report.candidates, 0, "junction descendants must never become candidates");
+        assert_eq!(report.archived, 0, "junction descendants must never be archived");
+        assert!(outside_file.exists(), "outside junction target must remain untouched");
+        assert!(
+            !archive_path_for(&outside_file).exists(),
+            "no archive may be published next to the outside target"
+        );
+        assert!(
+            !archive_path_for(&junction.join("outside.jsonl")).exists(),
+            "no archive may be published through the junction path"
+        );
+
+        fs::remove_dir(&junction).expect("junction cleanup must remove only the junction entry");
+        assert!(outside_file.exists(), "junction cleanup must not remove its target");
     }
 }
