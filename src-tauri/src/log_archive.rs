@@ -318,6 +318,19 @@ fn journal(
     .map_err(|error| error.to_string())
 }
 
+/// Returns true only when the newest log-archive ledger record for this path proves that DiskSage
+/// itself had already verified an archive and reached the reversible source-retirement boundary.
+fn retirement_retry_authorized(journal_path: &Path, path: &Path) -> bool {
+    let path_string = path.to_string_lossy();
+    safety::journal_recent(journal_path, usize::MAX)
+        .into_iter()
+        .find(|entry| entry.op == "log_archive_compress" && entry.path == path_string)
+        .is_some_and(|entry| {
+            entry.outcome == "archive_verified_retirement_pending"
+                || entry.outcome.starts_with("failed:original-trash-failed:")
+        })
+}
+
 /// Returns `None` when the file is eligible; `Some(skip)` when it should be skipped.
 fn skip_reason_for(
     path: &Path,
@@ -338,7 +351,9 @@ fn skip_reason_for(
     if has_excluded_suffix(path, &options.exclude_suffixes) {
         return Some((SkipReason::ExcludedSuffix, bytes, None));
     }
-    if archive_path_for(path).exists() {
+    if archive_path_for(path).exists()
+        && (!options.execute || !retirement_retry_authorized(&options.journal_path, path))
+    {
         return Some((SkipReason::AlreadyArchivedSibling, bytes, None));
     }
     if let Some(reason) = app_managed_library_blocker(path) {
@@ -394,6 +409,148 @@ fn mutation_blocked(path: &Path) -> Option<String> {
         return Some("protected-path".into());
     }
     None
+}
+
+/// Resume only a DiskSage-ledger-correlated retirement after re-verifying both the durable archive
+/// and the unchanged source. Pre-existing archives are never overwritten or removed on this path.
+fn resume_verified_archive_retirement(
+    path: &Path,
+    options: &LogArchiveOptions,
+    age_days: u64,
+    bytes_original: u64,
+) -> ArchiveFileResult {
+    let path_string = path.to_string_lossy().into_owned();
+    let archive = archive_path_for(path);
+    let fail = |message: String, bytes_archive: Option<u64>| ArchiveFileResult {
+        path: path_string.clone(),
+        bytes_original,
+        bytes_archive,
+        bytes_reclaimed: None,
+        age_days: Some(age_days),
+        outcome: ArchiveOutcome::Failed(message),
+    };
+
+    if let Some(reason) = mutation_blocked(path) {
+        return fail(format!("mutation-authority-rejected:{reason}"), None);
+    }
+
+    let archive_metadata = match fs::symlink_metadata(&archive) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+        Ok(_) => return fail("existing-archive-not-regular-file".into(), None),
+        Err(error) => return fail(format!("existing-archive-metadata-failed:{error}"), None),
+    };
+    let archive_bytes = archive_metadata.len();
+    let archive_object_id = match capture_object_id(&archive) {
+        Ok(value) => value,
+        Err(error) => return fail(format!("existing-archive-{error}"), Some(archive_bytes)),
+    };
+    let original_object_id = match capture_object_id(path) {
+        Ok(value) => value,
+        Err(error) => return fail(error, Some(archive_bytes)),
+    };
+    let original_digest = match sha256_file(path) {
+        Ok(value) => value,
+        Err(error) => return fail(error, Some(archive_bytes)),
+    };
+
+    if let Err(error) = run_zstd_test(&options.zstd_bin, &archive) {
+        return fail(format!("existing-archive-unverified:{error}"), Some(archive_bytes));
+    }
+    let decompressed = match decompressed_sha256(&options.zstd_bin, &archive) {
+        Ok(value) => value,
+        Err(error) => {
+            return fail(
+                format!("existing-archive-unverified:{error}"),
+                Some(archive_bytes),
+            )
+        }
+    };
+    if decompressed != original_digest {
+        return fail("existing-archive-content-mismatch".into(), Some(archive_bytes));
+    }
+
+    if let Some(reason) = mutation_blocked(path) {
+        return fail(
+            format!("mutation-authority-rejected:{reason}"),
+            Some(archive_bytes),
+        );
+    }
+    match capture_object_id(path) {
+        Ok(current) if current == original_object_id => {}
+        Ok(_) => return fail("object-identity-changed-before-retire".into(), Some(archive_bytes)),
+        Err(error) => return fail(error, Some(archive_bytes)),
+    }
+    match sha256_file(path) {
+        Ok(live_digest) if live_digest == original_digest => {}
+        Ok(_) => return fail("live-content-changed-before-retire".into(), Some(archive_bytes)),
+        Err(error) => return fail(error, Some(archive_bytes)),
+    }
+    match capture_object_id(&archive) {
+        Ok(current) if current == archive_object_id => {}
+        Ok(_) => return fail("existing-archive-object-changed".into(), Some(archive_bytes)),
+        Err(error) => {
+            return fail(
+                format!("existing-archive-{error}"),
+                Some(archive_bytes),
+            )
+        }
+    }
+    match decompressed_sha256(&options.zstd_bin, &archive) {
+        Ok(live_digest) if live_digest == original_digest => {}
+        Ok(_) => return fail("existing-archive-content-changed".into(), Some(archive_bytes)),
+        Err(error) => {
+            return fail(
+                format!("existing-archive-unverified:{error}"),
+                Some(archive_bytes),
+            )
+        }
+    }
+
+    if let Err(error) = journal(
+        &options.journal_path,
+        "log_archive_retirement_retry",
+        path,
+        bytes_original,
+        "archive_verified_retirement_pending",
+        now_ms(),
+    ) {
+        return fail(error, Some(archive_bytes));
+    }
+    if let Err(error) = safety::trash_delete_if_identity(
+        path,
+        &original_object_id,
+        bytes_original,
+        &options.journal_path,
+        now_ms(),
+    ) {
+        let message = format!("original-trash-failed:{error}");
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_retirement_retry",
+            path,
+            bytes_original,
+            &format!("failed:{message}"),
+            now_ms(),
+        );
+        return fail(message, Some(archive_bytes));
+    }
+    let _ = journal(
+        &options.journal_path,
+        "log_archive_retirement_retry",
+        path,
+        bytes_original,
+        "ok",
+        now_ms(),
+    );
+
+    ArchiveFileResult {
+        path: path_string,
+        bytes_original,
+        bytes_archive: Some(archive_bytes),
+        bytes_reclaimed: None,
+        age_days: Some(age_days),
+        outcome: ArchiveOutcome::Archived,
+    }
 }
 
 fn archive_one(
@@ -625,6 +782,17 @@ fn archive_one(
     }
 
     let archive_bytes = fs::metadata(&archive).map(|metadata| metadata.len()).unwrap_or(0);
+    if let Err(error) = journal(
+        &options.journal_path,
+        "log_archive_compress",
+        path,
+        bytes_original,
+        "archive_verified_retirement_pending",
+        now_ms(),
+    ) {
+        let _ = fs::remove_file(&archive);
+        return fail(error, Some(archive_bytes));
+    }
     if let Err(error) = safety::trash_delete_if_identity(
         path,
         &original_object_id,
@@ -760,7 +928,11 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
                 candidates += 1;
                 bytes_original_total += bytes;
                 if options.execute {
-                    let result = archive_one(path, options, age, bytes, now_ms());
+                    let result = if archive_path_for(path).exists() {
+                        resume_verified_archive_retirement(path, options, age, bytes)
+                    } else {
+                        archive_one(path, options, age, bytes, now_ms())
+                    };
                     match &result.outcome {
                         ArchiveOutcome::Archived => {
                             archived += 1;
@@ -772,7 +944,8 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
                             }
                         }
                         ArchiveOutcome::Failed(_) => failed += 1,
-                        ArchiveOutcome::Skipped(_) | ArchiveOutcome::Planned => {}
+                        ArchiveOutcome::Skipped(_) => skipped += 1,
+                        ArchiveOutcome::Planned => {}
                     }
                     results.push(result);
                 } else {
