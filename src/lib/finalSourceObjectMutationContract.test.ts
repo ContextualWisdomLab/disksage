@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const safetySource = readFileSync('src-tauri/src/safety.rs', 'utf8');
+const linuxFinalMutationFixture = readFileSync(
+  'src-tauri/src/linux_final_mutation_fail_closed_tests.rs',
+  'utf8',
+);
+const tauriLibSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
 
 describe('final source-object mutation contract', () => {
   it('does not authorize the final staging move from the reviewed pathname alone', () => {
@@ -25,10 +30,14 @@ describe('final source-object mutation contract', () => {
     ).toContain('fn final_trash_source_substitution_does_not_mutate_replacement()');
   });
 
-  it('requires reversible substitution evidence to detect transient wrong-object mutation before compensation', () => {
+  it('requires the wired Linux filesystem fixture to fail closed before reversible mutation', () => {
     expect(
-      safetySource,
-      'an end-state-only restore assertion can pass after the replacement was moved and restored; the real filesystem fixture must observe the mutation subject before any compensating restore',
+      tauriLibSource,
+      'the Linux final-mutation acceptance module must be part of the Rust test graph',
+    ).toContain('mod linux_final_mutation_fail_closed_tests;');
+    expect(
+      linuxFinalMutationFixture,
+      'Linux acceptance must exercise the production Trash boundary and prove mutation never starts',
     ).toContain('fn final_trash_source_substitution_never_becomes_mutation_subject()');
   });
 
@@ -39,10 +48,14 @@ describe('final source-object mutation contract', () => {
     ).toContain('fn final_permanent_source_substitution_does_not_mutate_replacement()');
   });
 
-  it('requires permanent substitution evidence to detect transient wrong-object mutation before compensation', () => {
+  it('requires the wired Linux filesystem fixture to fail closed before permanent mutation', () => {
     expect(
-      safetySource,
-      'permanent-delete acceptance must fail if an unreviewed replacement ever becomes the mutation subject, even when later identity mismatch handling restores it',
+      tauriLibSource,
+      'the Linux final-mutation acceptance module must be part of the Rust test graph',
+    ).toContain('mod linux_final_mutation_fail_closed_tests;');
+    expect(
+      linuxFinalMutationFixture,
+      'Linux permanent-delete acceptance must call the production boundary and prove mutation never starts',
     ).toContain('fn final_permanent_source_substitution_never_becomes_mutation_subject()');
   });
 });
