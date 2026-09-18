@@ -9,10 +9,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
-fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
-}
-
 fn write_verify_only_zstd(script_path: &Path) {
     let script = "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -t)\n    exit 0\n    ;;\n  -dc)\n    cat \"$3\"\n    ;;\n  -q)\n    # A recovery retry must consume the already-published archive, not recompress or overwrite it.\n    exit 65\n    ;;\n  *)\n    exit 64\n    ;;\nesac\n";
     fs::write(script_path, script).expect("fake zstd should be writable");
@@ -92,7 +88,7 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
         "recovery must never overwrite the already-published archive"
     );
     assert!(report.results.iter().any(|result| {
-        result.path == source.to_string_lossy()
+        result.path == source.to_string_lossy().as_ref()
             && matches!(result.outcome, ArchiveOutcome::Archived)
     }));
     let journal_text = fs::read_to_string(&journal).expect("destructive retry must be journaled");
