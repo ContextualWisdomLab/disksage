@@ -3,6 +3,7 @@
 use disksage_lib::log_archive::{
     archive_logs, ArchiveOutcome, LogArchiveOptions, DEFAULT_EXCLUDE_SUFFIXES,
 };
+use serde_json::json;
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,21 @@ fn options_for(root: &Path, journal: &Path, zstd: &Path) -> LogArchiveOptions {
     }
 }
 
+fn append_verified_retirement_pending(journal: &Path, source: &Path, bytes: u64) {
+    let entry = json!({
+        "ts_ms": 1_u64,
+        "op": "log_archive_compress",
+        "path": source.to_string_lossy(),
+        "bytes": bytes,
+        "outcome": "archive_verified_retirement_pending"
+    });
+    fs::write(
+        journal,
+        format!("{}\n", serde_json::to_string(&entry).expect("journal entry must serialize")),
+    )
+    .expect("recovery ledger fixture should be writable");
+}
+
 #[test]
 fn verified_existing_archive_retries_identity_bound_source_retirement() {
     let tmp = tempdir().expect("temporary root should be available");
@@ -62,7 +78,8 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
     set_old_enough(&source);
 
     // Model the durable state left after archive publication/verification succeeded but the
-    // reversible Trash retirement did not complete. The source and verified archive both exist.
+    // reversible Trash retirement did not complete. The source and verified archive both exist,
+    // and the ledger records that this exact source path reached the verified-retirement boundary.
     let archive = archive_path_for(&source);
     fs::write(&archive, &source_bytes).expect("verified archive fixture should be writable");
     let archive_before = fs::read(&archive).expect("archive should be readable before retry");
@@ -70,13 +87,14 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
     let zstd = tmp.path().join("verify-only-zstd");
     write_verify_only_zstd(&zstd);
     let journal = tmp.path().join("journal.jsonl");
+    append_verified_retirement_pending(&journal, &source, source_bytes.len() as u64);
 
     let report = archive_logs(&options_for(&root, &journal, &zstd))
         .expect("recovery retry should return a report");
 
     assert_eq!(
         report.archived, 1,
-        "a verified matching archive must allow identity-bound Trash retirement to resume; report={report:?}"
+        "a ledger-correlated, verified matching archive must allow identity-bound Trash retirement to resume; report={report:?}"
     );
     assert!(
         !source.exists(),
@@ -92,8 +110,35 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
             && matches!(result.outcome, ArchiveOutcome::Archived)
     }));
     let journal_text = fs::read_to_string(&journal).expect("destructive retry must be journaled");
+    assert!(journal_text.contains("archive_verified_retirement_pending"));
     assert!(journal_text.contains("trash_delete"));
     assert!(journal_text.contains("\"outcome\":\"ok\""));
+}
+
+#[test]
+fn matching_archive_without_retirement_ledger_never_authorizes_source_retirement() {
+    let tmp = tempdir().expect("temporary root should be available");
+    let root = tmp.path().join("logs");
+    fs::create_dir_all(&root).expect("fixture root should be creatable");
+
+    let source = root.join("session.jsonl");
+    let source_bytes = b"same bytes but no DiskSage retirement provenance\n".repeat(256);
+    fs::write(&source, &source_bytes).expect("source fixture should be writable");
+    set_old_enough(&source);
+
+    let archive = archive_path_for(&source);
+    fs::write(&archive, &source_bytes).expect("matching foreign archive fixture should be writable");
+
+    let zstd = tmp.path().join("verify-only-zstd");
+    write_verify_only_zstd(&zstd);
+    let journal = tmp.path().join("journal.jsonl");
+
+    let report = archive_logs(&options_for(&root, &journal, &zstd))
+        .expect("unproven sibling should fail closed in the report");
+
+    assert_eq!(report.archived, 0, "content equality alone must not grant deletion authority");
+    assert_eq!(fs::read(&source).expect("source must remain"), source_bytes);
+    assert_eq!(fs::read(&archive).expect("archive must remain"), source_bytes);
 }
 
 #[test]
@@ -114,6 +159,7 @@ fn foreign_existing_archive_never_authorizes_source_retirement() {
     let zstd = tmp.path().join("verify-only-zstd");
     write_verify_only_zstd(&zstd);
     let journal = tmp.path().join("journal.jsonl");
+    append_verified_retirement_pending(&journal, &source, source_bytes.len() as u64);
 
     let report = archive_logs(&options_for(&root, &journal, &zstd))
         .expect("mismatched sibling should fail closed in the report");
