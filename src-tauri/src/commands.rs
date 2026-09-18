@@ -73,46 +73,6 @@ pub struct NodeView {
     pub entries: Vec<EntryView>,
 }
 
-/// 스캔 결과 + 실시간 read_dir로 한 레벨을 조회 (순수 함수 — 테스트 대상)
-pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
-    // '..'는 lexical starts_with를 우회해 루트 밖을 열람할 수 있음 — 컴포넌트 단위로 거부
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err("path outside scanned root".into());
-    }
-    if !path.starts_with(&res.root) {
-        return Err("path outside scanned root".into());
-    }
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-        let Ok(entry) = entry else { continue };
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_symlink() {
-            continue;
-        }
-        let p = entry.path();
-        let (size, is_dir) = if ft.is_dir() {
-            (res.dir_sizes.get(&p).copied().unwrap_or(0), true)
-        } else {
-            (entry.metadata().map(|m| m.len()).unwrap_or(0), false)
-        };
-        entries.push(EntryView {
-            name: entry.file_name().to_string_lossy().into_owned(),
-            path: p.to_string_lossy().into_owned(),
-            size,
-            is_dir,
-        });
-    }
-    entries.sort_by(|a, b| b.size.cmp(&a.size));
-    Ok(NodeView {
-        path: path.to_string_lossy().into_owned(),
-        size: res.dir_sizes.get(path).copied().unwrap_or(0),
-        entries,
-    })
-}
-
 #[derive(serde::Serialize)]
 pub struct CleanResult {
     pub path: String,
@@ -409,14 +369,6 @@ pub fn cancel_cloud_copy(
     }
     state.cloud_copy_cancel.store(true, Ordering::SeqCst);
     Ok(())
-}
-
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn get_node(path: String, state: State<AppState>) -> Result<NodeView, String> {
-    let guard = state.result.lock().unwrap();
-    let res = guard.as_ref().ok_or("no scan result")?;
-    node_view(res, &PathBuf::from(path))
 }
 
 #[cfg(not(coverage))]
@@ -3418,9 +3370,7 @@ pub fn reason_unknown_extensions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::scan_dir_with_interval;
     use std::fs;
-    use std::sync::atomic::AtomicBool;
 
     use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
@@ -3574,10 +3524,6 @@ mod tests {
         let _ = out;
     }
 
-    fn scan(root: &Path) -> ScanResult {
-        scan_dir_with_interval(root, &AtomicBool::new(false), 1, |_| {})
-    }
-
     #[test]
     fn load_ontology_from_valid_ttl_ok() {
         let ttl = r#"
@@ -3593,85 +3539,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn load_ontology_from_garbage_is_err() {
         assert!(load_ontology_from("@@@ not turtle").is_err());
-    }
-
-    #[test]
-    fn node_view_lists_entries_sorted_by_size_desc() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::create_dir(root.join("sub")).unwrap();
-        fs::write(root.join("sub").join("inner.bin"), vec![0u8; 500]).unwrap();
-        fs::write(root.join("small.txt"), vec![0u8; 10]).unwrap();
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert_eq!(view.size, 510);
-        assert_eq!(view.entries.len(), 2);
-        assert_eq!(view.entries[0].name, "sub");
-        assert!(view.entries[0].is_dir);
-        assert_eq!(view.entries[0].size, 500);
-        assert_eq!(view.entries[1].name, "small.txt");
-        assert!(!view.entries[1].is_dir);
-    }
-
-    #[test]
-    fn node_view_rejects_path_outside_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, &std::env::temp_dir().join("..")).is_err());
-    }
-
-    #[test]
-    fn node_view_rejects_parent_dir_components() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        let sneaky = tmp.path().join("..");
-        assert!(node_view(&res, &sneaky).is_err());
-    }
-
-    #[test]
-    fn node_view_rejects_sibling_path_outside_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let other = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, other.path()).is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn node_view_skips_junctions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::create_dir(root.join("real")).unwrap();
-        let junction = root.join("junc");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&junction)
-            .arg(root.join("real"))
-            .status()
-            .unwrap();
-        assert!(status.success(), "mklink /J failed");
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert!(view.entries.iter().all(|e| e.name != "junc"));
-    }
-
-    #[test]
-    fn node_view_errors_on_unreadable_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let res = scan(tmp.path());
-        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn node_view_skips_symlinks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("real.bin"), vec![0u8; 5]).unwrap();
-        std::os::unix::fs::symlink(root.join("real.bin"), root.join("link.bin")).unwrap();
-        let res = scan(root);
-        let view = node_view(&res, root).unwrap();
-        assert!(view.entries.iter().all(|e| e.name != "link.bin"));
     }
 
     #[test]
