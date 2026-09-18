@@ -11,6 +11,13 @@ describe('final source-object mutation contract', () => {
     ).not.toContain('std::fs::rename(path, &staged)');
   });
 
+  it('does not submit a private staging pathname as native Trash restore authority', () => {
+    expect(
+      safetySource,
+      'native Trash metadata must preserve the user-reviewed original location rather than a private DiskSage staging path',
+    ).not.toContain('platform_trash_delete(&staged)');
+  });
+
   it('proves pathname substitution cannot redirect the final reversible Trash mutation', () => {
     expect(
       safetySource,
