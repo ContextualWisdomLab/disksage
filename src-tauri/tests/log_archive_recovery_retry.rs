@@ -88,9 +88,9 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
     write_verify_only_zstd(&zstd);
     let journal = tmp.path().join("journal.jsonl");
     append_verified_retirement_pending(&journal, &source, source_bytes.len() as u64);
+    let options = options_for(&root, &journal, &zstd);
 
-    let report = archive_logs(&options_for(&root, &journal, &zstd))
-        .expect("recovery retry should return a report");
+    let report = archive_logs(&options).expect("recovery retry should return a report");
 
     assert_eq!(
         report.archived, 1,
@@ -113,6 +113,17 @@ fn verified_existing_archive_retries_identity_bound_source_retirement() {
     assert!(journal_text.contains("archive_verified_retirement_pending"));
     assert!(journal_text.contains("trash_delete"));
     assert!(journal_text.contains("\"outcome\":\"ok\""));
+
+    // A successful retry must consume its one-shot ledger authority. Reusing the same pathname
+    // for a new filesystem object, even with identical bytes, must not replay the old retirement.
+    fs::write(&source, &source_bytes).expect("replacement source fixture should be writable");
+    set_old_enough(&source);
+    let replay = archive_logs(&options).expect("stale-ledger replay should return a report");
+    assert_eq!(
+        replay.archived, 0,
+        "completed retirement evidence must not authorize a later filesystem object"
+    );
+    assert!(source.exists(), "new source object must survive stale ledger evidence");
 }
 
 #[test]
