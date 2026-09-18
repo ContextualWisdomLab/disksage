@@ -181,6 +181,15 @@ jobs:
           else
             printf 'SKIP provider_global_sync_success_pipe_contract: owner source absent; no runtime regression executed\n'
           fi
+      - name: macOS deletion/recovery regression when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if [[ -f "src-tauri/tests/macos_trash_staging_recovery.rs" ]]; then
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --test macos_trash_staging_recovery
+          else
+            printf 'SKIP macos_trash_staging_recovery: owner source absent; no runtime regression executed\n'
+          fi
 
   windows-home-resolution:
     runs-on: windows-latest
@@ -233,6 +242,15 @@ jobs:
             }
           } else {
             Write-Output 'SKIP staging_creation_windows_substitution_does_not_delete_replacement: owner contract absent; no runtime regression executed'
+          }
+      - name: Windows log-archive reparse regression when owner contract is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src/lib/logArchiveWindowsReparseContract.test.ts') {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked --lib log_archive::tests::windows_junction_is_not_traversed_for_archive_mutation -- --exact
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP log_archive::tests::windows_junction_is_not_traversed_for_archive_mutation: owner contract absent; no runtime regression executed'
           }
 
   llm-engine-build:
