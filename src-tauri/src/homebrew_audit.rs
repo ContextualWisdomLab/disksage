@@ -9,9 +9,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 #[cfg(unix)]
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 pub const HOMEBREW_AUDIT_SCHEMA_KIND: &str = "disksage.homebrew-audit/v1";
@@ -655,6 +654,7 @@ fn days_from_civil(year: i64, month: i32, day: i32) -> i32 {
     (era * 146_097 + doe as i64 - 719_468) as i32
 }
 
+#[cfg(unix)]
 fn volume_atime_unreliable(prefix: &Path) -> bool {
     let output = Command::new("mount").output().ok();
     let Some(output) = output else {
@@ -679,6 +679,11 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(not(unix))]
+fn volume_atime_unreliable(_prefix: &Path) -> bool {
+    true
 }
 
 fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
