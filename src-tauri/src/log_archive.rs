@@ -6,7 +6,8 @@
 //! recent-write gate). `--min-stable-secs` still refuses recently-touched files.
 //! Archives keep the original path and name with a `.zst` suffix. The original is removed
 //! only after `zstd -t` and a decompressed SHA-256 match succeed. Dry-run is the default;
-//! execution journals every file decision.
+//! execution journals each compression operation, while dry-run and skipped decisions remain
+//! in the returned report only.
 
 use crate::cloud_app_managed::app_managed_library_blocker;
 use crate::safety::{self, JournalEntry};
@@ -289,45 +290,46 @@ fn skip_reason_for(
     path: &Path,
     options: &LogArchiveOptions,
     now: SystemTime,
-) -> Result<Option<(SkipReason, u64, Option<u64>)>, String> {
+) -> Option<(SkipReason, u64, Option<u64>)> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(_) => return Ok(Some((SkipReason::MetadataUnavailable, 0, None))),
+        Err(_) => return Some((SkipReason::MetadataUnavailable, 0, None)),
     };
     if metadata.file_type().is_symlink() {
-        return Ok(Some((SkipReason::Symlink, 0, None)));
+        return Some((SkipReason::Symlink, 0, None));
     }
     if !metadata.is_file() {
-        return Ok(Some((SkipReason::NotRegularFile, 0, None)));
+        return Some((SkipReason::NotRegularFile, 0, None));
     }
     let bytes = metadata.len();
     if has_excluded_suffix(path, &options.exclude_suffixes) {
-        return Ok(Some((SkipReason::ExcludedSuffix, bytes, None)));
+        return Some((SkipReason::ExcludedSuffix, bytes, None));
     }
     if archive_path_for(path).exists() {
-        return Ok(Some((SkipReason::AlreadyArchivedSibling, bytes, None)));
+        return Some((SkipReason::AlreadyArchivedSibling, bytes, None));
     }
     if let Some(reason) = app_managed_library_blocker(path) {
-        return Ok(Some((SkipReason::AppManaged(reason), bytes, None)));
+        return Some((SkipReason::AppManaged(reason), bytes, None));
     }
     if safety::is_protected(path) {
-        return Ok(Some((SkipReason::ProtectedPath, bytes, None)));
+        return Some((SkipReason::ProtectedPath, bytes, None));
     }
-    let modified = metadata
-        .modified()
-        .map_err(|_| "mtime-unavailable".to_string())?;
+    let modified = match metadata.modified() {
+        Ok(modified) => modified,
+        Err(_) => return Some((SkipReason::MetadataUnavailable, bytes, None)),
+    };
     let age = age_days(modified, now);
     if !stable_long_enough(modified, now, options.min_stable_secs) {
-        return Ok(Some((SkipReason::TooRecent, bytes, age)));
+        return Some((SkipReason::TooRecent, bytes, age));
     }
     let Some(age_days) = age else {
-        return Ok(Some((SkipReason::MetadataUnavailable, bytes, None)));
+        return Some((SkipReason::MetadataUnavailable, bytes, None));
     };
     // older_than_days == 0: no age gate (lossless compression of all min-stable files).
     if options.older_than_days > 0 && age_days < options.older_than_days {
-        return Ok(Some((SkipReason::AgeBelowThreshold, bytes, Some(age_days))));
+        return Some((SkipReason::AgeBelowThreshold, bytes, Some(age_days)));
     }
-    Ok(None)
+    None
 }
 
 fn fingerprint(path: &Path) -> Result<(u64, SystemTime), String> {
@@ -621,6 +623,17 @@ pub fn validate_options(options: &LogArchiveOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn metadata_unavailable_result(path: &Path, bytes_original: u64) -> ArchiveFileResult {
+    ArchiveFileResult {
+        path: path.to_string_lossy().into_owned(),
+        bytes_original,
+        bytes_archive: None,
+        bytes_reclaimed: None,
+        age_days: None,
+        outcome: ArchiveOutcome::Skipped(SkipReason::MetadataUnavailable),
+    }
+}
+
 pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, String> {
     validate_options(options)?;
     if options.execute {
@@ -645,10 +658,10 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
         .filter_map(Result::ok)
     {
         let path = entry.path();
-        if path == options.root || entry.file_type().is_dir() {
+        if path == options.root || path == options.journal_path || entry.file_type().is_dir() {
             continue;
         }
-        match skip_reason_for(path, options, now)? {
+        match skip_reason_for(path, options, now) {
             Some((reason, bytes, age)) => {
                 skipped += 1;
                 results.push(ArchiveFileResult {
@@ -661,9 +674,23 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
                 });
             }
             None => {
-                let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+                let metadata = match fs::metadata(path) {
+                    Ok(metadata) => metadata,
+                    Err(_) => {
+                        skipped += 1;
+                        results.push(metadata_unavailable_result(path, 0));
+                        continue;
+                    }
+                };
                 let bytes = metadata.len();
-                let modified = metadata.modified().map_err(|error| error.to_string())?;
+                let modified = match metadata.modified() {
+                    Ok(modified) => modified,
+                    Err(_) => {
+                        skipped += 1;
+                        results.push(metadata_unavailable_result(path, bytes));
+                        continue;
+                    }
+                };
                 let age = age_days(modified, now).unwrap_or(0);
                 candidates += 1;
                 bytes_original_total += bytes;
@@ -782,6 +809,24 @@ mod tests {
         }));
         assert!(!archive_path_for(&old).exists());
         assert!(old.exists());
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn journal_inside_root_is_excluded_from_the_report() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let journal = root.join("journal.jsonl");
+        fs::write(&journal, b"existing journal\n").unwrap();
+        touch_aged(&journal, 40);
+
+        let report = archive_logs(&options_for(&root, &journal, true)).unwrap();
+
+        assert_eq!(report.candidates, 0);
+        assert_eq!(report.skipped, 0);
+        assert!(report.results.is_empty());
+        assert_eq!(fs::read(&journal).unwrap(), b"existing journal\n");
     }
 
     #[test]

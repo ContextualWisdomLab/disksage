@@ -213,9 +213,11 @@ mod tests {
             "--root".into(),
             "/tmp".into(),
             "--older-than-days".into(),
-            "0".into(),
+            "3651".into(),
         ])
         .unwrap_err();
-        assert!(error.contains("between 1 and 3650"));
+        assert!(error.contains("between 0 and 3650"));
+        let error = parse_args(&["--root".into(), "/tmp".into()]).unwrap_err();
+        assert!(error.contains("--older-than-days is required"));
     }
 }

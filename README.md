@@ -188,7 +188,8 @@ Orca reclaim 7-day recent-write gate (that gate applies to rebuildable worktree 
 Dry-run is the default. Required arguments are `--root` and `--older-than-days`
 (`0` disables the age filter; `--min-stable-secs` still refuses recently-touched files).
 Execution also refuses app-managed / protected paths and skips sqlite / already-compressed
-suffixes; every file decision is journaled.
+suffixes. During `--execute`, each compression operation is journaled; dry-run and skipped
+decisions appear only in `LogArchiveReport`.
 
 ```sh
 # Age-filtered dry-run
