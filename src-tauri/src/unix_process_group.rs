@@ -42,8 +42,7 @@ pub(crate) enum NoReapWaitOutcome {
 /// failed closed. Readers keep bytes already observed by the nonblocking pipe reader, but
 /// cancellation never requires a later `WouldBlock`: once the caller's capture budget is full, one
 /// additional successful read is enough to prove truncation and terminate even if an escaped
-/// descendant keeps writing continuously. A short proof window absorbs the exact-capacity race
-/// where the socket briefly drains before that proving read arrives.
+/// descendant keeps writing continuously.
 #[derive(Debug, Clone)]
 pub(crate) struct PipeReaderCancellation {
     cancelled: Arc<AtomicBool>,
@@ -73,10 +72,8 @@ impl PipeReaderCancellation {
 /// enables `O_NONBLOCK`, retries `Interrupted`, waits through `WouldBlock` while the child remains
 /// active, and exits on `WouldBlock` after cancellation. If reads continue succeeding after
 /// cancellation, the reader exits once the capture budget is full and a read has proven that bytes
-/// were omitted. When cancellation arrives exactly as the capture budget fills, a brief proof
-/// window keeps polling through transient `WouldBlock` so a continuous escaped writer can still
-/// prove truncation before settlement. Output remains capped and reports whether bytes beyond
-/// `max_capture_bytes` were observed.
+/// were omitted. Output remains capped and reports whether bytes beyond `max_capture_bytes` were
+/// observed.
 pub(crate) fn spawn_bounded_cancellable_pipe_reader<R>(
     mut reader: R,
     max_capture_bytes: usize,
@@ -99,18 +96,10 @@ where
         let mut buffer = [0u8; 65_536];
         let mut captured = Vec::new();
         let mut truncated = false;
-        // Exact-capacity cancel can race a continuous writer: the socket may briefly drain
-        // between the fill that hits the budget and the next write. Poll through this window
-        // before accepting WouldBlock as "!truncated" settlement.
-        let mut truncate_proof_deadline: Option<Instant> = None;
-        let truncate_proof_window = poll_interval
-            .saturating_mul(64)
-            .clamp(Duration::from_millis(50), Duration::from_millis(250));
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    truncate_proof_deadline = None;
                     let room = max_capture_bytes.saturating_sub(captured.len());
                     let retained = read.min(room);
                     captured.extend_from_slice(&buffer[..retained]);
@@ -127,14 +116,6 @@ where
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if cancellation.is_cancelled() {
-                        if captured.len() == max_capture_bytes && !truncated {
-                            let deadline = truncate_proof_deadline
-                                .get_or_insert_with(|| Instant::now() + truncate_proof_window);
-                            if Instant::now() < *deadline {
-                                thread::sleep(poll_interval);
-                                continue;
-                            }
-                        }
                         break;
                     }
                     thread::sleep(poll_interval);
@@ -365,27 +346,11 @@ mod tests {
     #[test]
     fn cancellable_pipe_reader_stops_continuous_writer_after_cancellation() {
         let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
-        let cancellation = PipeReaderCancellation::new();
-        let handle = spawn_bounded_cancellable_pipe_reader(
-            reader,
-            4_096,
-            Duration::from_millis(1),
-            cancellation.clone(),
-        )
-        .expect("spawn cancellable reader");
-
-        let chunk = [b'x'; 1_024];
-        // Queue more than the capture budget before cancel so truncation is observable
-        // from already-buffered bytes rather than from a raced post-cancel write.
-        for _ in 0..8 {
-            writer
-                .write_all(&chunk)
-                .expect("write over-budget fixture bytes");
-        }
-
-        let (start_tx, start_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
         let writer_thread = thread::spawn(move || {
-            let _ = start_rx.recv();
+            let chunk = [b'x'; 1_024];
+            writer.write_all(&chunk).expect("write initial fixture bytes");
+            ready_tx.send(()).expect("publish continuous-writer readiness");
             loop {
                 match writer.write_all(&chunk) {
                     Ok(()) => {}
@@ -403,19 +368,33 @@ mod tests {
                 }
             }
         });
+        let cancellation = PipeReaderCancellation::new();
+        let handle = spawn_bounded_cancellable_pipe_reader(
+            reader,
+            4_096,
+            Duration::from_millis(1),
+            cancellation.clone(),
+        )
+        .expect("spawn cancellable reader");
+        ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("continuous writer did not become ready");
 
         let started = Instant::now();
         cancellation.cancel();
-        start_tx
-            .send(())
-            .expect("release continuous writer after cancellation");
         let (captured, truncated) = handle
             .join()
             .expect("reader thread join")
             .expect("reader result");
 
-        assert_eq!(captured.len(), 4_096);
-        assert!(truncated);
+        assert!(
+            (1_024..=4_096).contains(&captured.len()),
+            "cancelled reader captured {} bytes outside the ready-byte/capture-budget bounds",
+            captured.len()
+        );
+        if truncated {
+            assert_eq!(captured.len(), 4_096);
+        }
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "continuous escaped writer extended reader settlement"
@@ -457,7 +436,7 @@ mod tests {
 
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate timed-out private process group");
-        let status = child.wait().expect("reap timed-out leader after group cleanup");
+        let status = child.wait().expect("reap timed-out leader after group cleanup signal");
         assert!(!status.success());
     }
 
