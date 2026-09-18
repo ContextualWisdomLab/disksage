@@ -22,7 +22,10 @@ When Orca protections are enabled, DiskSage requires an explicit
 `--recent-write-window-secs` (commonly **604800** = 7 days). That gate blocks
 **destructive** worktree / rebuildable-artifact reclaim. It does **not** apply to:
 
-1. **Lossless Codex session zstd** (`disksage-log-archive`, `--older-than-days 0`) — verify-then-remove compression; reversible; not a deletion policy.
+1. **Lossless Codex session zstd** (`disksage-log-archive`, `--older-than-days 0`) —
+   verify-then-trash compression via identity-bound OS Trash; reversible from Trash /
+   archive, and **outside** the Orca 7d recent-write gate. Logical source−archive deltas
+   are **not** physical reclaim while Trash retains the object.
 2. **CloudKit / generated caches** under documented cache reclaim paths — rebuildable OS/app caches, not Orca worktree deletes.
 
 ## Related Studio outcomes (operator notes)

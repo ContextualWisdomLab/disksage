@@ -182,9 +182,12 @@ cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
 ## Log archive CLI
 
 Lossless in-place zstd compression for text logs / transcripts (e.g. Codex session
-history). This is **not** a deletion: originals are removed only after `zstd -t` and a
-decompressed SHA-256 match, and archives are reversible. It is therefore **outside** the
-Orca reclaim 7-day recent-write gate (that gate applies to rebuildable worktree deletes).
+Lossless Codex session archives (`disksage-log-archive`, `--older-than-days 0`) verify a
+`.zst` then retire the reviewed source through DiskSage's identity-bound OS Trash path.
+That remains a destructive user-file action (recoverable via Trash), not a permanent-delete
+exception, and is **outside** the Orca reclaim 7-day recent-write gate (that gate applies to
+rebuildable worktree deletes). Physical free space is not credited from logical
+source−archive sizes while Trash retains the object.
 Dry-run is the default. Required arguments are `--root` and `--older-than-days`
 (`0` disables the age filter; `--min-stable-secs` still refuses recently-touched files).
 Execution also refuses app-managed / protected paths and skips sqlite / already-compressed

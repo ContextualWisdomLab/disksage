@@ -1,13 +1,15 @@
-//! Log/transcript compression with verify-then-remove (lossless zstd).
+//! Log/transcript compression with verify-then-trash (lossless zstd).
 //!
 //! Compresses regular files under a required root. `--older-than-days N` (N≥1) keeps an
 //! optional age filter; `--older-than-days 0` disables the age gate (Codex session history
-//! and similar lossless archives — not a deletion, so not subject to the Orca 7d reclaim
-//! recent-write gate). `--min-stable-secs` still refuses recently-touched files.
-//! Archives keep the original path and name with a `.zst` suffix. The original is removed
-//! only after `zstd -t` and a decompressed SHA-256 match succeed. Dry-run is the default;
-//! execution journals each compression operation, while dry-run and skipped decisions remain
-//! in the returned report only.
+//! and similar lossless archives). This path still retires sources through DiskSage's
+//! identity-bound OS Trash contract — it is not a permanent-delete exception and is not a
+//! substitute for measured physical reclaim. `--min-stable-secs` still refuses
+//! recently-touched files. Archives keep the original path and name with a `.zst` suffix.
+//! The reviewed source is trashed only after `zstd -t`, a decompressed SHA-256 match, and a
+//! filesystem-object identity revalidation succeed. Dry-run is the default; execution
+//! journals each compression operation, while dry-run and skipped decisions remain in the
+//! returned report only.
 
 use crate::cloud_app_managed::app_managed_library_blocker;
 use crate::safety::{self, JournalEntry};
@@ -118,24 +120,16 @@ pub fn resolve_zstd_bin() -> Result<PathBuf, String> {
 }
 
 fn which_zstd_on_path() -> Result<PathBuf, String> {
-    let output = Command::new("sh")
-        .args(["-c", "command -v zstd"])
-        .output()
-        .map_err(|_| "zstd-not-found".to_string())?;
-    if !output.status.success() {
-        return Err("zstd-not-found".into());
+    let path_var = std::env::var_os("PATH").ok_or_else(|| "zstd-not-found".to_string())?;
+    for dir in std::env::split_paths(&path_var) {
+        for name in ["zstd", "zstd.exe"] {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
     }
-    let path = String::from_utf8_lossy(&output.stdout);
-    let path = path.trim();
-    if path.is_empty() {
-        return Err("zstd-not-found".into());
-    }
-    let path = PathBuf::from(path);
-    if path.is_file() {
-        Ok(path)
-    } else {
-        Err("zstd-not-found".into())
-    }
+    Err("zstd-not-found".into())
 }
 
 fn now_ms() -> u64 {
@@ -178,7 +172,11 @@ fn archive_path_for(path: &Path) -> PathBuf {
 
 fn partial_archive_path_for(path: &Path) -> PathBuf {
     let mut partial = archive_path_for(path).into_os_string();
-    partial.push(".partial");
+    partial.push(format!(
+        ".partial.{}.{}",
+        std::process::id(),
+        now_ms()
+    ));
     PathBuf::from(partial)
 }
 
@@ -247,11 +245,12 @@ fn decompressed_sha256(zstd_bin: &Path, archive: &Path) -> Result<String, String
 }
 
 fn compress_to_partial(zstd_bin: &Path, source: &Path, partial: &Path) -> Result<(), String> {
+    // Refuse to reuse a path: temps are invocation-unique and must be create-new semantics.
     if partial.exists() {
-        fs::remove_file(partial).map_err(|error| format!("partial-cleanup-failed:{error}"))?;
+        return Err("partial-already-exists".into());
     }
     let status = Command::new(zstd_bin)
-        .args(["-q", "-f", "-o"])
+        .args(["-q", "-o"])
         .arg(partial)
         .arg(source)
         .status()
@@ -261,6 +260,27 @@ fn compress_to_partial(zstd_bin: &Path, source: &Path, partial: &Path) -> Result
     } else {
         let _ = fs::remove_file(partial);
         Err("zstd-compress-failed".into())
+    }
+}
+
+/// Publish `.zst` without clobbering a concurrent/existing archive (`rename` would replace).
+fn publish_archive_no_clobber(partial: &Path, archive: &Path) -> Result<(), String> {
+    match fs::hard_link(partial, archive) {
+        Ok(()) => {
+            if let Err(error) = fs::remove_file(partial) {
+                let _ = fs::remove_file(archive);
+                return Err(format!("partial-unlink-failed:{error}"));
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(partial);
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Err("archive-already-exists".into())
+            } else {
+                Err(format!("archive-publish-failed:{error}"))
+            }
+        }
     }
 }
 
@@ -332,12 +352,31 @@ fn skip_reason_for(
     None
 }
 
-fn fingerprint(path: &Path) -> Result<(u64, SystemTime), String> {
-    let metadata = fs::metadata(path).map_err(|error| format!("fingerprint-failed:{error}"))?;
-    let modified = metadata
-        .modified()
-        .map_err(|error| format!("fingerprint-mtime-failed:{error}"))?;
-    Ok((metadata.len(), modified))
+fn capture_object_id(path: &Path) -> Result<String, String> {
+    safety::filesystem_object_id(path)
+        .map_err(|error| format!("object-identity-unavailable:{error}"))
+}
+
+fn mutation_blocked(path: &Path) -> Option<String> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Some("parent-dir-segment".into());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Some("symlink-at-mutation".into());
+        }
+    }
+    if let Some(reason) = app_managed_library_blocker(path) {
+        return Some(format!("app-managed:{reason}"));
+    }
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if safety::is_protected(&canonical) || safety::is_protected(path) {
+        return Some("protected-path".into());
+    }
+    None
 }
 
 fn archive_one(
@@ -351,6 +390,15 @@ fn archive_one(
     let archive = archive_path_for(path);
     let partial = partial_archive_path_for(path);
 
+    let fail = |message: String, bytes_archive: Option<u64>| ArchiveFileResult {
+        path: path_string.clone(),
+        bytes_original,
+        bytes_archive,
+        bytes_reclaimed: None,
+        age_days: Some(age_days),
+        outcome: ArchiveOutcome::Failed(message),
+    };
+
     if let Err(error) = journal(
         &options.journal_path,
         "log_archive_compress",
@@ -359,17 +407,36 @@ fn archive_one(
         "pending",
         now_ms_value,
     ) {
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(error),
-        };
+        return fail(error, None);
     }
 
-    let original_fp = match fingerprint(path) {
+    if let Some(reason) = mutation_blocked(path) {
+        let message = format!("mutation-authority-rejected:{reason}");
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_compress",
+            path,
+            bytes_original,
+            &format!("failed:{message}"),
+            now_ms(),
+        );
+        return fail(message, None);
+    }
+
+    if archive.exists() {
+        let message = "archive-already-exists".to_string();
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_compress",
+            path,
+            bytes_original,
+            &format!("failed:{message}"),
+            now_ms(),
+        );
+        return fail(message, None);
+    }
+
+    let original_object_id = match capture_object_id(path) {
         Ok(value) => value,
         Err(error) => {
             let _ = journal(
@@ -380,14 +447,7 @@ fn archive_one(
                 &format!("failed:{error}"),
                 now_ms(),
             );
-            return ArchiveFileResult {
-                path: path_string,
-                bytes_original,
-                bytes_archive: None,
-                bytes_reclaimed: None,
-                age_days: Some(age_days),
-                outcome: ArchiveOutcome::Failed(error),
-            };
+            return fail(error, None);
         }
     };
 
@@ -402,14 +462,7 @@ fn archive_one(
                 &format!("failed:{error}"),
                 now_ms(),
             );
-            return ArchiveFileResult {
-                path: path_string,
-                bytes_original,
-                bytes_archive: None,
-                bytes_reclaimed: None,
-                age_days: Some(age_days),
-                outcome: ArchiveOutcome::Failed(error),
-            };
+            return fail(error, None);
         }
     };
 
@@ -422,35 +475,19 @@ fn archive_one(
             &format!("failed:{error}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(error),
-        };
+        return fail(error, None);
     }
 
-    if let Err(error) = fs::rename(&partial, &archive) {
-        let _ = fs::remove_file(&partial);
-        let message = format!("archive-rename-failed:{error}");
+    if let Err(error) = publish_archive_no_clobber(&partial, &archive) {
         let _ = journal(
             &options.journal_path,
             "log_archive_compress",
             path,
             bytes_original,
-            &format!("failed:{message}"),
+            &format!("failed:{error}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(message),
-        };
+        return fail(error, None);
     }
 
     if let Err(error) = run_zstd_test(&options.zstd_bin, &archive) {
@@ -463,14 +500,7 @@ fn archive_one(
             &format!("failed:{error}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(error),
-        };
+        return fail(error, None);
     }
 
     let decompressed = match decompressed_sha256(&options.zstd_bin, &archive) {
@@ -485,14 +515,7 @@ fn archive_one(
                 &format!("failed:{error}"),
                 now_ms(),
             );
-            return ArchiveFileResult {
-                path: path_string,
-                bytes_original,
-                bytes_archive: None,
-                bytes_reclaimed: None,
-                age_days: Some(age_days),
-                outcome: ArchiveOutcome::Failed(error),
-            };
+            return fail(error, None);
         }
     };
 
@@ -507,17 +530,25 @@ fn archive_one(
             &format!("failed:{message}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(message),
-        };
+        return fail(message, None);
     }
 
-    let current_fp = match fingerprint(path) {
+    // Fail closed if the reviewed object was replaced, mutated in place, or lost authority.
+    if let Some(reason) = mutation_blocked(path) {
+        let _ = fs::remove_file(&archive);
+        let message = format!("mutation-authority-rejected:{reason}");
+        let _ = journal(
+            &options.journal_path,
+            "log_archive_compress",
+            path,
+            bytes_original,
+            &format!("failed:{message}"),
+            now_ms(),
+        );
+        return fail(message, None);
+    }
+
+    let current_object_id = match capture_object_id(path) {
         Ok(value) => value,
         Err(error) => {
             let _ = fs::remove_file(&archive);
@@ -529,19 +560,12 @@ fn archive_one(
                 &format!("failed:{error}"),
                 now_ms(),
             );
-            return ArchiveFileResult {
-                path: path_string,
-                bytes_original,
-                bytes_archive: None,
-                bytes_reclaimed: None,
-                age_days: Some(age_days),
-                outcome: ArchiveOutcome::Failed(error),
-            };
+            return fail(error, None);
         }
     };
-    if current_fp != original_fp {
+    if current_object_id != original_object_id {
         let _ = fs::remove_file(&archive);
-        let message = "live-write-detected-before-remove".to_string();
+        let message = "object-identity-changed-before-retire".to_string();
         let _ = journal(
             &options.journal_path,
             "log_archive_compress",
@@ -550,19 +574,48 @@ fn archive_one(
             &format!("failed:{message}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: None,
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(message),
-        };
+        return fail(message, None);
+    }
+
+    // Same inode can still be rewritten in place; refuse to trash drifted content.
+    match sha256_file(path) {
+        Ok(live_digest) if live_digest == original_digest => {}
+        Ok(_) => {
+            let _ = fs::remove_file(&archive);
+            let message = "live-content-changed-before-retire".to_string();
+            let _ = journal(
+                &options.journal_path,
+                "log_archive_compress",
+                path,
+                bytes_original,
+                &format!("failed:{message}"),
+                now_ms(),
+            );
+            return fail(message, None);
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&archive);
+            let _ = journal(
+                &options.journal_path,
+                "log_archive_compress",
+                path,
+                bytes_original,
+                &format!("failed:{error}"),
+                now_ms(),
+            );
+            return fail(error, None);
+        }
     }
 
     let archive_bytes = fs::metadata(&archive).map(|metadata| metadata.len()).unwrap_or(0);
-    if let Err(error) = fs::remove_file(path) {
-        let message = format!("original-remove-failed:{error}");
+    if let Err(error) = safety::trash_delete_if_identity(
+        path,
+        &original_object_id,
+        bytes_original,
+        &options.journal_path,
+        now_ms(),
+    ) {
+        let message = format!("original-trash-failed:{error}");
         let _ = journal(
             &options.journal_path,
             "log_archive_compress",
@@ -571,22 +624,16 @@ fn archive_one(
             &format!("failed:{message}"),
             now_ms(),
         );
-        return ArchiveFileResult {
-            path: path_string,
-            bytes_original,
-            bytes_archive: Some(archive_bytes),
-            bytes_reclaimed: None,
-            age_days: Some(age_days),
-            outcome: ArchiveOutcome::Failed(message),
-        };
+        return fail(message, Some(archive_bytes));
     }
 
-    let reclaimed = bytes_original.saturating_sub(archive_bytes);
+    // Physical free bytes are unknown while Trash retains the object; do not credit
+    // logical source−archive as reclaimed space.
     let _ = journal(
         &options.journal_path,
         "log_archive_compress",
         path,
-        reclaimed,
+        bytes_original,
         "ok",
         now_ms(),
     );
@@ -595,7 +642,7 @@ fn archive_one(
         path: path_string,
         bytes_original,
         bytes_archive: Some(archive_bytes),
-        bytes_reclaimed: Some(reclaimed),
+        bytes_reclaimed: None,
         age_days: Some(age_days),
         outcome: ArchiveOutcome::Archived,
     }
@@ -830,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_verifies_then_removes_original() {
+    fn execute_verifies_then_trashes_original_without_crediting_reclaim() {
         let tmp = tempdir().unwrap();
         let root = tmp.path().join("logs");
         fs::create_dir_all(&root).unwrap();
@@ -850,8 +897,60 @@ mod tests {
         assert!(archive.is_file());
         let journal_text = fs::read_to_string(&journal).unwrap();
         assert!(journal_text.contains("log_archive_compress"));
+        assert!(journal_text.contains("trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
-        assert!(report.bytes_reclaimed_total > 0);
+        assert_eq!(
+            report.bytes_reclaimed_total, 0,
+            "Trash retention means physical reclaim is not credited from logical sizes"
+        );
+        assert!(report.results.iter().all(|result| result.bytes_reclaimed.is_none()));
+    }
+
+    #[test]
+    fn existing_archive_is_never_clobbered() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("session.jsonl");
+        fs::write(&old, b"{\"session\":1}\n".repeat(200)).unwrap();
+        touch_aged(&old, 40);
+        let archive = archive_path_for(&old);
+        fs::write(&archive, b"preexisting-archive").unwrap();
+
+        let journal = tmp.path().join("journal.jsonl");
+        let report = archive_logs(&options_for(&root, &journal, true)).unwrap();
+        assert_eq!(report.archived, 0);
+        assert!(old.exists());
+        assert_eq!(fs::read(&archive).unwrap(), b"preexisting-archive");
+        assert!(report.results.iter().any(|result| {
+            matches!(
+                result.outcome,
+                ArchiveOutcome::Skipped(SkipReason::AlreadyArchivedSibling)
+            )
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_sibling_outside_root_survives_source_retirement() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("logs");
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("shared.jsonl");
+        let sibling = tmp.path().join("shared-link.jsonl");
+        fs::write(&old, b"{\"session\":1}\n".repeat(200)).unwrap();
+        fs::hard_link(&old, &sibling).unwrap();
+        touch_aged(&old, 40);
+
+        let journal = tmp.path().join("journal.jsonl");
+        let report = archive_logs(&options_for(&root, &journal, true)).unwrap();
+        assert_eq!(report.archived, 1);
+        assert!(!old.exists());
+        assert!(sibling.exists(), "hardlink sibling must retain shared inode content");
+        assert_eq!(
+            fs::read(&sibling).unwrap(),
+            b"{\"session\":1}\n".repeat(200)
+        );
     }
 
     #[test]
