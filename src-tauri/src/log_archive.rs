@@ -15,8 +15,9 @@ use crate::cloud_app_managed::app_managed_library_blocker;
 use crate::safety::{self, JournalEntry};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -358,20 +359,46 @@ fn parse_retirement_pending(outcome: &str) -> Option<RetirementRetryEvidence> {
     })
 }
 
-/// Return recovery evidence only when the newest archive/retry ledger transition for this path is
-/// an unconsumed, identity-bound verified-retirement lease. A later `ok` consumes the lease.
-fn retirement_retry_evidence(journal_path: &Path, path: &Path) -> Option<RetirementRetryEvidence> {
-    let path_string = path.to_string_lossy();
-    safety::journal_recent(journal_path, usize::MAX)
-        .into_iter()
-        .find(|entry| {
-            entry.path == path_string.as_ref()
-                && matches!(
-                    entry.op.as_str(),
-                    "log_archive_compress" | "log_archive_retirement_retry"
-                )
-        })
-        .and_then(|entry| parse_retirement_pending(&entry.outcome))
+/// Stream the ledger once and retain unconsumed recovery evidence only for paths that currently
+/// have archive siblings. Any malformed record makes the operation fail closed. A canonical Trash
+/// success or a later non-pending log-archive transition consumes an older lease for that path.
+fn retirement_retry_evidence(
+    journal_path: &Path,
+    archive_sibling_paths: &HashSet<String>,
+) -> HashMap<String, RetirementRetryEvidence> {
+    if archive_sibling_paths.is_empty() {
+        return HashMap::new();
+    }
+    let Ok(journal) = File::open(journal_path) else {
+        return HashMap::new();
+    };
+    let mut evidence = HashMap::new();
+    for line in BufReader::new(journal).lines() {
+        let Ok(line) = line else {
+            return HashMap::new();
+        };
+        let Ok(entry) = serde_json::from_str::<JournalEntry>(&line) else {
+            return HashMap::new();
+        };
+        if !archive_sibling_paths.contains(&entry.path) {
+            continue;
+        }
+        if matches!(
+            entry.op.as_str(),
+            "log_archive_compress" | "log_archive_retirement_retry"
+        ) {
+            if let Some(pending) = parse_retirement_pending(&entry.outcome) {
+                evidence.insert(entry.path, pending);
+            } else {
+                evidence.remove(&entry.path);
+            }
+        } else if entry.op.starts_with("log_archive_")
+            || (entry.op == "trash_delete" && entry.outcome == "ok")
+        {
+            evidence.remove(&entry.path);
+        }
+    }
+    evidence
 }
 
 /// Returns `None` when the file is eligible; `Some(skip)` when it should be skipped.
@@ -379,6 +406,7 @@ fn skip_reason_for(
     path: &Path,
     options: &LogArchiveOptions,
     now: SystemTime,
+    retry_evidence: Option<&RetirementRetryEvidence>,
 ) -> Option<(SkipReason, u64, Option<u64>)> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -394,9 +422,7 @@ fn skip_reason_for(
     if has_excluded_suffix(path, &options.exclude_suffixes) {
         return Some((SkipReason::ExcludedSuffix, bytes, None));
     }
-    if archive_path_for(path).exists()
-        && (!options.execute || retirement_retry_evidence(&options.journal_path, path).is_none())
-    {
+    if archive_path_for(path).exists() && (!options.execute || retry_evidence.is_none()) {
         return Some((SkipReason::AlreadyArchivedSibling, bytes, None));
     }
     if let Some(reason) = app_managed_library_blocker(path) {
@@ -462,6 +488,7 @@ fn resume_verified_archive_retirement(
     options: &LogArchiveOptions,
     age_days: u64,
     bytes_original: u64,
+    evidence: Option<&RetirementRetryEvidence>,
 ) -> ArchiveFileResult {
     let path_string = path.to_string_lossy().into_owned();
     let archive = archive_path_for(path);
@@ -474,7 +501,7 @@ fn resume_verified_archive_retirement(
         outcome: ArchiveOutcome::Failed(message),
     };
 
-    let Some(evidence) = retirement_retry_evidence(&options.journal_path, path) else {
+    let Some(evidence) = evidence else {
         return ArchiveFileResult {
             path: path_string,
             bytes_original,
@@ -960,17 +987,31 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
     let mut bytes_archive_total = 0_u64;
     let mut bytes_reclaimed_total = 0_u64;
 
-    for entry in WalkDir::new(&options.root)
+    let paths: Vec<PathBuf> = WalkDir::new(&options.root)
         .follow_links(false)
         .into_iter()
         .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if path == options.root || path == options.journal_path || entry.file_type().is_dir() {
-            continue;
-        }
-        match skip_reason_for(path, options, now) {
+        .filter(|entry| {
+            let path = entry.path();
+            path != options.root && path != options.journal_path && !entry.file_type().is_dir()
+        })
+        .map(walkdir::DirEntry::into_path)
+        .collect();
+    let archive_sibling_paths: HashSet<String> = paths
+        .iter()
+        .filter(|path| archive_path_for(path).exists())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let retry_evidence = if options.execute {
+        retirement_retry_evidence(&options.journal_path, &archive_sibling_paths)
+    } else {
+        HashMap::new()
+    };
+
+    for path in &paths {
+        let path_retry_evidence = retry_evidence.get(path.to_string_lossy().as_ref());
+        match skip_reason_for(path, options, now, path_retry_evidence) {
             Some((reason, bytes, age)) => {
                 skipped += 1;
                 results.push(ArchiveFileResult {
@@ -1005,7 +1046,13 @@ pub fn archive_logs(options: &LogArchiveOptions) -> Result<LogArchiveReport, Str
                 bytes_original_total += bytes;
                 if options.execute {
                     let result = if archive_path_for(path).exists() {
-                        resume_verified_archive_retirement(path, options, age, bytes)
+                        resume_verified_archive_retirement(
+                            path,
+                            options,
+                            age,
+                            bytes,
+                            path_retry_evidence,
+                        )
                     } else {
                         archive_one(path, options, age, bytes, now_ms())
                     };

@@ -62,7 +62,11 @@ fn sha256_file(path: &Path) -> String {
         }
         hasher.update(&buffer[..read]);
     }
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn unix_object_id(path: &Path) -> String {
