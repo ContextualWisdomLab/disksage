@@ -179,6 +179,30 @@ cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
   --record-root /absolute/private/disksage-app-data
 ```
 
+## Log archive CLI
+
+Lossless in-place zstd compression for text logs / transcripts (e.g. Codex session
+history). This is **not** a deletion: originals are removed only after `zstd -t` and a
+decompressed SHA-256 match, and archives are reversible. It is therefore **outside** the
+Orca reclaim 7-day recent-write gate (that gate applies to rebuildable worktree deletes).
+Dry-run is the default. Required arguments are `--root` and `--older-than-days`
+(`0` disables the age filter; `--min-stable-secs` still refuses recently-touched files).
+Execution also refuses app-managed / protected paths and skips sqlite / already-compressed
+suffixes; every file decision is journaled.
+
+```sh
+# Age-filtered dry-run
+cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-log-archive -- \
+  --root /absolute/path/to/logs \
+  --older-than-days 30
+
+# Full lossless pass (no age gate) — preferred for ~/.codex/sessions
+cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-log-archive -- \
+  --root /absolute/path/to/logs \
+  --older-than-days 0 \
+  --execute
+```
+
 ## Local volume evidence CLI
 
 DiskSage can capture a read-only, path-redacted filesystem-capacity snapshot:
