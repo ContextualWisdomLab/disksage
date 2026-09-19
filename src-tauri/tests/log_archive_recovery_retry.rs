@@ -173,8 +173,18 @@ fn pending_ledger_rejects_identical_replacement_object() {
     let (reviewed_object_id, _) =
         append_verified_retirement_pending(&journal, &source, source_bytes.len() as u64);
 
+    // Allocate the replacement inode while the reviewed object still exists.
+    // On GitHub ubuntu runners, unlink+create at the same path can reuse the
+    // inode (same content, same object_id), which collapses this negative case.
+    let replacement = root.join("session.replacement.jsonl");
+    fs::write(&replacement, &source_bytes).expect("identical replacement should be writable");
+    assert_ne!(
+        unix_object_id(&replacement),
+        reviewed_object_id,
+        "sibling creation must allocate a distinct inode before swap"
+    );
     fs::remove_file(&source).expect("test should replace the originally reviewed source object");
-    fs::write(&source, &source_bytes).expect("identical replacement should be writable");
+    fs::rename(&replacement, &source).expect("replacement should take the reviewed pathname");
     set_old_enough(&source);
     assert_ne!(
         unix_object_id(&source),
