@@ -287,3 +287,29 @@ fn selected_cloudstorage_descendant_fails_closed_before_artifact_inventory() {
     );
     assert_eq!(report["executed"], false);
 }
+
+#[test]
+fn commands_use_crate_root_home_resolution_authority() {
+    let commands = include_str!("../src/commands.rs");
+    assert!(
+        commands.contains("#[cfg(not(coverage))]\nuse crate::home_resolution;"),
+        "commands.rs must consume the crate-root home_resolution owner"
+    );
+    assert!(
+        !commands.contains("#[path = \"home_resolution.rs\"]\nmod home_resolution;"),
+        "commands.rs must not compile a second private home_resolution module"
+    );
+}
+
+#[test]
+fn legacy_clean_dev_artifacts_tauri_command_is_retired() {
+    let commands = include_str!("../src/commands.rs");
+    assert!(
+        commands.contains("pub fn clean_dev_artifacts_inner("),
+        "the pure cleanup helper remains available to bound approval and focused tests"
+    );
+    assert!(
+        !commands.contains("pub fn clean_dev_artifacts(\n"),
+        "the retired direct Tauri mutation wrapper must not remain in production source"
+    );
+}
