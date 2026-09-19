@@ -270,7 +270,7 @@ fn recent_write_reason_with_limits(
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
-            if entry.depth() == 0 || entry.file_type().is_symlink() {
+            if entry.depth() == 0 {
                 return true;
             }
             if Instant::now() >= deadline {
