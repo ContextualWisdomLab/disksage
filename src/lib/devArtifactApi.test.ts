@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 import {
   cleanDevArtifactsBound,
   isDevArtifactApprovalCurrent,
+  listDevArtifacts,
   reviewDevArtifacts,
   type DevArtifactApproval,
 } from "./devArtifactApi";
@@ -27,6 +28,17 @@ describe("development artifact bound approval API", () => {
     expect(isDevArtifactApprovalCurrent(approval, 300_999)).toBe(true);
     expect(isDevArtifactApprovalCurrent(approval, 301_000)).toBe(false);
     expect(isDevArtifactApprovalCurrent(null, 300_999)).toBe(false);
+  });
+
+  it("loads development artifacts without making age an admission authority", async () => {
+    mocks.invoke.mockResolvedValueOnce([]);
+
+    await listDevArtifacts("/workspace");
+
+    expect(mocks.invoke).toHaveBeenCalledWith("list_dev_artifacts", {
+      root: "/workspace",
+      minAgeDays: 0,
+    });
   });
 
   it("forwards review and bound cleanup to the registered Tauri commands", async () => {
