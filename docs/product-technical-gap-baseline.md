@@ -1,5 +1,22 @@
 # DiskSage product and technical gap baseline
 
+## 2026-09-20 Linux final-mutation exact-head RCA
+
+- PR #451 head `14632a61f1882b012872440c7ce635f3b0d60d79` failed Test run
+  `35372229809`, Ubuntu job `105688658533`: 906 Rust tests passed and the two
+  deliberate real-filesystem acceptance tests failed because both identity-authorized operations
+  still created private staging and mutated by pathname on Linux.
+- Linux now rejects reversible Trash and permanent generated-directory mutation only after path,
+  protection, type, and expected object-identity validation, but before staging creation,
+  destructive-journal publication, rename, Trash, or recursive removal. Existing mutation and
+  recovery fixtures are retained for the platforms that still implement those paths; the two real
+  Linux fixtures remain production-bound acceptance rather than name-only source assertions.
+- This is fail-closed, not a claim that Linux deletion is supported. A future enablement requires a
+  deterministic same-exact-object final mutation primitive and native restore metadata for the
+  user-reviewed original location. Exact-head hosted checks after `49d4f846514c76d335626d1d69385e131eb0114d`
+  remain authoritative.
+
+
 ## 2026-09-08 pnpm cache evidence-bound reclaim
 
 - The fixed `pnpm-cache` catalog was re-audited to two direct children. Only `v11` (object
