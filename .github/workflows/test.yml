@@ -116,9 +116,11 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
-      - name: Windows development artifact allocation regressions
+      - name: Windows development artifact regressions
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
+          cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract
 
   llm-engine-build:
     runs-on: ubuntu-latest
