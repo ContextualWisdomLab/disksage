@@ -5,8 +5,14 @@ use disksage_lib::reclaim_protection::{
     assess_worktree_protections, ProtectionContext, REASON_ORCHESTRATION_LEAD,
     REASON_RECENT_WRITES,
 };
+#[cfg(windows)]
+use disksage_lib::reclaim_protection::{
+    recent_write_reason, REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn cargo_target(root: &Path, project_name: &str) -> PathBuf {
@@ -158,5 +164,65 @@ fn existing_descendant_recent_write_is_protected_when_root_directory_is_old() {
             .any(|reason| reason == REASON_RECENT_WRITES),
         "an existing descendant edited inside the explicit protection window must veto reclaim even when the ancestor directory mtime is old: {:?}",
         assessment.reason_codes
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_junction_boundary_is_incomplete_evidence_without_traversing_target() {
+    let temp = tempfile::tempdir().expect("create fixture root");
+    let candidate = temp.path().join("candidate");
+    let outside = temp.path().join("outside");
+    let outside_file = outside.join("outside.txt");
+    let junction = candidate.join("mounted-outside");
+    fs::create_dir(&candidate).expect("create candidate");
+    fs::create_dir(&outside).expect("create outside target");
+    fs::write(&outside_file, b"outside recent evidence\n").expect("write outside target");
+
+    let now = SystemTime::now();
+    let old = now
+        .checked_sub(Duration::from_secs(7_200))
+        .expect("old timestamp");
+    set_modified_time(&candidate, old);
+
+    let create = Command::new("cmd.exe")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .output()
+        .expect("spawn mklink junction fixture");
+    assert!(
+        create.status.success(),
+        "mklink /J failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    set_modified_time(&candidate, old);
+
+    let now_unix_secs = now
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_secs();
+    let reason = recent_write_reason(&candidate, 3_600, now_unix_secs);
+
+    let remove = Command::new("cmd.exe")
+        .args(["/C", "rmdir"])
+        .arg(&junction)
+        .output()
+        .expect("remove junction fixture");
+    assert!(
+        remove.status.success(),
+        "rmdir junction failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&remove.stdout),
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert!(
+        outside_file.exists(),
+        "junction cleanup must remove only the reparse point, never the external target"
+    );
+    assert_eq!(
+        reason,
+        Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+        "a Windows junction/reparse boundary is incomplete candidate-local evidence and must fail closed rather than traverse or classify target recency"
     );
 }
