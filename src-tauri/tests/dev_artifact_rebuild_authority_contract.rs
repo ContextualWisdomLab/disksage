@@ -1,4 +1,4 @@
-use disksage::dev_artifacts::find_artifacts;
+use disksage_lib::dev_artifacts::find_artifacts;
 use std::fs;
 
 fn generated_root(project: &std::path::Path, name: &str) -> std::path::PathBuf {
