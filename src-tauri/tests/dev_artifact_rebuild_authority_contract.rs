@@ -10,27 +10,37 @@ fn generated_root(project: &std::path::Path, name: &str) -> std::path::PathBuf {
     root
 }
 
-#[test]
-fn cargo_target_requires_manifest_and_lockfile_rebuild_authority() {
+fn cargo_project_fixture(with_lockfile: bool) -> (tempfile::TempDir, std::path::PathBuf) {
     let temp = tempfile::tempdir().expect("create fixture root");
     let project = temp.path().join("cargo-app");
     fs::create_dir_all(&project).expect("create cargo project");
     fs::write(project.join("Cargo.toml"), b"[package]\nname='fixture'\nversion='0.1.0'\n")
         .expect("write Cargo manifest");
+    if with_lockfile {
+        fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lockfile");
+    }
     let target = generated_root(&project, "target");
+    (temp, target)
+}
 
-    let without_lock = find_artifacts(temp.path(), 0, u64::MAX);
+#[test]
+fn cargo_target_without_lockfile_is_rejected() {
+    let (temp, target) = cargo_project_fixture(false);
+    let found = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        !without_lock
+        !found
             .iter()
             .any(|artifact| artifact.path == target.to_string_lossy().as_ref()),
         "Cargo.toml alone is not rebuild authority for deleting target"
     );
+}
 
-    fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lockfile");
-    let with_lock = find_artifacts(temp.path(), 0, u64::MAX);
+#[test]
+fn cargo_target_with_manifest_and_lockfile_is_admitted() {
+    let (temp, target) = cargo_project_fixture(true);
+    let found = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        with_lock
+        found
             .iter()
             .any(|artifact| artifact.path == target.to_string_lossy().as_ref()),
         "Cargo.toml + Cargo.lock must admit the generated target"
