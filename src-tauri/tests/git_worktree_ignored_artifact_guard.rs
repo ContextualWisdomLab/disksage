@@ -5,8 +5,6 @@
 //! `status_clean` scoped to tracked/untracked Git state while independently blocking removal when
 //! ignored artifacts are present.
 
-#![cfg(unix)]
-
 use disksage_lib::git_worktree::{
     audit_git_worktrees, GitWorktreeAuditEntry, GitWorktreeAuditOptions, GitWorktreeAuditReport,
     GitWorktreeDisposition,
