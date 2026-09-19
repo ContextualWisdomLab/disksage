@@ -169,7 +169,11 @@ fn empty_native_obsolete_extension_remains_inventory_with_zero_allocation() {
     let temp = tempfile::tempdir().expect("create fixture root");
     let home = temp.path().join("home");
     let appdata = home.join("AppData/Roaming");
-    let extensions = temp.path().join(".vscode-server/data/extensions");
+    let extensions = temp
+        .path()
+        .join(".vscode-server")
+        .join("data")
+        .join("extensions");
     let obsolete = extensions.join("publisher.empty-1.0.0");
     fs::create_dir_all(&appdata).expect("create appdata");
     fs::create_dir_all(&obsolete).expect("create empty obsolete extension");
