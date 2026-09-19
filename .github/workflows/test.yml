@@ -122,6 +122,9 @@ jobs:
       - name: Windows worktree active-use Restart Manager regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_windows_active_use
+      - name: Windows ignored worktree artifact regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_ignored_artifact_guard -- --exact ignored_artifacts_preserve_otherwise_clean_removal_candidate
       - name: Windows rebuild authority test target compile regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract --no-run
