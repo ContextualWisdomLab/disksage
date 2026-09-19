@@ -9,18 +9,17 @@ const linuxFinalMutationFixture = readFileSync(
 const tauriLibSource = readFileSync('src-tauri/src/lib.rs', 'utf8');
 
 describe('final source-object mutation contract', () => {
-  it('does not authorize the final staging move from the reviewed pathname alone', () => {
+  it('binds both identity-authorized mutation boundaries to the Linux fail-closed gate', () => {
     expect(
       safetySource,
-      'a revalidated pathname is evidence, not authority for the final source-object mutation',
-    ).not.toContain('std::fs::rename(path, &staged)');
-  });
-
-  it('does not submit a private staging pathname as native Trash restore authority', () => {
+      'Linux needs one explicit unsupported-platform boundary instead of pathname-selected mutation',
+    ).toContain(
+      '#[cfg(target_os = "linux")]\nfn ensure_identity_bound_final_mutation_supported()',
+    );
     expect(
-      safetySource,
-      'native Trash metadata must preserve the user-reviewed original location rather than a private DiskSage staging path',
-    ).not.toContain('platform_trash_delete(&staged)');
+      safetySource.match(/ensure_identity_bound_final_mutation_supported\(\)\?/g) ?? [],
+      'reversible Trash and permanent generated-directory removal must both cross the gate after identity validation',
+    ).toHaveLength(2);
   });
 
   it('requires the wired Linux filesystem fixture to fail closed before reversible mutation', () => {
