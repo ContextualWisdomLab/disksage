@@ -119,9 +119,12 @@ jobs:
       - name: Windows development artifact home and allocation regressions
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
-      - name: Windows Cargo project rebuild authority regression
+      - name: Windows Cargo manifest-only rejection regression
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract cargo_target_requires_manifest_and_lockfile_rebuild_authority -- --exact
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract cargo_target_without_lockfile_is_rejected -- --exact
+      - name: Windows Cargo manifest-plus-lock admission regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract cargo_target_with_manifest_and_lockfile_is_admitted -- --exact
       - name: Windows JavaScript project rebuild authority regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract javascript_generated_roots_require_package_manifest_and_recognized_lockfile -- --exact
