@@ -119,6 +119,9 @@ jobs:
       - name: Windows development artifact home and allocation regressions
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
+      - name: Windows Orca development artifact protection regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_orca_protection_contract
       - name: Windows worktree active-use Restart Manager regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_windows_active_use
