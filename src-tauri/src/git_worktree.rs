@@ -1,10 +1,10 @@
 //! Fail-closed, fingerprint-bound Git worktree auditing.
 //!
-//! The audit is read-only. A worktree is a removal candidate only when its HEAD is already
-//! contained in an explicitly selected retention-reference set without itself being an exact
-//! retained tip, its tracked and untracked state is clean, its path and size evidence are complete,
-//! it is neither locked nor prunable, and no active CWD or open-file consumer is observed. The
-//! resulting approval phrase is evidence, not execution.
+//! The audit is read-only. A worktree is a removal candidate only when its HEAD has durable
+//! merged/closed evidence (retention-reference containment and/or caller-admitted closed/merged
+//! bindings), its tracked/untracked-nonignored state is clean, ignored artifacts are absent, its
+//! path and size evidence are complete, it is neither locked nor prunable, and no active CWD or
+//! open-file consumer is observed. The resulting approval phrase is evidence, not execution.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -55,6 +55,12 @@ pub struct GitWorktreeAuditOptions {
     /// When true, treat a non-empty `git stash list` as a blocker.
     #[serde(default)]
     pub assess_stash: bool,
+    /// Caller-admitted closed/merged HEAD OIDs (durable evidence alongside retention refs).
+    #[serde(default)]
+    pub closed_merged_head_oids: Vec<String>,
+    /// Caller-admitted closed/merged branch names (exact match against worktree branch).
+    #[serde(default)]
+    pub closed_merged_branches: Vec<String>,
 }
 
 impl Default for GitWorktreeAuditOptions {
@@ -69,6 +75,8 @@ impl Default for GitWorktreeAuditOptions {
             assess_filesystem_protections: false,
             assess_unpushed_commits: false,
             assess_stash: false,
+            closed_merged_head_oids: Vec::new(),
+            closed_merged_branches: Vec::new(),
         }
     }
 }
@@ -79,6 +87,15 @@ pub enum GitWorktreeDisposition {
     RemovalCandidate,
     Preserve,
     EvidenceGap,
+}
+
+/// Operator-facing disposition class for the same three audit outcomes.
+pub fn disposition_class_ko(disposition: GitWorktreeDisposition) -> &'static str {
+    match disposition {
+        GitWorktreeDisposition::RemovalCandidate => "정리가능",
+        GitWorktreeDisposition::Preserve => "보존필요",
+        GitWorktreeDisposition::EvidenceGap => "증거부족",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -128,6 +145,10 @@ pub struct GitWorktreeAuditEntry {
     pub active_use: GitWorktreeActiveUseEvidence,
     pub disposition: GitWorktreeDisposition,
     pub blockers: Vec<String>,
+    /// Durable merged/closed evidence source when present:
+    /// `retention-reference-containment` or `caller-admitted-closed-merged`.
+    #[serde(default)]
+    pub merged_closed_evidence: Option<String>,
     pub entry_fingerprint: String,
 }
 
@@ -884,7 +905,7 @@ fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
     match input.contained_in_reference {
         Some(true) => {}
         Some(false) => blockers.push("reference-does-not-contain-head".into()),
-        None => blockers.push("reference-containment-evidence-incomplete".into()),
+        None => blockers.push("merged-closed-evidence-incomplete".into()),
     }
     if input.head_is_retained_tip {
         blockers.push("head-is-retained-tip".into());
@@ -977,7 +998,12 @@ fn entry_fingerprint(
         u8::from(entry.prunable),
         u8::from(entry.active_use.active),
         u8::from(entry.active_use.evidence_complete),
+        u8::from(entry.merged_closed_evidence.is_some()),
     ]);
+    hash_field(
+        &mut hasher,
+        entry.merged_closed_evidence.as_deref().unwrap_or(""),
+    );
     for pid in &entry.active_use.observed_pids {
         hasher.update(&pid.to_le_bytes());
     }
@@ -1266,38 +1292,11 @@ fn admin_fallback_worktrees(
     (worktrees, issues)
 }
 
-fn status_observation(path: &Path, timeout_ms: u64) -> (Option<bool>, Option<u64>) {
-    let result = match run_git(
-        path,
-        &[
-            OsString::from("status"),
-            OsString::from("--porcelain=v1"),
-            OsString::from("-z"),
-            OsString::from("--untracked-files=all"),
-            OsString::from("--ignore-submodules=none"),
-        ],
-        timeout_ms,
-        "git-status",
-    ) {
-        Ok(result) => result,
-        Err(_) => return (None, None),
-    };
-    if result.status_code != Some(0) {
-        return (None, None);
-    }
-    let count = result
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|field| !field.is_empty())
-        .count();
-    let Ok(count) = u64::try_from(count) else {
-        return (None, None);
-    };
-    (Some(count == 0), Some(count))
-}
-
-/// Returns `(uncommitted_tracked_or_staged, untracked_nonignored)` when status evidence is complete.
-fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool)> {
+/// Returns `(uncommitted, untracked_nonignored, ignored_artifacts, nonignored_entry_count)`.
+///
+/// Uses `git status --ignored` so `!!` debris cannot be silent; ignored is never conflated with
+/// untracked-nonignored (`??`).
+fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool, bool, u64)> {
     let result = run_git(
         path,
         &[
@@ -1305,6 +1304,7 @@ fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool)> {
             OsString::from("--porcelain=v1"),
             OsString::from("-z"),
             OsString::from("--untracked-files=all"),
+            OsString::from("--ignored=matching"),
             OsString::from("--ignore-submodules=none"),
         ],
         timeout_ms,
@@ -1316,18 +1316,25 @@ fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool)> {
     }
     let mut uncommitted = false;
     let mut untracked = false;
+    let mut ignored = false;
+    let mut nonignored_count = 0u64;
     for field in result.stdout.split(|byte| *byte == 0) {
         if field.len() < 3 {
             continue;
         }
-        // porcelain v1: XY<space>path — untracked is "??"
+        // porcelain v1: XY<path — untracked is "??", ignored is "!!"
+        if field.starts_with(b"!!") {
+            ignored = true;
+            continue;
+        }
+        nonignored_count = nonignored_count.saturating_add(1);
         if field.starts_with(b"??") {
             untracked = true;
         } else {
             uncommitted = true;
         }
     }
-    Some((uncommitted, untracked))
+    Some((uncommitted, untracked, ignored, nonignored_count))
 }
 
 fn stash_present_observation(path: &Path, timeout_ms: u64) -> Option<bool> {
@@ -1470,13 +1477,38 @@ pub fn audit_git_worktrees(
         let actor_cwd_inside = actor_cwd
             .as_ref()
             .map(|cwd| path_result.as_ref().is_ok_and(|path| cwd.starts_with(path)));
-        let (status_clean, status_entry_count) = if path_valid && !raw.bare {
-            status_observation(canonical_path, options.command_timeout_ms)
+        let status_kinds = if path_valid && !raw.bare {
+            status_dirty_kinds(canonical_path, options.command_timeout_ms)
         } else {
-            (None, None)
+            None
+        };
+        let (status_clean, status_entry_count) = match status_kinds {
+            Some((uncommitted, untracked, _ignored, nonignored_count)) => {
+                (Some(!(uncommitted || untracked)), Some(nonignored_count))
+            }
+            None => (None, None),
         };
         let contained_in_reference = containment_observation(&raw.head, &reachable_commits);
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
+        let caller_closed_merged = options
+            .closed_merged_head_oids
+            .iter()
+            .any(|oid| oid == &raw.head)
+            || raw.branch.as_ref().is_some_and(|branch| {
+                options
+                    .closed_merged_branches
+                    .iter()
+                    .any(|admitted| admitted == branch)
+            });
+        let merged_closed_evidence = if contained_in_reference == Some(true)
+            && !retention_references.is_empty()
+        {
+            Some("retention-reference-containment".to_string())
+        } else if caller_closed_merged {
+            Some("caller-admitted-closed-merged".to_string())
+        } else {
+            None
+        };
         let size = if path_valid {
             size_evidence(
                 canonical_path,
@@ -1494,6 +1526,12 @@ pub fn audit_git_worktrees(
             }
         };
 
+        // For candidate classification, treat caller-admitted closed/merged as durable containment.
+        let classification_contained = if merged_closed_evidence.is_some() {
+            Some(true)
+        } else {
+            contained_in_reference
+        };
         let preliminary = ClassificationInput {
             primary: index == 0,
             audit_origin: audit_origin_entry,
@@ -1502,7 +1540,7 @@ pub fn audit_git_worktrees(
             prunable: raw.prunable,
             path_valid,
             status_clean,
-            contained_in_reference,
+            contained_in_reference: classification_contained,
             head_is_retained_tip,
             actor_cwd_inside,
             size_complete: size.evidence_complete,
@@ -1534,13 +1572,21 @@ pub fn audit_git_worktrees(
         if raw.fallback_evidence_incomplete {
             blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
         }
+        if merged_closed_evidence.is_none()
+            && contained_in_reference.is_none()
+            && !blockers
+                .iter()
+                .any(|blocker| blocker == "merged-closed-evidence-incomplete")
+        {
+            blockers.push("merged-closed-evidence-incomplete".into());
+        }
+        if path_valid && !raw.bare && status_kinds.is_none() {
+            blockers.push("status-kinds-evidence-incomplete".into());
+        }
         // Extended Orca/dev protection criteria (stable reason codes).
         let process_cwd_inside = actor_cwd_inside == Some(true) || active_use.active;
-        let status_kinds = if path_valid && !raw.bare {
-            status_dirty_kinds(canonical_path, options.command_timeout_ms)
-        } else {
-            None
-        };
+        let status_kinds_for_protection =
+            status_kinds.map(|(uncommitted, untracked, ignored, _)| (uncommitted, untracked, ignored));
         let stash_present = if options.assess_stash && path_valid && !raw.bare {
             stash_present_observation(canonical_path, options.command_timeout_ms).unwrap_or(false)
         } else {
@@ -1558,7 +1604,7 @@ pub fn audit_git_worktrees(
             &options.protection,
             process_cwd_inside,
             false,
-            status_kinds,
+            status_kinds_for_protection,
             stash_present,
             commits_not_on_remote,
             options.assess_filesystem_protections,
@@ -1591,6 +1637,7 @@ pub fn audit_git_worktrees(
             active_use,
             disposition,
             blockers,
+            merged_closed_evidence,
             entry_fingerprint: String::new(),
         };
         entry.entry_fingerprint =
@@ -1665,12 +1712,15 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             matches!(
                 code.as_str(),
                 crate::reclaim_protection::REASON_ORCA_TERMINAL_LIVE
+                    | crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING
+                    | crate::reclaim_protection::REASON_INCOMPLETE_DISPATCH
                     | crate::reclaim_protection::REASON_PROCESS_CWD_INSIDE
                     | crate::reclaim_protection::REASON_ORCHESTRATION_LEAD
                     | crate::reclaim_protection::REASON_LISTED_IN_LEAD_QUEUE
                     | crate::reclaim_protection::REASON_OPEN_PR_HEAD
                     | crate::reclaim_protection::REASON_UNCOMMITTED_CHANGES
                     | crate::reclaim_protection::REASON_UNTRACKED_NONIGNORED
+                    | crate::reclaim_protection::REASON_IGNORED_ARTIFACTS
                     | crate::reclaim_protection::REASON_STASH_PRESENT
                     | crate::reclaim_protection::REASON_COMMITS_NOT_ON_REMOTE
                     | crate::reclaim_protection::REASON_RECENT_WRITES
@@ -1684,6 +1734,29 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
         .collect();
     protection_reason_codes.sort();
     protection_reason_codes.dedup();
+    let mut notices = vec![
+        "read-only-audit".into(),
+        "no-fetch-performed".into(),
+        "retention-references-bound-to-resolved-oids".into(),
+        "retention-reachable-commit-set-bounded".into(),
+        "exact-retained-tips-preserved".into(),
+        "only-strict-retained-tip-ancestors-can-be-candidates".into(),
+        "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
+        "approval-phrase-is-not-execution".into(),
+        "no-worktree-prune-remove-or-branch-delete".into(),
+        "no-user-file-or-cloud-provider-mutation".into(),
+        "recent-write-window-requires-explicit-caller-value".into(),
+        "disposition-class-ko:정리가능|보존필요|증거부족".into(),
+    ];
+    if report.entries.iter().any(|entry| {
+        entry
+            .blockers
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING)
+            && entry.merged_closed_evidence.is_some()
+    }) {
+        notices.push("sleep-session-requires-result-preserve-then-cleanup-then-reaudit".into());
+    }
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
@@ -1709,19 +1782,7 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "filesystem-created-or-modified-time-not-used-for-removal".into(),
             "orca-reclaim-protection-reason-codes".into(),
         ],
-        notices: vec![
-            "read-only-audit".into(),
-            "no-fetch-performed".into(),
-            "retention-references-bound-to-resolved-oids".into(),
-            "retention-reachable-commit-set-bounded".into(),
-            "exact-retained-tips-preserved".into(),
-            "only-strict-retained-tip-ancestors-can-be-candidates".into(),
-            "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
-            "approval-phrase-is-not-execution".into(),
-            "no-worktree-prune-remove-or-branch-delete".into(),
-            "no-user-file-or-cloud-provider-mutation".into(),
-            "recent-write-window-requires-explicit-caller-value".into(),
-        ],
+        notices,
         protection_reason_codes,
     }
 }
@@ -2398,6 +2459,7 @@ mod tests {
             },
             disposition: GitWorktreeDisposition::RemovalCandidate,
             blockers: Vec::new(),
+            merged_closed_evidence: Some("retention-reference-containment".into()),
             entry_fingerprint: String::new(),
         };
         entry.entry_fingerprint = entry_fingerprint(&common_dir, &reference_fingerprint, &entry);
@@ -2696,6 +2758,7 @@ mod tests {
             active_use,
             disposition: GitWorktreeDisposition::RemovalCandidate,
             blockers: Vec::new(),
+            merged_closed_evidence: Some("retention-reference-containment".into()),
             entry_fingerprint: String::new(),
         };
         let reference_set = "r".repeat(64);
@@ -2920,5 +2983,258 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "git-worktree-removal-record-dir-overlaps-repository");
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn ignored_artifacts_are_not_silent_removal_candidates() {
+        let (_temp, repository, secondary) = temporary_repository();
+        let exclude = repository.join(".git").join("info").join("exclude");
+        fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        fs::write(&exclude, b"build/\n").unwrap();
+        fs::create_dir_all(secondary.join("build")).unwrap();
+        fs::write(secondary.join("build").join("cache.bin"), b"debris\n").unwrap();
+
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            current_unix_ms(),
+        )
+        .unwrap();
+        let secondary_entry = report
+            .entries
+            .iter()
+            .find(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
+            .expect("secondary worktree entry");
+        assert_ne!(
+            secondary_entry.disposition,
+            GitWorktreeDisposition::RemovalCandidate
+        );
+        assert!(
+            secondary_entry
+                .blockers
+                .iter()
+                .any(|blocker| blocker == crate::reclaim_protection::REASON_IGNORED_ARTIFACTS),
+            "blockers={:?}",
+            secondary_entry.blockers
+        );
+        assert_eq!(secondary_entry.status_clean, Some(true));
+        assert!(!secondary_entry
+            .blockers
+            .iter()
+            .any(|blocker| blocker == crate::reclaim_protection::REASON_UNTRACKED_NONIGNORED));
+        assert_eq!(
+            secondary_entry.merged_closed_evidence.as_deref(),
+            Some("retention-reference-containment")
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn caller_admitted_closed_merged_is_durable_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        let secondary = temp.path().join("secondary");
+        fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "-b", "main"]);
+        fs::write(repository.join("evidence.txt"), b"first\n").unwrap();
+        git(&repository, &["add", "evidence.txt"]);
+        git(&repository, &["commit", "-m", "first"]);
+        git(&repository, &["checkout", "-b", "unmerged"]);
+        fs::write(repository.join("evidence.txt"), b"only-on-unmerged\n").unwrap();
+        git(&repository, &["commit", "-am", "unmerged tip"]);
+        let unmerged_head = {
+            let output = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repository)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .trim()
+                .to_ascii_lowercase()
+        };
+        git(&repository, &["checkout", "main"]);
+        git(
+            &repository,
+            &["worktree", "add", secondary.to_str().unwrap(), "unmerged"],
+        );
+
+        let without = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            current_unix_ms(),
+        )
+        .unwrap();
+        let blocked = without
+            .entries
+            .iter()
+            .find(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
+            .expect("secondary worktree entry");
+        assert!(blocked
+            .blockers
+            .iter()
+            .any(|blocker| blocker == "reference-does-not-contain-head"));
+        assert!(blocked.merged_closed_evidence.is_none());
+
+        let mut options = GitWorktreeAuditOptions::default();
+        options.closed_merged_head_oids.push(unmerged_head);
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            options,
+            current_unix_ms(),
+        )
+        .unwrap();
+        let secondary_entry = report
+            .entries
+            .iter()
+            .find(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
+            .expect("secondary worktree entry");
+        assert_eq!(
+            secondary_entry.merged_closed_evidence.as_deref(),
+            Some("caller-admitted-closed-merged")
+        );
+        assert_eq!(
+            secondary_entry.disposition,
+            GitWorktreeDisposition::RemovalCandidate,
+            "blockers={:?}",
+            secondary_entry.blockers
+        );
+    }
+
+    #[test]
+    fn incomplete_merged_closed_evidence_is_an_evidence_gap() {
+        assert_eq!(
+            disposition(&["merged-closed-evidence-incomplete".into()]),
+            GitWorktreeDisposition::EvidenceGap
+        );
+        let incomplete = ClassificationInput {
+            primary: false,
+            audit_origin: false,
+            bare: false,
+            locked: false,
+            prunable: false,
+            path_valid: true,
+            status_clean: Some(true),
+            contained_in_reference: None,
+            head_is_retained_tip: false,
+            actor_cwd_inside: Some(false),
+            size_complete: true,
+            active_use_assessed: true,
+            active_use_complete: true,
+            active_use_active: false,
+        };
+        assert_eq!(
+            candidate_blockers(&incomplete),
+            vec!["merged-closed-evidence-incomplete".to_string()]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn removal_result_records_stay_separate_from_plan_with_path_and_registration() {
+        // Plan/result consistency regression fodder from host cleanup notes:
+        // local268 + DIA101 confirmed path-absence; MBA retry needed label-mismatch fix.
+        let (_temp, repository, secondary) = temporary_repository();
+        let generated_at = current_unix_ms();
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            generated_at,
+        )
+        .unwrap();
+        assert_eq!(report.removal_candidate_count, 1);
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            generated_at + 1,
+            "human:local:test",
+            "plan versus result separation reviewed",
+        )
+        .unwrap();
+        // MBA-style label mismatch: wrong approval phrase must fail closed before mutation.
+        assert!(execute_stale_worktree_removal(
+            &report,
+            &approval,
+            "DiskSage stale worktree 1 0 승인 label-mismatch-fixture",
+            GitWorktreeAuditOptions::default(),
+            generated_at + 2,
+        )
+        .is_err());
+        let result = execute_stale_worktree_removal(
+            &report,
+            &approval,
+            &phrase,
+            GitWorktreeAuditOptions::default(),
+            generated_at + 2,
+        )
+        .unwrap();
+        assert_ne!(approval.approval_id, result.result_id);
+        assert_eq!(
+            result.removal_plan_fingerprint,
+            report.removal_plan_fingerprint
+        );
+        assert_eq!(result.items.len(), 1);
+        assert!(result.items[0].removal_command_succeeded);
+        // local268 / DIA101 path-absence + registration-absence contract
+        assert!(result.items[0].path_absence_verified);
+        assert!(result.items[0].registration_absence_verified);
+        assert!(!secondary.exists());
+        assert_eq!(
+            disposition_class_ko(GitWorktreeDisposition::RemovalCandidate),
+            "정리가능"
+        );
+        assert_eq!(
+            disposition_class_ko(GitWorktreeDisposition::Preserve),
+            "보존필요"
+        );
+        assert_eq!(
+            disposition_class_ko(GitWorktreeDisposition::EvidenceGap),
+            "증거부족"
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn sleeping_orca_session_is_preserve_not_reclaimable_alone() {
+        let (_temp, repository, secondary) = temporary_repository();
+        let mut options = GitWorktreeAuditOptions::default();
+        options.protection.orca_sleep_worktree_paths =
+            vec![fs::canonicalize(&secondary).unwrap()];
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            options,
+            current_unix_ms(),
+        )
+        .unwrap();
+        let secondary_entry = report
+            .entries
+            .iter()
+            .find(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
+            .expect("secondary");
+        assert_eq!(
+            secondary_entry.disposition,
+            GitWorktreeDisposition::Preserve
+        );
+        assert_eq!(
+            disposition_class_ko(secondary_entry.disposition),
+            "보존필요"
+        );
+        assert!(secondary_entry
+            .blockers
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING));
+        assert!(secondary_entry.merged_closed_evidence.is_some());
+        let summary = public_summary(&report);
+        assert!(summary.notices.iter().any(|notice| {
+            notice == "sleep-session-requires-result-preserve-then-cleanup-then-reaudit"
+        }));
     }
 }

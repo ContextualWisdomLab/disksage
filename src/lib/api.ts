@@ -583,6 +583,7 @@ export interface GitWorktreeAuditEntry {
   active_use: GitWorktreeActiveUseEvidence;
   disposition: GitWorktreeDisposition;
   blockers: string[];
+  merged_closed_evidence?: string | null;
   entry_fingerprint: string;
 }
 
