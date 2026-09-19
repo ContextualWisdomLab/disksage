@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Live Orca terminal (or agent) has this worktree bound.
 pub const REASON_ORCA_TERMINAL_LIVE: &str = "orca-terminal-live";
@@ -28,8 +28,10 @@ pub const REASON_UNTRACKED_NONIGNORED: &str = "untracked-nonignored";
 pub const REASON_STASH_PRESENT: &str = "stash-present";
 /// HEAD is not contained in any remote-tracking branch.
 pub const REASON_COMMITS_NOT_ON_REMOTE: &str = "commits-not-on-any-remote-branch";
-/// Path mtime is inside the caller-supplied recent-write window.
+/// A path inside the candidate tree was written inside the caller-supplied recent-write window.
 pub const REASON_RECENT_WRITES: &str = "recent-writes-within-window";
+/// Recent-write evidence could not be completed inside the bounded no-follow scan.
+pub const REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE: &str = "recent-write-evidence-incomplete";
 /// Protected analytical/local data directory.
 pub const REASON_PROTECTED_DATA_LOCAL: &str = "protected-data-path:local";
 /// Protected results directory.
@@ -47,6 +49,9 @@ pub const PROTECTED_DATA_DIR_NAMES: &[&str] = &["local", "results"];
 /// Credential / secret file basenames that force protection.
 pub const PROTECTED_CREDENTIAL_FILE_NAMES: &[&str] =
     &[".env", ".env.local", "credentials.json", "credentials"];
+
+const RECENT_WRITE_SCAN_BUDGET: Duration = Duration::from_millis(250);
+const MAX_RECENT_WRITE_SCAN_ENTRIES: usize = 250_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -186,19 +191,85 @@ pub fn path_is_under_any(candidate: &Path, roots: &[PathBuf]) -> bool {
     })
 }
 
+fn modified_time_reason(
+    metadata: &fs::Metadata,
+    window_secs: u64,
+    now_unix_secs: u64,
+) -> Result<Option<&'static str>, ()> {
+    let modified = metadata.modified().map_err(|_| ())?;
+    let mtime_secs = modified.duration_since(UNIX_EPOCH).map_err(|_| ())?.as_secs();
+    Ok((now_unix_secs.saturating_sub(mtime_secs) < window_secs).then_some(REASON_RECENT_WRITES))
+}
+
+fn recent_write_reason_with_limits(
+    path: &Path,
+    window_secs: u64,
+    now_unix_secs: u64,
+    deadline: Instant,
+    max_entries: usize,
+) -> Option<&'static str> {
+    if window_secs == 0 {
+        return None;
+    }
+    let root_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+    };
+    if root_metadata.file_type().is_symlink() {
+        return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE);
+    }
+    match modified_time_reason(&root_metadata, window_secs, now_unix_secs) {
+        Ok(Some(reason)) => return Some(reason),
+        Ok(None) => {}
+        Err(()) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+    }
+    if !root_metadata.is_dir() {
+        return None;
+    }
+
+    let mut visited = 0usize;
+    for entry in walkdir::WalkDir::new(path)
+        .min_depth(1)
+        .follow_links(false)
+        .into_iter()
+    {
+        if Instant::now() >= deadline || visited >= max_entries {
+            return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE);
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+        };
+        visited = visited.saturating_add(1);
+        if entry.file_type().is_symlink() {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(_) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+        };
+        match modified_time_reason(&metadata, window_secs, now_unix_secs) {
+            Ok(Some(reason)) => return Some(reason),
+            Ok(None) => {}
+            Err(()) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
+        }
+    }
+    None
+}
+
 pub fn recent_write_reason(
     path: &Path,
     window_secs: u64,
     now_unix_secs: u64,
 ) -> Option<&'static str> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?;
-    let mtime_secs = modified.duration_since(UNIX_EPOCH).ok()?.as_secs();
-    if now_unix_secs.saturating_sub(mtime_secs) < window_secs {
-        Some(REASON_RECENT_WRITES)
-    } else {
-        None
-    }
+    let deadline = Instant::now() + RECENT_WRITE_SCAN_BUDGET;
+    recent_write_reason_with_limits(
+        path,
+        window_secs,
+        now_unix_secs,
+        deadline,
+        MAX_RECENT_WRITE_SCAN_ENTRIES,
+    )
 }
 
 pub fn now_unix_secs() -> u64 {
@@ -397,6 +468,7 @@ pub fn artifact_blocking_reason_codes(assessment: &ProtectionAssessment) -> Vec<
                     | REASON_LISTED_IN_LEAD_QUEUE
                     | REASON_EDITABLE_INSTALL
                     | REASON_RECENT_WRITES
+                    | REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE
                     | REASON_BUILD_TOOL_ACTIVE
             )
         })
@@ -456,6 +528,33 @@ mod tests {
             Some(REASON_RECENT_WRITES)
         );
         assert_eq!(recent_write_reason(dir.path(), 0, now), None);
+    }
+
+    #[test]
+    fn recent_write_scan_fails_closed_when_root_metadata_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert_eq!(
+            recent_write_reason(&missing, 3_600, now_unix_secs()),
+            Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE)
+        );
+    }
+
+    #[test]
+    fn recent_write_scan_entry_budget_exhaustion_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("existing"), b"x").unwrap();
+        let old_now = now_unix_secs().saturating_add(7_200);
+        assert_eq!(
+            recent_write_reason_with_limits(
+                root.path(),
+                3_600,
+                old_now,
+                Instant::now() + Duration::from_secs(1),
+                0,
+            ),
+            Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE)
+        );
     }
 
     #[test]
