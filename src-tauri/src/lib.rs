@@ -93,6 +93,8 @@ mod git_worktree_impl;
 pub mod git_worktree;
 /// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
 pub mod git_worktree_github_evidence;
+/// Stable Orca/dev reclaim protection reason codes and pure assessors.
+pub mod reclaim_protection;
 /// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
 pub mod git_clone_reclaim;
 pub mod maven_cache;
