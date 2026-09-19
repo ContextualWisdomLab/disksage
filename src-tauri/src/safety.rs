@@ -352,6 +352,19 @@ pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn ensure_identity_bound_final_mutation_supported() -> Result<(), SafetyError> {
+    Err(SafetyError::Trash(
+        "identity-bound final mutation is unavailable on Linux until an exact-object primitive is proven"
+            .into(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_identity_bound_final_mutation_supported() -> Result<(), SafetyError> {
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JournalEntry {
     pub ts_ms: u64,
@@ -1977,6 +1990,7 @@ fn trash_delete_if_identity_with_catalog_root(
             "개발 아티팩트의 파일시스템 객체가 바뀌었습니다. 다시 스캔하세요".into(),
         ));
     }
+    ensure_identity_bound_final_mutation_supported()?;
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("개발 아티팩트의 파일명이 없습니다. 다시 스캔하세요".into())
     })?;
@@ -2174,6 +2188,7 @@ pub fn permanent_delete_dir_if_identity(
             "generated directory identity changed; rescan before deletion".into(),
         ));
     }
+    ensure_identity_bound_final_mutation_supported()?;
     let file_name = path.file_name().ok_or_else(|| {
         SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
     })?;
@@ -2722,6 +2737,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn final_trash_source_substitution_does_not_mutate_replacement() {
         let tmp = tempfile::tempdir().unwrap();
         let victim = tmp.path().join("reviewed-cache");
@@ -2761,6 +2777,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn final_permanent_source_substitution_does_not_mutate_replacement() {
         let tmp = tempfile::tempdir().unwrap();
         let victim = tmp.path().join("reviewed-cache");
@@ -2911,6 +2928,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_parent_replacement_fails_without_untracked_residue() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -2955,6 +2973,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_child_failure_closes_durable_intent() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -3036,6 +3055,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_intent_completion_failure_fails_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -3143,6 +3163,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_rollback_failure_is_durably_recoverable() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -3210,6 +3231,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_rollback_and_journal_failure_does_not_leave_untracked_residue() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -3279,6 +3301,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     #[rustfmt::skip]
+    #[cfg(not(target_os = "linux"))]
     fn staging_creation_rollback_and_all_recovery_publications_fail_does_not_leave_untracked_residue() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
@@ -3363,6 +3386,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn permanent_generated_directory_delete_rechecks_identity_and_journals() {
         let tmp = tempfile::tempdir().unwrap();
         let generated = tmp.path().join("node_modules");
@@ -3387,6 +3411,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn post_mutation_cleanup_failure_is_persisted_and_retry_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let generated = tmp.path().join("node_modules");
@@ -3424,6 +3449,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn pending_cleanup_rejects_moved_and_replaced_source_parent() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("owner-parent");
