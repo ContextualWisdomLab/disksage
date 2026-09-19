@@ -27,9 +27,10 @@ fn cargo_target(root: &Path, project_name: &str) -> PathBuf {
 fn set_modified_time(path: &Path, modified: SystemTime) {
     use std::os::windows::fs::OpenOptionsExt;
 
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     fs::OpenOptions::new()
-        .read(true)
+        .access_mode(FILE_WRITE_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .expect("open filesystem object for timestamp control")
