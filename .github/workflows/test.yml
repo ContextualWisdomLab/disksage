@@ -125,6 +125,9 @@ jobs:
       - name: Windows worktree active-use Restart Manager regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_windows_active_use
+      - name: Windows live Orca worktree protection-context regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context
       - name: Windows rebuild authority test target compile regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract --no-run
