@@ -110,16 +110,16 @@ fn ignored_artifacts_present(path: &Path, timeout_ms: u64) -> Result<bool, Strin
             Ok(None) if started.elapsed() >= Duration::from_millis(timeout_ms) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                drop(stdout_thread);
+                drop(stderr_thread);
                 return Err("git-ignored-status-timeout".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                drop(stdout_thread);
+                drop(stderr_thread);
                 return Err("git-ignored-status-wait-failed".into());
             }
         }
