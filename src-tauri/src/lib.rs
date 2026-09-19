@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod home_resolution;
+#[cfg_attr(coverage, allow(dead_code))]
 mod runtime_storage_commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod container_orphan_commands;
