@@ -290,7 +290,7 @@ fn selected_cloudstorage_descendant_fails_closed_before_artifact_inventory() {
 
 #[test]
 fn commands_use_crate_root_home_resolution_authority() {
-    let commands = include_str!("../src/commands.rs");
+    let commands = include_str!("../src/commands.rs").replace("\r\n", "\n");
     assert!(
         commands.contains("#[cfg(not(coverage))]\nuse crate::home_resolution;"),
         "commands.rs must consume the crate-root home_resolution owner"
@@ -303,7 +303,7 @@ fn commands_use_crate_root_home_resolution_authority() {
 
 #[test]
 fn legacy_clean_dev_artifacts_tauri_command_is_retired() {
-    let commands = include_str!("../src/commands.rs");
+    let commands = include_str!("../src/commands.rs").replace("\r\n", "\n");
     assert!(
         commands.contains("pub fn clean_dev_artifacts_inner("),
         "the pure cleanup helper remains available to bound approval and focused tests"
