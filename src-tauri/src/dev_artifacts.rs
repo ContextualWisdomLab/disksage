@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,9 @@ pub struct DevArtifact {
     pub kind: String,
     pub project: String,
     pub bytes: u64,
+    /// Filesystem blocks currently allocated for regular files in this generated root and actually
+    /// reclaimable when every hard-link name for each counted object is inside the root.
+    pub allocated_bytes: u64,
     pub files: u64,
     pub skipped: u64,
     pub scan_complete: bool,
@@ -126,6 +130,7 @@ fn age_days(path: &Path, now_ms: u64) -> u64 {
 #[derive(Default)]
 struct ArtifactManifest {
     bytes: u64,
+    allocated_bytes: u64,
     files: u64,
     skipped: u64,
     scan_complete: bool,
@@ -134,11 +139,117 @@ struct ArtifactManifest {
     object_id: String,
 }
 
+#[derive(Clone, Copy)]
+struct LinkAllocationEvidence {
+    allocated_bytes: u64,
+    total_links: u64,
+    observed_links: u64,
+}
+
+#[cfg(unix)]
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.blocks().saturating_mul(512))
+}
+
+#[cfg(unix)]
+fn hard_link_count(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.nlink())
+}
+
+#[cfg(windows)]
+fn windows_api_path(path: &Path) -> Option<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const BACKSLASH: u16 = b'\\' as u16;
+    const FORWARD_SLASH: u16 = b'/' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    let verbatim_prefix = [BACKSLASH, BACKSLASH, QUESTION, BACKSLASH];
+    if wide.starts_with(&verbatim_prefix) {
+        wide.push(0);
+        return Some(wide);
+    }
+    let device_prefix = [BACKSLASH, BACKSLASH, DOT, BACKSLASH];
+    if !path.is_absolute() || wide.starts_with(&device_prefix) {
+        return None;
+    }
+
+    let normalized = std::path::absolute(path).ok()?;
+    wide = normalized.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return None;
+    }
+    for unit in &mut wide {
+        if *unit == FORWARD_SLASH {
+            *unit = BACKSLASH;
+        }
+    }
+    let mut extended: Vec<u16> = if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        r"\\?\UNC\".encode_utf16().collect()
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    if wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        extended.extend_from_slice(&wide[2..]);
+    } else {
+        extended.extend_from_slice(&wide);
+    }
+    extended.push(0);
+    Some(extended)
+}
+
+#[cfg(windows)]
+fn allocated_bytes(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    const INVALID_FILE_SIZE: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCompressedFileSizeW(file_name: *const u16, high: *mut u32) -> u32;
+        fn GetLastError() -> u32;
+        fn SetLastError(error: u32);
+    }
+    let wide = windows_api_path(path)?;
+    let mut high = 0_u32;
+    // SAFETY: `wide` is a live NUL-terminated UTF-16 absolute path and `high` is writable.
+    let low = unsafe {
+        SetLastError(0);
+        GetCompressedFileSizeW(wide.as_ptr(), &mut high)
+    };
+    // INVALID_FILE_SIZE can also be a valid low word; GetLastError disambiguates it.
+    if low == INVALID_FILE_SIZE && unsafe { GetLastError() } != 0 {
+        return None;
+    }
+    Some((u64::from(high) << 32) | u64::from(low))
+}
+
+#[cfg(windows)]
+fn hard_link_count(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    let handle = winapi_util::Handle::from_path_any(path).ok()?;
+    let info = winapi_util::file::information(&handle).ok()?;
+    Some(info.number_of_links())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn allocated_bytes(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(metadata.len())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hard_link_count(_path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
 ///
-/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
-/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
-/// unusually large trees instead of blocking the UI indefinitely.
+/// Paths, kinds, logical sizes, allocated sizes, mtimes, hard-link topology, and filesystem
+/// identities detect stale or only-partly-reclaimable selections without reading file contents.
+/// A time/record bound makes the cleanup gate fail closed on unusually large trees instead of
+/// blocking the UI indefinitely.
 fn artifact_manifest(root: &Path) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
@@ -150,6 +261,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     }
     manifest.object_id = root_object_id.unwrap_or_default();
     let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let mut link_allocations: HashMap<String, LinkAllocationEvidence> = HashMap::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -198,22 +310,68 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 manifest.scan_complete = false;
                 continue;
             };
-            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
+            let Ok(identity) = crate::safety::filesystem_object_id(&entry_path) else {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
-                "<unknown>".into()
-            });
+                continue;
+            };
             let modified = modified_stamp(&metadata).unwrap_or_else(|| {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
                 "<unknown>".into()
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
+            let Some(allocated) = allocated_bytes(entry_path, &metadata) else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            let Some(total_links) = hard_link_count(entry_path, &metadata) else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            if total_links == 0 {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            }
+            match link_allocations.entry(identity.clone()) {
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(LinkAllocationEvidence {
+                        allocated_bytes: allocated,
+                        total_links,
+                        observed_links: 1,
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                    let evidence = occupied.get_mut();
+                    if evidence.allocated_bytes != allocated || evidence.total_links != total_links {
+                        manifest.scan_complete = false;
+                    }
+                    evidence.observed_links = evidence.observed_links.saturating_add(1);
+                }
+            }
             manifest.files = manifest.files.saturating_add(1);
             manifest.records.push(format!(
-                "F\0{relative}\0{identity}\0{}\0{modified}",
+                "F\0{relative}\0{identity}\0{}\0{allocated}\0{total_links}\0{modified}",
                 metadata.len()
             ));
+            if crate::cloud::metadata_is_dataless(&metadata) {
+                manifest.scan_complete = false;
+            }
+        }
+    }
+
+    for evidence in link_allocations.values() {
+        if evidence.observed_links > evidence.total_links {
+            manifest.scan_complete = false;
+            continue;
+        }
+        if evidence.observed_links == evidence.total_links {
+            manifest.allocated_bytes = manifest
+                .allocated_bytes
+                .saturating_add(evidence.allocated_bytes);
         }
     }
 
@@ -416,6 +574,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
+            if manifest.allocated_bytes == 0 {
+                return None;
+            }
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -424,6 +585,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 bytes: manifest.bytes,
+                allocated_bytes: manifest.allocated_bytes,
                 files: manifest.files,
                 skipped: manifest.skipped,
                 scan_complete: manifest.scan_complete,
@@ -444,11 +606,15 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     age_days(&path, now_ms)
                 };
                 let manifest = artifact_manifest(&path);
+                if manifest.allocated_bytes == 0 {
+                    return None;
+                }
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
                     kind: "vscode-obsolete-extension".into(),
                     project: product.into(),
                     bytes: manifest.bytes,
+                    allocated_bytes: manifest.allocated_bytes,
                     files: manifest.files,
                     skipped: manifest.skipped,
                     scan_complete: manifest.scan_complete,
@@ -459,7 +625,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             }),
     );
 
-    found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    found.sort_by(|a, b| {
+        b.allocated_bytes
+            .cmp(&a.allocated_bytes)
+            .then_with(|| b.bytes.cmp(&a.bytes))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     found
 }
 
@@ -515,6 +686,8 @@ fn clean_artifacts_with_disposition(
                     && candidate.kind == request.kind
                     && candidate.project == request.project
                     && candidate.bytes == request.bytes
+                    && candidate.allocated_bytes == request.allocated_bytes
+                    && request.allocated_bytes > 0
                     && candidate.files == request.files
                     && candidate.skipped == request.skipped
                     && candidate.scan_complete
@@ -633,7 +806,44 @@ mod tests {
         let nm = found.iter().find(|a| a.kind == "node_modules").unwrap();
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
+        assert!(nm.allocated_bytes > 0);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_links_inside_artifact_count_physical_allocation_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, target.join("payload-copy.bin")).unwrap();
+        let metadata = fs::metadata(&payload).unwrap();
+        let expected = allocated_bytes(&payload, &metadata).unwrap();
+        assert!(expected > 0, "fixture must consume physical allocation");
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].allocated_bytes, expected,
+            "one filesystem object must not be counted once per in-root hard-link name"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_hard_link_does_not_claim_retained_blocks_reclaimable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
+        let payload = target.join("payload.bin");
+        fs::hard_link(&payload, tmp.path().join("cargo-app/payload-retained.bin")).unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(
+            found.is_empty(),
+            "blocks retained by a hard link outside the generated root are not reclaimable"
+        );
     }
 
     #[test]
