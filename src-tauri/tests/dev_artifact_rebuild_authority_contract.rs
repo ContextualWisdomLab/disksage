@@ -4,7 +4,9 @@ use std::fs;
 fn generated_root(project: &std::path::Path, name: &str) -> std::path::PathBuf {
     let root = project.join(name);
     fs::create_dir_all(&root).expect("create generated root");
-    fs::write(root.join("payload.bin"), vec![0_u8; 4096]).expect("write generated payload");
+    // A compressible all-zero fixture can legitimately report zero physical allocation on Windows,
+    // which would test allocation admission instead of rebuild authority. Keep one real cluster.
+    fs::write(root.join("payload.bin"), [0x5a_u8; 4096]).expect("write generated payload");
     root
 }
 
@@ -82,7 +84,7 @@ fn native_cargo_cache_tag_remains_independent_of_project_lockfiles() {
     )
     .expect("write native cargo cache tag");
     fs::write(cache.join(".rustc_info.json"), b"{}").expect("write rustc cache metadata");
-    fs::write(cache.join("debug/payload.bin"), vec![0_u8; 4096]).expect("write cache payload");
+    fs::write(cache.join("debug/payload.bin"), [0x5a_u8; 4096]).expect("write cache payload");
 
     let found = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
