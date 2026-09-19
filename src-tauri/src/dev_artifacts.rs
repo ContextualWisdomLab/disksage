@@ -735,6 +735,127 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
+/// Locate the nearest enclosing Git worktree root for a generated artifact.
+pub fn enclosing_worktree_root(artifact: &Path) -> Option<PathBuf> {
+    artifact
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// Assess deletion blockers for one rebuild-authorized artifact without weakening inventory
+/// authority. Protection criteria are additive to rebuild, provider, allocation, identity and
+/// active-use evidence; they never admit a path that inventory rejected.
+pub fn assess_dev_artifact_protection(
+    artifact: &DevArtifact,
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> crate::reclaim_protection::ProtectionAssessment {
+    let path = Path::new(&artifact.path);
+    let mut reasons = Vec::new();
+
+    if crate::reclaim_protection::is_protected_data_dir_name(&artifact.kind) {
+        match artifact.kind.as_str() {
+            "local" => reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into()),
+            "results" => {
+                reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into())
+            }
+            _ => {}
+        }
+    }
+
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if crate::reclaim_protection::is_protected_data_dir_name(&name) {
+            match name.as_ref() {
+                "local" => reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into()),
+                "results" => {
+                    reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into())
+                }
+                _ => {}
+            }
+        }
+        if crate::reclaim_protection::is_orchestration_lead_name(&name) {
+            reasons.push(crate::reclaim_protection::REASON_ORCHESTRATION_LEAD.into());
+        }
+    }
+
+    if let Some(worktree) = enclosing_worktree_root(path) {
+        let assessment = crate::reclaim_protection::assess_worktree_protections(
+            &worktree,
+            None,
+            None,
+            context,
+            false,
+            false,
+            None,
+            false,
+            None,
+            true,
+        );
+        reasons.extend(crate::reclaim_protection::artifact_blocking_reason_codes(
+            &assessment,
+        ));
+    }
+
+    if let Some(window_secs) = context.recent_write_window_secs {
+        let now_unix_secs = context
+            .now_unix_secs
+            .unwrap_or_else(crate::reclaim_protection::now_unix_secs);
+        if let Some(reason) =
+            crate::reclaim_protection::recent_write_reason(path, window_secs, now_unix_secs)
+        {
+            reasons.push(reason.to_string());
+        }
+    }
+
+    crate::reclaim_protection::ProtectionAssessment::with_reasons(reasons)
+}
+
+fn artifact_protection_blocking_reasons(
+    assessment: &crate::reclaim_protection::ProtectionAssessment,
+) -> Vec<String> {
+    let mut reasons = crate::reclaim_protection::artifact_blocking_reason_codes(assessment);
+    reasons.extend(
+        assessment
+            .reason_codes
+            .iter()
+            .filter(|code| {
+                code.starts_with("protected-data-path:")
+                    || code.as_str() == crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+            })
+            .cloned(),
+    );
+    reasons.sort();
+    reasons.dedup();
+    reasons
+}
+
+/// Partition already rebuild-authorized inventory into reclaimable and protected sets. The
+/// assessment is explanatory evidence; cleanup re-evaluates the same authority immediately before
+/// mutation so a stale UI partition cannot authorize deletion.
+pub fn partition_artifacts_by_protection(
+    artifacts: &[DevArtifact],
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> (
+    Vec<DevArtifact>,
+    Vec<(DevArtifact, crate::reclaim_protection::ProtectionAssessment)>,
+) {
+    let mut reclaimable = Vec::new();
+    let mut protected = Vec::new();
+    for artifact in artifacts {
+        let assessment = assess_dev_artifact_protection(artifact, context);
+        if artifact_protection_blocking_reasons(&assessment).is_empty() {
+            reclaimable.push(artifact.clone());
+        } else {
+            protected.push((artifact.clone(), assessment));
+        }
+    }
+    (reclaimable, protected)
+}
+
 /// Re-scan and move only unchanged development artifacts to OS Trash.
 ///
 /// The request manifest is deliberately compared against a fresh bounded scan. A path match is
@@ -747,7 +868,35 @@ pub fn clean_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
-    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, false)
+    clean_artifacts_with_protection(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        &crate::reclaim_protection::ProtectionContext::default(),
+    )
+}
+
+/// Reversible cleanup with caller-supplied protection evidence. The context can add live Orca,
+/// lead-queue, open-PR or explicit recent-write evidence; it cannot relax static protection rules.
+pub fn clean_artifacts_with_protection(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    protection: &crate::reclaim_protection::ProtectionContext,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        false,
+        protection,
+    )
 }
 
 /// Permanently delete only unchanged, inactive development artifacts after an explicit caller
@@ -759,7 +908,34 @@ pub fn permanently_delete_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
-    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
+    permanently_delete_artifacts_with_protection(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        &crate::reclaim_protection::ProtectionContext::default(),
+    )
+}
+
+/// Permanent cleanup with the same protection authority used by reversible cleanup.
+pub fn permanently_delete_artifacts_with_protection(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    protection: &crate::reclaim_protection::ProtectionContext,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        true,
+        protection,
+    )
 }
 
 fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
@@ -777,11 +953,25 @@ fn clean_artifacts_with_disposition(
     journal_path: &Path,
     now_ms: u64,
     permanent: bool,
+    protection: &crate::reclaim_protection::ProtectionContext,
 ) -> Vec<DevArtifactCleanResult> {
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
         .map(|request| {
+            let protection_assessment = assess_dev_artifact_protection(request, protection);
+            let protection_blockers = artifact_protection_blocking_reasons(&protection_assessment);
+            if !protection_blockers.is_empty() {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: format!(
+                        "development artifact protected: {}",
+                        protection_blockers.join(",")
+                    ),
+                };
+            }
+
             let matches = current.iter().find(|candidate| {
                 candidate.path == request.path
                     && candidate.kind == request.kind
