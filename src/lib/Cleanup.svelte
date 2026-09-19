@@ -1,12 +1,14 @@
 <script lang="ts">
   import * as api from "./api";
+  import * as devArtifactApi from "./devArtifactApi";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import {
     executeRuntimeStorageMutation,
     runtimeStorageRecoverySucceeded,
   } from "./runtimeStorageMaintenanceFlow";
-  import { confirm } from "@tauri-apps/plugin-dialog";
+  import { confirm, open } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
@@ -15,12 +17,15 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let caches: api.CacheCandidate[] = $state([]);
-  let artifacts: api.DevArtifact[] = $state([]);
+  let artifacts: devArtifactApi.DevArtifact[] = $state([]);
+  let devArtifactRoot = $state("");
   let selected: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
   let cacheRetryMessage = $state("");
+  let devArtifactApproval: devArtifactApi.DevArtifactApproval | null = $state(null);
+  let devArtifactConfirmationPhrase = $state("");
   let runtimeStoragePlans: api.RuntimeStoragePlan[] = $state([]);
   let runtimeStorageBusy = $state(false);
   let runtimeStorageError = $state("");
@@ -35,6 +40,7 @@
     const labels: Record<string, string> = {
       node_modules: "Node.js 의존 파일",
       target: "개발 도구 빌드 산출물",
+      "cargo-target-cache": "Cargo 공용 빌드 캐시",
       ".venv": "Python 환경 파일",
       ".venv314": "Python 3.14 환경 파일",
       ".mypy_cache": "Python 형식 검사 캐시",
@@ -44,7 +50,10 @@
       ".nox": "Python 자동화 테스트 환경",
       dist: "배포용 빌드 파일",
       build: "빌드 파일",
+      ".next": "Next.js 빌드 파일",
+      "dist-electron": "Electron 빌드 파일",
       ".codegraph": "코드 분석 자료",
+      ".obsolete": "VS Code 폐기 확장",
     };
     return labels[kind] ?? "개발 파일";
   }
@@ -62,14 +71,63 @@
     }
   }
 
+  function invalidateDevArtifactApproval() {
+    devArtifactApproval = null;
+    devArtifactConfirmationPhrase = "";
+  }
+
+  onMount(() => {
+    const timer = window.setInterval(() => {
+      if (
+        devArtifactApproval !== null
+        && !devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
+      ) {
+        invalidateDevArtifactApproval();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  });
+
   async function load() {
     loadError = "";
+    invalidateDevArtifactApproval();
     try {
       caches = await api.listCacheCandidates();
-      artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
+      artifacts = devArtifactRoot ? await devArtifactApi.listDevArtifacts(devArtifactRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch {
-      loadError = "정리 대상을 불러오지 못했습니다. 저장 공간을 확인한 뒤 다시 시도하세요.";
+      loadError = "정리 대상을 불러오지 못했습니다. 저장 공간과 폴더 접근 권한을 확인한 뒤 다시 시도하세요.";
+    }
+  }
+
+  async function chooseDevArtifactRoot() {
+    if (busy) return;
+    loadError = "";
+    let chosenRoot: string | string[] | null;
+    try {
+      chosenRoot = await open({
+        directory: true,
+        multiple: false,
+        title: "정리할 개발 폴더 선택",
+      });
+    } catch {
+      loadError = "개발 폴더 선택 창을 열지 못했습니다. 폴더 접근 권한을 확인한 뒤 다시 시도하세요.";
+      return;
+    }
+    if (typeof chosenRoot !== "string" || chosenRoot.length === 0) return;
+
+    busy = true;
+    devArtifactRoot = chosenRoot;
+    selected = new Set();
+    invalidateDevArtifactApproval();
+    try {
+      artifacts = await devArtifactApi.listDevArtifacts(devArtifactRoot);
+      loadVerdicts(artifacts.map((a) => a.path));
+    } catch {
+      artifacts = [];
+      loadError = "선택한 개발 폴더를 확인하지 못했습니다. 접근 권한과 폴더 상태를 확인하세요.";
+    } finally {
+      busy = false;
     }
   }
 
@@ -224,39 +282,105 @@
     return next;
   }
 
+  function toggleArtifact(path: string) {
+    selected = toggle(selected, path);
+    invalidateDevArtifactApproval();
+  }
+
+  function selectedDevArtifacts(): devArtifactApi.DevArtifact[] {
+    return artifacts.filter(
+      (artifact) => selected.has(artifact.path) && artifact.scan_complete && artifact.skipped === 0,
+    );
+  }
+
   let totalSelected = $derived(
     artifacts
       .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
-      .reduce((sum, artifact) => sum + artifact.bytes, 0),
+      .reduce((sum, artifact) => sum + artifact.allocated_bytes, 0),
   );
 
   let selectionCount = $derived(
     artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
+  async function reviewDevArtifactSelection() {
+    const selectedArtifacts = selectedDevArtifacts();
+    if (busy || selectedArtifacts.length === 0 || !devArtifactRoot) return;
+    busy = true;
+    loadError = "";
+    invalidateDevArtifactApproval();
+    try {
+      devArtifactApproval = await devArtifactApi.reviewDevArtifacts(devArtifactRoot, selectedArtifacts);
+    } catch {
+      loadError = "선택 항목이 바뀌었거나 현재 상태를 다시 확인할 수 없습니다. 목록을 새로고침한 뒤 다시 검토하세요.";
+    } finally {
+      busy = false;
+    }
+  }
+
+  function devArtifactExecutionReady(): boolean {
+    return !busy
+      && devArtifactApi.isDevArtifactApprovalCurrent(devArtifactApproval, Date.now())
+      && devArtifactConfirmationPhrase.trim() === devArtifactApproval.exact_phrase
+      && selectionCount > 0;
+  }
+
   async function executeClean() {
-    // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const selectedArtifacts = artifacts.filter(
-      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
+    const selectedArtifacts = selectedDevArtifacts();
+    const approval = devArtifactApproval;
+    if (
+      selectedArtifacts.length === 0
+      || !devArtifactRoot
+      || !devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())
+      || devArtifactConfirmationPhrase.trim() !== approval.exact_phrase
+    ) return;
+
+    const summary = selectedArtifacts.map(
+      (artifact) => `${artifact.path} (로컬 ${fmtBytes(artifact.allocated_bytes)}, ${artifact.files}개)`,
     );
-    if (selectedArtifacts.length === 0 || !scannedRoot) return;
-    const summary = selectedArtifacts.map((a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개)`);
     const okay = await confirm(
-      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
+      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (현재 로컬 사용량 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 저장 공간이 회수되지 않습니다.",
-      { title: "DiskSage", kind: "warning" },
+        "\n\n입력한 승인 문구와 선택 지문을 백엔드에서 다시 검증합니다. 휴지통에서 복원할 수 있으며, 휴지통을 비우기 전에는 물리 공간이 회수되지 않습니다.",
+      { title: "DiskSage 개발 파일 정리", kind: "warning" },
     );
     if (!okay) return;
+    if (!devArtifactApi.isDevArtifactApprovalCurrent(approval, Date.now())) {
+      invalidateDevArtifactApproval();
+      loadError = "승인 시간이 만료되었습니다. 선택 항목은 유지했습니다. 다시 검토해 승인 문구를 생성하세요.";
+      return;
+    }
 
     busy = true;
+    loadError = "";
     try {
-      results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
+      const cleanResults = await devArtifactApi.cleanDevArtifactsBound(
+        devArtifactRoot,
+        0,
+        selectedArtifacts,
+        approval,
+        devArtifactConfirmationPhrase.trim(),
+      );
+      results = cleanResults;
+      const approvalFailure = cleanResults.some(
+        (result) => !result.ok && (
+          result.error.includes("development-artifact-approval-")
+          || result.error.includes("development-artifact-confirmation-")
+          || result.error.includes("development-artifact-selection-")
+        ),
+      );
+      if (approvalFailure) {
+        invalidateDevArtifactApproval();
+        loadError = "승인 증거가 더 이상 유효하지 않습니다. 선택 항목은 유지했습니다. 다시 검토해 승인 문구를 생성하세요.";
+        return;
+      }
       selected = new Set();
+      invalidateDevArtifactApproval();
       await load();
     } catch {
-      loadError = "개발 파일을 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+      invalidateDevArtifactApproval();
+      loadError = "개발 파일을 정리하지 못했습니다. 목록을 새로고침하고 현재 상태를 다시 검토하세요.";
     } finally {
       busy = false;
     }
@@ -267,7 +391,7 @@
 
 <section>
   <h2>정리 <button onclick={load} disabled={busy}>새로고침</button></h2>
-  {#if loadError}<p class="error" role="alert">작업을 다시 시도하세요. {loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   <h3>캐시</h3>
   <p class="notice" role="status">
@@ -295,7 +419,16 @@
     {/each}
   </ul>
 
-  <h3>오래된 개발 파일 {scannedRoot ? `(${scannedRoot}, 30일+)` : "(먼저 스캔하세요)"}</h3>
+  <h3>개발 빌드 파일 {devArtifactRoot ? `(${devArtifactRoot})` : "(개발 폴더를 선택하세요)"}</h3>
+  <p class="notice" role="status">
+    전체 디스크 스캔 위치를 재사용하지 않습니다. 정리할 개발 작업공간을 직접 선택하면, 그 안에서 다시 만들 수 있다고 확인된 빌드 파일과 캐시만 표시합니다.
+  </p>
+  <button onclick={chooseDevArtifactRoot} disabled={busy}>
+    {busy ? "개발 폴더 확인 중…" : "개발 폴더 선택"}
+  </button>
+  {#if devArtifactRoot && artifacts.length === 0 && !busy && !loadError}
+    <p class="notice" role="status">선택한 폴더에서 정리 가능한 개발 빌드 파일을 찾지 못했습니다.</p>
+  {/if}
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
@@ -304,7 +437,7 @@
             type="checkbox"
             disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
-            onchange={() => (selected = toggle(selected, a.path))}
+            onchange={() => toggleArtifact(a.path)}
           />
           {artifactKindLabel(a.kind)} <em>({a.project}, {a.age_days}일)</em>
           <span class="size">
@@ -312,7 +445,7 @@
               ? `${fmtBytes(a.bytes)} · 파일 정보 확인 미완료`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
-                : fmtBytes(a.bytes)}
+                : `로컬 ${fmtBytes(a.allocated_bytes)} · 논리 ${fmtBytes(a.bytes)}`}
           </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
@@ -325,20 +458,40 @@
   </ul>
 
   <div class="actions">
-    <button onclick={executeClean} disabled={busy || selectionCount === 0}>
-      {busy ? "정리 중…" : `선택 항목 휴지통으로 (논리 ${fmtBytes(totalSelected)})`}
+    <button onclick={reviewDevArtifactSelection} disabled={busy || selectionCount === 0}>
+      {busy ? "선택 항목 재검증 중…" : `선택 ${selectionCount}개 재검증 및 승인 문구 생성`}
+    </button>
+    {#if devArtifactApproval}
+      <div class="typed-approval" aria-live="polite">
+        <p class="notice" role="status">
+          아래 문구는 현재 선택과 파일 상태에만 5분 동안 유효합니다. 선택을 바꾸거나 새로고침하면 다시 검토해야 합니다.
+        </p>
+        <code>{devArtifactApproval.exact_phrase}</code>
+        <label>
+          정확한 승인 문구 입력
+          <input
+            bind:value={devArtifactConfirmationPhrase}
+            autocomplete="off"
+            spellcheck="false"
+            disabled={busy}
+          />
+        </label>
+      </div>
+    {/if}
+    <button onclick={executeClean} disabled={!devArtifactExecutionReady()}>
+      {busy ? "정리 중…" : `검토된 선택 항목 휴지통으로 (로컬 ${fmtBytes(totalSelected)})`}
     </button>
   </div>
 
   {#if results.length > 0}
-    <p>
+    <p role="status">
       {results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 완료 —
       휴지통에서 복원할 수 있습니다.
     </p>
     {#if failedResults.length > 0}
       <ul class="errors">
         {#each failedResults as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.</li>
+          <li title={r.path}>⚠ {r.path} — {r.error || "정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요."}</li>
         {/each}
       </ul>
     {/if}
@@ -438,6 +591,11 @@
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .actions { display: grid; gap: 0.6rem; }
+  .typed-approval { display: grid; gap: 0.5rem; max-width: 100%; }
+  .typed-approval code { overflow-wrap: anywhere; }
+  .typed-approval label { display: grid; gap: 0.25rem; }
+  .typed-approval input { width: 100%; box-sizing: border-box; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
