@@ -165,6 +165,43 @@ fn long_windows_build_paths_keep_physical_allocation_evidence_complete() {
 }
 
 #[test]
+fn empty_native_obsolete_extension_remains_inventory_with_zero_allocation() {
+    let temp = tempfile::tempdir().expect("create fixture root");
+    let home = temp.path().join("home");
+    let appdata = home.join("AppData/Roaming");
+    let extensions = temp.path().join(".vscode-server/data/extensions");
+    let obsolete = extensions.join("publisher.empty-1.0.0");
+    fs::create_dir_all(&appdata).expect("create appdata");
+    fs::create_dir_all(&obsolete).expect("create empty obsolete extension");
+    fs::write(
+        extensions.join(".obsolete"),
+        br#"{"publisher.empty-1.0.0":true}"#,
+    )
+    .expect("write native obsolete lifecycle metadata");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))
+        .args(["--root", temp.path().to_str().expect("UTF-8 temp path")])
+        .env_remove("HOME")
+        .env("USERPROFILE", &home)
+        .env("APPDATA", &appdata)
+        .output()
+        .expect("run development artifact inventory");
+
+    assert!(
+        output.status.success(),
+        "obsolete inventory failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("inventory JSON");
+    assert_eq!(report["candidate_count"], 1);
+    assert_eq!(report["candidates"][0]["kind"], "vscode-obsolete-extension");
+    assert_eq!(report["candidates"][0]["path"], obsolete.to_string_lossy().as_ref());
+    assert_eq!(report["candidates"][0]["allocated_bytes"], 0);
+    assert_eq!(report["candidates"][0]["files"], 0);
+    assert_eq!(report["candidates"][0]["scan_complete"], true);
+}
+
+#[test]
 fn absolute_windows_root_with_parent_component_is_rejected_before_inventory() {
     let temp = tempfile::tempdir().expect("create fixture root");
     let home = temp.path().join("home");
