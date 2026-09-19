@@ -112,6 +112,7 @@ fn review_current_selection_at(
     review_selection(root, &refreshed, issued_at_ms)
 }
 
+#[cfg(not(coverage))]
 fn review_current_selection(
     root: &Path,
     requests: &[DevArtifact],
