@@ -164,7 +164,6 @@ pub fn clean_artifacts_with_confirmation(
         min_age_days,
         journal_path,
         now_ms,
-        true,
     )
 }
 
