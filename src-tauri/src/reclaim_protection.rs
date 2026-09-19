@@ -5,8 +5,13 @@
 //! than inventing silent defaults. When a recent-write window is used, the caller
 //! must pass an explicit duration — there is no hidden library default.
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,6 +57,8 @@ pub const PROTECTED_CREDENTIAL_FILE_NAMES: &[&str] =
 
 const RECENT_WRITE_SCAN_BUDGET: Duration = Duration::from_millis(250);
 const MAX_RECENT_WRITE_SCAN_ENTRIES: usize = 250_000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -201,6 +208,35 @@ fn modified_time_reason(
     Ok((now_unix_secs.saturating_sub(mtime_secs) < window_secs).then_some(REASON_RECENT_WRITES))
 }
 
+fn root_boundary_incomplete(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn crosses_filesystem_boundary(root: &fs::Metadata, descendant: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        return root.dev() != descendant.dev();
+    }
+    #[cfg(windows)]
+    {
+        let _ = root;
+        return descendant.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (root, descendant);
+        false
+    }
+}
+
 fn recent_write_reason_with_limits(
     path: &Path,
     window_secs: u64,
@@ -215,7 +251,7 @@ fn recent_write_reason_with_limits(
         Ok(metadata) => metadata,
         Err(_) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
     };
-    if root_metadata.file_type().is_symlink() {
+    if root_metadata.file_type().is_symlink() || root_boundary_incomplete(&root_metadata) {
         return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE);
     }
     match modified_time_reason(&root_metadata, window_secs, now_unix_secs) {
@@ -227,13 +263,36 @@ fn recent_write_reason_with_limits(
         return None;
     }
 
+    let boundary_incomplete = Cell::new(false);
     let mut visited = 0usize;
-    for entry in walkdir::WalkDir::new(path)
+    let walker = walkdir::WalkDir::new(path)
         .min_depth(1)
         .follow_links(false)
         .into_iter()
-    {
-        if Instant::now() >= deadline || visited >= max_entries {
+        .filter_entry(|entry| {
+            if entry.depth() == 0 || entry.file_type().is_symlink() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                boundary_incomplete.set(true);
+                return false;
+            }
+            let metadata = match fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    boundary_incomplete.set(true);
+                    return false;
+                }
+            };
+            if crosses_filesystem_boundary(&root_metadata, &metadata) {
+                boundary_incomplete.set(true);
+                return false;
+            }
+            true
+        });
+
+    for entry in walker {
+        if boundary_incomplete.get() || Instant::now() >= deadline || visited >= max_entries {
             return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE);
         }
         let entry = match entry {
@@ -248,13 +307,18 @@ fn recent_write_reason_with_limits(
             Ok(metadata) => metadata,
             Err(_) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
         };
+        if crosses_filesystem_boundary(&root_metadata, &metadata) {
+            return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE);
+        }
         match modified_time_reason(&metadata, window_secs, now_unix_secs) {
             Ok(Some(reason)) => return Some(reason),
             Ok(None) => {}
             Err(()) => return Some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE),
         }
     }
-    None
+    boundary_incomplete
+        .get()
+        .then_some(REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE)
 }
 
 pub fn recent_write_reason(
