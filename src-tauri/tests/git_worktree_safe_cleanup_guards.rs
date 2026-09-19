@@ -1,6 +1,6 @@
 //! Focused regression coverage for #454 safe-cleanup guards:
 //! ignored artifacts must not be silent RemovalCandidates, and durable
-//! merged/closed evidence is required (retention containment and/or caller admission).
+//! merged/closed evidence is required (retention-reference containment only; caller hints are non-authoritative).
 
 #![cfg(all(unix, not(coverage)))]
 
@@ -141,7 +141,7 @@ fn sleeping_session_maps_to_preserve_class_not_reclaimable() {
 }
 
 #[test]
-fn caller_admitted_closed_merged_supplies_durable_evidence() {
+fn caller_admitted_closed_merged_hints_do_not_supply_durable_evidence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repository = temp.path().join("repository");
     let secondary = temp.path().join("secondary");
@@ -179,14 +179,18 @@ fn caller_admitted_closed_merged_supplies_durable_evidence() {
     let report = audit_git_worktrees(&repository, &["main".into()], options, now_ms())
         .expect("audit with admission");
     let entry = find_entry(&report, &secondary);
-    assert_eq!(
-        entry.merged_closed_evidence.as_deref(),
-        Some("caller-admitted-closed-merged")
+    assert!(
+        entry.merged_closed_evidence.is_none(),
+        "caller hint must not become authority: {:?}",
+        entry.merged_closed_evidence
     );
-    assert_eq!(
-        entry.disposition,
-        GitWorktreeDisposition::RemovalCandidate,
+    assert!(
+        entry
+            .blockers
+            .iter()
+            .any(|blocker| blocker == "reference-does-not-contain-head"),
         "blockers={:?}",
         entry.blockers
     );
+    assert_ne!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
 }

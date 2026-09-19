@@ -1,8 +1,8 @@
 //! Fail-closed, fingerprint-bound Git worktree auditing.
 //!
 //! The audit is read-only. A worktree is a removal candidate only when its HEAD has durable
-//! merged/closed evidence (retention-reference containment and/or caller-admitted closed/merged
-//! bindings), its tracked/untracked-nonignored state is clean, ignored artifacts are absent, its
+//! merged/closed evidence from retention-reference containment (caller-provided closed/merged
+//! hints are not authoritative until an authenticated evidence owner is bound), its tracked/untracked-nonignored state is clean, ignored artifacts are absent, its
 //! path and size evidence are complete, it is neither locked nor prunable, and no active CWD or
 //! open-file consumer is observed. The resulting approval phrase is evidence, not execution.
 
@@ -55,10 +55,10 @@ pub struct GitWorktreeAuditOptions {
     /// When true, treat a non-empty `git stash list` as a blocker.
     #[serde(default)]
     pub assess_stash: bool,
-    /// Caller-admitted closed/merged HEAD OIDs (durable evidence alongside retention refs).
+    /// Caller hints for closed/merged HEAD OIDs (non-authoritative until evidence owner binding).
     #[serde(default)]
     pub closed_merged_head_oids: Vec<String>,
-    /// Caller-admitted closed/merged branch names (exact match against worktree branch).
+    /// Caller hints for closed/merged branch names (non-authoritative until evidence owner binding).
     #[serde(default)]
     pub closed_merged_branches: Vec<String>,
 }
@@ -145,8 +145,7 @@ pub struct GitWorktreeAuditEntry {
     pub active_use: GitWorktreeActiveUseEvidence,
     pub disposition: GitWorktreeDisposition,
     pub blockers: Vec<String>,
-    /// Durable merged/closed evidence source when present:
-    /// `retention-reference-containment` or `caller-admitted-closed-merged`.
+    /// Durable merged/closed evidence source when present: `retention-reference-containment`.
     #[serde(default)]
     pub merged_closed_evidence: Option<String>,
     pub entry_fingerprint: String,
@@ -1490,22 +1489,10 @@ pub fn audit_git_worktrees(
         };
         let contained_in_reference = containment_observation(&raw.head, &reachable_commits);
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
-        let caller_closed_merged = options
-            .closed_merged_head_oids
-            .iter()
-            .any(|oid| oid == &raw.head)
-            || raw.branch.as_ref().is_some_and(|branch| {
-                options
-                    .closed_merged_branches
-                    .iter()
-                    .any(|admitted| admitted == branch)
-            });
         let merged_closed_evidence = if contained_in_reference == Some(true)
             && !retention_references.is_empty()
         {
             Some("retention-reference-containment".to_string())
-        } else if caller_closed_merged {
-            Some("caller-admitted-closed-merged".to_string())
         } else {
             None
         };
@@ -1526,12 +1513,6 @@ pub fn audit_git_worktrees(
             }
         };
 
-        // For candidate classification, treat caller-admitted closed/merged as durable containment.
-        let classification_contained = if merged_closed_evidence.is_some() {
-            Some(true)
-        } else {
-            contained_in_reference
-        };
         let preliminary = ClassificationInput {
             primary: index == 0,
             audit_origin: audit_origin_entry,
@@ -1540,7 +1521,7 @@ pub fn audit_git_worktrees(
             prunable: raw.prunable,
             path_valid,
             status_clean,
-            contained_in_reference: classification_contained,
+            contained_in_reference,
             head_is_retained_tip,
             actor_cwd_inside,
             size_complete: size.evidence_complete,
@@ -3032,7 +3013,7 @@ mod tests {
 
     #[cfg(all(unix, not(coverage)))]
     #[test]
-    fn caller_admitted_closed_merged_is_durable_evidence() {
+    fn caller_admitted_closed_merged_hints_are_not_durable_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let repository = temp.path().join("repository");
         let secondary = temp.path().join("secondary");
@@ -3094,15 +3075,14 @@ mod tests {
             .iter()
             .find(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
             .expect("secondary worktree entry");
-        assert_eq!(
-            secondary_entry.merged_closed_evidence.as_deref(),
-            Some("caller-admitted-closed-merged")
-        );
-        assert_eq!(
+        assert!(secondary_entry.merged_closed_evidence.is_none());
+        assert!(secondary_entry
+            .blockers
+            .iter()
+            .any(|blocker| blocker == "reference-does-not-contain-head"));
+        assert_ne!(
             secondary_entry.disposition,
-            GitWorktreeDisposition::RemovalCandidate,
-            "blockers={:?}",
-            secondary_entry.blockers
+            GitWorktreeDisposition::RemovalCandidate
         );
     }
 
