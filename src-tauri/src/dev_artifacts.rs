@@ -606,9 +606,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     age_days(&path, now_ms)
                 };
                 let manifest = artifact_manifest(&path);
-                if manifest.allocated_bytes == 0 {
-                    return None;
-                }
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
                     kind: "vscode-obsolete-extension".into(),
@@ -687,7 +684,7 @@ fn clean_artifacts_with_disposition(
                     && candidate.project == request.project
                     && candidate.bytes == request.bytes
                     && candidate.allocated_bytes == request.allocated_bytes
-                    && request.allocated_bytes > 0
+                    && (request.kind == "vscode-obsolete-extension" || request.allocated_bytes > 0)
                     && candidate.files == request.files
                     && candidate.skipped == request.skipped
                     && candidate.scan_complete
@@ -917,9 +914,11 @@ mod tests {
         assert!(found
             .iter()
             .any(|item| item.path == obsolete.to_string_lossy()));
-        assert!(found
+        let empty_obsolete = found
             .iter()
-            .any(|item| item.path == server_obsolete.to_string_lossy()));
+            .find(|item| item.path == server_obsolete.to_string_lossy())
+            .expect("native .obsolete lifecycle must retain an empty extension directory");
+        assert_eq!(empty_obsolete.allocated_bytes, 0);
         assert_eq!(editor_product(".cursor"), Some("Cursor"));
         assert_eq!(editor_product(".unknown-editor"), None);
     }
