@@ -19,14 +19,18 @@ fn cargo_target_requires_manifest_and_lockfile_rebuild_authority() {
 
     let without_lock = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        !without_lock.iter().any(|artifact| artifact.path == target.to_string_lossy()),
+        !without_lock
+            .iter()
+            .any(|artifact| artifact.path == target.to_string_lossy().as_ref()),
         "Cargo.toml alone is not rebuild authority for deleting target"
     );
 
     fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lockfile");
     let with_lock = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        with_lock.iter().any(|artifact| artifact.path == target.to_string_lossy()),
+        with_lock
+            .iter()
+            .any(|artifact| artifact.path == target.to_string_lossy().as_ref()),
         "Cargo.toml + Cargo.lock must admit the generated target"
     );
 }
@@ -45,7 +49,9 @@ fn javascript_generated_roots_require_package_manifest_and_recognized_lockfile()
     let without_lock = find_artifacts(temp.path(), 0, u64::MAX);
     for path in [&node_modules, &next, &electron] {
         assert!(
-            !without_lock.iter().any(|artifact| artifact.path == path.to_string_lossy()),
+            !without_lock
+                .iter()
+                .any(|artifact| artifact.path == path.to_string_lossy().as_ref()),
             "package.json alone is not rebuild authority for deleting {}",
             path.display()
         );
@@ -56,7 +62,9 @@ fn javascript_generated_roots_require_package_manifest_and_recognized_lockfile()
     let with_lock = find_artifacts(temp.path(), 0, u64::MAX);
     for path in [&node_modules, &next, &electron] {
         assert!(
-            with_lock.iter().any(|artifact| artifact.path == path.to_string_lossy()),
+            with_lock
+                .iter()
+                .any(|artifact| artifact.path == path.to_string_lossy().as_ref()),
             "package manifest + recognized lockfile must admit {}",
             path.display()
         );
@@ -78,7 +86,10 @@ fn native_cargo_cache_tag_remains_independent_of_project_lockfiles() {
 
     let found = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        found.iter().any(|artifact| artifact.kind == "cargo-target-cache" && artifact.path == cache.to_string_lossy()),
+        found.iter().any(|artifact| {
+            artifact.kind == "cargo-target-cache"
+                && artifact.path == cache.to_string_lossy().as_ref()
+        }),
         "native Cargo cache authority must remain independently discoverable"
     );
 }
