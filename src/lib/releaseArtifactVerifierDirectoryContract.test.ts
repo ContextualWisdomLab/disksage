@@ -61,6 +61,29 @@ function verify(artifactRoot: string) {
 }
 
 describe('release artifact verifier directory contract', () => {
+  for (const emptyPayload of ['bundle', 'cli'] as const) {
+    it.runIf(process.platform !== 'win32')(`rejects an empty ${emptyPayload} even with a matching checksum`, () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-empty-release-'));
+      const artifactRoot = join(fixtureRoot, 'release-artifacts');
+      try {
+        materializeExactArtifactSet(artifactRoot);
+        const name = 'disksage-cloud-plan-linux-x86_64';
+        const payload = emptyPayload === 'bundle'
+          ? join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb')
+          : join(artifactRoot, platformDirectories.linux, name);
+        write(payload, '');
+        if (emptyPayload === 'cli') {
+          write(`${payload}.sha256`, `${createHash('sha256').update('').digest('hex')}  ${name}\n`);
+        }
+        const result = verify(artifactRoot);
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toContain('Empty release artifact');
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
   it.runIf(process.platform !== 'win32')(
     'accepts the exact platform namespaces uploaded by the release matrix',
     () => {
@@ -156,7 +179,7 @@ describe('release artifact verifier directory contract', () => {
     },
   );
 
-  it('requires tag attestation to verify downloaded platform namespaces before SBOM generation', () => {
+  it('requires tag attestation to use the shared verifier before SBOM generation', () => {
     const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
     const attestStart = workflow.indexOf('  attest-release:');
     const publishStart = workflow.indexOf('  publish-release:', attestStart);
@@ -166,7 +189,7 @@ describe('release artifact verifier directory contract', () => {
     const attestJob = workflow.slice(attestStart, publishStart);
     const downloadOffset = attestJob.indexOf('- name: Download exact release artifact set');
     const verifierOffset = attestJob.indexOf(
-      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"',
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
     );
     const sbomOffset = attestJob.indexOf('- name: Generate and validate source-bound SBOM');
 
@@ -174,5 +197,26 @@ describe('release artifact verifier directory contract', () => {
     expect(verifierOffset).toBeGreaterThanOrEqual(0);
     expect(verifierOffset).toBeGreaterThan(downloadOffset);
     expect(sbomOffset).toBeGreaterThan(verifierOffset);
+    expect(attestJob).not.toContain('- name: Verify release artifact checksums');
+    expect(attestJob).not.toContain('require_exactly_one_path()');
+  });
+
+  it('pins every publish-release artifact download to exactly download-artifact v8.0.1', () => {
+    const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
+    const publishStart = workflow.indexOf('  publish-release:');
+    const gpuStart = workflow.indexOf('  gpu-build:', publishStart);
+    expect(publishStart).toBeGreaterThanOrEqual(0);
+    expect(gpuStart).toBeGreaterThan(publishStart);
+
+    const publishJob = workflow.slice(publishStart, gpuStart);
+    const pins = [
+      ...publishJob.matchAll(/actions\/download-artifact@([^\s]+)\s+#\s+([^\n]+)/g),
+    ].map((match) => ({ sha: match[1], label: match[2].trim() }));
+
+    expect(pins).toHaveLength(2);
+    expect(pins).toEqual([
+      { sha: '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', label: 'v8.0.1' },
+      { sha: '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', label: 'v8.0.1' },
+    ]);
   });
 });

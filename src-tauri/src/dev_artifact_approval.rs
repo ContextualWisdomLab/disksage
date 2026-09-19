@@ -112,6 +112,7 @@ fn review_current_selection_at(
     review_selection(root, &refreshed, issued_at_ms)
 }
 
+#[cfg(not(coverage))]
 fn review_current_selection(
     root: &Path,
     requests: &[DevArtifact],
@@ -164,7 +165,6 @@ pub fn clean_artifacts_with_confirmation(
         min_age_days,
         journal_path,
         now_ms,
-        true,
     )
 }
 
@@ -258,6 +258,37 @@ mod tests {
         assert_eq!(forward, reverse);
         let changed = selection_fingerprint(temp.path(), &[a, artifact("/tmp/b/target", "c")]).unwrap();
         assert_ne!(forward, changed);
+    }
+
+    #[test]
+    fn approval_fingerprint_binds_physical_allocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = artifact("/tmp/a/target", "a");
+        let mut changed = original.clone();
+        changed.allocated_bytes = original.allocated_bytes + 4096;
+
+        let original_fingerprint = selection_fingerprint(temp.path(), &[original]).unwrap();
+        let changed_fingerprint = selection_fingerprint(temp.path(), &[changed]).unwrap();
+
+        assert_ne!(original_fingerprint, changed_fingerprint);
+    }
+
+    #[test]
+    fn wrong_confirmation_phrase_is_rejected_before_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let request = artifact("/tmp/a/target", "a");
+        let approval = review_selection(temp.path(), std::slice::from_ref(&request), 10).unwrap();
+        let result = clean_artifacts_with_confirmation(
+            &[request],
+            temp.path(),
+            0,
+            &temp.path().join("journal.jsonl"),
+            10,
+            &approval,
+            "MOVE SOMETHING ELSE TO TRASH",
+        );
+
+        assert_eq!(result[0].error, "development-artifact-confirmation-required");
     }
 
     #[test]

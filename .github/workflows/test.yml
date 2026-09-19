@@ -3,20 +3,50 @@ name: Test
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
+      - "!docs/doctoring/release-artifact-provenance.md"
+      - "!docs/doctoring/tauri-content-security-policy.md"
+      - "!docs/doctoring/model-artifact-integrity.md"
+      - "!docs/doctoring/model-load-handle-binding.md"
+      - "!docs/development/icloud-local-eviction-batch.md"
+      - "!docs/architecture/goals/cloud-offload-goal.json"
+      - "!CHANGELOG.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      # Content-checked by contract tests (vitest + cargo test) — must still run CI.
+      - "!docs/doctoring/release-artifact-provenance.md"
+      - "!docs/doctoring/tauri-content-security-policy.md"
+      - "!docs/doctoring/model-artifact-integrity.md"
+      - "!docs/doctoring/model-load-handle-binding.md"
+      - "!docs/development/icloud-local-eviction-batch.md"
+      - "!docs/architecture/goals/cloud-offload-goal.json"
+      - "!CHANGELOG.md"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Verify exact source head
         shell: bash
         env:
@@ -31,12 +61,16 @@ jobs:
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev lsof
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           cache-targets: false
+      - name: Configure private test temp
+        run: |
+          mkdir -p "$RUNNER_TEMP/disksage"
+          echo "TMPDIR=$RUNNER_TEMP/disksage" >> "$GITHUB_ENV"
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
@@ -52,7 +86,7 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20.19.0
+          node-version: 22.12.0
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -63,8 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Verify exact source head
         shell: pwsh
         env:
@@ -82,9 +116,55 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
-      - name: Windows development artifact allocation regressions
+      - name: Windows development artifact home and allocation regressions
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_windows_home_contract
+      - name: Windows worktree active-use Restart Manager regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_windows_active_use
+      - name: Windows rebuild authority test target compile regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract --no-run
+      - name: Windows Cargo manifest-only rejection regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract cargo_target_without_lockfile_is_rejected -- --exact
+      - name: Windows Cargo manifest-plus-lock admission regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract cargo_target_with_manifest_and_lockfile_is_admitted -- --exact
+      - name: Windows JavaScript project rebuild authority regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract javascript_generated_roots_require_package_manifest_and_recognized_lockfile -- --exact
+      - name: Windows native Cargo cache authority regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract native_cargo_cache_tag_remains_independent_of_project_lockfiles -- --exact
+
+  frontend-contracts-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          if ($actualSha -ne $env:EXPECTED_SOURCE_SHA) {
+            Write-Error "Frontend job checked out $actualSha but expected source head $env:EXPECTED_SOURCE_SHA"
+            exit 1
+          }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Frontend contract tests
+        run: npm test
+      - name: Frontend production build
+        run: npm run build
 
   llm-engine-build:
     runs-on: ubuntu-latest
@@ -92,8 +172,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Verify exact source head
         shell: bash
         env:

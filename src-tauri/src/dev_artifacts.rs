@@ -9,6 +9,14 @@ use crate::scanner;
 // a partial observation into permission to move a recreated directory to the trash.
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
+const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
+// Reversible Trash cleanup backs an interactive path, so an incomplete active-use probe must fail
+// closed without inheriting the longer latency budget reserved for irreversible deletion.
+const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS;
+// Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
+// 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
+// longer operational timeout instead of silently weakening the active-use gate.
+const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -40,13 +48,95 @@ pub struct DevArtifactCleanResult {
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
 const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
+    (".next", &["package.json"]),
+    ("dist-electron", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (".venv314", &["pyproject.toml", "requirements.txt", "setup.py", ".git"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
+    (".mypy_cache", &[]),
+    (".pytest_cache", &[]),
+    (".ruff_cache", &[]),
+    (".tox", &["pyproject.toml", "tox.ini", "setup.cfg"]),
+    (".nox", &["pyproject.toml", "noxfile.py"]),
+    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
+
+const JAVASCRIPT_LOCKFILES: &[&str] = &[
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+];
+
+fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
+    let path = parent.join(marker);
+    if artifact_name != ".tox" || marker != "setup.cfg" {
+        return path.exists();
+    }
+    std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1_048_576)
+        && std::fs::read_to_string(path).is_ok_and(|text| {
+            text.lines()
+                .any(|line| line.trim().eq_ignore_ascii_case("[tox:tox]"))
+        })
+}
+
+fn project_rebuild_authority(parent: &Path, kind: &str) -> bool {
+    match kind {
+        "cargo-target-cache" => true,
+        "target" => parent.join("Cargo.toml").is_file() && parent.join("Cargo.lock").is_file(),
+        "node_modules" | ".next" | "dist-electron" => {
+            parent.join("package.json").is_file()
+                && JAVASCRIPT_LOCKFILES
+                    .iter()
+                    .any(|lockfile| parent.join(lockfile).is_file())
+        }
+        _ => true,
+    }
+}
+
+fn is_python_314_environment(path: &Path) -> bool {
+    let config = path.join("pyvenv.cfg");
+    std::fs::metadata(&config)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(config).is_ok_and(|text| {
+            text.lines().any(|line| {
+                line.split_once('=').is_some_and(|(key, value)| {
+                    let key = key.trim();
+                    (key.eq_ignore_ascii_case("version")
+                        || key.eq_ignore_ascii_case("version_info"))
+                        && value
+                            .trim()
+                            .strip_prefix("3.14")
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+            })
+        })
+}
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
+}
+
+fn cargo_target_cache(path: &Path) -> bool {
+    let tag_path = path.join("CACHEDIR.TAG");
+    let tagged = std::fs::metadata(&tag_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(tag_path).is_ok_and(|tag| {
+            tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n")
+                && tag.contains("cache directory tag created by cargo")
+        })
+        && path.join(".rustc_info.json").is_file();
+    tagged && path.join("debug").is_dir()
+}
+
+fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    if cargo_target_cache(path) {
+        return Some(("cargo-target-cache", &[]));
+    }
+    artifact_kind(name).map(|(kind, markers)| (*kind, *markers))
 }
 
 fn age_days(path: &Path, now_ms: u64) -> u64 {
@@ -112,9 +202,6 @@ fn windows_api_path(path: &Path) -> Option<Vec<u16>> {
         return None;
     }
 
-    // `\\?\` disables Win32 dot-component normalization. Resolve ordinary absolute
-    // paths before entering that namespace so `workspace\detour\..\target` remains a
-    // valid allocation query while preserving already-verbatim paths above.
     let normalized = std::path::absolute(path).ok()?;
     wide = normalized.as_os_str().encode_wide().collect();
     if wide.contains(&0) {
@@ -179,6 +266,8 @@ fn hard_link_count(_path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
     None
 }
 
+/// Canonicalize each discovered provider root independently so one unavailable provider cannot
+/// erase otherwise valid provider boundaries.
 fn canonicalize_provider_roots<I>(roots: I) -> Vec<PathBuf>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -189,6 +278,9 @@ where
         .collect()
 }
 
+/// Establish fail-closed user-home authority, then discover the provider roots that development
+/// artifact inventory must never cross. Home identity is checked both before and after
+/// canonicalization so a replaced or symlinked home cannot widen deletion authority.
 fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
     #[cfg(windows)]
     let candidates = [
@@ -220,6 +312,9 @@ fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
     ))
 }
 
+/// Reject both platform-native File Provider ancestry and any descendant of a provider root that
+/// DiskSage discovered from the identity-checked home directory. Canonicalization failure is unsafe
+/// here because cleanup inventory must not gain authority from an unresolved path.
 fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
     let component_blocked = path.components().any(|component| {
         matches!(component, std::path::Component::Normal(value) if value == "CloudStorage" || value == "Mobile Documents")
@@ -235,38 +330,12 @@ fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
         .any(|cloud_path| canonical_path.starts_with(cloud_path))
 }
 
-fn marker_and_lockfile_present(path: &Path, kind: &str) -> bool {
-    match kind {
-        "target" => path.join("Cargo.toml").is_file() && path.join("Cargo.lock").is_file(),
-        "node_modules" => {
-            path.join("package.json").is_file()
-                && [
-                    "package-lock.json",
-                    "pnpm-lock.yaml",
-                    "yarn.lock",
-                    "bun.lock",
-                    "bun.lockb",
-                ]
-                .iter()
-                .any(|name| path.join(name).is_file())
-        }
-        ".venv" | "venv" => {
-            ["pyproject.toml", "setup.py"]
-                .iter()
-                .any(|name| path.join(name).is_file())
-                && ["uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"]
-                    .iter()
-                    .any(|name| path.join(name).is_file())
-        }
-        _ => false,
-    }
-}
-
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
 ///
-/// Paths, kinds, sizes, mtimes, hard-link topology, and filesystem identities are enough to detect
-/// a stale selection while avoiding sensitive content reads. A time/record bound makes the cleanup
-/// gate fail closed on unusually large trees instead of blocking the UI indefinitely.
+/// Paths, kinds, logical sizes, allocated sizes, mtimes, hard-link topology, and filesystem
+/// identities detect stale or only-partly-reclaimable selections without reading file contents.
+/// A time/record bound makes the cleanup gate fail closed on unusually large trees instead of
+/// blocking the UI indefinitely.
 fn artifact_manifest(root: &Path) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
@@ -424,39 +493,102 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn staged_manifest_matches_request(path: &Path, request: &DevArtifact) -> bool {
-    let manifest = artifact_manifest(path);
-    manifest.scan_complete
-        && manifest.skipped == 0
-        && manifest.object_id == request.object_id
-        && manifest.bytes == request.bytes
-        && manifest.allocated_bytes == request.allocated_bytes
-        && manifest.files == request.files
-        && manifest.fingerprint == request.fingerprint
-}
-
-fn validate_staged_artifact(path: &Path, request: &DevArtifact) -> Result<(), String> {
-    let active_use = crate::git_worktree::active_use_evidence(path, 2_000, 64, true);
-    if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
-        return Err(
-            "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요"
-                .into(),
-        );
+fn editor_product(root_name: &str) -> Option<&'static str> {
+    match root_name {
+        ".vscode" => Some("Visual Studio Code"),
+        ".vscode-insiders" => Some("Visual Studio Code Insiders"),
+        ".vscode-server" => Some("Visual Studio Code Server"),
+        ".cursor" => Some("Cursor"),
+        _ => None,
     }
-    staged_manifest_matches_request(path, request)
-        .then_some(())
-        .ok_or_else(|| "개발 빌드 파일이 변경되었습니다. 다시 확인하세요".into())
 }
 
-/// 마커 인접 아티팩트 디렉토리를 찾아 로컬 할당량이 큰 순서로 반환.
+fn editor_product_for_extensions_dir(extensions: &Path) -> Option<&'static str> {
+    if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
+        return None;
+    }
+    let parent = extensions.parent()?;
+    let editor_root = if parent.file_name().and_then(|name| name.to_str()) == Some("data") {
+        parent.parent()?
+    } else {
+        parent
+    };
+    editor_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(editor_product)
+}
+
+fn is_editor_extension_directory(path: &Path) -> bool {
+    path.parent()
+        .and_then(editor_product_for_extensions_dir)
+        .is_some()
+}
+
+/// Return extension directories that VS Code itself marked obsolete.
 ///
-/// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
-/// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
-/// 도중 걸러내면, 중첩 node_modules의 자식이 부모보다 먼저 방문될 경우 둘 다
-/// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
-/// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
-/// 계산해 중첩분을 이중 계산하지 않는다.
+/// `.obsolete` is native lifecycle authority, so no version-age heuristic is needed. Only a real
+/// metadata file at `.vscode/extensions/.obsolete` and single-component real child directories are
+/// accepted.
+fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'static str)> {
+    let mut paths = Vec::new();
+    let Some(extensions) = metadata_path.parent() else {
+        return paths;
+    };
+    let Some(product) = editor_product_for_extensions_dir(extensions) else {
+        return paths;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(metadata_path) else {
+        return paths;
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > VSCODE_OBSOLETE_METADATA_MAX_BYTES
+    {
+        return paths;
+    }
+    let Ok(bytes) = std::fs::read(metadata_path) else {
+        return paths;
+    };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return paths;
+    };
+    let Some(names) = document.as_object() else {
+        return paths;
+    };
+    for (name, obsolete) in names {
+        if obsolete.as_bool() != Some(true) {
+            continue;
+        }
+        let mut components = Path::new(name).components();
+        let Some(std::path::Component::Normal(component)) = components.next() else {
+            continue;
+        };
+        if components.next().is_some() || component.is_empty() {
+            continue;
+        }
+        let candidate = extensions.join(component);
+        let Ok(candidate_metadata) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if candidate_metadata.is_dir() && !candidate_metadata.file_type().is_symlink() {
+            paths.push((candidate, product));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이를 증거로 보존하고 크기 내림차순으로 반환.
+///
+/// WalkDir의 부모 우선 순회를 이용해 검증된 아티팩트 아래는 즉시 건너뛴다. 생성물
+/// 내부의 중첩 `node_modules`까지 다시 훑지 않으므로 큰 개발 트리에서도 같은 바이트를
+/// 탐색 단계와 manifest 단계에서 두 번 읽지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    // Age is report/approval evidence, not inventory or cleanup authority. Mutation remains bound
+    // to a fresh manifest, filesystem identity, active-use evidence, and the requested selection.
+    let _ = min_age_days;
     let Some(provider_roots) = discovered_provider_roots() else {
         return Vec::new();
     };
@@ -471,62 +603,79 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         return Vec::new();
     }
     let mut candidates: Vec<PathBuf> = Vec::new();
-    let walker = walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일. Provider ancestry
-            // canonicalization is needed only for directories because only directories can affect
-            // traversal or become generated-root candidates.
-            entry.depth() == 0
-                || (scanner::keep_entry(entry)
-                    && (!entry.file_type().is_dir()
-                        || !provider_managed_ancestry(entry.path(), &provider_roots)))
-        });
+    let mut obsolete_extensions = Vec::new();
+    let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
 
-    for entry in walker {
+    while let Some(entry) = walker.next() {
         let Ok(e) = entry else { continue };
+        if crate::safety::is_explicitly_protected(e.path()) {
+            if e.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if e.file_type().is_dir() && provider_managed_ancestry(e.path(), &provider_roots) {
+            walker.skip_current_dir();
+            continue;
+        }
+        if e.depth() > 0 && !scanner::keep_entry(&e) {
+            if e.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if e.file_type().is_file() && e.file_name() == ".obsolete" {
+            obsolete_extensions.extend(vscode_obsolete_extension_paths(e.path()));
+            continue;
+        }
         if !e.file_type().is_dir() {
             continue;
         }
         let path = e.path();
+        if is_editor_extension_directory(path) {
+            walker.skip_current_dir();
+            continue;
+        }
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let Some((_, markers)) = artifact_kind(&name) else {
+        let Some((kind, markers)) = detected_artifact_kind(path, &name) else {
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = !markers.is_empty() && marker_and_lockfile_present(parent, &name);
+        let marker_ok = (markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| marker_exists(parent, &name, marker)))
+            && project_rebuild_authority(parent, kind);
+        if name == ".venv314" && (!marker_ok || !is_python_314_environment(path)) {
+            walker.skip_current_dir();
+            continue;
+        }
         if marker_ok {
             candidates.push(path.to_path_buf());
+            walker.skip_current_dir();
         }
     }
 
-    // 다른 후보의 하위 경로(중첩 아티팩트)는 제거 — 방문 순서에 의존하지 않는 비교
-    let top_level: Vec<&Path> = candidates
+    obsolete_extensions.sort();
+    obsolete_extensions.dedup();
+    let mut found: Vec<DevArtifact> = candidates
         .iter()
-        .enumerate()
-        .filter(|(i, p)| {
-            !candidates
+        .map(PathBuf::as_path)
+        .filter(|path| {
+            !obsolete_extensions
                 .iter()
-                .enumerate()
-                .any(|(j, other)| *i != j && p.starts_with(other))
+                .any(|(obsolete, _)| path.starts_with(obsolete))
         })
-        .map(|(_, p)| p.as_path())
-        .collect();
-
-    let mut found: Vec<DevArtifact> = top_level
-        .into_iter()
         .filter_map(|path| {
             let age = if now_ms == u64::MAX {
                 u64::MAX
             } else {
                 age_days(path, now_ms)
             };
-            let _ = min_age_days; // age is display-only; it never grants cleanup authority.
             let name = path.file_name()?.to_string_lossy().into_owned();
-            let (kind, _) = artifact_kind(&name)?;
+            let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
             let manifest = artifact_manifest(path);
             if manifest.allocated_bytes == 0 {
@@ -551,6 +700,32 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         })
         .collect();
 
+    found.extend(
+        obsolete_extensions
+            .into_iter()
+            .filter_map(|(path, product)| {
+                let age = if now_ms == u64::MAX {
+                    u64::MAX
+                } else {
+                    age_days(&path, now_ms)
+                };
+                let manifest = artifact_manifest(&path);
+                Some(DevArtifact {
+                    path: path.to_string_lossy().into_owned(),
+                    kind: "vscode-obsolete-extension".into(),
+                    project: product.into(),
+                    bytes: manifest.bytes,
+                    allocated_bytes: manifest.allocated_bytes,
+                    files: manifest.files,
+                    skipped: manifest.skipped,
+                    scan_complete: manifest.scan_complete,
+                    fingerprint: manifest.fingerprint,
+                    object_id: manifest.object_id,
+                    age_days: if age == u64::MAX { 0 } else { age },
+                })
+            }),
+    );
+
     found.sort_by(|a, b| {
         b.allocated_bytes
             .cmp(&a.allocated_bytes)
@@ -571,18 +746,38 @@ pub fn clean_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
-    approved: bool,
 ) -> Vec<DevArtifactCleanResult> {
-    if !approved {
-        return requests
-            .iter()
-            .map(|request| DevArtifactCleanResult {
-                path: request.path.clone(),
-                ok: false,
-                error: "정리하려면 검토 화면에서 휴지통 이동을 승인하세요".into(),
-            })
-            .collect();
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, false)
+}
+
+/// Permanently delete only unchanged, inactive development artifacts after an explicit caller
+/// approval. This provides physical reclaim without requiring a global Trash-empty operation.
+pub fn permanently_delete_artifacts(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
+}
+
+fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
+    if permanent {
+        ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS
+    } else {
+        ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS
     }
+}
+
+fn clean_artifacts_with_disposition(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Vec<DevArtifactCleanResult> {
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
@@ -593,7 +788,7 @@ pub fn clean_artifacts(
                     && candidate.project == request.project
                     && candidate.bytes == request.bytes
                     && candidate.allocated_bytes == request.allocated_bytes
-                    && request.allocated_bytes > 0
+                    && (request.kind == "vscode-obsolete-extension" || request.allocated_bytes > 0)
                     && candidate.files == request.files
                     && candidate.skipped == request.skipped
                     && candidate.scan_complete
@@ -615,26 +810,47 @@ pub fn clean_artifacts(
 
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&request.path),
-                2_000,
-                64,
+                artifact_active_use_timeout_ms(permanent),
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                 true,
             );
-            if !active_use.evidence_complete || active_use.active || active_use.error.is_some() {
+            if !active_use.assessed
+                || !active_use.evidence_complete
+                || active_use.error.is_some()
+                || active_use.results_truncated
+            {
                 return DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: false,
-                    error: "사용 중인지 확인할 수 없거나 현재 사용 중입니다. 관련 개발 도구를 닫고 다시 확인하세요".into(),
+                    error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                };
+            }
+            if active_use.active {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact is active; close the using process before cleanup".into(),
                 };
             }
 
-            match crate::safety::trash_delete_if_identity_and_validate(
-                Path::new(&request.path),
-                &request.object_id,
-                request.allocated_bytes,
-                journal_path,
-                now_ms,
-                |staged| validate_staged_artifact(staged, request),
-            ) {
+            let mutation = if permanent {
+                crate::safety::permanent_delete_dir_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            } else {
+                crate::safety::trash_delete_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            };
+            match mutation {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: true,
@@ -664,6 +880,11 @@ mod tests {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
+        match marker {
+            "package.json" => fs::write(p.join("package-lock.json"), b"{}").unwrap(),
+            "Cargo.toml" => fs::write(p.join("Cargo.lock"), b"version = 4\n").unwrap(),
+            _ => {}
+        }
         let a = p.join(artifact);
         fs::create_dir_all(&a).unwrap();
         fs::write(a.join("payload.bin"), vec![0u8; 256]).unwrap();
@@ -674,13 +895,7 @@ mod tests {
     fn finds_marker_adjacent_artifacts() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "webapp", "package.json", "node_modules");
-        fs::write(
-            tmp.path().join("webapp/pnpm-lock.yaml"),
-            b"lockfileVersion: 9",
-        )
-        .unwrap();
         project(tmp.path(), "cli", "Cargo.toml", "target");
-        fs::write(tmp.path().join("cli/Cargo.lock"), b"version = 4").unwrap();
         // 마커 없는 가짜 — 탐지되면 안 됨
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
@@ -697,40 +912,15 @@ mod tests {
         let nm = found.iter().find(|a| a.kind == "node_modules").unwrap();
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
+        assert!(nm.allocated_bytes > 0);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
     }
 
-    #[test]
-    fn requires_a_recognized_lockfile() {
-        let tmp = tempfile::tempdir().unwrap();
-        project(tmp.path(), "repo", "package.json", "node_modules");
-
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert!(found.is_empty());
-    }
-
-    #[test]
-    fn zero_allocation_artifact_is_not_offered_for_cleanup() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("empty-app");
-        fs::create_dir_all(project.join("node_modules")).unwrap();
-        fs::write(project.join("package.json"), b"{}").unwrap();
-        fs::write(project.join("package-lock.json"), b"{}").unwrap();
-
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert!(
-            found.is_empty(),
-            "zero-allocation generated roots cannot be executable cleanup candidates"
-        );
-    }
-
+    #[cfg(unix)]
     #[test]
     fn hard_links_inside_artifact_count_physical_allocation_once() {
         let tmp = tempfile::tempdir().unwrap();
         let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
-        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
         let payload = target.join("payload.bin");
         fs::hard_link(&payload, target.join("payload-copy.bin")).unwrap();
         let metadata = fs::metadata(&payload).unwrap();
@@ -746,11 +936,11 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn external_hard_link_prevents_false_reclaim_offer() {
+    fn external_hard_link_does_not_claim_retained_blocks_reclaimable() {
         let tmp = tempfile::tempdir().unwrap();
         let target = project(tmp.path(), "cargo-app", "Cargo.toml", "target");
-        fs::write(tmp.path().join("cargo-app/Cargo.lock"), b"version = 4").unwrap();
         let payload = target.join("payload.bin");
         fs::hard_link(&payload, tmp.path().join("cargo-app/payload-retained.bin")).unwrap();
 
@@ -763,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_provider_root_does_not_discard_other_provider_roots() {
+    fn canonicalizes_available_provider_roots_without_discarding_unavailable_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let existing = tmp.path().join("provider-existing");
         let unavailable = tmp.path().join("provider-unavailable");
@@ -777,24 +967,137 @@ mod tests {
     }
 
     #[test]
-    fn reports_age_without_using_it_as_cleanup_authority() {
+    fn provider_ancestry_rejects_named_and_canonical_provider_descendants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let named = tmp.path().join("Library/CloudStorage/provider/workspace");
+        fs::create_dir_all(&named).unwrap();
+        assert!(provider_managed_ancestry(&named, &[]));
+
+        let provider = tmp.path().join("onedrive-root");
+        let descendant = provider.join("workspace");
+        fs::create_dir_all(&descendant).unwrap();
+        let roots = canonicalize_provider_roots([provider]);
+        assert!(provider_managed_ancestry(&descendant, &roots));
+    }
+
+    #[test]
+    fn broad_selected_root_prunes_nested_provider_build_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("Library/CloudStorage/provider/repository");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            b"[package]\nname='fixture'\nversion='0.1.0'",
+        )
+        .unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(project.join("target/output.bin"), b"generated").unwrap();
+
+        assert!(
+            find_artifacts(tmp.path(), 0, u64::MAX).is_empty(),
+            "nested provider-managed roots must be pruned before candidate planning"
+        );
+    }
+
+    #[test]
+    fn finds_only_explicit_javascript_build_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".next", "dist-electron"] {
+            project(tmp.path(), name, "package.json", name);
+        }
+        let generic_project = tmp.path().join("generic");
+        fs::create_dir_all(generic_project.join(".build")).unwrap();
+        fs::write(generic_project.join("package.json"), b"{}").unwrap();
+        fs::write(generic_project.join(".build/customer-data.bin"), b"owned").unwrap();
+        fs::create_dir_all(tmp.path().join("unowned/.next")).unwrap();
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        for name in [".next", "dist-electron"] {
+            assert!(found.iter().any(|artifact| artifact.kind == name));
+        }
+        assert!(!found.iter().any(|artifact| artifact.kind == ".build"));
+        assert!(!found.iter().any(|artifact| artifact.path.contains("unowned")));
+    }
+
+    #[test]
+    fn finds_regenerable_codegraph_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("repo/.codegraph");
+        fs::create_dir_all(&index).unwrap();
+        fs::write(index.join("db"), b"generated").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(found.iter().any(|artifact| {
+            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finds_only_native_marked_real_vscode_extension_directories() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let extensions = tmp.path().join(".vscode/extensions");
+        let obsolete = extensions.join("publisher.tool-1.0.0");
+        let retained = extensions.join("publisher.keep-1.0.0");
+        let server_extensions = tmp.path().join(".vscode-server/data/extensions");
+        let server_obsolete = server_extensions.join("publisher.server-1.0.0");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&obsolete).unwrap();
+        fs::create_dir(&retained).unwrap();
+        fs::create_dir_all(&server_obsolete).unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, extensions.join("linked-1.0.0")).unwrap();
+        fs::write(obsolete.join("package.json"), b"{}").unwrap();
+        fs::write(
+            extensions.join(".obsolete"),
+            br#"{"publisher.tool-1.0.0":true,"publisher.keep-1.0.0":false,"../outside":true,"linked-1.0.0":true}"#,
+        )
+        .unwrap();
+        fs::write(
+            server_extensions.join(".obsolete"),
+            br#"{"publisher.server-1.0.0":true}"#,
+        )
+        .unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(found.len(), 2);
+        assert!(found
+            .iter()
+            .all(|item| item.kind == "vscode-obsolete-extension"));
+        assert!(found
+            .iter()
+            .any(|item| item.path == obsolete.to_string_lossy()));
+        let empty_obsolete = found
+            .iter()
+            .find(|item| item.path == server_obsolete.to_string_lossy())
+            .expect("native .obsolete lifecycle must retain an empty extension directory");
+        assert_eq!(empty_obsolete.allocated_bytes, 0);
+        assert_eq!(editor_product(".cursor"), Some("Cursor"));
+        assert_eq!(editor_product(".unknown-editor"), None);
+    }
+
+    #[test]
+    fn age_is_evidence_not_admission_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
-        fs::write(tmp.path().join("fresh/package-lock.json"), b"{}").unwrap();
-        // 방금 만든 항목도 잠금 파일과 할당 증거가 있으면 표시한다. 나이는 정보일 뿐이다.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert_eq!(find_artifacts(tmp.path(), 30, now_ms).len(), 1);
-        assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
+
+        let found = find_artifacts(tmp.path(), 30, now_ms);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].age_days, 0);
     }
 
     #[test]
     fn artifacts_inside_artifacts_are_not_double_counted() {
         let tmp = tempfile::tempdir().unwrap();
         let nm = project(tmp.path(), "app", "package.json", "node_modules");
-        fs::write(tmp.path().join("app/yarn.lock"), b"lock").unwrap();
         // node_modules 내부의 중첩 node_modules — 별도 항목이면 안 됨
         let nested = nm.join("dep").join("node_modules");
         fs::create_dir_all(&nested).unwrap();
@@ -807,7 +1110,6 @@ mod tests {
     fn cleanup_fails_closed_when_artifact_identity_changes() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "app", "package.json", "node_modules");
-        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
         let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
         assert_eq!(candidates.len(), 1);
         let journal = tmp.path().join("journal.jsonl");
@@ -816,7 +1118,7 @@ mod tests {
         std::fs::rename(&live, &original).unwrap();
         std::fs::create_dir(&live).unwrap();
         std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
-        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1, true);
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
@@ -828,111 +1130,151 @@ mod tests {
         );
     }
 
-    #[test]
-    fn classifies_manual_cargo_node_and_venv_reclaim_without_age_authority() {
-        let tmp = tempfile::tempdir().unwrap();
-        project(tmp.path(), "cargo-6_7-gib-incident", "Cargo.toml", "target");
-        fs::write(
-            tmp.path().join("cargo-6_7-gib-incident/Cargo.lock"),
-            b"version = 4",
-        )
-        .unwrap();
-        project(tmp.path(), "node-app", "package.json", "node_modules");
-        fs::write(
-            tmp.path().join("node-app/pnpm-lock.yaml"),
-            b"lockfileVersion: 9",
-        )
-        .unwrap();
-        project(tmp.path(), "python-app", "pyproject.toml", ".venv");
-        fs::write(tmp.path().join("python-app/uv.lock"), b"version = 1").unwrap();
-
-        let found = find_artifacts(tmp.path(), u64::MAX, u64::MAX);
-
-        assert_eq!(
-            found.len(),
-            3,
-            "age threshold never decides generated-root eligibility"
-        );
-        assert!(found
-            .iter()
-            .all(|item| item.scan_complete && item.allocated_bytes > 0));
-        assert!(found.iter().any(|item| item.kind == "target"));
-        assert!(found.iter().any(|item| item.kind == "node_modules"));
-        assert!(found.iter().any(|item| item.kind == ".venv"));
-    }
-
-    #[test]
-    fn cleanup_requires_explicit_approval() {
-        let tmp = tempfile::tempdir().unwrap();
-        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
-        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
-        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        let result = clean_artifacts(
-            &candidates,
-            tmp.path(),
-            0,
-            &tmp.path().join("journal.jsonl"),
-            1,
-            false,
-        );
-
-        assert!(!result[0].ok);
-        assert!(artifact.exists());
-    }
-
-    #[test]
-    fn broad_selected_root_prunes_nested_file_provider_build_roots() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("Library/CloudStorage/provider/repository");
-        fs::create_dir_all(project.join("target")).unwrap();
-        fs::write(
-            project.join("Cargo.toml"),
-            b"[package]\nname='fixture'\nversion='0.1.0'",
-        )
-        .unwrap();
-        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
-        fs::write(project.join("target/output.bin"), b"generated").unwrap();
-
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
-
-        assert!(
-            found.is_empty(),
-            "nested File Provider roots must be pruned before candidate planning"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
-    fn staged_validation_restores_artifact_with_retained_writer() {
-        use std::fs::OpenOptions;
-
+    fn permanent_cleanup_physically_removes_an_unchanged_inactive_artifact() {
         let tmp = tempfile::tempdir().unwrap();
         let artifact = project(tmp.path(), "app", "package.json", "node_modules");
-        fs::write(tmp.path().join("app/package-lock.json"), b"{}").unwrap();
-        let request = find_artifacts(tmp.path(), 0, u64::MAX).remove(0);
-        let _writer = OpenOptions::new()
-            .write(true)
-            .open(artifact.join("payload.bin"))
-            .unwrap();
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let journal = tmp.path().join("journal.jsonl");
 
-        let result = crate::safety::trash_delete_if_identity_and_validate(
-            &artifact,
-            &request.object_id,
-            request.allocated_bytes,
-            &tmp.path().join("journal.jsonl"),
-            1,
-            |staged| validate_staged_artifact(staged, &request),
-        );
+        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
 
-        assert!(
-            result.is_err(),
-            "a retained writer must prevent Trash handoff"
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok, "{}", results[0].error);
+        assert!(!artifact.exists());
+        assert_eq!(
+            crate::safety::journal_recent(&journal, 1)[0].op,
+            "permanent_generated_directory_delete"
         );
-        assert!(
-            artifact.exists(),
-            "failed validation must restore the artifact"
-        );
-        assert!(artifact.join("payload.bin").exists());
+    }
+
+    #[test]
+    fn discovers_regenerable_python_tool_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".mypy_cache", ".pytest_cache", ".ruff_cache"] {
+            let path = tmp.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("cache.bin"), b"cache").unwrap();
+        }
+        let mut kinds = find_artifacts(tmp.path(), 0, u64::MAX)
+            .into_iter()
+            .map(|artifact| artifact.kind)
+            .collect::<Vec<_>>();
+        kinds.sort();
+        assert_eq!(kinds, [".mypy_cache", ".pytest_cache", ".ruff_cache"]);
+    }
+
+    #[test]
+    fn discovers_marker_gated_python_tool_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[tox:tox]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+        fs::write(tmp.path().join("noxfile.py"), "").unwrap();
+        fs::create_dir(tmp.path().join(".nox")).unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
+    }
+
+    #[test]
+    fn ignores_tox_directory_when_setup_cfg_has_no_tox_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[metadata]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn discovers_python_314_project_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.14.0").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, ".venv314");
+    }
+
+    #[test]
+    fn discovers_standalone_cargo_target_cache_by_native_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("wardnet-pr95-target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn discovers_named_target_cache_without_project_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+        )
+        .unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, "cargo-target-cache");
+    }
+
+    #[test]
+    fn ignores_named_target_layout_without_cargo_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        for child in ["deps", "build", "incremental"] {
+            fs::create_dir_all(target.join("debug").join(child)).unwrap();
+        }
+        fs::write(target.join("customer-owned.sqlite"), b"business data").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn ignores_oversized_standalone_cargo_cache_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("standalone-cache");
+        fs::create_dir_all(cache.join("debug")).unwrap();
+        fs::write(cache.join(".rustc_info.json"), "{}").unwrap();
+        let mut tag = "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n".to_owned();
+        tag.push_str(&"x".repeat(65_536));
+        fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn ignores_named_python_314_directory_without_matching_environment_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.13.9").unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.140.0").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::remove_file(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 }
