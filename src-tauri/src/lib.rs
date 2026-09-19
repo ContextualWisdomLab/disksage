@@ -37,6 +37,7 @@ mod node_view_security_tests;
 mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod dev_artifacts;
+pub mod dev_artifact_approval;
 #[cfg_attr(coverage, allow(dead_code))]
 mod ontology;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -151,6 +152,8 @@ pub fn run() {
             commands::list_dev_artifacts,
             generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
+            dev_artifact_approval::review_dev_artifacts,
+            dev_artifact_approval::clean_dev_artifacts_bound,
             commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
