@@ -336,12 +336,15 @@ fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'stat
     paths
 }
 
-/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
+/// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이를 증거로 보존하고 크기 내림차순으로 반환.
 ///
 /// WalkDir의 부모 우선 순회를 이용해 검증된 아티팩트 아래는 즉시 건너뛴다. 생성물
 /// 내부의 중첩 `node_modules`까지 다시 훑지 않으므로 큰 개발 트리에서도 같은 바이트를
 /// 탐색 단계와 manifest 단계에서 두 번 읽지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    // Age is report/approval evidence, not inventory or cleanup authority. Mutation remains bound
+    // to a fresh manifest, filesystem identity, active-use evidence, and the requested selection.
+    let _ = min_age_days;
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut obsolete_extensions = Vec::new();
     let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
@@ -409,9 +412,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             } else {
                 age_days(path, now_ms)
             };
-            if age < min_age_days {
-                return None;
-            }
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
@@ -443,9 +443,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 } else {
                     age_days(&path, now_ms)
                 };
-                if age < min_age_days {
-                    return None;
-                }
                 let manifest = artifact_manifest(&path);
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
@@ -718,17 +715,18 @@ mod tests {
     }
 
     #[test]
-    fn respects_min_age() {
+    fn age_is_evidence_not_admission_authority() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "fresh", "package.json", "node_modules");
-        // 방금 만든 것: min_age_days=30이면 제외 (now = 실제 현재로는 나이가 0)
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
-        // min_age_days=0이면 포함
-        assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
+
+        let found = find_artifacts(tmp.path(), 30, now_ms);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].age_days, 0);
     }
 
     #[test]
