@@ -1,4 +1,6 @@
-use disksage_lib::dev_artifacts::{find_artifacts, partition_artifacts_by_protection};
+use disksage_lib::dev_artifacts::{
+    clean_artifacts, find_artifacts, partition_artifacts_by_protection,
+};
 use disksage_lib::reclaim_protection::{ProtectionContext, REASON_ORCHESTRATION_LEAD};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,11 +27,15 @@ fn orchestration_lead_target_is_protected_while_idle_target_remains_reclaimable(
 
     let artifacts = find_artifacts(temp.path(), 0, u64::MAX);
     assert!(
-        artifacts.iter().any(|artifact| Path::new(&artifact.path) == lead_target),
+        artifacts
+            .iter()
+            .any(|artifact| Path::new(&artifact.path) == lead_target),
         "the real generated lead target must first be admitted by ordinary rebuild authority"
     );
     assert!(
-        artifacts.iter().any(|artifact| Path::new(&artifact.path) == idle_target),
+        artifacts
+            .iter()
+            .any(|artifact| Path::new(&artifact.path) == idle_target),
         "the idle control target must first be admitted by ordinary rebuild authority"
     );
 
@@ -51,5 +57,26 @@ fn orchestration_lead_target_is_protected_while_idle_target_remains_reclaimable(
             .iter()
             .any(|artifact| Path::new(&artifact.path) == idle_target),
         "an unrelated rebuildable target must remain reclaimable when no protection applies"
+    );
+
+    let lead_artifact = artifacts
+        .iter()
+        .find(|artifact| Path::new(&artifact.path) == lead_target)
+        .expect("lead target inventory")
+        .clone();
+    let journal = temp.path().join("journal.jsonl");
+    let results = clean_artifacts(&[lead_artifact], temp.path(), 0, &journal, 1);
+
+    assert_eq!(results.len(), 1);
+    assert!(!results[0].ok, "protection must be deletion authority, not display metadata");
+    assert!(
+        results[0].error.contains(REASON_ORCHESTRATION_LEAD),
+        "cleanup rejection must retain the stable protection reason code: {}",
+        results[0].error
+    );
+    assert!(lead_target.exists(), "protected generated root must remain on disk");
+    assert!(
+        !journal.exists(),
+        "protection rejection must occur before mutation journaling"
     );
 }
