@@ -102,10 +102,11 @@ describe('release version contract', () => {
   });
 
   it('loads repository manifests through injectable runtime boundaries', () => {
+    const fixtureRoot = resolve('/fixture');
     const manifests = new Map([
-      ['/fixture/package.json', '{"version":"0.1.0"}'],
-      ['/fixture/src-tauri/Cargo.toml', '[package]\nname = "disksage"\nversion = "0.1.0"\n[dependencies]\n'],
-      ['/fixture/src-tauri/tauri.conf.json', '{"version":"0.1.0"}'],
+      [resolve(fixtureRoot, 'package.json'), '{"version":"0.1.0"}'],
+      [resolve(fixtureRoot, 'src-tauri/Cargo.toml'), '[package]\nname = "disksage"\nversion = "0.1.0"\n[dependencies]\n'],
+      [resolve(fixtureRoot, 'src-tauri/tauri.conf.json'), '{"version":"0.1.0"}'],
     ]);
     const readText = vi.fn((path: string) => {
       const value = manifests.get(path);
@@ -113,7 +114,7 @@ describe('release version contract', () => {
       return value;
     });
     expect(verifyReleaseVersion({
-      repositoryRoot: '/fixture',
+      repositoryRoot: fixtureRoot,
       environment: { GITHUB_REF: 'refs/tags/v0.1.0', GITHUB_REF_NAME: 'v0.1.0' },
       readText,
     })).toBe('Release version contract passed for 0.1.0.');
