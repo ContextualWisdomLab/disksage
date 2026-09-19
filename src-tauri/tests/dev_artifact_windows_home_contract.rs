@@ -247,3 +247,43 @@ fn absolute_windows_root_with_parent_component_is_rejected_before_inventory() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn selected_cloudstorage_descendant_fails_closed_before_artifact_inventory() {
+    let temp = tempfile::tempdir().expect("create fixture root");
+    let home = temp.path().join("home");
+    let appdata = home.join("AppData/Roaming");
+    let provider_root = home.join("Library").join("CloudStorage").join("Provider-fixture");
+    let workspace = provider_root.join("workspace");
+    let project = workspace.join("cargo-app");
+    let target = project.join("target");
+    fs::create_dir_all(&appdata).expect("create appdata");
+    fs::create_dir_all(&target).expect("create provider-managed target");
+    fs::write(
+        project.join("Cargo.toml"),
+        b"[package]\nname='provider-fixture'\nversion='0.1.0'\n",
+    )
+    .expect("write Cargo marker");
+    fs::write(project.join("Cargo.lock"), b"version = 4\n").expect("write Cargo lock");
+    fs::write(target.join("generated.bin"), [0x5a; 4096]).expect("write generated file");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-dev-artifacts"))
+        .args(["--root", workspace.to_str().expect("UTF-8 provider path")])
+        .env_remove("HOME")
+        .env("USERPROFILE", &home)
+        .env("APPDATA", &appdata)
+        .output()
+        .expect("run development artifact inventory inside provider ancestry");
+
+    assert!(
+        output.status.success(),
+        "read-only provider-root admission should report no candidates rather than mutate or crash: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("inventory JSON");
+    assert_eq!(
+        report["candidate_count"], 0,
+        "a selected root already inside provider-managed ancestry must fail closed before walk"
+    );
+    assert_eq!(report["executed"], false);
+}
