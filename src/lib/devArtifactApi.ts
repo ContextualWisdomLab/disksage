@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CleanResult, DevArtifact } from "./api";
+import type { CleanResult, DevArtifact as LegacyDevArtifact } from "./api";
+
+export type DevArtifact = LegacyDevArtifact & {
+  allocated_bytes: number;
+};
 
 export interface DevArtifactApproval {
   selection_fingerprint: string;
@@ -12,6 +16,9 @@ export const isDevArtifactApprovalCurrent = (
   approval: DevArtifactApproval | null,
   nowMs: number,
 ): approval is DevArtifactApproval => approval !== null && nowMs < approval.expires_at_ms;
+
+export const listDevArtifacts = (root: string, minAgeDays = 0) =>
+  invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
 
 export const reviewDevArtifacts = (root: string, artifacts: DevArtifact[]) =>
   invoke<DevArtifactApproval>("review_dev_artifacts", { root, artifacts });
