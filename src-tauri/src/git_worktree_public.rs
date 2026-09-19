@@ -45,7 +45,7 @@ fn validate_local_options(options: GitWorktreeAuditOptions) -> Result<(), String
 }
 
 fn drain_bounded<R: Read + Send + 'static>(mut reader: R) -> thread::JoinHandle<(Vec<u8>, bool)> {
-    thread::spawn(|| {
+    thread::spawn(move || {
         let mut retained = Vec::new();
         let mut truncated = false;
         let mut buffer = [0_u8; 16 * 1024];
