@@ -11,9 +11,14 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release workflow retry contract', () => {
-  it('cancels stale first attempts without self-cancelling explicit reruns', () => {
+  it('cancels stale first-attempt PR runs without cancelling explicit reruns', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    expect(workflow).toContain("cancel-in-progress: ${{ github.run_attempt == 1 }}");
+    expect(workflow).toContain(
+      'group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}',
+    );
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}",
+    );
     expect(workflow).not.toContain('cancel-in-progress: true');
   });
 

@@ -12,6 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Live Orca terminal (or agent) has this worktree bound.
 pub const REASON_ORCA_TERMINAL_LIVE: &str = "orca-terminal-live";
+/// Orca workspace is in Sleep with a still-bound session (not deletion grounds alone).
+pub const REASON_ORCA_SESSION_SLEEPING: &str = "orca-session-sleeping";
+/// An incomplete orchestration dispatch still owns this worktree.
+pub const REASON_INCOMPLETE_DISPATCH: &str = "incomplete-dispatch-evidence-incomplete";
 /// A process CWD (or recursive open handle) is inside the path.
 pub const REASON_PROCESS_CWD_INSIDE: &str = "process-cwd-inside";
 /// Worktree directory name is `orchestration-lead-*`.
@@ -24,6 +28,8 @@ pub const REASON_OPEN_PR_HEAD: &str = "open-pr-head";
 pub const REASON_UNCOMMITTED_CHANGES: &str = "uncommitted-changes";
 /// Untracked, non-ignored files are present.
 pub const REASON_UNTRACKED_NONIGNORED: &str = "untracked-nonignored";
+/// Ignored build/cache debris is present (`git status --ignored` / `!!`).
+pub const REASON_IGNORED_ARTIFACTS: &str = "ignored-artifacts-present";
 /// A git stash entry exists.
 pub const REASON_STASH_PRESENT: &str = "stash-present";
 /// HEAD is not contained in any remote-tracking branch.
@@ -53,6 +59,12 @@ pub const PROTECTED_CREDENTIAL_FILE_NAMES: &[&str] =
 pub struct ProtectionContext {
     /// Absolute worktree paths with a live Orca terminal binding.
     pub orca_live_worktree_paths: Vec<PathBuf>,
+    /// Absolute worktree paths whose Orca workspace status is Sleep (session still bound).
+    #[serde(default)]
+    pub orca_sleep_worktree_paths: Vec<PathBuf>,
+    /// Absolute worktree paths with an incomplete orchestration dispatch.
+    #[serde(default)]
+    pub incomplete_dispatch_worktree_paths: Vec<PathBuf>,
     /// Absolute paths mentioned in any scanned `LEAD_QUEUE.md`.
     pub lead_queue_worktree_paths: Vec<PathBuf>,
     /// Open PR head commit OIDs (and optionally branch names via separate field).
@@ -104,6 +116,56 @@ pub fn is_protected_credential_file_name(name: &str) -> bool {
     PROTECTED_CREDENTIAL_FILE_NAMES
         .iter()
         .any(|protected| *protected == name)
+}
+
+/// Parse `orca worktree list --json` into paths whose `workspaceStatus` is Sleep.
+///
+/// Sleep is not deletion grounds by itself; callers feed these paths into
+/// [`ProtectionContext::orca_sleep_worktree_paths`] so the same audit preserves them until
+/// session cleanup and re-audit.
+pub fn parse_orca_sleep_worktree_paths(json_bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(json_bytes).map_err(|_| "orca-worktree-json-invalid".to_string())?;
+    let worktrees = extract_worktree_array(&value).ok_or_else(|| "orca-worktree-json-shape".to_string())?;
+    let mut paths = BTreeSet::new();
+    for worktree in worktrees {
+        let Some(object) = worktree.as_object() else {
+            continue;
+        };
+        let status = object
+            .get("workspaceStatus")
+            .or_else(|| object.get("status"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !status.eq_ignore_ascii_case("sleep") && !status.eq_ignore_ascii_case("sleeping") {
+            continue;
+        }
+        for key in ["path", "worktreePath"] {
+            if let Some(path) = object.get(key).and_then(|value| value.as_str()) {
+                if !path.is_empty() {
+                    paths.insert(PathBuf::from(path));
+                }
+            }
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn extract_worktree_array(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    if let Some(array) = value.as_array() {
+        return Some(array);
+    }
+    let object = value.as_object()?;
+    if let Some(array) = object.get("worktrees").and_then(|value| value.as_array()) {
+        return Some(array);
+    }
+    if let Some(array) = object.get("items").and_then(|value| value.as_array()) {
+        return Some(array);
+    }
+    if let Some(result) = object.get("result") {
+        return extract_worktree_array(result);
+    }
+    None
 }
 
 /// Parse `orca terminal list --json` into absolute worktree paths.
@@ -300,6 +362,8 @@ pub fn protected_data_reasons_under(worktree: &Path) -> Vec<String> {
 }
 
 /// Assess worktree-level protections from supplied evidence (no subprocesses).
+///
+/// `status_dirty` is `(uncommitted_tracked_or_staged, untracked_nonignored, ignored_artifacts)`.
 pub fn assess_worktree_protections(
     worktree: &Path,
     head_oid: Option<&str>,
@@ -307,7 +371,7 @@ pub fn assess_worktree_protections(
     context: &ProtectionContext,
     process_cwd_inside: bool,
     build_tool_active: bool,
-    status_dirty: Option<(bool, bool)>,
+    status_dirty: Option<(bool, bool, bool)>,
     stash_present: bool,
     commits_not_on_remote: Option<bool>,
     assess_filesystem_protections: bool,
@@ -320,6 +384,14 @@ pub fn assess_worktree_protections(
 
     if path_is_under_any(worktree, &context.orca_live_worktree_paths) {
         reasons.push(REASON_ORCA_TERMINAL_LIVE.to_string());
+    }
+    // Sleep alone is never deletion grounds: a still-bound sleeping session preserves
+    // until result preservation → session cleanup → re-audit.
+    if path_is_under_any(worktree, &context.orca_sleep_worktree_paths) {
+        reasons.push(REASON_ORCA_SESSION_SLEEPING.to_string());
+    }
+    if path_is_under_any(worktree, &context.incomplete_dispatch_worktree_paths) {
+        reasons.push(REASON_INCOMPLETE_DISPATCH.to_string());
     }
     if process_cwd_inside {
         reasons.push(REASON_PROCESS_CWD_INSIDE.to_string());
@@ -354,12 +426,15 @@ pub fn assess_worktree_protections(
             }
         }
     }
-    if let Some((uncommitted, untracked)) = status_dirty {
+    if let Some((uncommitted, untracked, ignored)) = status_dirty {
         if uncommitted {
             reasons.push(REASON_UNCOMMITTED_CHANGES.to_string());
         }
         if untracked {
             reasons.push(REASON_UNTRACKED_NONIGNORED.to_string());
+        }
+        if ignored {
+            reasons.push(REASON_IGNORED_ARTIFACTS.to_string());
         }
     }
     if stash_present {
@@ -392,6 +467,7 @@ pub fn artifact_blocking_reason_codes(assessment: &ProtectionAssessment) -> Vec<
             matches!(
                 code.as_str(),
                 REASON_ORCA_TERMINAL_LIVE
+                    | REASON_ORCA_SESSION_SLEEPING
                     | REASON_PROCESS_CWD_INSIDE
                     | REASON_ORCHESTRATION_LEAD
                     | REASON_LISTED_IN_LEAD_QUEUE
@@ -491,6 +567,8 @@ mod tests {
         // RED: many protections fire.
         let context = ProtectionContext {
             orca_live_worktree_paths: vec![worktree.clone()],
+            orca_sleep_worktree_paths: Vec::new(),
+            incomplete_dispatch_worktree_paths: Vec::new(),
             lead_queue_worktree_paths: vec![worktree.clone()],
             open_pr_head_oids: vec!["abc123".into()],
             open_pr_head_branches: vec!["feature".into()],
@@ -504,7 +582,7 @@ mod tests {
             &context,
             true,
             false,
-            Some((true, true)),
+            Some((true, true, true)),
             true,
             Some(true),
             true,
@@ -517,6 +595,7 @@ mod tests {
         assert!(red
             .reason_codes
             .contains(&REASON_PROTECTED_CREDENTIALS.to_string()));
+        assert!(red.reason_codes.contains(&REASON_IGNORED_ARTIFACTS.to_string()));
         assert!(!artifact_blocking_reason_codes(&red).is_empty());
 
         // GREEN: inactive ordinary worktree with no evidence.
@@ -529,7 +608,7 @@ mod tests {
             &ProtectionContext::default(),
             false,
             false,
-            Some((false, false)),
+            Some((false, false, false)),
             false,
             Some(false),
             true,
@@ -537,5 +616,41 @@ mod tests {
         assert!(!green.protected);
         assert!(artifact_blocking_reason_codes(&green).is_empty());
         assert!(whole_worktree_blocking_reason_codes(&green).is_empty());
+    }
+
+    #[test]
+    fn sleep_session_preserves_and_is_not_deletion_grounds_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("sleeping-owner");
+        fs::create_dir_all(&worktree).unwrap();
+        let context = ProtectionContext {
+            orca_sleep_worktree_paths: vec![worktree.clone()],
+            ..ProtectionContext::default()
+        };
+        let assessment = assess_worktree_protections(
+            &worktree,
+            Some("deadbeef"),
+            Some("feature"),
+            &context,
+            false,
+            false,
+            Some((false, false, false)),
+            false,
+            Some(false),
+            false,
+        );
+        assert_eq!(
+            assessment.reason_codes,
+            vec![REASON_ORCA_SESSION_SLEEPING.to_string()]
+        );
+        assert!(whole_worktree_blocking_reason_codes(&assessment)
+            .contains(&REASON_ORCA_SESSION_SLEEPING.to_string()));
+    }
+
+    #[test]
+    fn parse_orca_sleep_worktree_paths_from_workspace_status() {
+        let json = br#"{"result":{"worktrees":[{"path":"/tmp/a/sleep-wt","workspaceStatus":"Sleep"},{"path":"/tmp/a/awake","workspaceStatus":"in-progress"}]}}"#;
+        let paths = parse_orca_sleep_worktree_paths(json).unwrap();
+        assert_eq!(paths, vec![PathBuf::from("/tmp/a/sleep-wt")]);
     }
 }
