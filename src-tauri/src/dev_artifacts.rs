@@ -63,6 +63,14 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
+const JAVASCRIPT_LOCKFILES: &[&str] = &[
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+];
+
 fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
     let path = parent.join(marker);
     if artifact_name != ".tox" || marker != "setup.cfg" {
@@ -73,6 +81,20 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
             text.lines()
                 .any(|line| line.trim().eq_ignore_ascii_case("[tox:tox]"))
         })
+}
+
+fn project_rebuild_authority(parent: &Path, kind: &str) -> bool {
+    match kind {
+        "cargo-target-cache" => true,
+        "target" => parent.join("Cargo.toml").is_file() && parent.join("Cargo.lock").is_file(),
+        "node_modules" | ".next" | "dist-electron" => {
+            parent.join("package.json").is_file()
+                && JAVASCRIPT_LOCKFILES
+                    .iter()
+                    .any(|lockfile| parent.join(lockfile).is_file())
+        }
+        _ => true,
+    }
 }
 
 fn is_python_314_environment(path: &Path) -> bool {
@@ -536,14 +558,15 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let Some((_, markers)) = detected_artifact_kind(path, &name) else {
+        let Some((kind, markers)) = detected_artifact_kind(path, &name) else {
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty()
+        let marker_ok = (markers.is_empty()
             || markers
                 .iter()
-                .any(|marker| marker_exists(parent, &name, marker));
+                .any(|marker| marker_exists(parent, &name, marker)))
+            && project_rebuild_authority(parent, kind);
         if name == ".venv314" && (!marker_ok || !is_python_314_environment(path)) {
             walker.skip_current_dir();
             continue;
@@ -776,6 +799,11 @@ mod tests {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
+        match marker {
+            "package.json" => fs::write(p.join("package-lock.json"), b"{}").unwrap(),
+            "Cargo.toml" => fs::write(p.join("Cargo.lock"), b"version = 4\n").unwrap(),
+            _ => {}
+        }
         let a = p.join(artifact);
         fs::create_dir_all(&a).unwrap();
         fs::write(a.join("payload.bin"), vec![0u8; 256]).unwrap();
