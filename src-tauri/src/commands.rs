@@ -29,8 +29,7 @@ use crate::{
 };
 
 #[cfg(not(coverage))]
-#[path = "home_resolution.rs"]
-mod home_resolution;
+use crate::home_resolution;
 
 #[path = "copy_headroom.rs"]
 mod copy_headroom;
@@ -773,24 +772,6 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
 
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn clean_dev_artifacts(
-    root: String,
-    min_age_days: u64,
-    artifacts: Vec<dev_artifacts::DevArtifact>,
-    app: AppHandle,
-) -> Result<Vec<CleanResult>, String> {
-    let jp = journal_file_path(&app)?;
-    Ok(clean_dev_artifacts_inner(
-        &artifacts,
-        Path::new(&root),
-        min_age_days,
-        &jp,
-        now_ms(),
-    ))
-}
-
-#[cfg(not(coverage))]
-#[tauri::command]
 pub fn recent_operations(
     limit: usize,
     app: AppHandle,
@@ -816,7 +797,7 @@ pub fn expand_clean_targets(dir: String) -> Vec<String> {
 
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
+pub async fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
     let files = dupes::collect_files(Path::new(&root));
     Ok(dupes::find_duplicates(files, 4096))
 }
