@@ -266,6 +266,70 @@ fn hard_link_count(_path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
     None
 }
 
+/// Canonicalize each discovered provider root independently so one unavailable provider cannot
+/// erase otherwise valid provider boundaries.
+fn canonicalize_provider_roots<I>(roots: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    roots
+        .into_iter()
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+        .collect()
+}
+
+/// Establish fail-closed user-home authority, then discover the provider roots that development
+/// artifact inventory must never cross. Home identity is checked both before and after
+/// canonicalization so a replaced or symlinked home cannot widen deletion authority.
+fn discovered_provider_roots() -> Option<Vec<PathBuf>> {
+    #[cfg(windows)]
+    let candidates = [
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+        crate::home_resolution::windows_home_drive_path(),
+    ];
+    #[cfg(not(windows))]
+    let candidates = [std::env::var_os("HOME").map(PathBuf::from), None];
+    let home = crate::home_resolution::select_absolute_home(candidates).ok()?;
+    if home
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&home).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let expected_identity = crate::safety::filesystem_object_id(&home).ok()?;
+    let home = std::fs::canonicalize(home).ok()?;
+    if crate::safety::filesystem_object_id(&home).ok()? != expected_identity {
+        return None;
+    }
+    Some(canonicalize_provider_roots(
+        crate::cloud::discover_cloud_roots(&home)
+            .into_iter()
+            .map(|cloud_root| PathBuf::from(cloud_root.path)),
+    ))
+}
+
+/// Reject both platform-native File Provider ancestry and any descendant of a provider root that
+/// DiskSage discovered from the identity-checked home directory. Canonicalization failure is unsafe
+/// here because cleanup inventory must not gain authority from an unresolved path.
+fn provider_managed_ancestry(path: &Path, provider_roots: &[PathBuf]) -> bool {
+    let component_blocked = path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(value) if value == "CloudStorage" || value == "Mobile Documents")
+    });
+    if component_blocked {
+        return true;
+    }
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return true;
+    };
+    provider_roots
+        .iter()
+        .any(|cloud_path| canonical_path.starts_with(cloud_path))
+}
+
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
 ///
 /// Paths, kinds, logical sizes, allocated sizes, mtimes, hard-link topology, and filesystem
@@ -525,6 +589,19 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     // Age is report/approval evidence, not inventory or cleanup authority. Mutation remains bound
     // to a fresh manifest, filesystem identity, active-use evidence, and the requested selection.
     let _ = min_age_days;
+    let Some(provider_roots) = discovered_provider_roots() else {
+        return Vec::new();
+    };
+    let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
+        return Vec::new();
+    };
+    if !root.is_absolute()
+        || root_metadata.file_type().is_symlink()
+        || !root_metadata.is_dir()
+        || provider_managed_ancestry(root, &provider_roots)
+    {
+        return Vec::new();
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut obsolete_extensions = Vec::new();
     let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
@@ -535,6 +612,10 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             if e.file_type().is_dir() {
                 walker.skip_current_dir();
             }
+            continue;
+        }
+        if e.file_type().is_dir() && provider_managed_ancestry(e.path(), &provider_roots) {
+            walker.skip_current_dir();
             continue;
         }
         if e.depth() > 0 && !scanner::keep_entry(&e) {
@@ -872,6 +953,53 @@ mod tests {
     }
 
     #[test]
+    fn canonicalizes_available_provider_roots_without_discarding_unavailable_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = tmp.path().join("provider-existing");
+        let unavailable = tmp.path().join("provider-unavailable");
+        fs::create_dir_all(&existing).unwrap();
+
+        let roots = canonicalize_provider_roots([existing.clone(), unavailable.clone()]);
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], fs::canonicalize(existing).unwrap());
+        assert_eq!(roots[1], unavailable);
+    }
+
+    #[test]
+    fn provider_ancestry_rejects_named_and_canonical_provider_descendants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let named = tmp.path().join("Library/CloudStorage/provider/workspace");
+        fs::create_dir_all(&named).unwrap();
+        assert!(provider_managed_ancestry(&named, &[]));
+
+        let provider = tmp.path().join("onedrive-root");
+        let descendant = provider.join("workspace");
+        fs::create_dir_all(&descendant).unwrap();
+        let roots = canonicalize_provider_roots([provider]);
+        assert!(provider_managed_ancestry(&descendant, &roots));
+    }
+
+    #[test]
+    fn broad_selected_root_prunes_nested_provider_build_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("Library/CloudStorage/provider/repository");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            b"[package]\nname='fixture'\nversion='0.1.0'",
+        )
+        .unwrap();
+        fs::write(project.join("Cargo.lock"), b"version = 4").unwrap();
+        fs::write(project.join("target/output.bin"), b"generated").unwrap();
+
+        assert!(
+            find_artifacts(tmp.path(), 0, u64::MAX).is_empty(),
+            "nested provider-managed roots must be pruned before candidate planning"
+        );
+    }
+
+    #[test]
     fn finds_only_explicit_javascript_build_outputs() {
         let tmp = tempfile::tempdir().unwrap();
         for name in [".next", "dist-electron"] {
@@ -1117,7 +1245,6 @@ mod tests {
             fs::create_dir_all(target.join("debug").join(child)).unwrap();
         }
         fs::write(target.join("customer-owned.sqlite"), b"business data").unwrap();
-
         assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
