@@ -71,6 +71,22 @@ fn now_ms() -> Result<u64, String> {
     u64::try_from(value).map_err(|_| "system-time-overflow".into())
 }
 
+/// Return the current process real UID on Unix.
+///
+/// Non-Unix builds use an unreachable sentinel because platform observation fails closed before
+/// recovery planning. Keeping the call portable lets shared `cloud-cli` feature builds compile
+/// without granting iCloud recovery authority on unsupported platforms.
+fn current_recovery_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 fn read_plan(path: &Path) -> Result<IcloudFileProviderRecoveryPlan, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "icloud-recovery-plan-unavailable".to_string())?;
@@ -104,7 +120,7 @@ fn run() -> Result<(), String> {
         serde_json::to_value(plan_icloud_file_provider_recovery(
             &health,
             daemon,
-            unsafe { libc::getuid() },
+            current_recovery_uid(),
             now,
         ))
     }
