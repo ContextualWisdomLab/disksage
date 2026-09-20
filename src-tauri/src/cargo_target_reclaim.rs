@@ -193,7 +193,7 @@ pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, 
 }
 
 /// Test/hook seam: run clean with an explicit cargo binary and measured target dir.
-pub fn clean_cargo_target_with(
+pub(crate) fn clean_cargo_target_with(
     project_dir: &Path,
     target_dir: &Path,
     cargo: &Path,
@@ -438,50 +438,94 @@ mod tests {
         let project = root.join("proj");
         let target = project.join("target");
         let shared = root.join("shared-target");
+        let argv_log = root.join("fake-cargo.argv");
         fs::create_dir_all(&target).unwrap();
         fs::create_dir_all(&shared).unwrap();
         fs::write(project.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
         fs::write(target.join("artifact"), "delete-me").unwrap();
         fs::write(shared.join("SENTINEL"), "must-survive").unwrap();
+        let target_canon = fs::canonicalize(&target).unwrap();
 
-        // Mock cargo: if --target-dir is present, delete only that dir's contents;
-        // otherwise (legacy bug) wipe shared sentinel location.
+        // Mock cargo: record argv; mutate ONLY the allowlisted absolute target embedded below.
+        // Never delete via unset env / root-glob fallback.
         let fake = project.join("fake-cargo");
-        let script = r#"#!/bin/sh
-target=""
-while [ $# -gt 0 ]; do
-  if [ "$1" = "--target-dir" ]; then
-    shift
-    target="$1"
-  fi
-  shift
-done
-if [ -n "$target" ]; then
-  rm -rf "$target"/*
-  exit 0
-fi
-# Unpinned clean would destroy the unrelated shared target (forbidden path).
-rm -rf "$CARGO_UNPINNED_SHARED"/*
-exit 0
-"#;
+        let script = format!(
+            "#!/bin/sh\n\
+ALLOWED_TARGET='{allowed}'\n\
+ARGV_LOG='{log}'\n\
+printf '%s\\0' \"$@\" > \"$ARGV_LOG\"\n\
+target=\"\"\n\
+while [ \"$#\" -gt 0 ]; do\n\
+  if [ \"$1\" = \"--target-dir\" ]; then\n\
+    shift\n\
+    target=\"$1\"\n\
+  fi\n\
+  shift || true\n\
+done\n\
+if [ -n \"$target\" ] && [ \"$target\" = \"$ALLOWED_TARGET\" ]; then\n\
+  find \"$ALLOWED_TARGET\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
+  exit 0\n\
+fi\n\
+exit 42\n",
+            allowed = target_canon.display(),
+            log = argv_log.display()
+        );
         fs::write(&fake, script).unwrap();
         let mut perms = fs::metadata(&fake).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let result = clean_cargo_target_with(&project, &target, &fake).expect("clean ok");
+        let result = clean_cargo_target_with(&project, &target_canon, &fake).expect("clean ok");
         assert!(result.executed);
         assert_eq!(result.status_code, 0);
         assert!(result.observed_reduction_bytes > 0);
         assert_eq!(ledger_reclaim_bytes(&result), result.observed_reduction_bytes);
+
+        let argv = fs::read(&argv_log).unwrap_or_default();
+        let argv_txt = String::from_utf8_lossy(&argv);
+        assert!(
+            argv_txt.contains("--target-dir"),
+            "consumer must pass --target-dir; argv={argv_txt:?}"
+        );
+        assert!(
+            argv_txt.contains(target_canon.to_string_lossy().as_ref()),
+            "consumer must pass measured target; argv={argv_txt:?}"
+        );
         assert!(
             shared.join("SENTINEL").is_file(),
             "unrelated sentinel must survive pinned --target-dir clean"
         );
         assert!(
-            !target.join("artifact").exists(),
+            !target_canon.join("artifact").exists(),
             "measured target contents should be removed"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn equal_project_root_target_is_rejected() {
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-eqroot-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        let fake = root.join("fake-cargo");
+        fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake, perms).unwrap();
+        }
+        let err = clean_cargo_target_with(&root, &root, &fake).unwrap_err();
+        assert_eq!(err, "cargo-target-dir-outside-project");
         let _ = fs::remove_dir_all(&root);
     }
 
