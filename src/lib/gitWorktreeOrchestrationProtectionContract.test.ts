@@ -99,13 +99,10 @@ describe("Git worktree orchestration ownership protection contract", () => {
 
   it("keeps focused Rust coverage for Sleep parsing, preservation, public notice, and incomplete dispatch", () => {
     expect(protectionSource).toContain(
-      "fn sleep_session_preserves_and_is_not_deletion_grounds_alone()",
+      "fn sleeping_and_incomplete_dispatch_ownership_are_stable_blockers()",
     );
     expect(protectionSource).toContain(
-      "fn parse_orca_sleep_worktree_paths_from_workspace_status()",
-    );
-    expect(protectionSource).toContain(
-      "fn incomplete_dispatch_is_fail_closed_ownership_blocker()",
+      "fn orca_worktree_json_extracts_only_sleeping_paths_and_is_bounded()",
     );
     expect(auditSource).toContain(
       "fn public_summary_warns_before_reclaiming_completed_sleeping_session()",
