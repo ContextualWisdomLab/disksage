@@ -8,6 +8,10 @@ const protectionSource = readFileSync(
   resolve(repositoryRoot, "src-tauri/src/reclaim_protection.rs"),
   "utf8",
 );
+const auditSource = readFileSync(
+  resolve(repositoryRoot, "src-tauri/src/git_worktree.rs"),
+  "utf8",
+);
 const auditCliSource = readFileSync(
   resolve(repositoryRoot, "src-tauri/src/bin/disksage-git-worktree-audit.rs"),
   "utf8",
@@ -32,13 +36,29 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(protectionSource).toContain(
       `REASON_INCOMPLETE_DISPATCH: &str = "${INCOMPLETE_DISPATCH_REASON}"`,
     );
-    expect(protectionSource).toContain("pub orca_sleep_worktree_paths: Vec<PathBuf>");
-    expect(protectionSource).toContain("pub incomplete_dispatch_worktree_paths: Vec<PathBuf>");
+    expect(protectionSource).toMatch(
+      /#\[serde\(default\)\][\s\S]{0,120}pub orca_sleep_worktree_paths: Vec<PathBuf>/,
+    );
+    expect(protectionSource).toMatch(
+      /#\[serde\(default\)\][\s\S]{0,120}pub incomplete_dispatch_worktree_paths: Vec<PathBuf>/,
+    );
     expect(protectionSource).toContain("parse_orca_sleep_worktree_paths");
+    expect(protectionSource).toContain('eq_ignore_ascii_case("sleep")');
+    expect(protectionSource).toContain('eq_ignore_ascii_case("sleeping")');
     expect(protectionSource).toContain("context.orca_sleep_worktree_paths");
     expect(protectionSource).toContain("context.incomplete_dispatch_worktree_paths");
     expect(protectionSource).toContain("REASON_ORCA_SESSION_SLEEPING.to_string()");
     expect(protectionSource).toContain("REASON_INCOMPLETE_DISPATCH.to_string()");
+  });
+
+  it("retains both ownership reasons in redacted public audit evidence", () => {
+    const summaryStart = auditSource.indexOf("pub fn public_summary");
+    expect(summaryStart).toBeGreaterThanOrEqual(0);
+    const summaryEnd = auditSource.indexOf("\nfn valid_hex64", summaryStart);
+    expect(summaryEnd).toBeGreaterThan(summaryStart);
+    const summaryBody = auditSource.slice(summaryStart, summaryEnd);
+    expect(summaryBody).toContain("REASON_ORCA_SESSION_SLEEPING");
+    expect(summaryBody).toContain("REASON_INCOMPLETE_DISPATCH");
   });
 
   it("acquires the same ownership evidence on audit and mutation CLIs", () => {
@@ -61,12 +81,27 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(hostedProtectionTest).toContain("REASON_INCOMPLETE_DISPATCH");
   });
 
-  it("does not treat sleeping ownership as reclaimable artifact evidence", () => {
+  it("blocks artifact reclaim while sleeping ownership remains bound", () => {
     const blockerStart = protectionSource.indexOf("pub fn artifact_blocking_reason_codes");
     expect(blockerStart).toBeGreaterThanOrEqual(0);
-    const blockerEnd = protectionSource.indexOf("pub fn whole_worktree_blocking_reason_codes", blockerStart);
+    const blockerEnd = protectionSource.indexOf(
+      "pub fn whole_worktree_blocking_reason_codes",
+      blockerStart,
+    );
     expect(blockerEnd).toBeGreaterThan(blockerStart);
     const blockerBody = protectionSource.slice(blockerStart, blockerEnd);
     expect(blockerBody).toContain("REASON_ORCA_SESSION_SLEEPING");
+  });
+
+  it("keeps focused Rust coverage for Sleep parsing, preservation, and incomplete dispatch", () => {
+    expect(protectionSource).toContain(
+      "fn sleep_session_preserves_and_is_not_deletion_grounds_alone()",
+    );
+    expect(protectionSource).toContain(
+      "fn parse_orca_sleep_worktree_paths_from_workspace_status()",
+    );
+    expect(protectionSource).toContain(
+      "fn incomplete_dispatch_is_fail_closed_ownership_blocker()",
+    );
   });
 });
