@@ -10,23 +10,46 @@ const apiSource = readFileSync(resolve(repositoryRoot, "src/lib/api.ts"), "utf8"
 const PATH_ALGORITHM = "disksage.git-worktree-path/blake3-v2";
 const ENTRY_ALGORITHM = "disksage.git-worktree-entry/blake3-v3";
 
+function rustStructBody(name: string): string {
+  const marker = `pub struct ${name} {`;
+  const start = rustSource.indexOf(marker);
+  expect(start, `${name} must exist`).toBeGreaterThanOrEqual(0);
+  const end = rustSource.indexOf("\n}", start);
+  expect(end, `${name} must have a closing brace`).toBeGreaterThan(start);
+  return rustSource.slice(start, end);
+}
+
 describe("Git worktree fingerprint evidence contract", () => {
-  it("serializes explicit path and entry fingerprint algorithms", () => {
+  it("serializes explicit path and entry algorithms on both private and public audit evidence", () => {
     expect(rustSource).toContain(`GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM: &str = "${PATH_ALGORITHM}"`);
     expect(rustSource).toContain(`GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM: &str = "${ENTRY_ALGORITHM}"`);
-    expect(rustSource).toContain("pub path_fingerprint_algorithm: String");
-    expect(rustSource).toContain("pub entry_fingerprint_algorithm: String");
+
+    for (const structName of ["GitWorktreeAuditReport", "GitWorktreeAuditPublicSummary"]) {
+      const body = rustStructBody(structName);
+      expect(body).toContain("pub path_fingerprint_algorithm: String");
+      expect(body).toContain("pub entry_fingerprint_algorithm: String");
+    }
+
     expect(rustSource).toContain("path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into()");
     expect(rustSource).toContain("entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into()");
+    expect(rustSource).toContain("path_fingerprint_algorithm: report.path_fingerprint_algorithm.clone()");
+    expect(rustSource).toContain("entry_fingerprint_algorithm: report.entry_fingerprint_algorithm.clone()");
   });
 
   it("fails removal validation closed when persisted algorithm metadata drifts", () => {
     expect(rustSource).toContain("report.path_fingerprint_algorithm != GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM");
     expect(rustSource).toContain("report.entry_fingerprint_algorithm != GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM");
+    expect(rustSource).toContain("fn removal_rejects_mismatched_fingerprint_algorithms()");
   });
 
   it("exposes exact algorithm literals to first-party TypeScript consumers", () => {
-    expect(apiSource).toContain(`path_fingerprint_algorithm: "${PATH_ALGORITHM}"`);
-    expect(apiSource).toContain(`entry_fingerprint_algorithm: "${ENTRY_ALGORITHM}"`);
+    const marker = "export interface GitWorktreeAuditReport {";
+    const start = apiSource.indexOf(marker);
+    expect(start, "GitWorktreeAuditReport TypeScript contract must exist").toBeGreaterThanOrEqual(0);
+    const end = apiSource.indexOf("\n}", start);
+    expect(end, "GitWorktreeAuditReport TypeScript contract must close").toBeGreaterThan(start);
+    const body = apiSource.slice(start, end);
+    expect(body).toContain(`path_fingerprint_algorithm: "${PATH_ALGORITHM}"`);
+    expect(body).toContain(`entry_fingerprint_algorithm: "${ENTRY_ALGORITHM}"`);
   });
 });
