@@ -1742,15 +1742,13 @@ fn hash_field(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(value.as_bytes());
 }
 
-/// Stable path component for fingerprinting. Filesystem identity (device/inode or canonical path)
-/// wins when the path resolves; NFC UTF-8 is the bounded fallback for macOS File Provider /
-/// Hangul spellings that refer to the same entry without a local materialization (see `cloud.rs`).
+/// Stable path component for fingerprinting. Filesystem object identity wins when the path resolves;
+/// canonical text is the bounded compatibility fallback when an object identity cannot be acquired,
+/// and NFC UTF-8 is reserved for non-materialized File Provider spellings (see `cloud.rs`).
 fn path_identity_for_fingerprint(path: &str) -> String {
     let path_buf = Path::new(path);
-    if let Ok(metadata) = fs::symlink_metadata(path_buf) {
-        if let Some(object_id) = crate::safety::object_id_from_metadata(&metadata) {
-            return format!("fs-object:{object_id}");
-        }
+    if let Ok(object_id) = crate::safety::filesystem_object_id(path_buf) {
+        return format!("fs-object:{object_id}");
     }
     if let Ok(canonical) = fs::canonicalize(path_buf) {
         return format!("canonical:{}", canonical.to_string_lossy());
@@ -1859,9 +1857,10 @@ fn entry_fingerprint(
     entry: &GitWorktreeAuditEntry,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.git-worktree-entry\0v2\0");
+    hasher.update(b"disksage.git-worktree-entry\0v3\0");
     hash_field(&mut hasher, common_dir);
     hash_field(&mut hasher, &entry.path);
+    hash_field(&mut hasher, &entry.path_fingerprint);
     hash_field(&mut hasher, &entry.head);
     hash_field(&mut hasher, entry.branch.as_deref().unwrap_or(""));
     hash_field(&mut hasher, reference_set_fingerprint);
@@ -2168,9 +2167,9 @@ fn admin_fallback_worktrees(
             detached: true,
             bare: false,
             locked,
-            lock_reason,
+            lock_reason: None,
             prunable,
-            prunable_reason,
+            prunable_reason: None,
             fallback_evidence_incomplete: true,
         });
     }
