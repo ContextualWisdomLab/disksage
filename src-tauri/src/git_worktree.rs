@@ -950,13 +950,27 @@ fn hash_field(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(value.as_bytes());
 }
 
+/// Stable path component for fingerprinting. Filesystem identity (device/inode or canonical path)
+/// wins when the path resolves; NFC UTF-8 is the bounded fallback for macOS File Provider /
+/// Hangul spellings that refer to the same entry without a local materialization (see `cloud.rs`).
+fn path_identity_for_fingerprint(path: &str) -> String {
+    let path_buf = Path::new(path);
+    if let Ok(metadata) = fs::symlink_metadata(path_buf) {
+        if let Some(object_id) = crate::safety::object_id_from_metadata(&metadata) {
+            return format!("fs-object:{object_id}");
+        }
+    }
+    if let Ok(canonical) = fs::canonicalize(path_buf) {
+        return format!("canonical:{}", canonical.to_string_lossy());
+    }
+    path.nfc().collect::<String>()
+}
+
 fn path_fingerprint(common_dir: &str, path: &str) -> String {
-    let common_dir = common_dir.nfc().collect::<String>();
-    let path = path.nfc().collect::<String>();
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.git-worktree-path\0v1\0");
-    hash_field(&mut hasher, &common_dir);
-    hash_field(&mut hasher, &path);
+    hasher.update(b"disksage.git-worktree-path\0v2\0");
+    hash_field(&mut hasher, &path_identity_for_fingerprint(common_dir));
+    hash_field(&mut hasher, &path_identity_for_fingerprint(path));
     hasher.finalize().to_hex().to_string()
 }
 
@@ -2524,6 +2538,85 @@ mod tests {
         assert_eq!(
             path_fingerprint(common_dir_nfc, path_nfc),
             path_fingerprint(&common_dir_nfd, &path_nfd),
+        );
+    }
+
+    #[test]
+    fn path_fingerprint_distinct_existing_directories_do_not_collide() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        let dir_a = temp.path().join("worktree-alpha");
+        let dir_b = temp.path().join("worktree-beta");
+        fs::create_dir_all(&common).unwrap();
+        fs::create_dir(&dir_a).unwrap();
+        fs::create_dir(&dir_b).unwrap();
+        assert_ne!(
+            path_fingerprint(
+                common.to_str().unwrap(),
+                dir_a.to_str().unwrap(),
+            ),
+            path_fingerprint(
+                common.to_str().unwrap(),
+                dir_b.to_str().unwrap(),
+            ),
+        );
+    }
+
+    #[test]
+    fn path_fingerprint_nfc_nfd_distinct_directory_entries_do_not_collide() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        fs::create_dir_all(&common).unwrap();
+        let nfc_name = "가";
+        let nfd_name: String = nfc_name.nfd().collect();
+        assert_ne!(nfc_name, nfd_name.as_str());
+        let dir_nfc = temp.path().join(nfc_name);
+        fs::create_dir(&dir_nfc).unwrap();
+        let dir_nfd = temp.path().join(&nfd_name);
+        match fs::create_dir(&dir_nfd) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let meta_nfc = fs::symlink_metadata(&dir_nfc).unwrap();
+                    let meta_nfd = fs::symlink_metadata(&dir_nfd).unwrap();
+                    assert_ne!(
+                        (meta_nfc.dev(), meta_nfc.ino()),
+                        (meta_nfd.dev(), meta_nfd.ino()),
+                        "reproduction requires distinct directory entries"
+                    );
+                }
+                assert_ne!(
+                    path_fingerprint(common.to_str().unwrap(), dir_nfc.to_str().unwrap()),
+                    path_fingerprint(common.to_str().unwrap(), dir_nfd.to_str().unwrap()),
+                    "distinct NFC/NFD directory entries must not share a path fingerprint",
+                );
+            }
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::AlreadyExists,
+                    "APFS/HFS+ cannot host both NFC and NFD spellings as separate entries; \
+                     collision reproduction is impossible on this filesystem",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn path_fingerprint_same_existing_entry_matches_nfc_and_nfd_spellings() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        fs::create_dir_all(&common).unwrap();
+        let dir = temp.path().join("가");
+        fs::create_dir(&dir).unwrap();
+        let dir_nfd: String = dir.to_string_lossy().nfd().collect();
+        if !Path::new(&dir_nfd).exists() {
+            return;
+        }
+        assert_eq!(
+            path_fingerprint(common.to_str().unwrap(), dir.to_str().unwrap()),
+            path_fingerprint(common.to_str().unwrap(), &dir_nfd),
         );
     }
 
