@@ -33,6 +33,18 @@ const MAX_IGNORED_STATUS_OUTPUT_BYTES: usize = 1024 * 1024;
 const IGNORED_ARTIFACT_BLOCKER: &str = "ignored-artifacts-present";
 const IGNORED_ARTIFACT_EVIDENCE_GAP: &str = "ignored-artifact-evidence-incomplete";
 
+/// Fail closed while Windows worktree removal is still pathname-selected after object validation.
+#[cfg(windows)]
+fn ensure_identity_bound_worktree_mutation_available() -> Result<(), String> {
+    Err("git-worktree-removal-windows-identity-bound-mutation-unavailable".into())
+}
+
+/// Admit mutation only on platforms whose existing removal path is not capability-gated here.
+#[cfg(not(windows))]
+fn ensure_identity_bound_worktree_mutation_available() -> Result<(), String> {
+    Ok(())
+}
+
 fn validate_local_command_timeout(timeout_ms: u64) -> Result<(), String> {
     if timeout_ms == 0 || timeout_ms > MAX_LOCAL_COMMAND_TIMEOUT_MS {
         return Err("git-worktree-command-timeout-out-of-bounds".into());
@@ -481,6 +493,7 @@ pub fn execute_stale_worktree_removal(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal(
         approved_report,
@@ -501,6 +514,7 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_closed_pull_requests(
         approved_report,
@@ -523,6 +537,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_pull_requests(
         approved_report,
