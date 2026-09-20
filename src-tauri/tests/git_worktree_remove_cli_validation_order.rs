@@ -1,16 +1,15 @@
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Output};
 
-#[test]
-fn explicit_window_validation_precedes_orca_evidence_io() {
-    let fixture = tempfile::tempdir().expect("temporary validation-order fixture");
-    let repository_root = fixture.path().join("repository");
-    std::fs::create_dir(&repository_root).expect("repository fixture directory");
-    let missing_orca_terminal_json = fixture.path().join("missing-orca-terminal.json");
-    let record_root = fixture.path().join("records");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-remove"))
+fn run_without_explicit_window(
+    repository_root: &Path,
+    record_root: &Path,
+    evidence_flag: &str,
+    evidence_path: &Path,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-remove"))
         .arg("--repository-root")
-        .arg(&repository_root)
+        .arg(repository_root)
         .arg("--reference-ref")
         .arg("HEAD")
         .arg("--approved-removal-plan-fingerprint")
@@ -22,13 +21,15 @@ fn explicit_window_validation_precedes_orca_evidence_io() {
         .arg("--rationale")
         .arg("validation ordering must fail closed before evidence I/O")
         .arg("--record-root")
-        .arg(&record_root)
+        .arg(record_root)
         .arg("--enable-orca-protections")
-        .arg("--orca-terminal-json")
-        .arg(&missing_orca_terminal_json)
+        .arg(evidence_flag)
+        .arg(evidence_path)
         .output()
-        .expect("remove CLI must execute");
+        .expect("remove CLI must execute")
+}
 
+fn assert_missing_window_precedes_evidence_io(output: &Output, record_root: &Path) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -39,7 +40,7 @@ fn explicit_window_validation_precedes_orca_evidence_io() {
     );
     assert!(
         stderr.contains("--recent-write-window-secs"),
-        "mandatory mutation-boundary validation must precede Orca evidence I/O; status={:?}; binary={}; stdout={}; stderr={}; record_root_exists={}",
+        "mandatory mutation-boundary validation must precede evidence I/O; status={:?}; binary={}; stdout={}; stderr={}; record_root_exists={}",
         output.status,
         env!("CARGO_BIN_EXE_disksage-git-worktree-remove"),
         String::from_utf8_lossy(&output.stdout),
@@ -50,4 +51,38 @@ fn explicit_window_validation_precedes_orca_evidence_io() {
         !record_root.exists(),
         "validation failure must not create approval/result evidence"
     );
+}
+
+#[test]
+fn explicit_window_validation_precedes_orca_evidence_io() {
+    let fixture = tempfile::tempdir().expect("temporary validation-order fixture");
+    let repository_root = fixture.path().join("repository");
+    std::fs::create_dir(&repository_root).expect("repository fixture directory");
+    let missing_evidence = fixture.path().join("missing-orca-terminal.json");
+    let record_root = fixture.path().join("records");
+
+    let output = run_without_explicit_window(
+        &repository_root,
+        &record_root,
+        "--orca-terminal-json",
+        &missing_evidence,
+    );
+    assert_missing_window_precedes_evidence_io(&output, &record_root);
+}
+
+#[test]
+fn explicit_window_validation_precedes_lead_queue_io() {
+    let fixture = tempfile::tempdir().expect("temporary validation-order fixture");
+    let repository_root = fixture.path().join("repository");
+    std::fs::create_dir(&repository_root).expect("repository fixture directory");
+    let missing_evidence = fixture.path().join("missing-lead-queue.md");
+    let record_root = fixture.path().join("records");
+
+    let output = run_without_explicit_window(
+        &repository_root,
+        &record_root,
+        "--lead-queue-file",
+        &missing_evidence,
+    );
+    assert_missing_window_precedes_evidence_io(&output, &record_root);
 }
