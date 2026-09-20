@@ -33,6 +33,8 @@ mod staging_cleanup_recovery_interleaving_tests;
 mod safety_non_utf8_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod linux_final_mutation_fail_closed_tests;
+#[cfg(test)]
+mod organize_move_source_identity_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
 #[cfg(all(test, unix))]
