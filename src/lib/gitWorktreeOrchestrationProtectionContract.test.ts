@@ -27,6 +27,8 @@ const hostedProtectionTest = readFileSync(
 
 const SLEEP_REASON = "orca-session-sleeping";
 const INCOMPLETE_DISPATCH_REASON = "incomplete-dispatch-evidence-incomplete";
+const SLEEP_CLEANUP_NOTICE =
+  "sleep-session-requires-result-preserve-then-cleanup-then-reaudit";
 
 describe("Git worktree orchestration ownership protection contract", () => {
   it("keeps sleeping Orca sessions and incomplete dispatches as stable fail-closed ownership reasons", () => {
@@ -51,7 +53,7 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(protectionSource).toContain("REASON_INCOMPLETE_DISPATCH.to_string()");
   });
 
-  it("retains both ownership reasons in redacted public audit evidence", () => {
+  it("retains orchestration ownership evidence and the cleanup-before-reclaim notice in the redacted public summary", () => {
     const summaryStart = auditSource.indexOf("pub fn public_summary");
     expect(summaryStart).toBeGreaterThanOrEqual(0);
     const summaryEnd = auditSource.indexOf("\nfn valid_hex64", summaryStart);
@@ -59,6 +61,8 @@ describe("Git worktree orchestration ownership protection contract", () => {
     const summaryBody = auditSource.slice(summaryStart, summaryEnd);
     expect(summaryBody).toContain("REASON_ORCA_SESSION_SLEEPING");
     expect(summaryBody).toContain("REASON_INCOMPLETE_DISPATCH");
+    expect(summaryBody).toContain(SLEEP_CLEANUP_NOTICE);
+    expect(summaryBody).toContain("completed_pull_request_commit");
   });
 
   it("acquires the same ownership evidence on audit and mutation CLIs", () => {
@@ -93,7 +97,7 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(blockerBody).toContain("REASON_ORCA_SESSION_SLEEPING");
   });
 
-  it("keeps focused Rust coverage for Sleep parsing, preservation, and incomplete dispatch", () => {
+  it("keeps focused Rust coverage for Sleep parsing, preservation, public notice, and incomplete dispatch", () => {
     expect(protectionSource).toContain(
       "fn sleep_session_preserves_and_is_not_deletion_grounds_alone()",
     );
@@ -102,6 +106,9 @@ describe("Git worktree orchestration ownership protection contract", () => {
     );
     expect(protectionSource).toContain(
       "fn incomplete_dispatch_is_fail_closed_ownership_blocker()",
+    );
+    expect(auditSource).toContain(
+      "fn public_summary_warns_before_reclaiming_completed_sleeping_session()",
     );
   });
 });
