@@ -26,7 +26,7 @@ enum ParseOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]"
+    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--orca-worktree-json ABSOLUTE_JSON] [--incomplete-dispatch-worktree-path ABSOLUTE_PATH] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash] [--closed-merged-head-oid OID] [--closed-merged-branch NAME]"
 }
 
 fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -150,6 +150,30 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                 options.protection.orca_live_worktree_paths =
                     disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
             }
+            "--orca-worktree-json" => {
+                let path = PathBuf::from(value(args, &mut index, "--orca-worktree-json")?);
+                if !path.is_absolute() {
+                    return Err("--orca-worktree-json은 절대 경로여야 함".into());
+                }
+                let bytes = std::fs::read(&path)
+                    .map_err(|_| "orca-worktree-json-read-failed".to_string())?;
+                options.protection.orca_sleep_worktree_paths =
+                    disksage_lib::reclaim_protection::parse_orca_sleep_worktree_paths(&bytes)?;
+            }
+            "--incomplete-dispatch-worktree-path" => {
+                let path = PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--incomplete-dispatch-worktree-path",
+                )?);
+                if !path.is_absolute() {
+                    return Err("--incomplete-dispatch-worktree-path은 절대 경로여야 함".into());
+                }
+                options
+                    .protection
+                    .incomplete_dispatch_worktree_paths
+                    .push(path);
+            }
             "--open-pr-head-oid" => {
                 options
                     .protection
@@ -189,6 +213,20 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
             }
             "--assess-stash" => {
                 assess_stash = true;
+            }
+            "--closed-merged-head-oid" => {
+                let oid = utf8_value(args, &mut index, "--closed-merged-head-oid")?;
+                if !(matches!(oid.len(), 40 | 64)
+                    && oid.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                {
+                    return Err("closed-merged-head-oid-invalid".into());
+                }
+                options.closed_merged_head_oids.push(oid.to_ascii_lowercase());
+            }
+            "--closed-merged-branch" => {
+                let branch = utf8_value(args, &mut index, "--closed-merged-branch")?;
+                disksage_lib::git_worktree::validate_reference(&branch)?;
+                options.closed_merged_branches.push(branch);
             }
             "--help" | "-h" => return Err("help-cannot-be-combined-with-runtime-input".into()),
             _ => return Err("unknown-argument".into()),
