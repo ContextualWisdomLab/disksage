@@ -49,9 +49,10 @@ fn main() -> ExitCode {
         Ok(result) => {
             let reclaim = ledger_reclaim_bytes(&result);
             println!(
-                "{{\n  \"cargo_path\": {:?},\n  \"project_dir\": {:?},\n  \"bytes_before\": {},\n  \"bytes_after\": {},\n  \"observed_reduction_bytes\": {},\n  \"ledger_reclaim_bytes\": {},\n  \"status_code\": {},\n  \"executed\": {}\n}}",
+                "{{\n  \"cargo_path\": {:?},\n  \"project_dir\": {:?},\n  \"target_dir\": {:?},\n  \"bytes_before\": {},\n  \"bytes_after\": {},\n  \"observed_reduction_bytes\": {},\n  \"ledger_reclaim_bytes\": {},\n  \"status_code\": {},\n  \"executed\": {}\n}}",
                 result.cargo_path,
                 result.project_dir,
+                result.target_dir,
                 result.bytes_before,
                 result.bytes_after,
                 result.observed_reduction_bytes,
