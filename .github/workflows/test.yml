@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           actual_sha="$(git rev-parse HEAD)"
           if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
-            echo "::error::Test job checked out $actual_sha but expected source head $env:EXPECTED_SOURCE_SHA"
+            echo "::error::Test job checked out $actual_sha but expected source head $EXPECTED_SOURCE_SHA"
             exit 1
           fi
       - name: Install Tauri system deps
