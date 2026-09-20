@@ -140,7 +140,15 @@ fn ensure_absolute_project(project_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Measured target must be absolute and stay under `project_dir` (no escape / shared redirect).
+/// Canonical component containment (not string-prefix). Requires a strict child path.
+fn is_strict_canonical_child(root: &Path, candidate: &Path) -> bool {
+    let root_c: Vec<_> = root.components().collect();
+    let cand_c: Vec<_> = candidate.components().collect();
+    cand_c.len() > root_c.len() && cand_c.iter().zip(root_c.iter()).all(|(a, b)| a == b)
+}
+
+/// Measured target must be absolute and a strict canonical child of `project_dir`
+/// (rejects symlink escapes / shared redirects outside the project tree).
 fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<PathBuf, String> {
     if !target_dir.is_absolute() {
         return Err("cargo-target-dir-not-absolute".into());
@@ -162,7 +170,7 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
             .ok_or_else(|| "cargo-target-dir-name-missing".to_string())?;
         parent_canon.join(name)
     };
-    if !target_canon.starts_with(&project_canon) {
+    if !is_strict_canonical_child(&project_canon, &target_canon) {
         return Err("cargo-target-dir-outside-project".into());
     }
     Ok(target_canon)
@@ -473,6 +481,42 @@ exit 0
         assert!(
             !target.join("artifact").exists(),
             "measured target contents should be removed"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escape_target_is_rejected() {
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-symlink-escape-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("proj");
+        let outside = root.join("outside-shared");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        fs::write(outside.join("SENTINEL"), "must-survive").unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("target")).unwrap();
+
+        let fake = project.join("fake-cargo");
+        fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake, perms).unwrap();
+
+        let err = clean_cargo_target_with(&project, &project.join("target"), &fake).unwrap_err();
+        assert_eq!(err, "cargo-target-dir-outside-project");
+        assert!(
+            outside.join("SENTINEL").is_file(),
+            "symlink-escaped shared target must not be cleaned"
         );
         let _ = fs::remove_dir_all(&root);
     }
