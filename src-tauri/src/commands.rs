@@ -983,7 +983,7 @@ pub async fn plan_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1036,7 +1036,7 @@ pub async fn remove_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1045,7 +1045,7 @@ pub async fn remove_stale_git_worktrees(
             &evidence.stale_open_heads,
             &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
@@ -1158,7 +1158,7 @@ pub async fn remove_stale_git_clone(
             &retention_references,
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if plan.plan_fingerprint != approved_plan_fingerprint {
@@ -1967,9 +1967,6 @@ fn create_cloud_candidate_receipt(
         exact_confirmation_phrase,
     )?;
     if !adopt_existing {
-        // Native File Provider copies can materialize placeholders and stage more than the source
-        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
-        // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
@@ -2346,8 +2343,6 @@ pub async fn copy_cloud_candidate(
             operation: Arc::clone(&cloud_copy_operation),
             fingerprint: metadata_fingerprint.clone(),
         };
-        // Register before taking the shared review lock so a queued copy can be cancelled.
-        // The token remains set if cancellation races with lock acquisition.
         let result = (|| {
             let _guard = cloud_review
                 .lock()
@@ -3153,7 +3148,7 @@ pub fn export_organization_lineage(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String> {
-    crate::userrules::parse_rules(&user_rules_json(&app))
+    crate::userrules::parse_rules(&user_rules_json(&app)?)
 }
 
 #[cfg(not(coverage))]
@@ -3640,7 +3635,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_errors_on_unreadable_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
+        assert!(node_view(res, &tmp.path().join("missing")).is_err());
     }
 
     #[cfg(unix)]
