@@ -215,13 +215,14 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
         max_worktrees: args.max_worktrees,
         max_entries_per_worktree: args.max_entries_per_worktree,
         max_active_pids: args.max_active_pids,
+        ..git_worktree::GitWorktreeAuditOptions::default()
     };
     let audited_at_ms = cloud::system_now_ms();
     let evidence = git_worktree_github_evidence::collect(
         &args.repository_root,
         args.include_closed_pull_requests,
         args.stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
     )?;
     let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
@@ -230,7 +231,7 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
         &evidence.stale_open_heads,
         &evidence.pull_request_commits,
         args.stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
         audited_at_ms,
     )?;
     if report.removal_plan_fingerprint != args.plan_fingerprint {
