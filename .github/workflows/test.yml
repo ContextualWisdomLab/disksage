@@ -136,13 +136,13 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recent_window -- --exact
       - name: Windows worktree remove-CLI explicit recent-window validation regression
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_remove_cli_contract orca_enabled_remove_requires_explicit_recent_write_window_before_execution -- --exact
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_remove_cli_contract orca_enabled_remove_requires_explicit_recent_write_window_before_execution -- --exact
       - name: Windows worktree remove-CLI stale-plan live-protection regression
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_remove_cli_contract stale_approved_plan_is_rejected_when_live_protection_changes_removal_authority -- --exact
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_remove_cli_contract stale_approved_plan_is_rejected_when_live_protection_changes_removal_authority -- --exact
       - name: Windows worktree remove-CLI protection reacquisition regression
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context shipped_remove_cli_reacquires_live_protection_before_mutation -- --exact
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_orca_protection_context shipped_remove_cli_reacquires_live_protection_before_mutation -- --exact
       - name: Windows worktree audit CLI authority surface regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_audit_help_exit
