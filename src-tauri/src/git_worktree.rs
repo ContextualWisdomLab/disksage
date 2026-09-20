@@ -27,7 +27,10 @@ use std::time::{Duration, Instant};
 
 use unicode_normalization::UnicodeNormalization;
 
-pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v4";
+pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v5";
+pub const GIT_WORKTREE_AUDIT_VERSION: u32 = 5;
+const GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM: &str = "disksage.git-worktree-path/blake3-v2";
+const GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM: &str = "disksage.git-worktree-entry/blake3-v3";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
@@ -157,6 +160,8 @@ pub struct GitWorktreeReferenceBinding {
 pub struct GitWorktreeAuditReport {
     pub schema_kind: String,
     pub version: u32,
+    pub path_fingerprint_algorithm: String,
+    pub entry_fingerprint_algorithm: String,
     pub repository_root: String,
     pub common_dir: String,
     pub generated_at_ms: u64,
@@ -183,6 +188,8 @@ pub struct GitWorktreeAuditReport {
 pub struct GitWorktreeAuditPublicSummary {
     pub schema_kind: String,
     pub version: u32,
+    pub path_fingerprint_algorithm: String,
+    pub entry_fingerprint_algorithm: String,
     pub generated_at_ms: u64,
     pub stale_open_pull_request_cutoff_ms: Option<u64>,
     pub retention_reference_count: usize,
@@ -2665,7 +2672,9 @@ pub fn audit_git_worktrees_with_pull_request_membership(
 
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-        version: 4,
+        version: GIT_WORKTREE_AUDIT_VERSION,
+        path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+        entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
         repository_root: repository_root.to_string_lossy().into_owned(),
         common_dir: common_dir_string,
         generated_at_ms,
@@ -2720,6 +2729,8 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
+        path_fingerprint_algorithm: report.path_fingerprint_algorithm.clone(),
+        entry_fingerprint_algorithm: report.entry_fingerprint_algorithm.clone(),
         generated_at_ms: report.generated_at_ms,
         stale_open_pull_request_cutoff_ms: report.stale_open_pull_request_cutoff_ms,
         retention_reference_count: report.retention_references.len(),
@@ -2775,7 +2786,9 @@ fn exact_removal_approval_phrase(
 
 fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
     if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
-        || report.version != 4
+        || report.version != GIT_WORKTREE_AUDIT_VERSION
+        || report.path_fingerprint_algorithm != GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM
+        || report.entry_fingerprint_algorithm != GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM
         || report.filesystem_mutation_executed
         || !Path::new(&report.repository_root).is_absolute()
         || !Path::new(&report.common_dir).is_absolute()
@@ -3628,7 +3641,9 @@ mod tests {
             removal_plan_fingerprint(&common_dir, &authority_fingerprint, &entries);
         GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 4,
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
             repository_root: "/tmp/repository".into(),
             common_dir,
             generated_at_ms: 10,
@@ -3649,6 +3664,23 @@ mod tests {
             issues: Vec::new(),
             filesystem_mutation_executed: false,
         }
+    }
+
+    #[test]
+    fn removal_rejects_mismatched_fingerprint_algorithms() {
+        let mut report = executable_report();
+        report.path_fingerprint_algorithm = "disksage.git-worktree-path/blake3-v1".into();
+        assert_eq!(
+            validate_audit_for_removal(&report).unwrap_err(),
+            "git-worktree-removal-audit-integrity-invalid"
+        );
+
+        let mut report = executable_report();
+        report.entry_fingerprint_algorithm = "disksage.git-worktree-entry/blake3-v2".into();
+        assert_eq!(
+            validate_audit_for_removal(&report).unwrap_err(),
+            "git-worktree-removal-audit-integrity-invalid"
+        );
     }
 
     #[cfg(all(unix, not(coverage)))]
@@ -4238,7 +4270,9 @@ mod tests {
     fn public_summary_redacts_local_identity_and_denies_execution_claims() {
         let report = GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 4,
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
             repository_root: "/private/repo".into(),
             common_dir: "/private/repo/.git".into(),
             generated_at_ms: 1,

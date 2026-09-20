@@ -14,7 +14,7 @@ pub use crate::git_worktree_impl::{
     GitWorktreeReferenceBinding, GitWorktreeRemovalApproval, GitWorktreeRemovalItemResult,
     GitWorktreeRemovalResult, GitWorktreeSizeEvidence, PullRequestCommitMembership,
     PullRequestCommits, StaleOpenPullRequestHeads, GIT_WORKTREE_AUDIT_SCHEMA_KIND,
-    MAX_REFERENCE_BYTES,
+    GIT_WORKTREE_AUDIT_VERSION, MAX_REFERENCE_BYTES,
 };
 
 use std::ffi::OsString;
