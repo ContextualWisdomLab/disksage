@@ -132,6 +132,8 @@ fn live_orca_terminal_arriving_after_approval_vetoes_removal_before_mutation() {
         &repository,
         &["worktree", "add", "-q", secondary.to_str().unwrap(), "stale"],
     );
+    let preserved_file = secondary.join("evidence.txt");
+    let preserved_bytes = fs::read(&preserved_file).expect("snapshot linked worktree file");
 
     let audited_at_ms = now_ms();
     let approved_report = audit_git_worktrees(
@@ -178,7 +180,8 @@ fn live_orca_terminal_arriving_after_approval_vetoes_removal_before_mutation() {
     );
     assert!(secondary.exists(), "live worktree path must not be removed");
     assert_eq!(
-        fs::read_to_string(secondary.join("evidence.txt")).expect("read preserved worktree file"),
-        "first\n"
+        fs::read(&preserved_file).expect("read preserved worktree file"),
+        preserved_bytes,
+        "failed removal must not mutate the linked worktree contents"
     );
 }
