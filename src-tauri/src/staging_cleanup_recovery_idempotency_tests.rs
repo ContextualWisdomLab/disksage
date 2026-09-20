@@ -1,4 +1,4 @@
-use disksage_lib::safety::{
+use crate::safety::{
     filesystem_object_id, journal_append, journal_recent, permanent_delete_dir_if_identity,
     JournalEntry,
 };
@@ -18,11 +18,14 @@ fn completed_cleanup_is_not_replayed_from_an_older_pending_receipt() {
 
     let staging_object_id =
         filesystem_object_id(&staging_dir).expect("capture staging directory identity");
+    let source_parent_object_id =
+        filesystem_object_id(fixture.path()).expect("capture source-parent identity");
     let target_object_id = "reviewed-target-id";
     let journal = fixture.path().join("journal.jsonl");
     let recovery = serde_json::json!({
         "staging_name": ".disksage-trash-4242-7-0",
         "staging_object_id": staging_object_id,
+        "source_parent_object_id": source_parent_object_id,
         "target_object_id": target_object_id,
         "catalog_root_object_id": null,
         "error": "simulated post-mutation cleanup failure"
