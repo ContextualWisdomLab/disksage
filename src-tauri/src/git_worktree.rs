@@ -23,6 +23,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use unicode_normalization::UnicodeNormalization;
+
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
@@ -949,10 +951,12 @@ fn hash_field(hasher: &mut blake3::Hasher, value: &str) {
 }
 
 fn path_fingerprint(common_dir: &str, path: &str) -> String {
+    let common_dir = common_dir.nfc().collect::<String>();
+    let path = path.nfc().collect::<String>();
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage.git-worktree-path\0v1\0");
-    hash_field(&mut hasher, common_dir);
-    hash_field(&mut hasher, path);
+    hash_field(&mut hasher, &common_dir);
+    hash_field(&mut hasher, &path);
     hasher.finalize().to_hex().to_string()
 }
 
@@ -2506,6 +2510,21 @@ mod tests {
             &["worktree", "add", secondary.to_str().unwrap(), "merged"],
         );
         (temp, repository, secondary)
+    }
+
+    #[test]
+    fn path_fingerprint_matches_nfc_and_nfd_hangul_paths() {
+        let common_dir_nfc =
+            "/Users/test/Library/CloudStorage/GoogleDrive-user@example.com/내 드라이브/.git";
+        let path_nfc = "/Users/test/Library/CloudStorage/GoogleDrive-user@example.com/내 드라이브/worktrees/clean-publication-snapshot";
+        let common_dir_nfd: String = common_dir_nfc.nfd().collect();
+        let path_nfd: String = path_nfc.nfd().collect();
+        assert_ne!(common_dir_nfc, common_dir_nfd.as_str());
+        assert_ne!(path_nfc, path_nfd.as_str());
+        assert_eq!(
+            path_fingerprint(common_dir_nfc, path_nfc),
+            path_fingerprint(&common_dir_nfd, &path_nfd),
+        );
     }
 
     #[test]
