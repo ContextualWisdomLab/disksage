@@ -152,6 +152,14 @@ jobs:
       - name: Windows worktree same-path object replacement regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_path_identity_windows -- --exact same_registered_path_replacement_changes_path_and_plan_identity
+      - name: Windows worktree admin-fallback reason evidence regression
+        shell: pwsh
+        run: |
+          if (Select-String -Path src-tauri/tests/git_worktree_path_identity_windows.rs -Pattern 'fn admin_fallback_preserves_lock_and_prunable_reason_evidence' -Quiet) {
+            cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_path_identity_windows -- --exact admin_fallback_preserves_lock_and_prunable_reason_evidence
+          } else {
+            Write-Host 'Admin-fallback reason fixture is not present on this source exact; child owner will execute it when adopted.'
+          }
       - name: Windows rebuild authority test target compile regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test dev_artifact_rebuild_authority_contract --no-run
