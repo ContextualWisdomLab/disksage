@@ -220,7 +220,7 @@
 
       {#if candidateEntries().length > 0}
         <ul class="worktrees">
-          {#each candidateEntries() as candidate (candidate.path_fingerprint)}
+          {#each candidateEntries() as candidate (candidate.path)}
             <li>
               <div><strong>보존 기준 연결 확인됨</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
               <div class="path" title={candidate.path}>{candidate.path}</div>
@@ -233,7 +233,7 @@
         <div class="blocked">
           <strong>확인이 끝나지 않아 정리를 시작할 수 없습니다.</strong>
           <ul>
-            {#each evidenceGapEntries() as entry (entry.path_fingerprint)}
+            {#each evidenceGapEntries() as entry (entry.path)}
               <li><span class="path">{entry.path}</span> — 확인이 필요한 항목이 있습니다. 상태를 다시 확인하세요.</li>
             {/each}
           </ul>
