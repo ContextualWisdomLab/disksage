@@ -72,7 +72,7 @@ fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Effective UID for daemon identity binding. Unix-only; stub on other platforms.
+/// Real UID (`getuid`) for daemon identity binding on Unix; stub (0) on other platforms.
 pub fn current_recovery_uid() -> u32 {
     #[cfg(unix)]
     {
