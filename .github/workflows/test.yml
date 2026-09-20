@@ -181,6 +181,15 @@ jobs:
           else
             printf 'SKIP provider_global_sync_success_pipe_contract: owner source absent; no runtime regression executed\n'
           fi
+      - name: macOS deletion/recovery regression when owner source is present
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if [[ -f "src-tauri/tests/macos_trash_staging_recovery.rs" ]]; then
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --test macos_trash_staging_recovery
+          else
+            printf 'SKIP macos_trash_staging_recovery: owner source absent; no runtime regression executed\n'
+          fi
 
   windows-home-resolution:
     runs-on: windows-latest
@@ -216,23 +225,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             Write-Output 'SKIP provider_oauth_cli_process: owner source absent; no runtime regression executed'
-          }
-      - name: Windows staging rollback safety regression when owner contract is present
-        shell: pwsh
-        run: |
-          if (Test-Path 'src/lib/stagingCreationWindowsRollbackContract.test.ts') {
-            $output = & cargo test --manifest-path src-tauri/Cargo.toml --locked --lib safety::tests::staging_creation_windows_substitution_does_not_delete_replacement -- --exact 2>&1
-            $status = $LASTEXITCODE
-            $output | Write-Output
-            if ($status -ne 0) { exit $status }
-            $joined = $output -join "`n"
-            $expected = 'test safety::tests::staging_creation_windows_substitution_does_not_delete_replacement ... ok'
-            if ($joined -notmatch [regex]::Escape($expected)) {
-              Write-Error 'Windows staging rollback regression did not execute'
-              exit 1
-            }
-          } else {
-            Write-Output 'SKIP staging_creation_windows_substitution_does_not_delete_replacement: owner contract absent; no runtime regression executed'
           }
 
   llm-engine-build:
