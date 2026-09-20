@@ -208,7 +208,7 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
         closed_pull_request_heads,
         stale_open_pull_request_heads,
         stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
         generated_at_ms,
     )?;
     let primary = report
@@ -314,7 +314,7 @@ pub fn plan_git_clone_reclaim(
     generated_at_ms: u64,
 ) -> Result<GitCloneReclaimPlan, String> {
     let closed = if include_closed_pull_requests {
-        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
+        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options.clone())?
     } else {
         ClosedPullRequestHeads::new()
     };
