@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
+const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]";
 const OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn binary_path() -> &'static Path {
@@ -163,6 +163,12 @@ fn private_output_fails_closed_when_secure_unix_mode_is_unavailable() {
 #[test]
 fn unknown_and_missing_arguments_are_exact_bounded_failures() {
     assert_exact_failure(&["--opaque-option=customer-secret"], "unknown-argument");
+    // Raw caller assertions are deliberately absent from the v4 deletion-authority surface.
+    assert_exact_failure(&["--closed-merged-head-oid", OID], "unknown-argument");
+    assert_exact_failure(
+        &["--closed-merged-branch", "refs/heads/not-merged"],
+        "unknown-argument",
+    );
     assert_exact_failure(&["--repository-root"], "--repository-root 값이 필요함");
     assert_exact_failure(
         &["--repository-root", "/repository", "--reference-ref"],
