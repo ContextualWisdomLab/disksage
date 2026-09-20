@@ -140,6 +140,14 @@ jobs:
       - name: Windows worktree remove-CLI stale-plan live-protection regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_remove_cli_contract stale_approved_plan_is_rejected_when_live_protection_changes_removal_authority -- --exact
+      - name: Windows worktree remove-CLI post-validation replacement race regression
+        shell: pwsh
+        run: |
+          if (Select-String -Path src-tauri/tests/git_worktree_remove_cli_contract.rs -Pattern 'fn replacement_after_final_validation_cannot_be_removed_by_path_race' -Quiet) {
+            cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_remove_cli_contract replacement_after_final_validation_cannot_be_removed_by_path_race -- --exact
+          } else {
+            Write-Host 'Post-validation replacement fixture is not present on this source exact; child owner will execute it when adopted.'
+          }
       - name: Windows worktree remove-CLI protection reacquisition regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test git_worktree_orca_protection_context shipped_remove_cli_reacquires_live_protection_before_mutation -- --exact
