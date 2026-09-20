@@ -2706,6 +2706,8 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             matches!(
                 code.as_str(),
                 crate::reclaim_protection::REASON_ORCA_TERMINAL_LIVE
+                    | crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING
+                    | crate::reclaim_protection::REASON_INCOMPLETE_DISPATCH
                     | crate::reclaim_protection::REASON_PROCESS_CWD_INSIDE
                     | crate::reclaim_protection::REASON_ORCHESTRATION_LEAD
                     | crate::reclaim_protection::REASON_LISTED_IN_LEAD_QUEUE

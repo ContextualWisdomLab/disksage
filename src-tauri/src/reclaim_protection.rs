@@ -8,6 +8,7 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
@@ -17,6 +18,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Live Orca terminal (or agent) has this worktree bound.
 pub const REASON_ORCA_TERMINAL_LIVE: &str = "orca-terminal-live";
+/// Orca workspace is sleeping while a session remains bound.
+pub const REASON_ORCA_SESSION_SLEEPING: &str = "orca-session-sleeping";
+/// An incomplete orchestration dispatch still owns this worktree.
+pub const REASON_INCOMPLETE_DISPATCH: &str = "incomplete-dispatch-evidence-incomplete";
 /// A process CWD (or recursive open handle) is inside the path.
 pub const REASON_PROCESS_CWD_INSIDE: &str = "process-cwd-inside";
 /// Worktree directory name is `orchestration-lead-*`.
@@ -55,6 +60,7 @@ pub const PROTECTED_DATA_DIR_NAMES: &[&str] = &["local", "results"];
 pub const PROTECTED_CREDENTIAL_FILE_NAMES: &[&str] =
     &[".env", ".env.local", "credentials.json", "credentials"];
 
+pub const MAX_ORCA_WORKTREE_JSON_BYTES: usize = 1024 * 1024;
 const RECENT_WRITE_SCAN_BUDGET: Duration = Duration::from_millis(250);
 const MAX_RECENT_WRITE_SCAN_ENTRIES: usize = 250_000;
 #[cfg(windows)]
@@ -65,6 +71,12 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 pub struct ProtectionContext {
     /// Absolute worktree paths with a live Orca terminal binding.
     pub orca_live_worktree_paths: Vec<PathBuf>,
+    /// Absolute worktree paths whose Orca workspace is sleeping with a bound session.
+    #[serde(default)]
+    pub orca_sleep_worktree_paths: Vec<PathBuf>,
+    /// Absolute worktree paths with an incomplete orchestration dispatch.
+    #[serde(default)]
+    pub incomplete_dispatch_worktree_paths: Vec<PathBuf>,
     /// Absolute paths mentioned in any scanned `LEAD_QUEUE.md`.
     pub lead_queue_worktree_paths: Vec<PathBuf>,
     /// Open PR head commit OIDs (and optionally branch names via separate field).
@@ -116,6 +128,63 @@ pub fn is_protected_credential_file_name(name: &str) -> bool {
     PROTECTED_CREDENTIAL_FILE_NAMES
         .iter()
         .any(|protected| *protected == name)
+}
+
+/// Parse bounded `orca worktree list --json` evidence for sleeping sessions.
+pub fn parse_orca_sleep_worktree_paths(json_bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
+    if json_bytes.len() > MAX_ORCA_WORKTREE_JSON_BYTES {
+        return Err("orca-worktree-json-too-large".to_string());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(json_bytes).map_err(|_| "orca-worktree-json-invalid".to_string())?;
+    let worktrees =
+        extract_worktree_array(&value).ok_or_else(|| "orca-worktree-json-shape".to_string())?;
+    let mut paths = BTreeSet::new();
+    for worktree in worktrees {
+        let Some(object) = worktree.as_object() else {
+            continue;
+        };
+        let status = object
+            .get("workspaceStatus")
+            .or_else(|| object.get("status"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !status.eq_ignore_ascii_case("sleep") && !status.eq_ignore_ascii_case("sleeping") {
+            continue;
+        }
+        for key in ["path", "worktreePath"] {
+            if let Some(path) = object.get(key).and_then(|value| value.as_str()) {
+                if !path.is_empty() {
+                    paths.insert(PathBuf::from(path));
+                }
+            }
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+/// Read and parse Orca worktree evidence without allocating an unbounded input file.
+pub fn parse_orca_sleep_worktree_paths_file(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let file = fs::File::open(path).map_err(|_| "orca-worktree-json-read-failed".to_string())?;
+    let mut bytes = Vec::new();
+    file.take((MAX_ORCA_WORKTREE_JSON_BYTES as u64) + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "orca-worktree-json-read-failed".to_string())?;
+    parse_orca_sleep_worktree_paths(&bytes)
+}
+
+fn extract_worktree_array(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    if let Some(array) = value.as_array() {
+        return Some(array);
+    }
+    let object = value.as_object()?;
+    if let Some(array) = object.get("worktrees").and_then(|value| value.as_array()) {
+        return Some(array);
+    }
+    if let Some(array) = object.get("items").and_then(|value| value.as_array()) {
+        return Some(array);
+    }
+    object.get("result").and_then(extract_worktree_array)
 }
 
 /// Parse `orca terminal list --json` into absolute worktree paths.
@@ -456,6 +525,12 @@ pub fn assess_worktree_protections(
     if path_is_under_any(worktree, &context.orca_live_worktree_paths) {
         reasons.push(REASON_ORCA_TERMINAL_LIVE.to_string());
     }
+    if path_is_under_any(worktree, &context.orca_sleep_worktree_paths) {
+        reasons.push(REASON_ORCA_SESSION_SLEEPING.to_string());
+    }
+    if path_is_under_any(worktree, &context.incomplete_dispatch_worktree_paths) {
+        reasons.push(REASON_INCOMPLETE_DISPATCH.to_string());
+    }
     if process_cwd_inside {
         reasons.push(REASON_PROCESS_CWD_INSIDE.to_string());
     }
@@ -527,6 +602,7 @@ pub fn artifact_blocking_reason_codes(assessment: &ProtectionAssessment) -> Vec<
             matches!(
                 code.as_str(),
                 REASON_ORCA_TERMINAL_LIVE
+                    | REASON_ORCA_SESSION_SLEEPING
                     | REASON_PROCESS_CWD_INSIDE
                     | REASON_ORCHESTRATION_LEAD
                     | REASON_LISTED_IN_LEAD_QUEUE
@@ -654,6 +730,8 @@ mod tests {
         // RED: many protections fire.
         let context = ProtectionContext {
             orca_live_worktree_paths: vec![worktree.clone()],
+            orca_sleep_worktree_paths: Vec::new(),
+            incomplete_dispatch_worktree_paths: Vec::new(),
             lead_queue_worktree_paths: vec![worktree.clone()],
             open_pr_head_oids: vec!["abc123".into()],
             open_pr_head_branches: vec!["feature".into()],
@@ -700,5 +778,52 @@ mod tests {
         assert!(!green.protected);
         assert!(artifact_blocking_reason_codes(&green).is_empty());
         assert!(whole_worktree_blocking_reason_codes(&green).is_empty());
+    }
+
+    #[test]
+    fn sleeping_and_incomplete_dispatch_ownership_are_stable_blockers() {
+        let root = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("sleeping-owner");
+        fs::create_dir_all(&worktree).unwrap();
+        let context = ProtectionContext {
+            orca_sleep_worktree_paths: vec![worktree.clone()],
+            incomplete_dispatch_worktree_paths: vec![worktree.clone()],
+            ..ProtectionContext::default()
+        };
+        let assessment = assess_worktree_protections(
+            &worktree,
+            None,
+            None,
+            &context,
+            false,
+            false,
+            Some((false, false)),
+            false,
+            Some(false),
+            false,
+        );
+
+        assert!(assessment
+            .reason_codes
+            .contains(&REASON_ORCA_SESSION_SLEEPING.to_string()));
+        assert!(assessment
+            .reason_codes
+            .contains(&REASON_INCOMPLETE_DISPATCH.to_string()));
+        assert!(artifact_blocking_reason_codes(&assessment)
+            .contains(&REASON_ORCA_SESSION_SLEEPING.to_string()));
+    }
+
+    #[test]
+    fn orca_worktree_json_extracts_only_sleeping_paths_and_is_bounded() {
+        let json = br#"{"result":{"worktrees":[{"path":"/tmp/a/sleep","workspaceStatus":"Sleep"},{"worktreePath":"/tmp/a/sleeping","status":"Sleeping"},{"path":"/tmp/a/awake","workspaceStatus":"Active"}]}}"#;
+        assert_eq!(
+            parse_orca_sleep_worktree_paths(json).unwrap(),
+            vec![PathBuf::from("/tmp/a/sleep"), PathBuf::from("/tmp/a/sleeping")]
+        );
+        assert_eq!(
+            parse_orca_sleep_worktree_paths(&vec![b' '; MAX_ORCA_WORKTREE_JSON_BYTES + 1])
+                .unwrap_err(),
+            "orca-worktree-json-too-large"
+        );
     }
 }

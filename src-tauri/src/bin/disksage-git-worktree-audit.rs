@@ -26,7 +26,7 @@ enum ParseOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]"
+    "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--orca-worktree-json ABSOLUTE_JSON] [--incomplete-dispatch-worktree-path ABSOLUTE_PATH] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]"
 }
 
 fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -80,6 +80,7 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut enable_orca_protections = false;
     let mut seen_recent_write = false;
     let mut seen_orca_terminal_json = false;
+    let mut seen_orca_worktree_json = false;
     let mut assess_filesystem = false;
     let mut assess_unpushed = false;
     let mut assess_stash = false;
@@ -159,6 +160,29 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                     .map_err(|_| "orca-terminal-json-read-failed".to_string())?;
                 options.protection.orca_live_worktree_paths =
                     disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+            }
+            "--orca-worktree-json" => {
+                mark_singleton(&mut seen_orca_worktree_json)?;
+                let path = PathBuf::from(value(args, &mut index, "--orca-worktree-json")?);
+                if !path.is_absolute() {
+                    return Err("--orca-worktree-json은 절대 경로여야 함".into());
+                }
+                options.protection.orca_sleep_worktree_paths =
+                    disksage_lib::reclaim_protection::parse_orca_sleep_worktree_paths_file(&path)?;
+            }
+            "--incomplete-dispatch-worktree-path" => {
+                let path = PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--incomplete-dispatch-worktree-path",
+                )?);
+                if !path.is_absolute() {
+                    return Err("--incomplete-dispatch-worktree-path은 절대 경로여야 함".into());
+                }
+                options
+                    .protection
+                    .incomplete_dispatch_worktree_paths
+                    .push(path);
             }
             "--open-pr-head-oid" => {
                 options
