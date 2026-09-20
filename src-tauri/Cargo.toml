@@ -106,6 +106,10 @@ name = "disksage-cache-cleanup"
 path = "src/bin/disksage-cache-cleanup.rs"
 
 [[bin]]
+name = "disksage-cargo-target-clean"
+path = "src/bin/disksage-cargo-target-clean.rs"
+
+[[bin]]
 name = "disksage-dev-artifacts"
 path = "src/bin/disksage-dev-artifacts.rs"
 

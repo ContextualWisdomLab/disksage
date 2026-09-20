@@ -75,6 +75,8 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// Fail-closed cargo target-dir reclaim (measured path pin + symlink escape guards).
+pub mod cargo_target_reclaim;
 /// Stable Orca/dev reclaim protection reason codes and pure assessors.
 pub mod reclaim_protection;
 pub mod maven_cache;
