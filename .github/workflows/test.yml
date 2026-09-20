@@ -137,6 +137,9 @@ jobs:
       - name: Windows worktree remove-CLI protection reacquisition regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context shipped_remove_cli_reacquires_live_protection_before_mutation -- --exact
+      - name: Windows worktree audit CLI authority surface regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_audit_help_exit
       - name: Windows ignored worktree artifact regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_ignored_artifact_guard -- --exact ignored_artifacts_preserve_otherwise_clean_removal_candidate
