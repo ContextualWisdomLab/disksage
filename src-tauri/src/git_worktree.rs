@@ -2167,9 +2167,9 @@ fn admin_fallback_worktrees(
             detached: true,
             bare: false,
             locked,
-            lock_reason: None,
+            lock_reason,
             prunable,
-            prunable_reason: None,
+            prunable_reason,
             fallback_evidence_incomplete: true,
         });
     }
@@ -4007,6 +4007,45 @@ mod tests {
             disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
             GitWorktreeDisposition::EvidenceGap
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_preserves_lock_and_prunable_reasons() {
+        let temp = tempfile::tempdir().unwrap();
+        let common_dir = temp.path().join(".git");
+        let worktree = temp.path().join("linked");
+        fs::create_dir_all(&worktree).unwrap();
+        let admin = common_dir.join("worktrees").join("linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}/.git\n", worktree.display()),
+        )
+        .unwrap();
+        fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
+        fs::write(admin.join("locked"), "owned by maintenance\n").unwrap();
+        fs::write(
+            admin.join("prunable"),
+            "gitdir file points to missing location\n",
+        )
+        .unwrap();
+
+        let (entries, _) =
+            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].locked);
+        assert_eq!(
+            entries[0].lock_reason.as_deref(),
+            Some("owned by maintenance")
+        );
+        assert!(entries[0].prunable);
+        assert_eq!(
+            entries[0].prunable_reason.as_deref(),
+            Some("gitdir file points to missing location")
+        );
+        assert!(entries[0].fallback_evidence_incomplete);
     }
 
     #[cfg(unix)]
