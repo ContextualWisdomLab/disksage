@@ -1967,6 +1967,9 @@ fn create_cloud_candidate_receipt(
         exact_confirmation_phrase,
     )?;
     if !adopt_existing {
+        // Native File Provider copies can materialize placeholders and stage more than the source
+        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
+        // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
@@ -2343,6 +2346,8 @@ pub async fn copy_cloud_candidate(
             operation: Arc::clone(&cloud_copy_operation),
             fingerprint: metadata_fingerprint.clone(),
         };
+        // Register before taking the shared review lock so a queued copy can be cancelled.
+        // The token remains set if cancellation races with lock acquisition.
         let result = (|| {
             let _guard = cloud_review
                 .lock()
@@ -3148,7 +3153,7 @@ pub fn export_organization_lineage(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String> {
-    crate::userrules::parse_rules(&user_rules_json(&app)?)
+    crate::userrules::parse_rules(&user_rules_json(&app))
 }
 
 #[cfg(not(coverage))]
@@ -3635,7 +3640,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_errors_on_unreadable_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        assert!(node_view(res, &tmp.path().join("missing")).is_err());
+        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
     }
 
     #[cfg(unix)]
