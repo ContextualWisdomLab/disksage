@@ -1,0 +1,10 @@
+{
+  "schema_kind": "disksage.git-worktree-audit/v5",
+  "version": 5,
+  "path_fingerprint_algorithm": "disksage.git-worktree-path/blake3-v2",
+  "entry_fingerprint_algorithm": "disksage.git-worktree-entry/blake3-v3",
+  "entry_membership_fields": [
+    "completed_pull_request_commit",
+    "open_pull_request_commit"
+  ]
+}
