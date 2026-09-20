@@ -37,7 +37,7 @@ const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
 const GITHUB_SEARCH_INTERVAL_MS: u64 = 2_100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitWorktreeAuditOptions {
     pub command_timeout_ms: u64,
@@ -45,6 +45,19 @@ pub struct GitWorktreeAuditOptions {
     pub max_worktrees: usize,
     pub max_entries_per_worktree: u64,
     pub max_active_pids: usize,
+    /// Extended Orca/dev protection evidence. Recent-write checks require an explicit
+    /// `recent_write_window_secs` inside the context (no silent default).
+    #[serde(default)]
+    pub protection: crate::reclaim_protection::ProtectionContext,
+    /// When true, scan each worktree for protected data paths and editable installs.
+    #[serde(default)]
+    pub assess_filesystem_protections: bool,
+    /// When true, treat HEAD not contained in any remote-tracking branch as a blocker.
+    #[serde(default)]
+    pub assess_unpushed_commits: bool,
+    /// When true, treat a non-empty `git stash list` as a blocker.
+    #[serde(default)]
+    pub assess_stash: bool,
 }
 
 impl Default for GitWorktreeAuditOptions {
@@ -55,6 +68,10 @@ impl Default for GitWorktreeAuditOptions {
             max_worktrees: 2_048,
             max_entries_per_worktree: 2_000_000,
             max_active_pids: 64,
+            protection: crate::reclaim_protection::ProtectionContext::default(),
+            assess_filesystem_protections: false,
+            assess_unpushed_commits: false,
+            assess_stash: false,
         }
     }
 }
@@ -183,6 +200,8 @@ pub struct GitWorktreeAuditPublicSummary {
     pub branch_names_redacted: bool,
     pub metadata_semantics: Vec<String>,
     pub notices: Vec<String>,
+    /// Stable protection reason codes observed across entries (paths redacted).
+    pub protection_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -349,6 +368,11 @@ fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
     if options.max_active_pids == 0 || options.max_active_pids > 4_096 {
         return Err("git-worktree-active-pid-limit-out-of-bounds".into());
     }
+    if let Some(window) = options.protection.recent_write_window_secs {
+        if window == 0 || window > 366 * 24 * 60 * 60 {
+            return Err("git-worktree-recent-write-window-out-of-bounds".into());
+        }
+    }
     Ok(())
 }
 
@@ -412,8 +436,6 @@ fn run_bounded_command(
         command.env_remove("GH_REPO");
     }
     #[cfg(unix)]
-    // Keep descendants in a private process group so a timeout cannot leave a Git helper holding
-    // stdout/stderr pipes open and make the bounded reader join hang indefinitely.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -842,7 +864,7 @@ pub fn github_closed_pull_request_heads_with_options(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
 ) -> Result<ClosedPullRequestHeads, String> {
-    validate_options(options)?;
+    validate_options(options.clone())?;
     let result = github_pull_request_heads_result(
         repository_root,
         options.command_timeout_ms,
@@ -854,12 +876,6 @@ pub fn github_closed_pull_request_heads_with_options(
     Ok(heads)
 }
 
-/// Resolve exact commit membership for the repository's registered worktrees.
-///
-/// Search results are only discovery hints: every hit is rebound to the exact repository and then
-/// verified against the pull request's authoritative commit list. Open membership is retained
-/// separately so it can veto every removal authority, including a second completed PR containing
-/// the same commit.
 pub fn github_pull_request_commit_membership(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
@@ -888,7 +904,7 @@ pub(crate) fn github_pull_request_commit_membership_with_exact(
     options: GitWorktreeAuditOptions,
     exact: PullRequestCommitMembership,
 ) -> Result<PullRequestCommitMembership, String> {
-    validate_options(options)?;
+    validate_options(options.clone())?;
     let started = Instant::now();
     let remaining = || {
         options
@@ -937,7 +953,7 @@ pub(crate) fn github_pull_request_commit_membership_with_exact(
         return Err("github-repository-identity-invalid".into());
     }
 
-    let registered_heads = list_worktrees(repository_root, options)?
+    let registered_heads = list_worktrees(repository_root, options.clone())?
         .into_iter()
         .map(|worktree| worktree.head)
         .collect::<BTreeSet<_>>();
@@ -1014,11 +1030,6 @@ pub(crate) fn github_pull_request_commit_membership_with_exact(
     Ok(membership)
 }
 
-/// Resolve exact head OIDs for same-repository open pull requests created before an explicit cutoff.
-///
-/// The cutoff is supplied by the operator; DiskSage never chooses an age threshold implicitly.
-/// GitHub state, repository identity, branch name, head OID, and creation timestamp are all
-/// refreshed before a plan and before each removal.
 pub fn github_stale_open_pull_request_heads(
     repository_root: &Path,
     cutoff_ms: u64,
@@ -1471,7 +1482,6 @@ struct WindowsRestartManagerSession(u32);
 #[cfg(windows)]
 impl Drop for WindowsRestartManagerSession {
     fn drop(&mut self) {
-        // SAFETY: the handle was returned by RmStartSession and is ended exactly once here.
         unsafe { RmEndSession(self.0) };
     }
 }
@@ -1547,7 +1557,6 @@ pub(crate) fn active_use_evidence(
     }
     let mut handle = 0_u32;
     let mut session_key = [0_u16; 33];
-    // SAFETY: all pointers reference writable fixed-size values required by Restart Manager.
     let started = unsafe { RmStartSession(&mut handle, 0, session_key.as_mut_ptr()) };
     if started != ERROR_SUCCESS {
         return restart_manager_evidence(
@@ -1559,7 +1568,6 @@ pub(crate) fn active_use_evidence(
     }
     let session = WindowsRestartManagerSession(handle);
     let pointers: Vec<*const u16> = files.iter().map(|file| file.as_ptr()).collect();
-    // SAFETY: the UTF-16 buffers and pointer array remain alive for the complete call.
     let registered = unsafe {
         RmRegisterResources(
             session.0,
@@ -1582,7 +1590,6 @@ pub(crate) fn active_use_evidence(
     let mut needed = 0_u32;
     let mut count = 0_u32;
     let mut reboot_reasons = 0_u32;
-    // SAFETY: the first call requests only the required process count and supplies a null buffer.
     let first = unsafe {
         RmGetList(
             session.0,
@@ -1606,8 +1613,6 @@ pub(crate) fn active_use_evidence(
     count = needed;
     let mut processes =
         vec![std::mem::MaybeUninit::<WindowsRestartManagerProcessInfo>::zeroed(); count as usize];
-    // SAFETY: the buffer has exactly `count` initialized writable slots; the API reports how many
-    // entries it filled, and only that prefix is read after a successful call.
     let second = unsafe {
         RmGetList(
             session.0,
@@ -1836,7 +1841,7 @@ fn entry_fingerprint(
     entry: &GitWorktreeAuditEntry,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.git-worktree-entry\0v1\0");
+    hasher.update(b"disksage.git-worktree-entry\0v2\0");
     hash_field(&mut hasher, common_dir);
     hash_field(&mut hasher, &entry.path);
     hash_field(&mut hasher, &entry.head);
@@ -1859,7 +1864,15 @@ fn entry_fingerprint(
         u8::from(entry.prunable),
         u8::from(entry.active_use.active),
         u8::from(entry.active_use.evidence_complete),
+        match entry.disposition {
+            GitWorktreeDisposition::RemovalCandidate => 0,
+            GitWorktreeDisposition::Preserve => 1,
+            GitWorktreeDisposition::EvidenceGap => 2,
+        },
     ]);
+    for blocker in &entry.blockers {
+        hash_field(&mut hasher, blocker);
+    }
     for pid in &entry.active_use.observed_pids {
         hasher.update(&pid.to_le_bytes());
     }
@@ -2073,8 +2086,6 @@ fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
         .map_err(|_| "git-worktree-admin-fallback-file-not-utf8".into())
 }
 
-/// Recover bounded registration facts when Git's porcelain listing hangs on a malformed entry.
-/// The returned records intentionally retain evidence gaps, so no removal operation can use them.
 fn admin_fallback_worktrees(
     common_dir: &Path,
     options: GitWorktreeAuditOptions,
@@ -2178,6 +2189,69 @@ fn status_observation(path: &Path, timeout_ms: u64) -> (Option<bool>, Option<u64
     (Some(count == 0), Some(count))
 }
 
+fn status_dirty_kinds(path: &Path, timeout_ms: u64) -> Option<(bool, bool)> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("status"),
+            OsString::from("--porcelain=v1"),
+            OsString::from("-z"),
+            OsString::from("--untracked-files=all"),
+            OsString::from("--ignore-submodules=none"),
+        ],
+        timeout_ms,
+        "git-status-kinds",
+    )
+    .ok()?;
+    if result.status_code != Some(0) {
+        return None;
+    }
+    let mut uncommitted = false;
+    let mut untracked = false;
+    for field in result.stdout.split(|byte| *byte == 0) {
+        if field.len() < 3 {
+            continue;
+        }
+        if field.starts_with(b"??") {
+            untracked = true;
+        } else {
+            uncommitted = true;
+        }
+    }
+    Some((uncommitted, untracked))
+}
+
+fn stash_present_observation(path: &Path, timeout_ms: u64) -> Option<bool> {
+    let result = run_git(
+        path,
+        &[OsString::from("stash"), OsString::from("list")],
+        timeout_ms,
+        "git-stash-list",
+    )
+    .ok()?;
+    (result.status_code == Some(0)).then(|| !result.stdout.is_empty())
+}
+
+fn commits_not_on_any_remote_branch(path: &Path, timeout_ms: u64) -> Option<bool> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("branch"),
+            OsString::from("-r"),
+            OsString::from("--contains"),
+            OsString::from("HEAD"),
+        ],
+        timeout_ms,
+        "git-branch-r-contains",
+    )
+    .ok()?;
+    if result.status_code != Some(0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&result.stdout);
+    Some(text.lines().all(|line| line.trim().is_empty()))
+}
+
 fn reachable_commit_set(
     repository_root: &Path,
     references: &[GitWorktreeReferenceBinding],
@@ -2226,11 +2300,6 @@ fn canonical_actor_cwd() -> Option<PathBuf> {
         .and_then(|path| fs::canonicalize(path).ok())
 }
 
-/// Audit every linked worktree registered in one Git common directory.
-///
-/// The selected references are resolved once, then every worktree HEAD is checked against that
-/// exact OID set. Exact retained tips are preserved. No fetch, prune, remove, branch deletion, file
-/// deletion, or provider operation is performed.
 pub fn audit_git_worktrees(
     repository_root: &Path,
     retention_references: &[String],
@@ -2246,8 +2315,6 @@ pub fn audit_git_worktrees(
     )
 }
 
-/// Audit worktrees while accepting exact head OIDs from authoritatively closed pull requests as
-/// removal authority. Callers must refresh this evidence immediately before execution.
 pub fn audit_git_worktrees_with_closed_pull_request_heads(
     repository_root: &Path,
     retention_references: &[String],
@@ -2266,7 +2333,6 @@ pub fn audit_git_worktrees_with_closed_pull_request_heads(
     )
 }
 
-/// Audit worktrees with exact same-repository closed and explicitly stale-open PR head evidence.
 pub fn audit_git_worktrees_with_pull_request_heads(
     repository_root: &Path,
     retention_references: &[String],
@@ -2288,7 +2354,6 @@ pub fn audit_git_worktrees_with_pull_request_heads(
     )
 }
 
-/// Audit worktrees with exact PR-head evidence plus exact commit membership.
 pub fn audit_git_worktrees_with_pull_request_membership(
     repository_root: &Path,
     retention_references: &[String],
@@ -2299,7 +2364,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_options(options)?;
+    validate_options(options.clone())?;
     if closed_pull_request_heads.len() > 10_000
         || closed_pull_request_heads
             .iter()
@@ -2360,10 +2425,10 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         &retention_references,
         options.command_timeout_ms,
     )?;
-    let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options) {
+    let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options.clone()) {
         Ok(raw_worktrees) => (raw_worktrees, Vec::new()),
         Err(error) if error == GIT_WORKTREE_LIST_TIMEOUT => {
-            admin_fallback_worktrees(&common_dir, options)
+            admin_fallback_worktrees(&common_dir, options.clone())
         }
         Err(error) => return Err(error),
     };
@@ -2466,6 +2531,49 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         if raw.fallback_evidence_incomplete {
             blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
         }
+        let process_cwd_inside = actor_cwd_inside == Some(true) || active_use.active;
+        let status_kinds = if path_valid && !raw.bare {
+            status_dirty_kinds(canonical_path, options.command_timeout_ms)
+        } else {
+            None
+        };
+        let stash_observation = if options.assess_stash && path_valid && !raw.bare {
+            stash_present_observation(canonical_path, options.command_timeout_ms)
+        } else {
+            Some(false)
+        };
+        if options.assess_stash && path_valid && !raw.bare && stash_observation.is_none() {
+            blockers.push("git-stash-evidence-incomplete".into());
+        }
+        let commits_not_on_remote = if options.assess_unpushed_commits && path_valid && !raw.bare {
+            commits_not_on_any_remote_branch(canonical_path, options.command_timeout_ms)
+        } else {
+            None
+        };
+        if options.assess_unpushed_commits
+            && path_valid
+            && !raw.bare
+            && commits_not_on_remote.is_none()
+        {
+            blockers.push("git-remote-containment-evidence-incomplete".into());
+        }
+        let extended = crate::reclaim_protection::assess_worktree_protections(
+            canonical_path,
+            Some(raw.head.as_str()),
+            raw.branch.as_deref(),
+            &options.protection,
+            process_cwd_inside,
+            false,
+            status_kinds,
+            stash_observation.unwrap_or(false),
+            commits_not_on_remote,
+            options.assess_filesystem_protections,
+        );
+        blockers.extend(crate::reclaim_protection::whole_worktree_blocking_reason_codes(
+            &extended,
+        ));
+        blockers.sort();
+        blockers.dedup();
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -2564,6 +2672,34 @@ pub fn audit_git_worktrees_with_pull_request_membership(
 }
 
 pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublicSummary {
+    let mut protection_reason_codes: Vec<String> = report
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blockers.iter().cloned())
+        .filter(|code| {
+            matches!(
+                code.as_str(),
+                crate::reclaim_protection::REASON_ORCA_TERMINAL_LIVE
+                    | crate::reclaim_protection::REASON_PROCESS_CWD_INSIDE
+                    | crate::reclaim_protection::REASON_ORCHESTRATION_LEAD
+                    | crate::reclaim_protection::REASON_LISTED_IN_LEAD_QUEUE
+                    | crate::reclaim_protection::REASON_OPEN_PR_HEAD
+                    | crate::reclaim_protection::REASON_UNCOMMITTED_CHANGES
+                    | crate::reclaim_protection::REASON_UNTRACKED_NONIGNORED
+                    | crate::reclaim_protection::REASON_STASH_PRESENT
+                    | crate::reclaim_protection::REASON_COMMITS_NOT_ON_REMOTE
+                    | crate::reclaim_protection::REASON_RECENT_WRITES
+                    | crate::reclaim_protection::REASON_RECENT_WRITE_EVIDENCE_INCOMPLETE
+                    | crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL
+                    | crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS
+                    | crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+                    | crate::reclaim_protection::REASON_EDITABLE_INSTALL
+                    | crate::reclaim_protection::REASON_BUILD_TOOL_ACTIVE
+            )
+        })
+        .collect();
+    protection_reason_codes.sort();
+    protection_reason_codes.dedup();
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
@@ -2589,6 +2725,7 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "user-file-production-time-not-inferred".into(),
             "filename-date-not-used".into(),
             "filesystem-created-or-modified-time-not-used-for-removal".into(),
+            "orca-reclaim-protection-reason-codes".into(),
         ],
         notices: vec![
             "read-only-audit".into(),
@@ -2601,7 +2738,9 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "approval-phrase-is-not-execution".into(),
             "no-worktree-prune-remove-or-branch-delete".into(),
             "no-user-file-or-cloud-provider-mutation".into(),
+            "recent-write-window-requires-explicit-caller-value".into(),
         ],
+        protection_reason_codes,
     }
 }
 
@@ -2733,7 +2872,6 @@ fn removal_approval_id_for(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Bind an attributed human decision to one exact, complete audit. This performs no mutation.
 pub fn approve_stale_worktree_removal(
     report: &GitWorktreeAuditReport,
     confirmation_exact_approval_phrase: &str,
@@ -2907,8 +3045,6 @@ fn pending_item(candidate: &GitWorktreeAuditEntry) -> GitWorktreeRemovalItemResu
     }
 }
 
-/// Re-audit the full plan and each individual candidate before invoking non-force Git worktree
-/// removal. No prune or branch-deletion command is reachable from this function.
 pub fn execute_stale_worktree_removal(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2926,7 +3062,6 @@ pub fn execute_stale_worktree_removal(
     )
 }
 
-/// Execute with freshly queried GitHub closed-PR evidence bound once before mutation.
 pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2946,7 +3081,6 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     )
 }
 
-/// Execute with freshly queried same-repository closed and stale-open PR evidence bound once.
 pub fn execute_stale_worktree_removal_with_github_pull_requests(
     approved_report: &GitWorktreeAuditReport,
     approval: &GitWorktreeRemovalApproval,
@@ -2956,7 +3090,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
-    validate_options(options)?;
+    validate_options(options.clone())?;
     validate_removal_approval(
         approved_report,
         approval,
@@ -2975,7 +3109,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
         &repository_root,
         include_closed_pull_requests,
         stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
     )?;
     let audit_live = |observed_at_ms| {
         audit_git_worktrees_with_pull_request_membership(
@@ -2985,7 +3119,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
             &evidence.stale_open_heads,
             &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             observed_at_ms,
         )
     };
@@ -3074,7 +3208,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound
         );
         item.registration_absence_verified =
-            registration_absent(&repository_root, Path::new(&candidate.path), options)
+            registration_absent(&repository_root, Path::new(&candidate.path), options.clone())
                 .unwrap_or(false);
         item.branch_retained = candidate.branch.as_deref().map(|branch| {
             branch_retained(&repository_root, branch, options.command_timeout_ms).unwrap_or(false)
@@ -3163,8 +3297,6 @@ fn absolute_without_parent(path: &Path) -> bool {
             .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
-/// Prepare private immutable-record storage outside the repository, common Git directory, and all
-/// audited worktrees, including when the app-data directory does not exist yet.
 pub fn prepare_worktree_record_directory(
     app_data_dir: &Path,
     report: &GitWorktreeAuditReport,
@@ -3241,7 +3373,6 @@ pub fn prepare_worktree_record_directory(
     Ok(canonical_record_dir)
 }
 
-/// Persist an approval or result using create-new semantics and make the completed file read-only.
 pub fn write_immutable_worktree_record<T: serde::Serialize>(
     record_dir: &Path,
     filename: &str,
@@ -3593,6 +3724,7 @@ mod tests {
         assert!(entry.closed_pull_request_head);
         assert_eq!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
     }
+
     #[cfg(all(unix, not(coverage)))]
     #[test]
     fn detached_intermediate_completed_commit_is_candidate_unless_an_open_pr_contains_it() {

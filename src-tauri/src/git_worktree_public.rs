@@ -40,7 +40,7 @@ fn validate_local_command_timeout(timeout_ms: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_local_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
+fn validate_local_options(options: &GitWorktreeAuditOptions) -> Result<(), String> {
     validate_local_command_timeout(options.command_timeout_ms)
 }
 
@@ -174,7 +174,7 @@ fn removal_plan_fingerprint(report: &GitWorktreeAuditReport) -> String {
 
 fn apply_ignored_artifact_guard(
     mut report: GitWorktreeAuditReport,
-    options: GitWorktreeAuditOptions,
+    options: &GitWorktreeAuditOptions,
 ) -> GitWorktreeAuditReport {
     let mut guarded = false;
     let mut evidence_gap = false;
@@ -337,7 +337,7 @@ pub fn github_closed_pull_request_heads_with_options(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
 ) -> Result<ClosedPullRequestHeads, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::github_closed_pull_request_heads_with_options(repository_root, options)
 }
 
@@ -346,7 +346,7 @@ pub fn github_pull_request_commit_membership(
     repository_root: &Path,
     options: GitWorktreeAuditOptions,
 ) -> Result<PullRequestCommitMembership, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::github_pull_request_commit_membership(repository_root, options)
 }
 
@@ -366,7 +366,7 @@ pub(crate) fn github_pull_request_commit_membership_with_exact(
     options: GitWorktreeAuditOptions,
     exact: PullRequestCommitMembership,
 ) -> Result<PullRequestCommitMembership, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::github_pull_request_commit_membership_with_exact(
         repository_root,
         options,
@@ -395,14 +395,14 @@ pub fn audit_git_worktrees(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::audit_git_worktrees(
         repository_root,
         retention_references,
-        options,
+        options.clone(),
         generated_at_ms,
     )
-    .map(|report| apply_ignored_artifact_guard(report, options))
+    .map(|report| apply_ignored_artifact_guard(report, &options))
 }
 
 /// Audit with closed-PR authority only after bounding every local subprocess deadline.
@@ -413,15 +413,15 @@ pub fn audit_git_worktrees_with_closed_pull_request_heads(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::audit_git_worktrees_with_closed_pull_request_heads(
         repository_root,
         retention_references,
         closed_pull_request_heads,
-        options,
+        options.clone(),
         generated_at_ms,
     )
-    .map(|report| apply_ignored_artifact_guard(report, options))
+    .map(|report| apply_ignored_artifact_guard(report, &options))
 }
 
 /// Audit with closed and stale-open PR authority under bounded local command options.
@@ -434,17 +434,17 @@ pub fn audit_git_worktrees_with_pull_request_heads(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::audit_git_worktrees_with_pull_request_heads(
         repository_root,
         retention_references,
         closed_pull_request_heads,
         stale_open_pull_request_heads,
         stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
         generated_at_ms,
     )
-    .map(|report| apply_ignored_artifact_guard(report, options))
+    .map(|report| apply_ignored_artifact_guard(report, &options))
 }
 
 /// Audit exact PR membership under bounded local command options.
@@ -458,7 +458,7 @@ pub fn audit_git_worktrees_with_pull_request_membership(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     crate::git_worktree_impl::audit_git_worktrees_with_pull_request_membership(
         repository_root,
         retention_references,
@@ -466,10 +466,10 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         stale_open_pull_request_heads,
         pull_request_commits,
         stale_open_pull_request_cutoff_ms,
-        options,
+        options.clone(),
         generated_at_ms,
     )
-    .map(|report| apply_ignored_artifact_guard(report, options))
+    .map(|report| apply_ignored_artifact_guard(report, &options))
 }
 
 /// Execute stale-worktree removal only with bounded local command deadlines.
@@ -480,7 +480,7 @@ pub fn execute_stale_worktree_removal(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal(
         approved_report,
@@ -500,7 +500,7 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_closed_pull_requests(
         approved_report,
@@ -522,7 +522,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
-    validate_local_options(options)?;
+    validate_local_options(&options)?;
     ensure_candidates_still_have_no_ignored_artifacts(approved_report, options.command_timeout_ms)?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_pull_requests(
         approved_report,

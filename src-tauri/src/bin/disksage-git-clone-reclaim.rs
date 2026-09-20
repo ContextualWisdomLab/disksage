@@ -163,7 +163,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         &args.retention_references,
         args.include_closed_pull_requests,
         args.stale_open_cutoff_ms,
-        options,
+        options.clone(),
         now_ms(),
     )?;
     let Some(execution) = args.execution else {

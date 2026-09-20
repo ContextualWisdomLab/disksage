@@ -983,7 +983,7 @@ pub async fn plan_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1036,7 +1036,7 @@ pub async fn remove_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1045,7 +1045,7 @@ pub async fn remove_stale_git_worktrees(
             &evidence.stale_open_heads,
             &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
@@ -1158,7 +1158,7 @@ pub async fn remove_stale_git_clone(
             &retention_references,
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if plan.plan_fingerprint != approved_plan_fingerprint {
