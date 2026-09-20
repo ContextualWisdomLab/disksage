@@ -2756,6 +2756,8 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "filename-date-not-used".into(),
             "filesystem-created-or-modified-time-not-used-for-removal".into(),
             "orca-reclaim-protection-reason-codes".into(),
+            // Ownership evidence field retained in the redacted public surface contract.
+            "completed_pull_request_commit".into(),
         ],
         notices: vec![
             "read-only-audit".into(),
@@ -2769,6 +2771,9 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "no-worktree-prune-remove-or-branch-delete".into(),
             "no-user-file-or-cloud-provider-mutation".into(),
             "recent-write-window-requires-explicit-caller-value".into(),
+            // Completed sleeping sessions must preserve results, cleanup, then re-audit
+            // before any reclaim path may proceed.
+            "sleep-session-requires-result-preserve-then-cleanup-then-reaudit".into(),
         ],
         protection_reason_codes,
     }
@@ -4303,6 +4308,95 @@ mod tests {
         assert!(encoded.contains("\"local_paths_redacted\":true"));
         assert!(encoded.contains("\"filesystem_mutation_executed\":false"));
         assert!(encoded.contains("filename-date-not-used"));
+    }
+
+    #[test]
+    fn public_summary_warns_before_reclaiming_completed_sleeping_session() {
+        let report = GitWorktreeAuditReport {
+            schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
+            repository_root: "/private/repo".into(),
+            common_dir: "/private/repo/.git".into(),
+            generated_at_ms: 1,
+            stale_open_pull_request_cutoff_ms: None,
+            retention_references: vec![GitWorktreeReferenceBinding {
+                reference_ref: "origin/develop".into(),
+                reference_oid: oid('a'),
+            }],
+            retention_reference_set_fingerprint: "r".repeat(64),
+            removal_authority_fingerprint: "a".repeat(64),
+            retention_reachable_commit_count: 1,
+            worktree_count: 1,
+            removal_candidate_count: 0,
+            removal_candidate_allocated_bytes: 0,
+            preserved_count: 1,
+            evidence_gap_count: 0,
+            evidence_complete: true,
+            removal_plan_fingerprint: "f".repeat(64),
+            exact_approval_phrase: None,
+            entries: vec![GitWorktreeAuditEntry {
+                path: "/private/repo/.git/worktrees/sleeping".into(),
+                path_fingerprint: "p".repeat(64),
+                head: oid('b'),
+                branch: None,
+                detached: true,
+                bare: false,
+                primary: false,
+                audit_origin: false,
+                locked: false,
+                lock_reason: None,
+                prunable: false,
+                prunable_reason: None,
+                status_clean: Some(true),
+                status_entry_count: Some(0),
+                contained_in_reference: Some(true),
+                closed_pull_request_head: false,
+                completed_pull_request_commit: true,
+                open_pull_request_commit: false,
+                stale_open_pull_request_head: false,
+                head_is_retained_tip: false,
+                actor_cwd_inside: Some(false),
+                size: GitWorktreeSizeEvidence {
+                    method: "test".into(),
+                    evidence_complete: true,
+                    allocated_bytes: 0,
+                    logical_bytes: 0,
+                    visited_entries: 0,
+                    error: None,
+                },
+                active_use: GitWorktreeActiveUseEvidence {
+                    method: "test".into(),
+                    assessed: true,
+                    evidence_complete: true,
+                    active: false,
+                    observed_pids: Vec::new(),
+                    results_truncated: true,
+                    error: None,
+                },
+                disposition: GitWorktreeDisposition::Preserve,
+                blockers: vec![crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING.to_string()],
+                entry_fingerprint: "e".repeat(64),
+            }],
+            issues: Vec::new(),
+            filesystem_mutation_executed: false,
+        };
+        let summary = public_summary(&report);
+        assert!(summary.notices.iter().any(|notice| {
+            notice == "sleep-session-requires-result-preserve-then-cleanup-then-reaudit"
+        }));
+        assert!(summary
+            .protection_reason_codes
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING));
+        assert!(summary
+            .metadata_semantics
+            .iter()
+            .any(|item| item == "completed_pull_request_commit"));
+        let encoded = serde_json::to_string(&summary).unwrap();
+        assert!(!encoded.contains("/private/repo"));
+        assert!(encoded.contains("sleep-session-requires-result-preserve-then-cleanup-then-reaudit"));
     }
 
     #[test]
