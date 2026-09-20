@@ -176,14 +176,24 @@ fn orca_enabled_remove_requires_explicit_recent_write_window_before_execution() 
         .output()
         .expect("shipped remove CLI should start for fail-closed validation");
 
-    assert!(!no_window.status.success());
+    let stdout = String::from_utf8_lossy(&no_window.stdout);
     let stderr = String::from_utf8_lossy(&no_window.stderr);
     assert!(
+        !no_window.status.success(),
+        "Orca-enabled removal without an explicit recent-write window must fail; status={:?}; binary={remove_binary:?}; stdout={stdout:?}; stderr={stderr:?}; record_root_exists={}",
+        no_window.status,
+        record_root.exists()
+    );
+    assert!(
         stderr.contains("--recent-write-window-secs"),
-        "remove CLI Orca pack must require an explicit recent-write window; stderr={stderr}"
+        "remove CLI Orca pack must require an explicit recent-write window; status={:?}; binary={remove_binary:?}; stdout={stdout:?}; stderr={stderr:?}; record_root_exists={}",
+        no_window.status,
+        record_root.exists()
     );
     assert!(
         !record_root.exists(),
-        "argument validation must fail before creating approval/result records"
+        "argument validation must fail before creating approval/result records; status={:?}; binary={remove_binary:?}; stdout={stdout:?}; stderr={stderr:?}; record_root_exists={}",
+        no_window.status,
+        record_root.exists()
     );
 }

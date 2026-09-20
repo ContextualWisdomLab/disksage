@@ -76,6 +76,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut enable_orca_protections = false;
     let mut seen_recent_write_window = false;
     let mut seen_orca_terminal_json = false;
+    let mut orca_terminal_json = None;
+    let mut lead_queue_files = Vec::new();
     let mut assess_filesystem_protections = false;
     let mut assess_unpushed_commits = false;
     let mut assess_stash = false;
@@ -166,10 +168,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 if !path.is_absolute() {
                     return Err("--orca-terminal-json must be absolute".into());
                 }
-                let bytes = std::fs::read(&path)
-                    .map_err(|_| "orca-terminal-json-read-failed".to_string())?;
-                protection.orca_live_worktree_paths =
-                    disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+                orca_terminal_json = Some(path);
             }
             Some("--orca-terminal-json") => return Err("duplicate option".into()),
             Some("--open-pr-head-oid") => protection
@@ -183,15 +182,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 if !path.is_absolute() {
                     return Err("--lead-queue-file must be absolute".into());
                 }
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|_| "lead-queue-file-read-failed".to_string())?;
-                let workspace_root = path.parent().unwrap_or(path.as_path());
-                protection.lead_queue_worktree_paths.extend(
-                    disksage_lib::reclaim_protection::lead_queue_mentioned_paths(
-                        &text,
-                        workspace_root,
-                    ),
-                );
+                lead_queue_files.push(path);
             }
             Some("--assess-filesystem-protections") if !assess_filesystem_protections => {
                 assess_filesystem_protections = true
@@ -257,6 +248,19 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
         assess_filesystem_protections = true;
         assess_unpushed_commits = true;
         assess_stash = true;
+    }
+    if let Some(path) = orca_terminal_json {
+        let bytes = std::fs::read(&path).map_err(|_| "orca-terminal-json-read-failed".to_string())?;
+        protection.orca_live_worktree_paths =
+            disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+    }
+    for path in lead_queue_files {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|_| "lead-queue-file-read-failed".to_string())?;
+        let workspace_root = path.parent().unwrap_or(path.as_path());
+        protection.lead_queue_worktree_paths.extend(
+            disksage_lib::reclaim_protection::lead_queue_mentioned_paths(&text, workspace_root),
+        );
     }
     let defaults = git_worktree::GitWorktreeAuditOptions::default();
 

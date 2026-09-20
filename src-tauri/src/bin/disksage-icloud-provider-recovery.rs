@@ -1,9 +1,8 @@
 //! Plan or execute one evidence-bound graceful iCloud File Provider daemon restart.
 
 use disksage_lib::icloud_provider_recovery::{
-    current_recovery_uid, execute_icloud_file_provider_recovery,
-    observe_icloud_file_provider_daemon, plan_icloud_file_provider_recovery,
-    IcloudFileProviderRecoveryPlan,
+    execute_icloud_file_provider_recovery, observe_icloud_file_provider_daemon,
+    plan_icloud_file_provider_recovery, IcloudFileProviderRecoveryPlan,
 };
 use disksage_lib::icloud_sync_health::{
     default_cloud_docs_db_dir, health_evidence_snapshot_from_report, probe_icloud_sync_health,
@@ -70,6 +69,22 @@ fn now_ms() -> Result<u64, String> {
         .map_err(|_| "system-clock-before-unix-epoch".to_string())?
         .as_millis();
     u64::try_from(value).map_err(|_| "system-time-overflow".into())
+}
+
+/// Return the current process real UID on Unix.
+///
+/// Non-Unix builds use an unreachable sentinel because platform observation fails closed before
+/// recovery planning. Keeping the call portable lets shared `cloud-cli` feature builds compile
+/// without granting iCloud recovery authority on unsupported platforms.
+fn current_recovery_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
 }
 
 fn read_plan(path: &Path) -> Result<IcloudFileProviderRecoveryPlan, String> {
