@@ -68,6 +68,21 @@ fn live_orca_terminal_preserves_otherwise_removable_worktree() {
         &["worktree", "add", "-q", secondary.to_str().unwrap(), "stale"],
     );
 
+    let baseline = audit_git_worktrees(
+        &repository,
+        &["main".into()],
+        GitWorktreeAuditOptions::default(),
+        now_ms(),
+    )
+    .expect("baseline audit real linked worktree without live Orca evidence");
+    let baseline_entry = entry_for_path(&baseline, &secondary);
+    assert_eq!(
+        baseline_entry.disposition,
+        GitWorktreeDisposition::RemovalCandidate,
+        "{baseline_entry:#?}"
+    );
+    let baseline_fingerprint = baseline_entry.entry_fingerprint.clone();
+
     let live_path = fs::canonicalize(&secondary).expect("canonical live worktree path");
     let options = GitWorktreeAuditOptions {
         protection: ProtectionContext {
@@ -91,6 +106,10 @@ fn live_orca_terminal_preserves_otherwise_removable_worktree() {
         entry.blockers
     );
     assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
+    assert_ne!(
+        entry.entry_fingerprint, baseline_fingerprint,
+        "protection authority that changes the decision must change entry integrity"
+    );
     assert_eq!(report.removal_candidate_count, 0, "{report:#?}");
     assert_eq!(report.exact_approval_phrase, None);
 }
