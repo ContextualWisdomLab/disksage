@@ -211,7 +211,7 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
         &args.repository_root,
         args.include_closed_pull_requests,
         args.stale_open_pull_request_cutoff_ms,
-        args.options,
+        args.options.clone(),
     )?;
     let report = disksage_lib::git_worktree::audit_git_worktrees_with_pull_request_membership(
         &args.repository_root,
