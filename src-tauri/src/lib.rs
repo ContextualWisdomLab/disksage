@@ -69,6 +69,8 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+/// Fail-closed cargo target-dir reclaim (measured path pin + symlink escape guards).
+pub mod cargo_target_reclaim;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim;
 /// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
