@@ -12,6 +12,10 @@ const USAGE: &str = "usage: disksage-git-worktree-remove \
 [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] \
 [--command-timeout-ms N] [--size-scan-timeout-ms N] \
 [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] \
+[--enable-orca-protections --recent-write-window-secs N] \
+[--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] \
+[--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] \
+[--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash] \
 --approved-removal-plan-fingerprint HEX64 \
 --confirmation-exact-approval-phrase PHRASE --reviewed-by human:ID --rationale TEXT \
 --record-root ABSOLUTE_PATH";
@@ -27,6 +31,10 @@ struct Args {
     max_worktrees: usize,
     max_entries_per_worktree: u64,
     max_active_pids: usize,
+    protection: disksage_lib::reclaim_protection::ProtectionContext,
+    assess_filesystem_protections: bool,
+    assess_unpushed_commits: bool,
+    assess_stash: bool,
     plan_fingerprint: String,
     confirmation_phrase: String,
     reviewed_by: String,
@@ -64,6 +72,13 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut max_worktrees = None;
     let mut max_entries_per_worktree = None;
     let mut max_active_pids = None;
+    let mut protection = disksage_lib::reclaim_protection::ProtectionContext::default();
+    let mut enable_orca_protections = false;
+    let mut seen_recent_write_window = false;
+    let mut seen_orca_terminal_json = false;
+    let mut assess_filesystem_protections = false;
+    let mut assess_unpushed_commits = false;
+    let mut assess_stash = false;
     let mut confirmation_phrase = None;
     let mut reviewed_by = None;
     let mut rationale = None;
@@ -132,6 +147,62 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 )
             }
             Some("--max-active-pids") => return Err("duplicate option".into()),
+            Some("--enable-orca-protections") if !enable_orca_protections => {
+                enable_orca_protections = true
+            }
+            Some("--enable-orca-protections") => return Err("duplicate option".into()),
+            Some("--recent-write-window-secs") if !seen_recent_write_window => {
+                seen_recent_write_window = true;
+                protection.recent_write_window_secs = Some(
+                    next_utf8(&mut args, "--recent-write-window-secs")?
+                        .parse()
+                        .map_err(|_| "--recent-write-window-secs must be an integer")?,
+                );
+            }
+            Some("--recent-write-window-secs") => return Err("duplicate option".into()),
+            Some("--orca-terminal-json") if !seen_orca_terminal_json => {
+                seen_orca_terminal_json = true;
+                let path = next_path(&mut args, "--orca-terminal-json")?;
+                if !path.is_absolute() {
+                    return Err("--orca-terminal-json must be absolute".into());
+                }
+                let bytes = std::fs::read(&path)
+                    .map_err(|_| "orca-terminal-json-read-failed".to_string())?;
+                protection.orca_live_worktree_paths =
+                    disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+            }
+            Some("--orca-terminal-json") => return Err("duplicate option".into()),
+            Some("--open-pr-head-oid") => protection
+                .open_pr_head_oids
+                .push(next_utf8(&mut args, "--open-pr-head-oid")?),
+            Some("--open-pr-head-branch") => protection
+                .open_pr_head_branches
+                .push(next_utf8(&mut args, "--open-pr-head-branch")?),
+            Some("--lead-queue-file") => {
+                let path = next_path(&mut args, "--lead-queue-file")?;
+                if !path.is_absolute() {
+                    return Err("--lead-queue-file must be absolute".into());
+                }
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|_| "lead-queue-file-read-failed".to_string())?;
+                let workspace_root = path.parent().unwrap_or(path.as_path());
+                protection.lead_queue_worktree_paths.extend(
+                    disksage_lib::reclaim_protection::lead_queue_mentioned_paths(
+                        &text,
+                        workspace_root,
+                    ),
+                );
+            }
+            Some("--assess-filesystem-protections") if !assess_filesystem_protections => {
+                assess_filesystem_protections = true
+            }
+            Some("--assess-filesystem-protections") => return Err("duplicate option".into()),
+            Some("--assess-unpushed-commits") if !assess_unpushed_commits => {
+                assess_unpushed_commits = true
+            }
+            Some("--assess-unpushed-commits") => return Err("duplicate option".into()),
+            Some("--assess-stash") if !assess_stash => assess_stash = true,
+            Some("--assess-stash") => return Err("duplicate option".into()),
             Some("--approved-removal-plan-fingerprint") => {
                 plan_fingerprint =
                     Some(next_utf8(&mut args, "--approved-removal-plan-fingerprint")?)
@@ -176,6 +247,17 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     if !record_root.is_absolute() {
         return Err("--record-root must be absolute".into());
     }
+    if enable_orca_protections {
+        if protection.recent_write_window_secs.is_none() {
+            return Err(
+                "--enable-orca-protections requires --recent-write-window-secs (no silent default)"
+                    .into(),
+            );
+        }
+        assess_filesystem_protections = true;
+        assess_unpushed_commits = true;
+        assess_stash = true;
+    }
     let defaults = git_worktree::GitWorktreeAuditOptions::default();
 
     Ok(ParseResult::Run(Args {
@@ -189,6 +271,10 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
         max_entries_per_worktree: max_entries_per_worktree
             .unwrap_or(defaults.max_entries_per_worktree),
         max_active_pids: max_active_pids.unwrap_or(defaults.max_active_pids),
+        protection,
+        assess_filesystem_protections,
+        assess_unpushed_commits,
+        assess_stash,
         plan_fingerprint,
         confirmation_phrase,
         reviewed_by,
@@ -215,7 +301,10 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
         max_worktrees: args.max_worktrees,
         max_entries_per_worktree: args.max_entries_per_worktree,
         max_active_pids: args.max_active_pids,
-        ..git_worktree::GitWorktreeAuditOptions::default()
+        protection: args.protection,
+        assess_filesystem_protections: args.assess_filesystem_protections,
+        assess_unpushed_commits: args.assess_unpushed_commits,
+        assess_stash: args.assess_stash,
     };
     let audited_at_ms = cloud::system_now_ms();
     let evidence = git_worktree_github_evidence::collect(
@@ -375,5 +464,32 @@ mod tests {
         assert_eq!(parsed.max_worktrees, 17);
         assert_eq!(parsed.max_entries_per_worktree, 2345);
         assert_eq!(parsed.max_active_pids, 9);
+    }
+
+    #[test]
+    fn parser_requires_explicit_recent_write_window_for_orca_pack() {
+        let mut no_window = valid_args();
+        no_window.splice(4..4, [OsString::from("--enable-orca-protections")]);
+        assert_eq!(
+            parse_args(no_window).unwrap_err(),
+            "--enable-orca-protections requires --recent-write-window-secs (no silent default)"
+        );
+
+        let mut with_window = valid_args();
+        with_window.splice(
+            4..4,
+            [
+                OsString::from("--enable-orca-protections"),
+                OsString::from("--recent-write-window-secs"),
+                OsString::from("3600"),
+            ],
+        );
+        let ParseResult::Run(parsed) = parse_args(with_window).unwrap() else {
+            panic!("Orca-protected removal request must parse")
+        };
+        assert_eq!(parsed.protection.recent_write_window_secs, Some(3600));
+        assert!(parsed.assess_filesystem_protections);
+        assert!(parsed.assess_unpushed_commits);
+        assert!(parsed.assess_stash);
     }
 }

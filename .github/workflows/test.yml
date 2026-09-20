@@ -125,9 +125,18 @@ jobs:
       - name: Windows worktree active-use Restart Manager regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_windows_active_use
-      - name: Windows live Orca worktree protection-context regression
+      - name: Windows worktree initial live-protection regression
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context live_orca_terminal_preserves_otherwise_removable_worktree -- --exact
+      - name: Windows worktree post-approval live-protection regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context live_orca_terminal_arriving_after_approval_vetoes_removal_before_mutation -- --exact
+      - name: Windows worktree audit-CLI protection acquisition regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recent_window -- --exact
+      - name: Windows worktree remove-CLI protection reacquisition regression
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_orca_protection_context shipped_remove_cli_reacquires_live_protection_before_mutation -- --exact
       - name: Windows ignored worktree artifact regression
         shell: pwsh
         run: cargo test --manifest-path src-tauri/Cargo.toml --test git_worktree_ignored_artifact_guard -- --exact ignored_artifacts_preserve_otherwise_clean_removal_candidate
