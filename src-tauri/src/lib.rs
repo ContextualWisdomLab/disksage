@@ -18,6 +18,7 @@ mod generic_cleanup;
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
+pub mod cargo_target_reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
