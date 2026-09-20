@@ -72,6 +72,18 @@ fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Effective UID for daemon identity binding. Unix-only; stub on other platforms.
+pub fn current_recovery_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 fn plan_fingerprint(plan: &IcloudFileProviderRecoveryPlan) -> String {
     let mut unsigned = plan.clone();
     unsigned.plan_fingerprint_sha256.clear();
@@ -275,7 +287,7 @@ fn process_path(pid: i32) -> Result<String, String> {
 
 #[cfg(target_os = "macos")]
 pub fn observe_icloud_file_provider_daemon() -> Result<IcloudFileProviderDaemonIdentity, String> {
-    let uid = unsafe { libc::getuid() };
+    let uid = current_recovery_uid();
     let pid = launchd_pid(uid)?;
     let executable_path = process_path(pid)?;
     if executable_path != FILE_PROVIDER_EXECUTABLE {
@@ -319,7 +331,7 @@ pub fn execute_icloud_file_provider_recovery(
         plan,
         fresh_health,
         &pre_daemon,
-        unsafe { libc::getuid() },
+        current_recovery_uid(),
         now_ms,
         confirmation,
         rationale,

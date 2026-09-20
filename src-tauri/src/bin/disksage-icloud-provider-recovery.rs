@@ -1,8 +1,9 @@
 //! Plan or execute one evidence-bound graceful iCloud File Provider daemon restart.
 
 use disksage_lib::icloud_provider_recovery::{
-    execute_icloud_file_provider_recovery, observe_icloud_file_provider_daemon,
-    plan_icloud_file_provider_recovery, IcloudFileProviderRecoveryPlan,
+    current_recovery_uid, execute_icloud_file_provider_recovery,
+    observe_icloud_file_provider_daemon, plan_icloud_file_provider_recovery,
+    IcloudFileProviderRecoveryPlan,
 };
 use disksage_lib::icloud_sync_health::{
     default_cloud_docs_db_dir, health_evidence_snapshot_from_report, probe_icloud_sync_health,
@@ -104,7 +105,7 @@ fn run() -> Result<(), String> {
         serde_json::to_value(plan_icloud_file_provider_recovery(
             &health,
             daemon,
-            unsafe { libc::getuid() },
+            current_recovery_uid(),
             now,
         ))
     }
