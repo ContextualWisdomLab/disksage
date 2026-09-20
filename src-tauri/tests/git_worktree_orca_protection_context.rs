@@ -1,9 +1,9 @@
-//! Real-filesystem contract for live Orca protection in the canonical v4 worktree audit.
+//! Real-filesystem contracts for live Orca protection in the canonical v4 worktree audit.
 //!
 //! The linked worktree is otherwise safely removable because its HEAD is already contained in the
 //! selected retention reference. Supplying live Orca terminal evidence must therefore be the only
 //! reason it is preserved. This keeps live protection evidence inside the same audit/fingerprint
-//! boundary that later execution re-audits.
+//! boundary that later execution re-audits and verifies the shipped CLI can acquire that evidence.
 
 use disksage_lib::git_worktree::{
     approve_stale_worktree_removal, audit_git_worktrees, execute_stale_worktree_removal,
@@ -49,8 +49,7 @@ fn entry_for_path<'a>(report: &'a GitWorktreeAuditReport, path: &Path) -> &'a Gi
         .expect("linked worktree must be present in audit")
 }
 
-#[test]
-fn live_orca_terminal_preserves_otherwise_removable_worktree() {
+fn real_linked_worktree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let temp = tempfile::tempdir().expect("temporary fixture root");
     let repository = temp.path().join("repository");
     let secondary = temp.path().join("secondary");
@@ -67,6 +66,12 @@ fn live_orca_terminal_preserves_otherwise_removable_worktree() {
         &repository,
         &["worktree", "add", "-q", secondary.to_str().unwrap(), "stale"],
     );
+    (temp, repository, secondary)
+}
+
+#[test]
+fn live_orca_terminal_preserves_otherwise_removable_worktree() {
+    let (_temp, repository, secondary) = real_linked_worktree();
 
     let baseline = audit_git_worktrees(
         &repository,
@@ -116,22 +121,7 @@ fn live_orca_terminal_preserves_otherwise_removable_worktree() {
 
 #[test]
 fn live_orca_terminal_arriving_after_approval_vetoes_removal_before_mutation() {
-    let temp = tempfile::tempdir().expect("temporary fixture root");
-    let repository = temp.path().join("repository");
-    let secondary = temp.path().join("secondary");
-    fs::create_dir(&repository).expect("create repository root");
-
-    git(&repository, &["init", "-q", "-b", "main"]);
-    fs::write(repository.join("evidence.txt"), b"first\n").expect("write first revision");
-    git(&repository, &["add", "evidence.txt"]);
-    git(&repository, &["commit", "-q", "-m", "first"]);
-    fs::write(repository.join("evidence.txt"), b"second\n").expect("write second revision");
-    git(&repository, &["commit", "-q", "-am", "second"]);
-    git(&repository, &["branch", "stale", "HEAD~1"]);
-    git(
-        &repository,
-        &["worktree", "add", "-q", secondary.to_str().unwrap(), "stale"],
-    );
+    let (_temp, repository, secondary) = real_linked_worktree();
     let preserved_file = secondary.join("evidence.txt");
     let preserved_bytes = fs::read(&preserved_file).expect("snapshot linked worktree file");
 
@@ -183,5 +173,78 @@ fn live_orca_terminal_arriving_after_approval_vetoes_removal_before_mutation() {
         fs::read(&preserved_file).expect("read preserved worktree file"),
         preserved_bytes,
         "failed removal must not mutate the linked worktree contents"
+    );
+}
+
+#[test]
+fn shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recent_window() {
+    let (temp, repository, secondary) = real_linked_worktree();
+    let live_path = fs::canonicalize(&secondary).expect("canonical live worktree path");
+    let terminal_json = temp.path().join("orca-terminals.json");
+    fs::write(
+        &terminal_json,
+        serde_json::to_vec(&serde_json::json!({
+            "result": {"terminals": [{"worktreePath": live_path}]}
+        }))
+        .expect("serialize terminal fixture"),
+    )
+    .expect("write terminal fixture");
+    let lead_queue = temp.path().join("LEAD_QUEUE.md");
+    fs::write(&lead_queue, "# empty-but-real lead queue fixture\n").expect("write lead queue fixture");
+
+    let binary = env!("CARGO_BIN_EXE_disksage-git-worktree-audit");
+    let output = Command::new(binary)
+        .arg("--repository-root")
+        .arg(&repository)
+        .arg("--reference-ref")
+        .arg("main")
+        .arg("--enable-orca-protections")
+        .arg("--recent-write-window-secs")
+        .arg("3600")
+        .arg("--orca-terminal-json")
+        .arg(&terminal_json)
+        .arg("--open-pr-head-oid")
+        .arg("0000000000000000000000000000000000000000")
+        .arg("--open-pr-head-branch")
+        .arg("stale")
+        .arg("--lead-queue-file")
+        .arg(&lead_queue)
+        .arg("--assess-filesystem-protections")
+        .arg("--assess-unpushed-commits")
+        .arg("--assess-stash")
+        .output()
+        .expect("shipped worktree audit CLI should start");
+    assert!(
+        output.status.success(),
+        "CLI must acquire protection evidence instead of rejecting the buyer-facing inputs: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("CLI output must remain public JSON");
+    let reasons = summary["protection_reason_codes"]
+        .as_array()
+        .expect("public summary protection reason codes");
+    assert!(
+        reasons.iter().any(|reason| reason == REASON_ORCA_TERMINAL_LIVE),
+        "summary={summary:#}"
+    );
+    assert_eq!(summary["removal_candidate_count"], 0);
+    assert!(summary["exact_approval_phrase"].is_null());
+
+    let no_window = Command::new(binary)
+        .arg("--repository-root")
+        .arg(&repository)
+        .arg("--reference-ref")
+        .arg("main")
+        .arg("--enable-orca-protections")
+        .arg("--orca-terminal-json")
+        .arg(&terminal_json)
+        .output()
+        .expect("shipped worktree audit CLI should start for fail-closed validation");
+    assert!(!no_window.status.success());
+    assert!(
+        String::from_utf8_lossy(&no_window.stderr).contains("--recent-write-window-secs"),
+        "Orca protection pack must require an explicit recent-write window; stderr={}",
+        String::from_utf8_lossy(&no_window.stderr)
     );
 }
