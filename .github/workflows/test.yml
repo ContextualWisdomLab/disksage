@@ -65,6 +65,8 @@ jobs:
           node-version: 20.19.0
       - run: npm ci
       - run: npm test
+      - name: Cargo target cleanup launcher delegation
+        run: bash scripts/tests/guarded-cargo-target-clean-delegation.sh
       - run: npm run build
 
   windows-home-resolution:
