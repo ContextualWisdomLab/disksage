@@ -24,6 +24,10 @@ const hostedProtectionTest = readFileSync(
   resolve(repositoryRoot, "src-tauri/tests/git_worktree_orca_protection_context.rs"),
   "utf8",
 );
+const publicSummaryBehaviorTest = readFileSync(
+  resolve(repositoryRoot, "src-tauri/tests/git_worktree_public_summary_notice.rs"),
+  "utf8",
+);
 
 const SLEEP_REASON = "orca-session-sleeping";
 const INCOMPLETE_DISPATCH_REASON = "incomplete-dispatch-evidence-incomplete";
@@ -53,7 +57,7 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(protectionSource).toContain("REASON_INCOMPLETE_DISPATCH.to_string()");
   });
 
-  it("retains orchestration ownership evidence and the cleanup-before-reclaim notice in the redacted public summary", () => {
+  it("retains orchestration ownership evidence and emits cleanup guidance only for a completed sleeping entry", () => {
     const summaryStart = auditSource.indexOf("pub fn public_summary");
     expect(summaryStart).toBeGreaterThanOrEqual(0);
     const summaryEnd = auditSource.indexOf("\nfn valid_hex64", summaryStart);
@@ -63,6 +67,21 @@ describe("Git worktree orchestration ownership protection contract", () => {
     expect(summaryBody).toContain("REASON_INCOMPLETE_DISPATCH");
     expect(summaryBody).toContain(SLEEP_CLEANUP_NOTICE);
     expect(summaryBody).toContain("completed_pull_request_commit");
+
+    const conditionalStart = summaryBody.indexOf("if report.entries.iter().any");
+    expect(conditionalStart).toBeGreaterThanOrEqual(0);
+    const conditionalBody = summaryBody.slice(conditionalStart, conditionalStart + 1_800);
+    expect(conditionalBody).toContain("completed_pull_request_commit");
+    expect(conditionalBody).toContain("REASON_ORCA_SESSION_SLEEPING");
+    expect(conditionalBody).toContain("notices.push");
+    expect(conditionalBody).toContain(SLEEP_CLEANUP_NOTICE);
+
+    expect(publicSummaryBehaviorTest).toContain(
+      "fn completed_sleeping_session_emits_cleanup_notice()",
+    );
+    expect(publicSummaryBehaviorTest).toContain(
+      "fn cleanup_notice_requires_completed_and_sleeping_on_the_same_entry()",
+    );
   });
 
   it("acquires the same ownership evidence on audit and mutation CLIs", () => {
