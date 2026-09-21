@@ -188,8 +188,11 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
 /// independent review active-holder-reproduction.json). Any non-empty stdout is
 /// therefore treated as active holders regardless of exit 0/1.
 ///
-/// Only exit 1 with empty stdout and stderr is an admissible empty no-match.
-/// Exit 127 and every other non-zero outcome without holder stdout fail closed.
+/// Any non-empty stderr is incomplete inspection evidence and fails closed,
+/// including exit 0 + empty stdout + warning stderr (report-a118 warning_zero).
+///
+/// Only exit 0 or 1 with **both** stdout and stderr empty is an admissible
+/// empty no-match. Exit 127 and every other non-zero outcome fail closed.
 pub(crate) fn classify_target_lsof_result(
     exit_code: i32,
     stdout: &str,
@@ -198,10 +201,12 @@ pub(crate) fn classify_target_lsof_result(
     if !stdout.trim().is_empty() {
         return Err("cargo-target-active-holders-present".into());
     }
-    if exit_code == 1 && stderr.is_empty() {
-        return Ok(());
+    if !stderr.trim().is_empty() {
+        return Err(format!(
+            "cargo-target-active-use-probe-failed:lsof-stderr-nonempty:exit:{exit_code}"
+        ));
     }
-    if exit_code == 0 {
+    if exit_code == 0 || exit_code == 1 {
         return Ok(());
     }
     Err(format!(
@@ -705,6 +710,65 @@ python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-h
             classify_target_lsof_result(1, sample, "").unwrap_err(),
             "cargo-target-active-holders-present"
         );
+    }
+
+    #[test]
+    fn lsof_exit_0_with_warning_stderr_is_fail_closed() {
+        // report-a118 warning_zero: exit0 + empty stdout + warning stderr invoked
+        // fake cargo under a118b237. Must refuse before clean.
+        let err = classify_target_lsof_result(
+            0,
+            "",
+            "lsof: WARNING: can't stat() fuse.portal file system /run/user/0/doc\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "cargo-target-active-use-probe-failed:lsof-stderr-nonempty:exit:0"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn warning_stderr_probe_blocks_clean_without_invoking_cargo() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-lsof-warn-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep-me"), "x").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        let ran = root.join("cargo-ran");
+        let fake = root.join("fake-cargo");
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", ran.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake, perms).unwrap();
+
+        fn probe_warning(_path: &Path) -> Result<(), String> {
+            classify_target_lsof_result(0, "", "lsof: WARNING: incomplete\n")
+        }
+
+        let err =
+            clean_cargo_target_with_active_use(&root, &target, &fake, probe_warning).unwrap_err();
+        assert_eq!(
+            err,
+            "cargo-target-active-use-probe-failed:lsof-stderr-nonempty:exit:0"
+        );
+        assert!(!ran.exists(), "cargo must not run on warning stderr");
+        assert!(target.join("keep-me").is_file());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

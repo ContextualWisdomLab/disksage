@@ -92,4 +92,23 @@ grep -q 'active-holders-present' "$WORK/err3.txt" \
 [[ ! -f "$WORK/cargo-ran" ]] || { echo "FAIL: cargo ran on exit1+holder-stdout"; exit 1; }
 [[ -f "$WORK/proj/target/keep-me" ]] || { echo "FAIL: deleted on exit1+holder-stdout"; exit 1; }
 
+# report-a118 warning_zero: exit 0 + empty stdout + warning stderr must NOT call cargo
+cat >"$WORK/bin/lsof" <<'EOS'
+#!/bin/sh
+echo "lsof: WARNING: can't stat() fuse.portal file system /run/user/0/doc" >&2
+exit 0
+EOS
+chmod +x "$WORK/bin/lsof"
+set +e
+LSOF_BIN="$WORK/bin/lsof" CARGO_BIN="$WORK/bin/cargo" \
+  "$SCRIPT" --project-dir "$WORK/proj" --target-dir "$WORK/proj/target" \
+  >"$WORK/out4.txt" 2>"$WORK/err4.txt"
+EC4=$?
+set -e
+[[ "$EC4" -ne 0 ]] || { echo "FAIL: exit0+warning-stderr WOULD_PROCEED"; exit 1; }
+grep -q 'lsof-stderr-nonempty' "$WORK/err4.txt" \
+  || { echo "FAIL: expected lsof-stderr-nonempty"; cat "$WORK/err4.txt" >&2; exit 1; }
+[[ ! -f "$WORK/cargo-ran" ]] || { echo "FAIL: cargo ran on exit0+warning-stderr"; exit 1; }
+[[ -f "$WORK/proj/target/keep-me" ]] || { echo "FAIL: deleted on exit0+warning-stderr"; exit 1; }
+
 echo "PASS guarded-cargo-target-clean lsof fail-closed regressions"

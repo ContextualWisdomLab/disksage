@@ -103,13 +103,14 @@ if [[ -d "$TARGET_REAL" ]]; then
   set -e
 
   # macOS may return exit 1 WITH holder lines (not only the documented empty
-  # no-match). Any stdout ⇒ refuse, before interpreting exit status.
+  # no-match). Any stdout ⇒ refuse. Any stderr ⇒ incomplete inspection (including
+  # exit 0 + empty stdout + warning stderr) ⇒ refuse before accepting status.
   if [[ -s "$LSOF_OUT" ]]; then
     refuse_active_use "active-holders-present path=$TARGET_REAL (lsof_exit=$LSOF_EC)"
-  elif [[ "$LSOF_EC" -eq 1 && ! -s "$LSOF_ERR" ]]; then
-    : # documented empty no-match
-  elif [[ "$LSOF_EC" -eq 0 ]]; then
-    : # exit 0 empty stdout
+  elif [[ -s "$LSOF_ERR" ]]; then
+    refuse_active_use "lsof-stderr-nonempty path=$TARGET_REAL (lsof_exit=$LSOF_EC)"
+  elif [[ "$LSOF_EC" -eq 0 || "$LSOF_EC" -eq 1 ]]; then
+    : # exit 0/1 with empty stdout and stderr only
   else
     refuse_active_use "lsof-exit-status:$LSOF_EC path=$TARGET_REAL (fail-closed)"
   fi
