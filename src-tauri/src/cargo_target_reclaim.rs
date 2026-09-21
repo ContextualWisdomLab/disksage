@@ -601,6 +601,7 @@ pub(crate) fn clean_cargo_target_with_active_use(
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
     let bytes_before = bounded_dir_size(&opened_target.handle_path)?;
     let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
+    active_use(&detached_target.clean_path)?;
 
     let mut command = Command::new(cargo);
     command
