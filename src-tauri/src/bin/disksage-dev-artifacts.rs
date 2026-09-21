@@ -451,6 +451,7 @@ mod tests {
             kind: "target".into(),
             project: root.to_string_lossy().into_owned(),
             bytes: 4096,
+            allocated_bytes: 4096,
             files: 8,
             skipped: 0,
             scan_complete: true,
