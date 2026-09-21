@@ -122,8 +122,8 @@ if [[ -d "$TARGET_REAL" ]]; then
 fi
 DF_BEFORE="$(df -k /System/Volumes/Data 2>/dev/null | tail -1 || df -k / | tail -1)"
 
-"$CARGO" clean --manifest-path "$MANIFEST" --target-dir "$TARGET_REAL"
-EC=$?
+EC=0
+"$CARGO" clean --manifest-path "$MANIFEST" --target-dir "$TARGET_REAL" || EC=$?
 
 AFTER_KIB=0
 if [[ -d "$TARGET_REAL" ]]; then
@@ -131,18 +131,24 @@ if [[ -d "$TARGET_REAL" ]]; then
 fi
 DF_AFTER="$(df -k /System/Volumes/Data 2>/dev/null | tail -1 || df -k / | tail -1)"
 
-python3 - <<PY
+python3 - "$CARGO" "$PROJECT_REAL" "$TARGET_REAL" "$EC" \
+  "$BEFORE_KIB" "$AFTER_KIB" "$DF_BEFORE" "$DF_AFTER" <<'PY'
 import json
+import sys
+
+cargo, project_dir, target_dir, exit_code, before, after, df_before, df_after = sys.argv[1:]
+before_i = int(before)
+after_i = int(after)
 print(json.dumps({
-  "cargo": "$CARGO",
-  "project_dir": "$PROJECT_REAL",
-  "target_dir": "$TARGET_REAL",
-  "exit_code": $EC,
-  "du_kib_before": $BEFORE_KIB,
-  "du_kib_after": $AFTER_KIB,
-  "observed_reduction_kib": max(0, $BEFORE_KIB - $AFTER_KIB),
-  "df_before": "$DF_BEFORE",
-  "df_after": "$DF_AFTER",
+  "cargo": cargo,
+  "project_dir": project_dir,
+  "target_dir": target_dir,
+  "exit_code": int(exit_code),
+  "du_kib_before": before_i,
+  "du_kib_after": after_i,
+  "observed_reduction_kib": max(0, before_i - after_i),
+  "df_before": df_before,
+  "df_after": df_after,
 }, indent=2))
 PY
 exit "$EC"
