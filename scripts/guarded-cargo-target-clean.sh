@@ -2,13 +2,18 @@
 # Guarded operational `cargo clean` — measurement scope == deletion scope.
 # Do NOT use bare `cargo clean --manifest-path` alone (CARGO_TARGET_DIR /
 # workspace / .cargo/config build.target-dir can redirect deletion).
+#
+# Fail-closed active-use: missing/failed lsof must NEVER proceed (including
+# exit 127). Only documented empty no-match (exit 1, empty stdout+stderr) or
+# exit 0 with zero holder lines allows clean. Any open holder refuses.
 set -euo pipefail
 
 USAGE='Usage: guarded-cargo-target-clean.sh --project-dir ABS_PATH [--target-dir ABS_PATH]
 
 Resolves canonical project + target, requires target to be a strict child of
-project (symlink escapes rejected), refuses if cargo/rustc hold the target,
-then runs: cargo clean --target-dir <approved> --manifest-path <project>/Cargo.toml
+project (symlink escapes rejected), requires target ownership by the current
+user, refuses when lsof is missing/failed or reports any open holder, then
+runs: cargo clean --target-dir <approved> --manifest-path <project>/Cargo.toml
 '
 
 PROJECT_DIR=""
@@ -57,12 +62,55 @@ if not ok:
     sys.exit(3)
 PY
 
-# Refuse shared/busy targets
-if [[ -d "$TARGET_REAL" ]]; then
-  if lsof +D "$TARGET_REAL" 2>/dev/null | grep -E 'cargo|rustc' >/dev/null; then
-    echo "refuse: cargo/rustc still using $TARGET_REAL" >&2
-    exit 4
+refuse_active_use() {
+  local reason="$1"
+  echo "refuse: $reason" >&2
+  exit 5
+}
+
+# Owner gate: never clean a target we do not own (shared/other-user trees).
+if [[ -e "$TARGET_REAL" ]]; then
+  SELF_UID="$(id -u)"
+  if stat --version >/dev/null 2>&1; then
+    OWNER_UID="$(stat -c '%u' "$TARGET_REAL")"
+  else
+    OWNER_UID="$(stat -f '%u' "$TARGET_REAL")"
   fi
+  if [[ "$OWNER_UID" != "$SELF_UID" ]]; then
+    refuse_active_use "target-owner-mismatch owner_uid=$OWNER_UID self_uid=$SELF_UID path=$TARGET_REAL"
+  fi
+fi
+
+# Active-holder probe — must not use `lsof | grep` under pipefail: lsof 127 / probe
+# failure previously collapsed into "no match" and WOULD_PROCEED.
+if [[ -d "$TARGET_REAL" ]]; then
+  LSOF_BIN="${LSOF_BIN:-}"
+  if [[ -z "$LSOF_BIN" ]]; then
+    LSOF_BIN="$(command -v lsof || true)"
+  fi
+  if [[ -z "$LSOF_BIN" || ! -x "$LSOF_BIN" ]]; then
+    refuse_active_use "lsof-unavailable (fail-closed; refusing clean of $TARGET_REAL)"
+  fi
+
+  LSOF_OUT="$(mktemp)"
+  LSOF_ERR="$(mktemp)"
+  cleanup_lsof_tmp() { rm -f "$LSOF_OUT" "$LSOF_ERR"; }
+  trap cleanup_lsof_tmp EXIT
+
+  set +e
+  "$LSOF_BIN" +D "$TARGET_REAL" >"$LSOF_OUT" 2>"$LSOF_ERR"
+  LSOF_EC=$?
+  set -e
+
+  if [[ "$LSOF_EC" -eq 1 && ! -s "$LSOF_OUT" && ! -s "$LSOF_ERR" ]]; then
+    : # documented empty no-match
+  elif [[ "$LSOF_EC" -ne 0 ]]; then
+    refuse_active_use "lsof-exit-status:$LSOF_EC path=$TARGET_REAL (fail-closed)"
+  elif [[ -s "$LSOF_OUT" ]]; then
+    # Any open file/process under the measured target blocks — not only cargo/rustc.
+    refuse_active_use "active-holders-present path=$TARGET_REAL"
+  fi
+  # exit 0 + empty stdout: treat as no holders
 fi
 
 BEFORE_KIB=0

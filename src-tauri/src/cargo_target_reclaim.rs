@@ -8,11 +8,17 @@
 //! Deletion scope is pinned with `cargo clean --target-dir <measured>` so workspace
 //! root targets, `CARGO_TARGET_DIR`, or `.cargo/config` `build.target-dir` cannot
 //! redirect deletion away from the inspected path.
+//!
+//! Before any `cargo clean`, the measured target must pass ownership + active-use
+//! probes. Missing/`lsof` exit 127 / unexpected probe failure fails closed (no clean).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+/// Active-use / ownership gate invoked before deletion. Tests inject stubs.
+pub(crate) type ActiveUseProbe = fn(&Path) -> Result<(), String>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CargoTargetCleanResult {
@@ -176,6 +182,91 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
     Ok(target_canon)
 }
 
+/// Classify `lsof` completion for a cargo target tree.
+///
+/// Only exit 1 with empty stdout and stderr is an admissible empty no-match.
+/// Exit 127 (command missing when stubbed/PATH-broken) and every other non-zero
+/// outcome fail closed. Exit 0 with any stdout means active holders.
+pub(crate) fn classify_target_lsof_result(
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> Result<(), String> {
+    if exit_code == 1 && stdout.is_empty() && stderr.is_empty() {
+        return Ok(());
+    }
+    if exit_code != 0 {
+        return Err(format!(
+            "cargo-target-active-use-probe-failed:lsof-exit-status:{exit_code}"
+        ));
+    }
+    if !stdout.trim().is_empty() {
+        return Err("cargo-target-active-holders-present".into());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_target_owned_by_self(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(|e| format!("cargo-target-owner-stat-failed:{e}"))?;
+    let self_uid = unsafe { libc::geteuid() };
+    if meta.uid() != self_uid {
+        return Err(format!(
+            "cargo-target-owner-mismatch:owner_uid={}:self_uid={self_uid}",
+            meta.uid()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_target_owned_by_self(_path: &Path) -> Result<(), String> {
+    // Non-Unix platforms lack a portable owner probe here; refuse mutation.
+    Err("cargo-target-owner-probe-unsupported".into())
+}
+
+fn resolve_lsof_executable() -> Result<PathBuf, String> {
+    let candidates = [
+        PathBuf::from("/usr/sbin/lsof"),
+        PathBuf::from("/usr/bin/lsof"),
+        PathBuf::from("/opt/homebrew/bin/lsof"),
+    ];
+    for candidate in candidates {
+        if executable_file(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err("cargo-target-lsof-unavailable".into())
+}
+
+/// Default production probe: ownership + fail-closed `lsof +D` on the measured target.
+pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), String> {
+    if !target_dir.exists() {
+        return Ok(());
+    }
+    ensure_target_owned_by_self(target_dir)?;
+    let lsof = resolve_lsof_executable()?;
+    let output = Command::new(&lsof)
+        .arg("+D")
+        .arg(target_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "cargo-target-lsof-unavailable".to_string()
+            } else {
+                format!("cargo-target-lsof-spawn-failed:{e}")
+            }
+        })?;
+    let code = output.status.code().unwrap_or(127);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    classify_target_lsof_result(code, &stdout, &stderr)
+}
+
 /// Run `cargo clean` for a project directory that owns a `Cargo.toml`.
 ///
 /// Always passes `--target-dir <project>/target` so measurement and deletion match.
@@ -183,6 +274,7 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
 /// Fail-closed:
 /// - missing cargo executable ⇒ `Err`
 /// - spawn failure / command-not-found ⇒ `Err`
+/// - active holders / lsof probe failure / owner mismatch ⇒ `Err` (no clean)
 /// - non-zero exit ⇒ `Err` (no success reclaim)
 /// - zero size delta with exit 0 ⇒ `Ok` with `observed_reduction_bytes == 0` (not a reclaim success claim)
 pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, String> {
@@ -198,6 +290,16 @@ pub(crate) fn clean_cargo_target_with(
     target_dir: &Path,
     cargo: &Path,
 ) -> Result<CargoTargetCleanResult, String> {
+    clean_cargo_target_with_active_use(project_dir, target_dir, cargo, ensure_target_safe_to_reclaim)
+}
+
+/// Same as [`clean_cargo_target_with`] but with an injectable active-use probe.
+pub(crate) fn clean_cargo_target_with_active_use(
+    project_dir: &Path,
+    target_dir: &Path,
+    cargo: &Path,
+    active_use: ActiveUseProbe,
+) -> Result<CargoTargetCleanResult, String> {
     ensure_absolute_project(project_dir)?;
     if !cargo.is_absolute() {
         return Err("cargo-executable-not-absolute".into());
@@ -206,6 +308,7 @@ pub(crate) fn clean_cargo_target_with(
         return Err("cargo-executable-unavailable".into());
     }
     let target_dir = resolve_measured_target_dir(project_dir, target_dir)?;
+    active_use(&target_dir)?;
     let bytes_before = bounded_dir_size(&target_dir)?;
 
     let mut child = Command::new(cargo)
@@ -396,7 +499,13 @@ mod tests {
         fs::create_dir_all(root.join("target")).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
         let missing = root.join("no-such-cargo-binary");
-        let err = clean_cargo_target_with(&root, &root.join("target"), &missing).unwrap_err();
+        let err = clean_cargo_target_with_active_use(
+            &root,
+            &root.join("target"),
+            &missing,
+            |_| Ok(()),
+        )
+        .unwrap_err();
         assert_eq!(err, "cargo-executable-unavailable");
         let _ = fs::remove_dir_all(&root);
     }
@@ -420,7 +529,7 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let err = clean_cargo_target_with(&root, &target, &fake).unwrap_err();
+        let err = clean_cargo_target_with_active_use(&root, &target, &fake, |_| Ok(())).unwrap_err();
         assert!(err.starts_with("cargo-clean-exit-nonzero:"), "{err}");
         assert!(target.join("junk").is_file(), "must not claim reclaim on nonzero");
         let _ = fs::remove_dir_all(&root);
@@ -475,7 +584,9 @@ exit 42\n",
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let result = clean_cargo_target_with(&project, &target_canon, &fake).expect("clean ok");
+        let result =
+            clean_cargo_target_with_active_use(&project, &target_canon, &fake, |_| Ok(()))
+                .expect("clean ok");
         assert!(result.executed);
         assert_eq!(result.status_code, 0);
         assert!(result.observed_reduction_bytes > 0);
@@ -562,6 +673,107 @@ exit 42\n",
             outside.join("SENTINEL").is_file(),
             "symlink-escaped shared target must not be cleaned"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lsof_exit_127_is_fail_closed_not_empty_match() {
+        let err = classify_target_lsof_result(127, "", "").unwrap_err();
+        assert_eq!(
+            err,
+            "cargo-target-active-use-probe-failed:lsof-exit-status:127"
+        );
+        assert!(classify_target_lsof_result(1, "", "").is_ok());
+        assert_eq!(
+            classify_target_lsof_result(0, "COMMAND PID\nrustc 1\n", "")
+                .unwrap_err(),
+            "cargo-target-active-holders-present"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_holder_probe_failure_blocks_clean_without_invoking_cargo() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-lsof127-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep-me"), "x").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        let ran = root.join("cargo-ran");
+        let fake = root.join("fake-cargo");
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", ran.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake, perms).unwrap();
+
+        fn probe_lsof_127(_path: &Path) -> Result<(), String> {
+            classify_target_lsof_result(127, "", "")
+        }
+
+        let err =
+            clean_cargo_target_with_active_use(&root, &target, &fake, probe_lsof_127).unwrap_err();
+        assert_eq!(
+            err,
+            "cargo-target-active-use-probe-failed:lsof-exit-status:127"
+        );
+        assert!(!ran.exists(), "cargo must not run when lsof probe fails");
+        assert!(
+            target.join("keep-me").is_file(),
+            "must not delete when active-use probe fails"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_holders_present_blocks_clean_without_invoking_cargo() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-holders-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep-me"), "x").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        let ran = root.join("cargo-ran");
+        let fake = root.join("fake-cargo");
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", ran.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake, perms).unwrap();
+
+        fn probe_holders(_path: &Path) -> Result<(), String> {
+            Err("cargo-target-active-holders-present".into())
+        }
+
+        let err =
+            clean_cargo_target_with_active_use(&root, &target, &fake, probe_holders).unwrap_err();
+        assert_eq!(err, "cargo-target-active-holders-present");
+        assert!(!ran.exists(), "cargo must not run when holders are present");
+        assert!(target.join("keep-me").is_file());
         let _ = fs::remove_dir_all(&root);
     }
 }
