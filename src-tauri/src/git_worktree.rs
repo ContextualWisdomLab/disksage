@@ -2728,6 +2728,31 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
         .collect();
     protection_reason_codes.sort();
     protection_reason_codes.dedup();
+    let mut notices = vec![
+        "read-only-audit".into(),
+        "no-fetch-performed".into(),
+        "retention-references-bound-to-resolved-oids".into(),
+        "retention-reachable-commit-set-bounded".into(),
+        "exact-retained-tips-preserved".into(),
+        "only-strict-retained-tip-ancestors-can-be-candidates".into(),
+        "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
+        "approval-phrase-is-not-execution".into(),
+        "no-worktree-prune-remove-or-branch-delete".into(),
+        "no-user-file-or-cloud-provider-mutation".into(),
+        "recent-write-window-requires-explicit-caller-value".into(),
+    ];
+    // Cleanup guidance is buyer notice for the same entry only: completed PR commit + sleeping
+    // Orca ownership. Either fact alone must not emit reclaim guidance.
+    if report.entries.iter().any(|entry| {
+        entry.completed_pull_request_commit
+            && entry.blockers.iter().any(|blocker| {
+                blocker == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING
+            })
+    }) {
+        notices.push(
+            "sleep-session-requires-result-preserve-then-cleanup-then-reaudit".into(),
+        );
+    }
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
@@ -2759,22 +2784,7 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             // Ownership evidence field retained in the redacted public surface contract.
             "completed_pull_request_commit".into(),
         ],
-        notices: vec![
-            "read-only-audit".into(),
-            "no-fetch-performed".into(),
-            "retention-references-bound-to-resolved-oids".into(),
-            "retention-reachable-commit-set-bounded".into(),
-            "exact-retained-tips-preserved".into(),
-            "only-strict-retained-tip-ancestors-can-be-candidates".into(),
-            "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
-            "approval-phrase-is-not-execution".into(),
-            "no-worktree-prune-remove-or-branch-delete".into(),
-            "no-user-file-or-cloud-provider-mutation".into(),
-            "recent-write-window-requires-explicit-caller-value".into(),
-            // Completed sleeping sessions must preserve results, cleanup, then re-audit
-            // before any reclaim path may proceed.
-            "sleep-session-requires-result-preserve-then-cleanup-then-reaudit".into(),
-        ],
+        notices,
         protection_reason_codes,
     }
 }
