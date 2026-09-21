@@ -43,6 +43,22 @@ describe('Windows Cargo target detach object-authority contract', () => {
     expect(openDirectory).toMatch(/\.access_mode\([^)]*READ_CONTROL[^)]*\)/s);
     expect(openDirectory).not.toContain('.read(true)');
 
+    // ADR-0002 requires identity to be revalidated immediately before mutation.
+    // A handle-bound rename prevents the replacement object from being renamed, but
+    // without this last pathname-to-handle check DiskSage could still clean the
+    // reviewed object after it has ceased to be the requested target pathname.
+    const preMutationRevalidation = windowsDetach.indexOf(
+      'windows_native::identity_at(target_dir)',
+    );
+    const handleDetach = windowsDetach.indexOf(
+      'windows_native::rename_opened_directory(&opened.file, &clean_path)',
+    );
+    expect(preMutationRevalidation).toBeGreaterThanOrEqual(0);
+    expect(handleDetach).toBeGreaterThan(preMutationRevalidation);
+    const authorizationWindow = windowsDetach.slice(preMutationRevalidation, handleDetach);
+    expect(authorizationWindow).toContain('opened.identity');
+    expect(authorizationWindow).toContain('cargo-target-dir-replaced');
+
     expect(windowsDetach).toMatch(
       /windows_native::rename_opened_directory\s*\(\s*&opened\.file\s*,\s*&clean_path\s*\)/,
     );
