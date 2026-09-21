@@ -114,10 +114,6 @@ name = "disksage-homebrew-audit"
 path = "src/bin/disksage-homebrew-audit.rs"
 
 [[bin]]
-name = "disksage-log-archive"
-path = "src/bin/disksage-log-archive.rs"
-
-[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]

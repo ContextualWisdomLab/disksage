@@ -387,14 +387,8 @@ mod tests {
             .expect("reader thread join")
             .expect("reader result");
 
-        assert!(
-            (1_024..=4_096).contains(&captured.len()),
-            "cancelled reader captured {} bytes outside the ready-byte/capture-budget bounds",
-            captured.len()
-        );
-        if truncated {
-            assert_eq!(captured.len(), 4_096);
-        }
+        assert_eq!(captured.len(), 4_096);
+        assert!(truncated);
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "continuous escaped writer extended reader settlement"
@@ -436,7 +430,7 @@ mod tests {
 
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate timed-out private process group");
-        let status = child.wait().expect("reap timed-out leader after group cleanup signal");
+        let status = child.wait().expect("reap timed-out leader after group cleanup");
         assert!(!status.success());
     }
 

@@ -49,7 +49,6 @@ mod brew_cleanup;
 #[allow(dead_code)]
 pub(crate) mod unix_process_group;
 pub mod homebrew_audit;
-pub mod log_archive;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
