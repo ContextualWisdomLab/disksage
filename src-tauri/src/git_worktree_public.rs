@@ -189,7 +189,6 @@ fn apply_ignored_artifact_guard(
     options: &GitWorktreeAuditOptions,
 ) -> GitWorktreeAuditReport {
     let mut guarded = false;
-    let mut evidence_gap = false;
     for entry in &mut report.entries {
         if entry.disposition != GitWorktreeDisposition::RemovalCandidate {
             continue;
@@ -199,16 +198,27 @@ fn apply_ignored_artifact_guard(
             Ok(true) => {
                 entry.blockers.push(IGNORED_ARTIFACT_BLOCKER.into());
                 entry.disposition = GitWorktreeDisposition::Preserve;
+                // Bind the blocker + disposition into core entry identity so mixed plans stay
+                // durable evidence rather than a temporary review-only ACL.
+                entry.entry_fingerprint = crate::git_worktree_impl::entry_fingerprint(
+                    &report.common_dir,
+                    &report.removal_authority_fingerprint,
+                    entry,
+                );
                 guarded = true;
             }
             Err(reason) => {
                 entry.blockers.push(IGNORED_ARTIFACT_EVIDENCE_GAP.into());
                 entry.disposition = GitWorktreeDisposition::EvidenceGap;
+                entry.entry_fingerprint = crate::git_worktree_impl::entry_fingerprint(
+                    &report.common_dir,
+                    &report.removal_authority_fingerprint,
+                    entry,
+                );
                 report
                     .issues
                     .push(format!("{}:{reason}", entry.path_fingerprint));
                 guarded = true;
-                evidence_gap = true;
             }
         }
     }
@@ -238,21 +248,16 @@ fn apply_ignored_artifact_guard(
         .count();
     report.evidence_complete = report.issues.is_empty() && report.evidence_gap_count == 0;
     report.removal_plan_fingerprint = removal_plan_fingerprint(&report);
-
-    // Until ignored-artifact evidence is moved into the core per-entry fingerprint, mixed plans are
-    // review-only. This prevents the core execution re-audit from observing a different candidate
-    // set and guarantees that no approval can bridge the temporary ACL boundary.
-    if report.removal_candidate_count > 0 {
-        report.exact_approval_phrase = None;
-        if !evidence_gap {
-            report
-                .issues
-                .push("ignored-artifact-mixed-plan-review-required".into());
-            report.evidence_complete = false;
-        }
-    } else {
-        report.exact_approval_phrase = None;
-    }
+    // Ignored-artifact preservation is per-entry core evidence. Remaining clean candidates stay
+    // explicitly approvable in the same audit; do not inject a mixed-plan evidence gap.
+    report.exact_approval_phrase = (report.removal_candidate_count > 0 && report.evidence_complete)
+        .then(|| {
+            crate::git_worktree_impl::exact_removal_approval_phrase(
+                report.removal_candidate_count,
+                report.removal_candidate_allocated_bytes,
+                &report.removal_plan_fingerprint,
+            )
+        });
     report
 }
 
@@ -260,11 +265,14 @@ fn ensure_candidates_still_have_no_ignored_artifacts(
     approved_report: &GitWorktreeAuditReport,
     timeout_ms: u64,
 ) -> Result<(), String> {
+    // Only remaining removal candidates must be free of ignored-artifact blockers. Preserved
+    // entries that already carry durable ignored-artifact evidence must not poison execution of
+    // an independent clean candidate in the same plan.
     if approved_report.entries.iter().any(|entry| {
-        entry
-            .blockers
-            .iter()
-            .any(|blocker| blocker == IGNORED_ARTIFACT_BLOCKER || blocker == IGNORED_ARTIFACT_EVIDENCE_GAP)
+        entry.disposition == GitWorktreeDisposition::RemovalCandidate
+            && entry.blockers.iter().any(|blocker| {
+                blocker == IGNORED_ARTIFACT_BLOCKER || blocker == IGNORED_ARTIFACT_EVIDENCE_GAP
+            })
     }) {
         return Err("git-worktree-ignored-artifact-guarded-plan-not-executable".into());
     }

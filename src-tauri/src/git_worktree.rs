@@ -1858,7 +1858,7 @@ fn removal_authority_fingerprint_with_open(
     hasher.finalize().to_hex().to_string()
 }
 
-fn entry_fingerprint(
+pub(crate) fn entry_fingerprint(
     common_dir: &str,
     reference_set_fingerprint: &str,
     entry: &GitWorktreeAuditEntry,
@@ -2723,6 +2723,8 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
                     | crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
                     | crate::reclaim_protection::REASON_EDITABLE_INSTALL
                     | crate::reclaim_protection::REASON_BUILD_TOOL_ACTIVE
+                    | "ignored-artifacts-present"
+                    | "ignored-artifact-evidence-incomplete"
             )
         })
         .collect();
@@ -2793,7 +2795,7 @@ fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn exact_removal_approval_phrase(
+pub(crate) fn exact_removal_approval_phrase(
     candidate_count: usize,
     allocated_bytes: u64,
     plan_fingerprint: &str,
