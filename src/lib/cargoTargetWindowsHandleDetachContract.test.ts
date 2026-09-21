@@ -32,11 +32,15 @@ describe('Windows Cargo target detach object-authority contract', () => {
     expect(windowsNative).toContain('SetFileInformationByHandle');
     expect(windowsNative).toMatch(/fn\s+rename_opened_directory\s*\(\s*file:\s*&File,/);
 
-    // A handle used for rename must be opened with explicit DELETE access. Generic
-    // read access is insufficient for FileRenameInfo and would turn the safety repair
-    // into a Windows-only runtime failure rather than a usable deletion boundary.
+    // The same handle is reused for owner inspection and rename. GetSecurityInfo
+    // requires READ_CONTROL for OWNER_SECURITY_INFORMATION, while the mutation path
+    // requires DELETE-capable access. Replacing generic read with DELETE alone would
+    // make the ownership gate fail before the handle-bound safety boundary is usable.
     expect(windowsNative).toMatch(/const\s+DELETE(?:_ACCESS)?\s*:\s*u32\s*=\s*0x0*1_?0*0*0\s*;/i);
+    expect(windowsNative).toMatch(/const\s+READ_CONTROL\s*:\s*u32\s*=\s*0x0*2_?0*0*0\s*;/i);
     expect(openDirectory).toContain('.access_mode(');
+    expect(openDirectory).toMatch(/\.access_mode\([^)]*DELETE(?:_ACCESS)?[^)]*\)/s);
+    expect(openDirectory).toMatch(/\.access_mode\([^)]*READ_CONTROL[^)]*\)/s);
     expect(openDirectory).not.toContain('.read(true)');
 
     expect(windowsDetach).toMatch(
