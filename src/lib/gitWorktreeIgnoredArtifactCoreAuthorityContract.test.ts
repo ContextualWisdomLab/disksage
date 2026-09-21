@@ -42,13 +42,16 @@ describe("Git worktree ignored-artifact core authority", () => {
     expect(ignoredReasonIndex).toBeLessThan(fingerprintIndex);
   });
 
-  it("does not keep a second ignored-artifact deletion authority in the public facade", () => {
+  it("uses the normal core live re-audit as the only ignored-artifact removal authority", () => {
     expect(publicSource).not.toContain("fn apply_ignored_artifact_guard");
     expect(publicSource).not.toContain(
-      "fn ensure_candidates_still_have_no_ignored_artifacts",
+      "git_worktree::ensure_candidates_still_have_no_ignored_artifacts",
     );
     expect(publicSource).not.toContain("ignored_artifacts_present(Path::new(&candidate.path)");
     expect(publicSource).not.toContain(".map(|report| apply_ignored_artifact_guard");
+    expect(coreSource).not.toContain(
+      "fn ensure_candidates_still_have_no_ignored_artifacts",
+    );
   });
 
   it("keeps the real-filesystem mixed ignored+clean acceptance as behavior evidence", () => {
