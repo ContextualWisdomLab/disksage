@@ -102,15 +102,17 @@ if [[ -d "$TARGET_REAL" ]]; then
   LSOF_EC=$?
   set -e
 
-  if [[ "$LSOF_EC" -eq 1 && ! -s "$LSOF_OUT" && ! -s "$LSOF_ERR" ]]; then
+  # macOS may return exit 1 WITH holder lines (not only the documented empty
+  # no-match). Any stdout ⇒ refuse, before interpreting exit status.
+  if [[ -s "$LSOF_OUT" ]]; then
+    refuse_active_use "active-holders-present path=$TARGET_REAL (lsof_exit=$LSOF_EC)"
+  elif [[ "$LSOF_EC" -eq 1 && ! -s "$LSOF_ERR" ]]; then
     : # documented empty no-match
-  elif [[ "$LSOF_EC" -ne 0 ]]; then
+  elif [[ "$LSOF_EC" -eq 0 ]]; then
+    : # exit 0 empty stdout
+  else
     refuse_active_use "lsof-exit-status:$LSOF_EC path=$TARGET_REAL (fail-closed)"
-  elif [[ -s "$LSOF_OUT" ]]; then
-    # Any open file/process under the measured target blocks — not only cargo/rustc.
-    refuse_active_use "active-holders-present path=$TARGET_REAL"
   fi
-  # exit 0 + empty stdout: treat as no holders
 fi
 
 BEFORE_KIB=0

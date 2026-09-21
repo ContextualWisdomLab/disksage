@@ -184,26 +184,29 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
 
 /// Classify `lsof` completion for a cargo target tree.
 ///
+/// macOS `lsof +D` may return exit 1 **with** holder lines in stdout (see
+/// independent review active-holder-reproduction.json). Any non-empty stdout is
+/// therefore treated as active holders regardless of exit 0/1.
+///
 /// Only exit 1 with empty stdout and stderr is an admissible empty no-match.
-/// Exit 127 (command missing when stubbed/PATH-broken) and every other non-zero
-/// outcome fail closed. Exit 0 with any stdout means active holders.
+/// Exit 127 and every other non-zero outcome without holder stdout fail closed.
 pub(crate) fn classify_target_lsof_result(
     exit_code: i32,
     stdout: &str,
     stderr: &str,
 ) -> Result<(), String> {
-    if exit_code == 1 && stdout.is_empty() && stderr.is_empty() {
-        return Ok(());
-    }
-    if exit_code != 0 {
-        return Err(format!(
-            "cargo-target-active-use-probe-failed:lsof-exit-status:{exit_code}"
-        ));
-    }
     if !stdout.trim().is_empty() {
         return Err("cargo-target-active-holders-present".into());
     }
-    Ok(())
+    if exit_code == 1 && stderr.is_empty() {
+        return Ok(());
+    }
+    if exit_code == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "cargo-target-active-use-probe-failed:lsof-exit-status:{exit_code}"
+    ))
 }
 
 #[cfg(unix)]
@@ -687,6 +690,19 @@ exit 42\n",
         assert_eq!(
             classify_target_lsof_result(0, "COMMAND PID\nrustc 1\n", "")
                 .unwrap_err(),
+            "cargo-target-active-holders-present"
+        );
+    }
+
+    #[test]
+    fn lsof_exit_1_with_holder_stdout_is_active_holders_not_empty_match() {
+        // Mirrors independent review active-holder-reproduction.json:
+        // Python PID held a synthetic file; lsof exit=1, stderr empty, stdout listed
+        // the holder. Original cargo|rustc grep would miss it and WOULD_PROCEED.
+        let sample = "COMMAND     PID       USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\n\
+python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-holder/target/synthetic-artifact\n";
+        assert_eq!(
+            classify_target_lsof_result(1, sample, "").unwrap_err(),
             "cargo-target-active-holders-present"
         );
     }

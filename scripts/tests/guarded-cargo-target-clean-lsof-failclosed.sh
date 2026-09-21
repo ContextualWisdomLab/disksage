@@ -54,7 +54,7 @@ fi
 grep -q 'lsof-exit-status:127\|lsof-unavailable' "$WORK/err.txt" \
   || { echo "FAIL: expected lsof fail-closed reason in stderr"; cat "$WORK/err.txt" >&2; exit 1; }
 
-# Holder present must also refuse
+# Holder present must also refuse (exit 0 + stdout)
 cat >"$WORK/bin/lsof" <<'EOS'
 #!/bin/sh
 echo "COMMAND PID USER"
@@ -71,5 +71,25 @@ set -e
 [[ "$EC2" -ne 0 ]] || { echo "FAIL: holders present exited 0"; exit 1; }
 [[ ! -f "$WORK/cargo-ran" ]] || { echo "FAIL: cargo ran with holders"; exit 1; }
 [[ -f "$WORK/proj/target/keep-me" ]] || { echo "FAIL: deleted with holders"; exit 1; }
+
+# macOS-style: exit 1 WITH holder stdout (Python/non-cargo) must refuse — not WOULD_PROCEED
+cat >"$WORK/bin/lsof" <<'EOS'
+#!/bin/sh
+echo "COMMAND     PID       USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME"
+echo "python3.1 21407 seonghobae    3u   REG   1,16       23 1 /tmp/x/target/synthetic-artifact"
+exit 1
+EOS
+chmod +x "$WORK/bin/lsof"
+set +e
+LSOF_BIN="$WORK/bin/lsof" CARGO_BIN="$WORK/bin/cargo" \
+  "$SCRIPT" --project-dir "$WORK/proj" --target-dir "$WORK/proj/target" \
+  >"$WORK/out3.txt" 2>"$WORK/err3.txt"
+EC3=$?
+set -e
+[[ "$EC3" -ne 0 ]] || { echo "FAIL: exit1+holder-stdout WOULD_PROCEED"; exit 1; }
+grep -q 'active-holders-present' "$WORK/err3.txt" \
+  || { echo "FAIL: expected active-holders-present for exit1+stdout"; cat "$WORK/err3.txt" >&2; exit 1; }
+[[ ! -f "$WORK/cargo-ran" ]] || { echo "FAIL: cargo ran on exit1+holder-stdout"; exit 1; }
+[[ -f "$WORK/proj/target/keep-me" ]] || { echo "FAIL: deleted on exit1+holder-stdout"; exit 1; }
 
 echo "PASS guarded-cargo-target-clean lsof fail-closed regressions"
