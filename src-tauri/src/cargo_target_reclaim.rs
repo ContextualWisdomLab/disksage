@@ -14,8 +14,21 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+const CARGO_CLEAN_TIMEOUT: Duration = Duration::from_secs(600);
+const LSOF_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// Active-use / ownership gate invoked before deletion. Tests inject stubs.
 pub(crate) type ActiveUseProbe = fn(&Path) -> Result<(), String>;
@@ -161,25 +174,269 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
     }
     let project_canon = std::fs::canonicalize(project_dir)
         .map_err(|e| format!("cargo-target-project-canonicalize-failed:{e}"))?;
-    // target may not exist yet; canonicalize parent + join name when absent
-    let target_canon = if target_dir.exists() {
-        std::fs::canonicalize(target_dir)
-            .map_err(|e| format!("cargo-target-dir-canonicalize-failed:{e}"))?
-    } else {
-        let parent = target_dir
-            .parent()
-            .ok_or_else(|| "cargo-target-dir-parent-missing".to_string())?;
-        let parent_canon = std::fs::canonicalize(parent)
-            .map_err(|e| format!("cargo-target-dir-parent-canonicalize-failed:{e}"))?;
-        let name = target_dir
-            .file_name()
-            .ok_or_else(|| "cargo-target-dir-name-missing".to_string())?;
-        parent_canon.join(name)
+    // `Path::exists` reports false for dangling links, so inspect the final component first.
+    let target_canon = match std::fs::symlink_metadata(target_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("cargo-target-dir-symlink".into());
+        }
+        Ok(_) => std::fs::canonicalize(target_dir)
+            .map_err(|e| format!("cargo-target-dir-canonicalize-failed:{e}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = target_dir
+                .parent()
+                .ok_or_else(|| "cargo-target-dir-parent-missing".to_string())?;
+            let parent_canon = std::fs::canonicalize(parent)
+                .map_err(|e| format!("cargo-target-dir-parent-canonicalize-failed:{e}"))?;
+            let name = target_dir
+                .file_name()
+                .ok_or_else(|| "cargo-target-dir-name-missing".to_string())?;
+            parent_canon.join(name)
+        }
+        Err(error) => return Err(format!("cargo-target-dir-metadata-failed:{error}")),
     };
     if !is_strict_canonical_child(&project_canon, &target_canon) {
         return Err("cargo-target-dir-outside-project".into());
     }
     Ok(target_canon)
+}
+
+#[derive(Debug)]
+struct BoundedCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn read_bounded(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) if output.len() < MAX_COMMAND_OUTPUT_BYTES => {
+                let retained = (MAX_COMMAND_OUTPUT_BYTES - output.len()).min(read);
+                output.extend_from_slice(&chunk[..retained]);
+            }
+            Ok(_) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(output)
+}
+
+fn terminate_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        // The child creates a private process group, so descendants cannot outlive timeout.
+        let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn run_bounded_command(
+    command: &mut Command,
+    timeout: Duration,
+    error_prefix: &str,
+) -> Result<BoundedCommandOutput, String> {
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{error_prefix}-spawn-failed:{error}"))?;
+    let stdout = child.stdout.take().ok_or_else(|| format!("{error_prefix}-stdout-unavailable"))?;
+    let stderr = child.stderr.take().ok_or_else(|| format!("{error_prefix}-stderr-unavailable"))?;
+    let stdout_reader = std::thread::spawn(move || read_bounded(stdout));
+    let stderr_reader = std::thread::spawn(move || read_bounded(stderr));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                terminate_child(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!("{error_prefix}-timeout"));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                terminate_child(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!("{error_prefix}-wait-failed:{error}"));
+            }
+        }
+    };
+    let stdout = stdout_reader.join()
+        .map_err(|_| format!("{error_prefix}-stdout-reader-panicked"))?
+        .map_err(|error| format!("{error_prefix}-stdout-read-failed:{error}"))?;
+    let stderr = stderr_reader.join()
+        .map_err(|_| format!("{error_prefix}-stderr-reader-panicked"))?
+        .map_err(|error| format!("{error_prefix}-stderr-read-failed:{error}"))?;
+    Ok(BoundedCommandOutput { status, stdout, stderr })
+}
+
+#[cfg(unix)]
+struct OpenedTargetDir {
+    file: File,
+    handle_path: PathBuf,
+}
+
+#[cfg(unix)]
+fn open_verified_target_dir(
+    target_dir: &Path,
+    expected: &std::fs::Metadata,
+) -> Result<OpenedTargetDir, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(target_dir)
+        .map_err(|error| format!("cargo-target-dir-open-failed:{error}"))?;
+    let opened = file.metadata()
+        .map_err(|error| format!("cargo-target-dir-open-metadata-failed:{error}"))?;
+    if !opened.is_dir() || opened.dev() != expected.dev() || opened.ino() != expected.ino() {
+        return Err("cargo-target-dir-replaced".into());
+    }
+
+    let fd = file.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    let handle_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    #[cfg(target_os = "macos")]
+    let handle_path = PathBuf::from(format!("/dev/fd/{fd}"));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err("cargo-target-identity-bound-cleanup-unsupported".into());
+
+    let handle_metadata = std::fs::metadata(&handle_path)
+        .map_err(|error| format!("cargo-target-dir-handle-path-failed:{error}"))?;
+    if handle_metadata.dev() != opened.dev() || handle_metadata.ino() != opened.ino() {
+        return Err("cargo-target-dir-handle-identity-mismatch".into());
+    }
+    Ok(OpenedTargetDir { file, handle_path })
+}
+
+#[cfg(not(unix))]
+struct OpenedTargetDir {
+    handle_path: PathBuf,
+}
+
+#[cfg(not(unix))]
+fn open_verified_target_dir(
+    _target_dir: &Path,
+    _expected: &std::fs::Metadata,
+) -> Result<OpenedTargetDir, String> {
+    Err("cargo-target-identity-bound-cleanup-unsupported".into())
+}
+
+#[cfg(unix)]
+struct DetachedTargetDir {
+    opened: OpenedTargetDir,
+    original_path: PathBuf,
+    clean_path: PathBuf,
+    quarantine_path: PathBuf,
+    committed: bool,
+}
+
+#[cfg(unix)]
+impl DetachedTargetDir {
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DetachedTargetDir {
+    fn drop(&mut self) {
+        if !self.committed {
+            let clean = std::fs::symlink_metadata(&self.clean_path);
+            let opened = self.opened.file.metadata();
+            let original_missing = std::fs::symlink_metadata(&self.original_path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            let same_opened_dir = match (clean, opened) {
+                (Ok(clean), Ok(opened)) => {
+                    clean.is_dir()
+                        && !clean.file_type().is_symlink()
+                        && clean.dev() == opened.dev()
+                        && clean.ino() == opened.ino()
+                }
+                _ => false,
+            };
+            if original_missing && same_opened_dir {
+                let _ = std::fs::rename(&self.clean_path, &self.original_path);
+            }
+        }
+        if self.committed || std::fs::symlink_metadata(&self.clean_path).is_err() {
+            let _ = std::fs::remove_dir(&self.quarantine_path);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn detach_verified_target_dir(
+    target_dir: &Path,
+    opened: OpenedTargetDir,
+) -> Result<DetachedTargetDir, String> {
+    let parent = target_dir.parent().ok_or_else(|| "cargo-target-dir-parent-missing".to_string())?;
+    let quarantine = tempfile::Builder::new()
+        .prefix(".disksage-cargo-clean-")
+        .tempdir_in(parent)
+        .map_err(|error| format!("cargo-target-quarantine-create-failed:{error}"))?;
+    let clean_path = quarantine.path().join("target");
+    std::fs::rename(target_dir, &clean_path)
+        .map_err(|error| format!("cargo-target-dir-detach-failed:{error}"))?;
+    let quarantine_path = quarantine.keep();
+    let moved = std::fs::symlink_metadata(&clean_path)
+        .map_err(|error| format!("cargo-target-dir-detached-metadata-failed:{error}"))?;
+    let expected = opened.file.metadata()
+        .map_err(|error| format!("cargo-target-dir-open-metadata-failed:{error}"))?;
+    if moved.file_type().is_symlink()
+        || !moved.is_dir()
+        || moved.dev() != expected.dev()
+        || moved.ino() != expected.ino()
+    {
+        if std::fs::symlink_metadata(target_dir)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            let _ = std::fs::rename(&clean_path, target_dir);
+        }
+        let _ = std::fs::remove_dir(&quarantine_path);
+        return Err("cargo-target-dir-replaced".into());
+    }
+    Ok(DetachedTargetDir {
+        opened,
+        original_path: target_dir.to_path_buf(),
+        clean_path,
+        quarantine_path,
+        committed: false,
+    })
+}
+
+#[cfg(not(unix))]
+struct DetachedTargetDir {
+    opened: OpenedTargetDir,
+    clean_path: PathBuf,
+}
+
+#[cfg(not(unix))]
+impl DetachedTargetDir {
+    fn commit(&mut self) {}
+}
+
+#[cfg(not(unix))]
+fn detach_verified_target_dir(
+    _target_dir: &Path,
+    _opened: OpenedTargetDir,
+) -> Result<DetachedTargetDir, String> {
+    Err("cargo-target-identity-bound-cleanup-unsupported".into())
 }
 
 /// Classify `lsof` completion for a cargo target tree.
@@ -248,6 +505,22 @@ fn resolve_lsof_executable() -> Result<PathBuf, String> {
     Err("cargo-target-lsof-unavailable".into())
 }
 
+fn run_target_lsof(
+    lsof: &Path,
+    target_dir: &Path,
+    timeout: Duration,
+) -> Result<BoundedCommandOutput, String> {
+    let mut command = Command::new(lsof);
+    command.arg("+D").arg(target_dir);
+    run_bounded_command(&mut command, timeout, "cargo-target-lsof").map_err(|error| {
+        if error.contains("spawn-failed:No such file or directory") {
+            "cargo-target-lsof-unavailable".to_string()
+        } else {
+            error
+        }
+    })
+}
+
 /// Default production probe: ownership + fail-closed `lsof +D` on the measured target.
 pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), String> {
     if !target_dir.exists() {
@@ -255,20 +528,7 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
     }
     ensure_target_owned_by_self(target_dir)?;
     let lsof = resolve_lsof_executable()?;
-    let output = Command::new(&lsof)
-        .arg("+D")
-        .arg(target_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "cargo-target-lsof-unavailable".to_string()
-            } else {
-                format!("cargo-target-lsof-spawn-failed:{e}")
-            }
-        })?;
+    let output = run_target_lsof(&lsof, target_dir, LSOF_TIMEOUT)?;
     let code = output.status.code().unwrap_or(127);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -316,82 +576,54 @@ pub(crate) fn clean_cargo_target_with_active_use(
         return Err("cargo-executable-unavailable".into());
     }
     let target_dir = resolve_measured_target_dir(project_dir, target_dir)?;
-    active_use(&target_dir)?;
-    let bytes_before = bounded_dir_size(&target_dir)?;
 
-    let mut child = Command::new(cargo)
+    let initial_metadata = match std::fs::symlink_metadata(&target_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("cargo-target-dir-unsafe-type".into());
+        }
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CargoTargetCleanResult {
+                cargo_path: cargo.to_path_buf(),
+                project_dir: project_dir.to_path_buf(),
+                target_dir,
+                bytes_before: 0,
+                bytes_after: 0,
+                observed_reduction_bytes: 0,
+                status_code: 0,
+                executed: false,
+            });
+        }
+        Err(error) => return Err(format!("cargo-target-dir-metadata-failed:{error}")),
+    };
+    active_use(&target_dir)?;
+    // Bind measurement and cleanup to the authorized object, not its replaceable pathname.
+    let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
+    let bytes_before = bounded_dir_size(&opened_target.handle_path)?;
+    let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
+
+    let mut command = Command::new(cargo);
+    command
         .arg("clean")
         .arg("--target-dir")
-        .arg(&target_dir)
-        .current_dir(project_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        .arg(&detached_target.clean_path)
+        .current_dir(project_dir);
+    let output = run_bounded_command(&mut command, CARGO_CLEAN_TIMEOUT, "cargo-clean")
+        .map_err(|error| {
+            if error.contains("spawn-failed:No such file or directory") {
                 "cargo-executable-unavailable".to_string()
             } else {
-                format!("cargo-clean-spawn-failed:{e}")
+                error
             }
         })?;
 
-    // Drain stderr on a helper thread so a verbose failure cannot fill the pipe and block.
-    let stderr_handle = child.stderr.take().map(|mut stderr| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 4096];
-            const MAX: usize = 64 * 1024;
-            loop {
-                match stderr.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if buf.len() < MAX {
-                            let take = (MAX - buf.len()).min(n);
-                            buf.extend_from_slice(&chunk[..take]);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            buf
-        })
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(600);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(h) = stderr_handle {
-                    let _ = h.join();
-                }
-                return Err("cargo-clean-timeout".into());
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(h) = stderr_handle {
-                    let _ = h.join();
-                }
-                return Err(format!("cargo-clean-wait-failed:{e}"));
-            }
-        }
-    };
-
-    if let Some(h) = stderr_handle {
-        let _ = h.join();
-    }
-
-    let status_code = status.code().unwrap_or(-1);
+    let status_code = output.status.code().unwrap_or(-1);
     if status_code != 0 {
         return Err(format!("cargo-clean-exit-nonzero:{status_code}"));
     }
 
-    let bytes_after = bounded_dir_size(&target_dir)?;
+    let bytes_after = bounded_dir_size(&detached_target.opened.handle_path)?;
+    detached_target.commit();
     Ok(CargoTargetCleanResult {
         cargo_path: cargo.to_path_buf(),
         project_dir: project_dir.to_path_buf(),
@@ -563,12 +795,11 @@ mod tests {
         fs::write(shared.join("SENTINEL"), "must-survive").unwrap();
         let target_canon = fs::canonicalize(&target).unwrap();
 
-        // Mock cargo: record argv; mutate ONLY the allowlisted absolute target embedded below.
-        // Never delete via unset env / root-glob fallback.
+        // Mock cargo: record argv and mutate only the identity-verified detached target.
         let fake = project.join("fake-cargo");
         let script = format!(
             "#!/bin/sh\n\
-ALLOWED_TARGET='{allowed}'\n\
+ORIGINAL_TARGET='{original}'\n\
 ARGV_LOG='{log}'\n\
 printf '%s\\0' \"$@\" > \"$ARGV_LOG\"\n\
 target=\"\"\n\
@@ -579,12 +810,13 @@ while [ \"$#\" -gt 0 ]; do\n\
   fi\n\
   shift || true\n\
 done\n\
-if [ -n \"$target\" ] && [ \"$target\" = \"$ALLOWED_TARGET\" ]; then\n\
-  find \"$ALLOWED_TARGET\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
+if [ -n \"$target\" ] && [ \"$target\" != \"$ORIGINAL_TARGET\" ] && [ -d \"$target\" ]; then\n\
+  find -H \"$target\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
+  rmdir \"$target\"\n\
   exit 0\n\
 fi\n\
 exit 42\n",
-            allowed = target_canon.display(),
+            original = target_canon.display(),
             log = argv_log.display()
         );
         fs::write(&fake, script).unwrap();
@@ -607,8 +839,8 @@ exit 42\n",
             "consumer must pass --target-dir; argv={argv_txt:?}"
         );
         assert!(
-            argv_txt.contains(target_canon.to_string_lossy().as_ref()),
-            "consumer must pass measured target; argv={argv_txt:?}"
+            argv_txt.contains(".disksage-cargo-clean-") && !argv_txt.contains(target_canon.to_string_lossy().as_ref()),
+            "consumer must pass the identity-verified detached target; argv={argv_txt:?}"
         );
         assert!(
             shared.join("SENTINEL").is_file(),
@@ -676,11 +908,104 @@ exit 42\n",
         fs::set_permissions(&fake, perms).unwrap();
 
         let err = clean_cargo_target_with(&project, &project.join("target"), &fake).unwrap_err();
-        assert_eq!(err, "cargo-target-dir-outside-project");
+        assert_eq!(err, "cargo-target-dir-symlink");
         assert!(
             outside.join("SENTINEL").is_file(),
             "symlink-escaped shared target must not be cleaned"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_target_symlink_is_rejected() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-dangling-target-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        symlink(root.join("missing-target"), root.join("target")).unwrap();
+        let fake = root.join("fake-cargo");
+        fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let error = clean_cargo_target_with_active_use(
+            &root, &root.join("target"), &fake, |_| Ok(())
+        ).unwrap_err();
+        assert_eq!(error, "cargo-target-dir-symlink");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn target_path_swap_during_clean_cannot_redirect_deletion() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-target-swap-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let target = project.join("target");
+        let moved_target = project.join("target-moved");
+        let outside = root.join("outside");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        fs::write(target.join("artifact"), "delete-me").unwrap();
+        fs::write(outside.join("SENTINEL"), "must-survive").unwrap();
+
+        let fake = project.join("fake-cargo");
+        let script = format!(
+            "#!/bin/sh\n\
+target_arg=''\n\
+while [ \"$#\" -gt 0 ]; do\n\
+  if [ \"$1\" = '--target-dir' ]; then shift; target_arg=\"$1\"; fi\n\
+  shift || true\n\
+done\n\
+mv '{target}' '{moved}'\n\
+ln -s '{outside}' '{target}'\n\
+find -H \"$target_arg\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
+rmdir \"$target_arg\"\n",
+            target = target.display(), moved = moved_target.display(), outside = outside.display(),
+        );
+        fs::write(&fake, script).unwrap();
+        let mut permissions = fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake, permissions).unwrap();
+
+        let result = clean_cargo_target_with_active_use(&project, &target, &fake, |_| Ok(()))
+            .expect("handle-bound cleanup should succeed");
+        assert!(result.observed_reduction_bytes > 0);
+        assert!(outside.join("SENTINEL").is_file());
+        assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+        assert!(!moved_target.join("artifact").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_cargo_cleans_identity_verified_detached_target() {
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-real-handle-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
+        fs::write(target.join("artifact"), "delete-me").unwrap();
+        let cargo = fs::canonicalize(env!("CARGO")).unwrap();
+
+        let result = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
+            .expect("real cargo should accept the detached target");
+        assert!(result.executed);
+        assert!(result.observed_reduction_bytes > 0);
+        assert!(!target.join("artifact").exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -726,6 +1051,34 @@ python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-h
             err,
             "cargo-target-active-use-probe-failed:lsof-stderr-nonempty:exit:0"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lsof_timeout_terminates_the_probe() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-lsof-timeout-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("target")).unwrap();
+        let pid_file = root.join("lsof.pid");
+        let fake_lsof = root.join("fake-lsof");
+        fs::write(&fake_lsof, format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec sleep 30\n", pid_file.display()
+        )).unwrap();
+        let mut permissions = fs::metadata(&fake_lsof).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_lsof, permissions).unwrap();
+
+        let error = run_target_lsof(
+            &fake_lsof, &root.join("target"), Duration::from_millis(100)
+        ).unwrap_err();
+        assert_eq!(error, "cargo-target-lsof-timeout");
+        let pid: libc::pid_t = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "timed-out lsof survived");
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
