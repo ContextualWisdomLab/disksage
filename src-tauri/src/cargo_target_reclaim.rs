@@ -10,7 +10,7 @@
 //! redirect deletion away from the inspected path.
 //!
 //! Before any `cargo clean`, the measured target must pass ownership + active-use
-//! probes. Missing/`lsof` exit 127 / unexpected probe failure fails closed (no clean).
+//! probes. Missing or incomplete platform active-use evidence fails closed (no clean).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -27,8 +27,387 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 
 const CARGO_CLEAN_TIMEOUT: Duration = Duration::from_secs(600);
-const LSOF_TIMEOUT: Duration = Duration::from_secs(30);
+const ACTIVE_USE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
+
+#[cfg(windows)]
+mod windows_native {
+    use std::ffi::c_void;
+    use std::fs::{File, OpenOptions};
+    use std::mem::{size_of, MaybeUninit};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    use std::path::{Path, PathBuf};
+    use std::ptr::{null, null_mut};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    const FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
+    const FILE_ID_INFO_CLASS: i32 = 18;
+    const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
+    const SE_FILE_OBJECT: i32 = 1;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_USER_CLASS: i32 = 1;
+    const ERROR_SUCCESS: u32 = 0;
+    const ERROR_MORE_DATA: u32 = 234;
+    const CCH_RM_SESSION_KEY: usize = 32;
+    const MAX_RESTART_MANAGER_FILES: usize = 4_096;
+    const MAX_RESTART_MANAGER_ENTRIES: usize = 65_536;
+
+    #[repr(C)]
+    struct FileAttributeTagInfo {
+        file_attributes: u32,
+        reparse_tag: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct FileId128 {
+        identifier: [u8; 16],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct FileIdInfo {
+        volume_serial_number: u64,
+        file_id: FileId128,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct DirectoryIdentity(FileIdInfo);
+
+    #[repr(C)]
+    struct SidAndAttributes {
+        sid: *mut c_void,
+        attributes: u32,
+    }
+
+    #[repr(C)]
+    struct TokenUser {
+        user: SidAndAttributes,
+    }
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandleEx(
+            file: *mut c_void,
+            file_information_class: i32,
+            file_information: *mut c_void,
+            buffer_size: u32,
+        ) -> i32;
+        fn GetCurrentProcess() -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+
+    #[link(name = "Advapi32")]
+    unsafe extern "system" {
+        fn GetSecurityInfo(
+            handle: *mut c_void,
+            object_type: i32,
+            security_information: u32,
+            owner: *mut *mut c_void,
+            group: *mut *mut c_void,
+            dacl: *mut *mut c_void,
+            sacl: *mut *mut c_void,
+            security_descriptor: *mut *mut c_void,
+        ) -> u32;
+        fn OpenProcessToken(
+            process_handle: *mut c_void,
+            desired_access: u32,
+            token_handle: *mut *mut c_void,
+        ) -> i32;
+        fn GetTokenInformation(
+            token_handle: *mut c_void,
+            token_information_class: i32,
+            token_information: *mut c_void,
+            token_information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+        fn EqualSid(first: *mut c_void, second: *mut c_void) -> i32;
+    }
+
+    #[link(name = "Rstrtmgr")]
+    unsafe extern "system" {
+        fn RmStartSession(session: *mut u32, flags: u32, session_key: *mut u16) -> u32;
+        fn RmRegisterResources(
+            session: u32,
+            file_count: u32,
+            filenames: *const *const u16,
+            application_count: u32,
+            applications: *const c_void,
+            service_count: u32,
+            services: *const *const u16,
+        ) -> u32;
+        fn RmGetList(
+            session: u32,
+            process_info_needed: *mut u32,
+            process_info_count: *mut u32,
+            process_info: *mut c_void,
+            reboot_reasons: *mut u32,
+        ) -> u32;
+        fn RmEndSession(session: u32) -> u32;
+    }
+
+    pub(super) fn open_directory(path: &Path) -> Result<File, String> {
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|error| format!("cargo-target-dir-open-failed:{error}"))?;
+        let mut tag = MaybeUninit::<FileAttributeTagInfo>::zeroed();
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle().cast(),
+                FILE_ATTRIBUTE_TAG_INFO_CLASS,
+                tag.as_mut_ptr().cast(),
+                size_of::<FileAttributeTagInfo>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "cargo-target-dir-open-attributes-failed:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let tag = unsafe { tag.assume_init() };
+        if tag.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("cargo-target-dir-reparse-point".into());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn identity(file: &File) -> Result<DirectoryIdentity, String> {
+        let mut info = MaybeUninit::<FileIdInfo>::zeroed();
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle().cast(),
+                FILE_ID_INFO_CLASS,
+                info.as_mut_ptr().cast(),
+                size_of::<FileIdInfo>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "cargo-target-dir-file-id-failed:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(DirectoryIdentity(unsafe { info.assume_init() }))
+    }
+
+    pub(super) fn identity_at(path: &Path) -> Result<DirectoryIdentity, String> {
+        identity(&open_directory(path)?)
+    }
+
+    pub(super) fn ensure_owned_by_current_user(file: &File) -> Result<(), String> {
+        let mut owner = null_mut();
+        let mut security_descriptor = null_mut();
+        let status = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle().cast(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut security_descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS || owner.is_null() || security_descriptor.is_null() {
+            if !security_descriptor.is_null() {
+                unsafe { LocalFree(security_descriptor) };
+            }
+            return Err(format!("cargo-target-owner-query-failed:{status}"));
+        }
+
+        let mut token = null_mut();
+        let token_opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+        if token_opened == 0 {
+            unsafe { LocalFree(security_descriptor) };
+            return Err(format!(
+                "cargo-target-owner-token-open-failed:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let result = (|| {
+            let mut required = 0u32;
+            unsafe {
+                GetTokenInformation(token, TOKEN_USER_CLASS, null_mut(), 0, &mut required);
+            }
+            if required < size_of::<TokenUser>() as u32 {
+                return Err("cargo-target-owner-token-query-failed".to_string());
+            }
+            let words = (required as usize).div_ceil(size_of::<usize>());
+            let mut buffer = vec![0usize; words];
+            let ok = unsafe {
+                GetTokenInformation(
+                    token,
+                    TOKEN_USER_CLASS,
+                    buffer.as_mut_ptr().cast(),
+                    required,
+                    &mut required,
+                )
+            };
+            if ok == 0 {
+                return Err(format!(
+                    "cargo-target-owner-token-query-failed:{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let token_user = unsafe { &*(buffer.as_ptr().cast::<TokenUser>()) };
+            if token_user.user.sid.is_null()
+                || unsafe { EqualSid(owner, token_user.user.sid) } == 0
+            {
+                return Err("cargo-target-owner-mismatch".to_string());
+            }
+            Ok(())
+        })();
+        unsafe {
+            CloseHandle(token);
+            LocalFree(security_descriptor);
+        }
+        result
+    }
+
+    fn enumerate_file_resources(root: &Path) -> Result<Vec<PathBuf>, String> {
+        let mut files = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        let mut entries = 0usize;
+        while let Some(directory) = stack.pop() {
+            let read = std::fs::read_dir(&directory)
+                .map_err(|error| format!("cargo-target-active-use-enumeration-failed:{error}"))?;
+            for entry in read {
+                let entry = entry
+                    .map_err(|error| format!("cargo-target-active-use-enumeration-failed:{error}"))?;
+                entries += 1;
+                if entries > MAX_RESTART_MANAGER_ENTRIES {
+                    return Err("cargo-target-active-use-entry-limit".into());
+                }
+                let metadata = std::fs::symlink_metadata(entry.path())
+                    .map_err(|error| format!("cargo-target-active-use-metadata-failed:{error}"))?;
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    continue;
+                }
+                if metadata.is_dir() {
+                    stack.push(entry.path());
+                } else if metadata.is_file() {
+                    if files.len() == MAX_RESTART_MANAGER_FILES {
+                        return Err("cargo-target-active-use-resource-limit".into());
+                    }
+                    files.push(entry.path());
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    struct RestartManagerSession(u32);
+
+    impl Drop for RestartManagerSession {
+        fn drop(&mut self) {
+            unsafe {
+                RmEndSession(self.0);
+            }
+        }
+    }
+
+    fn query_restart_manager(root: &Path) -> Result<(), String> {
+        let files = enumerate_file_resources(root)?;
+        if files.is_empty() {
+            return Ok(());
+        }
+        let wide_files = files
+            .iter()
+            .map(|path| {
+                let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+                if wide.contains(&0) || wide.len() >= 32_767 {
+                    return Err("cargo-target-active-use-resource-path-invalid".to_string());
+                }
+                wide.push(0);
+                Ok(wide)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let file_pointers: Vec<*const u16> = wide_files.iter().map(|path| path.as_ptr()).collect();
+
+        let mut session = 0u32;
+        let mut session_key = [0u16; CCH_RM_SESSION_KEY + 1];
+        let status = unsafe { RmStartSession(&mut session, 0, session_key.as_mut_ptr()) };
+        if status != ERROR_SUCCESS {
+            return Err(format!("cargo-target-active-use-probe-failed:rm-start:{status}"));
+        }
+        let _session = RestartManagerSession(session);
+        let status = unsafe {
+            RmRegisterResources(
+                session,
+                file_pointers.len() as u32,
+                file_pointers.as_ptr(),
+                0,
+                null(),
+                0,
+                null(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(format!("cargo-target-active-use-probe-failed:rm-register:{status}"));
+        }
+
+        let mut needed = 0u32;
+        let mut count = 0u32;
+        let mut reboot_reasons = 0u32;
+        let status = unsafe {
+            RmGetList(
+                session,
+                &mut needed,
+                &mut count,
+                null_mut(),
+                &mut reboot_reasons,
+            )
+        };
+        if (status == ERROR_MORE_DATA && needed > 0)
+            || (status == ERROR_SUCCESS && (needed > 0 || count > 0))
+        {
+            return Err("cargo-target-active-holders-present".into());
+        }
+        if status == ERROR_SUCCESS {
+            return Ok(());
+        }
+        Err(format!("cargo-target-active-use-probe-failed:rm-list:{status}"))
+    }
+
+    pub(super) fn ensure_no_active_holders(
+        root: &Path,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let root = root.to_path_buf();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("cargo-target-restart-manager".into())
+            .spawn(move || {
+                let _ = sender.send(query_restart_manager(&root));
+            })
+            .map_err(|error| format!("cargo-target-active-use-probe-thread-failed:{error}"))?;
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("cargo-target-active-use-probe-failed:restart-manager-timeout".into())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("cargo-target-active-use-probe-failed:restart-manager-disconnected".into())
+            }
+        }
+    }
+}
 
 /// Active-use / ownership gate invoked before deletion. Tests inject stubs.
 pub(crate) type ActiveUseProbe = fn(&Path) -> Result<(), String>;
@@ -324,12 +703,29 @@ fn open_verified_target_dir(
     Ok(OpenedTargetDir { file, handle_path })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 struct OpenedTargetDir {
-    handle_path: PathBuf,
+    file: std::fs::File,
+    identity: windows_native::DirectoryIdentity,
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn open_verified_target_dir(
+    target_dir: &Path,
+    expected: windows_native::DirectoryIdentity,
+) -> Result<OpenedTargetDir, String> {
+    let file = windows_native::open_directory(target_dir)?;
+    let identity = windows_native::identity(&file)?;
+    if identity != expected || windows_native::identity_at(target_dir)? != identity {
+        return Err("cargo-target-dir-replaced".into());
+    }
+    Ok(OpenedTargetDir { file, identity })
+}
+
+#[cfg(not(any(unix, windows)))]
+struct OpenedTargetDir;
+
+#[cfg(not(any(unix, windows)))]
 fn open_verified_target_dir(
     _target_dir: &Path,
     _expected: &std::fs::Metadata,
@@ -348,6 +744,10 @@ struct DetachedTargetDir {
 
 #[cfg(unix)]
 impl DetachedTargetDir {
+    fn verified_size(&self) -> Result<u64, String> {
+        bounded_dir_size(&self.opened.handle_path)
+    }
+
     fn commit(&mut self) {
         self.committed = true;
     }
@@ -420,18 +820,101 @@ fn detach_verified_target_dir(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+struct DetachedTargetDir {
+    opened: OpenedTargetDir,
+    original_path: PathBuf,
+    clean_path: PathBuf,
+    quarantine_path: PathBuf,
+    committed: bool,
+}
+
+#[cfg(windows)]
+impl DetachedTargetDir {
+    fn verified_size(&self) -> Result<u64, String> {
+        match std::fs::symlink_metadata(&self.clean_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                Err("cargo-target-dir-replaced".into())
+            }
+            Ok(_) => {
+                if windows_native::identity_at(&self.clean_path)? != self.opened.identity {
+                    return Err("cargo-target-dir-replaced".into());
+                }
+                bounded_dir_size(&self.clean_path)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(format!("cargo-target-dir-detached-metadata-failed:{error}")),
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+#[cfg(windows)]
+impl Drop for DetachedTargetDir {
+    fn drop(&mut self) {
+        if !self.committed {
+            let original_missing = std::fs::symlink_metadata(&self.original_path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            let same_opened_dir = windows_native::identity_at(&self.clean_path)
+                .is_ok_and(|identity| identity == self.opened.identity);
+            if original_missing && same_opened_dir {
+                let _ = std::fs::rename(&self.clean_path, &self.original_path);
+            }
+        }
+        if self.committed || std::fs::symlink_metadata(&self.clean_path).is_err() {
+            let _ = std::fs::remove_dir(&self.quarantine_path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn detach_verified_target_dir(
+    target_dir: &Path,
+    opened: OpenedTargetDir,
+) -> Result<DetachedTargetDir, String> {
+    let parent = target_dir.parent().ok_or_else(|| "cargo-target-dir-parent-missing".to_string())?;
+    let quarantine = tempfile::Builder::new()
+        .prefix(".disksage-cargo-clean-")
+        .tempdir_in(parent)
+        .map_err(|error| format!("cargo-target-quarantine-create-failed:{error}"))?;
+    let clean_path = quarantine.path().join("target");
+    std::fs::rename(target_dir, &clean_path)
+        .map_err(|error| format!("cargo-target-dir-detach-failed:{error}"))?;
+    let quarantine_path = quarantine.keep();
+    let moved_identity = windows_native::identity_at(&clean_path);
+    if moved_identity.as_ref() != Ok(&opened.identity) {
+        if std::fs::symlink_metadata(target_dir)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            let _ = std::fs::rename(&clean_path, target_dir);
+        }
+        let _ = std::fs::remove_dir(&quarantine_path);
+        return Err("cargo-target-dir-replaced".into());
+    }
+    Ok(DetachedTargetDir {
+        opened,
+        original_path: target_dir.to_path_buf(),
+        clean_path,
+        quarantine_path,
+        committed: false,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 struct DetachedTargetDir {
     opened: OpenedTargetDir,
     clean_path: PathBuf,
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl DetachedTargetDir {
     fn commit(&mut self) {}
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn detach_verified_target_dir(
     _target_dir: &Path,
     _opened: OpenedTargetDir,
@@ -485,9 +968,14 @@ fn ensure_target_owned_by_self(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn ensure_target_owned_by_self(path: &Path) -> Result<(), String> {
+    let directory = windows_native::open_directory(path)?;
+    windows_native::ensure_owned_by_current_user(&directory)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn ensure_target_owned_by_self(_path: &Path) -> Result<(), String> {
-    // Non-Unix platforms lack a portable owner probe here; refuse mutation.
     Err("cargo-target-owner-probe-unsupported".into())
 }
 
@@ -521,18 +1009,27 @@ fn run_target_lsof(
     })
 }
 
-/// Default production probe: ownership + fail-closed `lsof +D` on the measured target.
+/// Default production probe: ownership plus fail-closed platform active-use evidence.
 pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), String> {
     if !target_dir.exists() {
         return Ok(());
     }
     ensure_target_owned_by_self(target_dir)?;
-    let lsof = resolve_lsof_executable()?;
-    let output = run_target_lsof(&lsof, target_dir, LSOF_TIMEOUT)?;
-    let code = output.status.code().unwrap_or(127);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    classify_target_lsof_result(code, &stdout, &stderr)
+    #[cfg(windows)]
+    return windows_native::ensure_no_active_holders(target_dir, ACTIVE_USE_TIMEOUT);
+
+    #[cfg(unix)]
+    {
+        let lsof = resolve_lsof_executable()?;
+        let output = run_target_lsof(&lsof, target_dir, ACTIVE_USE_TIMEOUT)?;
+        let code = output.status.code().unwrap_or(127);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        classify_target_lsof_result(code, &stdout, &stderr)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    Err("cargo-target-active-use-probe-unsupported".into())
 }
 
 /// Run `cargo clean` for a project directory that owns a `Cargo.toml`.
@@ -568,6 +1065,25 @@ pub(crate) fn clean_cargo_target_with_active_use(
     cargo: &Path,
     active_use: ActiveUseProbe,
 ) -> Result<CargoTargetCleanResult, String> {
+    clean_cargo_target_with_active_use_and_opened_hook(
+        project_dir,
+        target_dir,
+        cargo,
+        active_use,
+        |_| Ok(()),
+    )
+}
+
+fn clean_cargo_target_with_active_use_and_opened_hook<F>(
+    project_dir: &Path,
+    target_dir: &Path,
+    cargo: &Path,
+    active_use: ActiveUseProbe,
+    after_open: F,
+) -> Result<CargoTargetCleanResult, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     ensure_absolute_project(project_dir)?;
     if !cargo.is_absolute() {
         return Err("cargo-executable-not-absolute".into());
@@ -596,12 +1112,23 @@ pub(crate) fn clean_cargo_target_with_active_use(
         }
         Err(error) => return Err(format!("cargo-target-dir-metadata-failed:{error}")),
     };
+    #[cfg(windows)]
+    let initial_identity = {
+        let _ = initial_metadata;
+        windows_native::identity_at(&target_dir)?
+    };
     active_use(&target_dir)?;
     // Bind measurement and cleanup to the authorized object, not its replaceable pathname.
+    #[cfg(unix)]
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
-    let bytes_before = bounded_dir_size(&opened_target.handle_path)?;
+    #[cfg(windows)]
+    let opened_target = open_verified_target_dir(&target_dir, initial_identity)?;
+    #[cfg(not(any(unix, windows)))]
+    let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
+    after_open(&target_dir)?;
     let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
     active_use(&detached_target.clean_path)?;
+    let bytes_before = detached_target.verified_size()?;
 
     let mut command = Command::new(cargo);
     command
@@ -623,7 +1150,7 @@ pub(crate) fn clean_cargo_target_with_active_use(
         return Err(format!("cargo-clean-exit-nonzero:{status_code}"));
     }
 
-    let bytes_after = bounded_dir_size(&detached_target.opened.handle_path)?;
+    let bytes_after = detached_target.verified_size()?;
     detached_target.commit();
     Ok(CargoTargetCleanResult {
         cargo_path: cargo.to_path_buf(),
@@ -939,6 +1466,50 @@ exit 42\n",
         ).unwrap_err();
         assert_eq!(error, "cargo-target-dir-symlink");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_production_path_rejects_same_path_substitution_after_open() {
+        let root = tempfile::tempdir().expect("temp root");
+        let project = root.path().join("project");
+        let target = project.join("target");
+        let reviewed = project.join("reviewed-target");
+        fs::create_dir_all(&target).expect("target directory");
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname=\"windows-substitution\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .expect("manifest");
+        fs::write(target.join("reviewed.bin"), "reviewed").expect("reviewed artifact");
+        let fake_cargo = project.join("cargo.exe");
+        fs::write(&fake_cargo, "must-not-run").expect("fake cargo marker");
+
+        let result = clean_cargo_target_with_active_use_and_opened_hook(
+            &project,
+            &target,
+            &fake_cargo,
+            |_| Ok(()),
+            |opened_path| {
+                fs::rename(opened_path, &reviewed)
+                    .map_err(|error| format!("test-reviewed-rename-failed:{error}"))?;
+                fs::create_dir(opened_path)
+                    .map_err(|error| format!("test-replacement-create-failed:{error}"))?;
+                fs::write(opened_path.join("replacement.bin"), "replacement")
+                    .map_err(|error| format!("test-replacement-write-failed:{error}"))?;
+                Ok(())
+            },
+        );
+
+        assert_eq!(result.unwrap_err(), "cargo-target-dir-replaced");
+        assert!(
+            reviewed.join("reviewed.bin").is_file(),
+            "the identity-bound reviewed object must not be cleaned"
+        );
+        assert!(
+            target.join("replacement.bin").is_file(),
+            "the same-path replacement must be restored without mutation"
+        );
     }
 
     #[cfg(target_os = "linux")]
