@@ -10,12 +10,11 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 6] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 5] = [
     "npm-cache",
     "pnpm-cache",
     "adobe-cache",
     "edge-cache",
-    "uv-cache",
     "trivy-cache",
 ];
 
@@ -31,8 +30,25 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
-/// uv cache child holding installed tool/MCP environments, not regenerable download cache.
-const UV_TOOL_ARCHIVE_DIR: &str = "archive-v0";
+
+#[cfg(target_os = "macos")]
+fn configured_uv_cache_root(bases: &rules::BaseDirs) -> PathBuf {
+    std::env::var_os("UV_CACHE_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| bases.local_data.join("uv"))
+}
+
+#[cfg(target_os = "macos")]
+fn is_uv_cache_root(bases: &rules::BaseDirs, dir: &Path) -> bool {
+    let configured = configured_uv_cache_root(bases);
+    dir == configured || same_file::is_same_file(dir, &configured).unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_uv_cache_root(_bases: &rules::BaseDirs, _dir: &Path) -> bool {
+    false
+}
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -241,6 +257,9 @@ pub(crate) fn clean_cache_contents_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
+    if is_uv_cache_root(bases, dir) {
+        return Err("uv-cache-native-owner-required".into());
+    }
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
@@ -255,15 +274,6 @@ pub(crate) fn clean_cache_contents_inner(
     Ok(expected
         .into_iter()
         .map(|target| {
-            // uv tool/MCP venvs live in `archive-v0`; an idle one looks inactive but launchd MCP
-            // services start from it, so it is never a cache target.
-            if Path::new(&target.path).file_name() == Some(UV_TOOL_ARCHIVE_DIR.as_ref()) {
-                return CleanResult {
-                    path: target.path,
-                    ok: false,
-                    error: "cache-target-protected-uv-tool-archive".into(),
-                };
-            }
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
             // reclaiming unrelated, inactive cache archives in the same catalog root.
             let recursive = std::fs::symlink_metadata(&target.path)
@@ -353,6 +363,9 @@ pub fn clean_regenerable_caches_headless(
 #[tauri::command]
 pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    if is_uv_cache_root(&bases, Path::new(&dir)) {
+        return Err("uv-cache-native-owner-required".into());
+    }
     if !rules::is_catalog_path(&bases, Path::new(&dir)) {
         return Err("cache-root-not-current-or-safe".into());
     }
@@ -424,22 +437,19 @@ mod tests {
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn cleanup_never_trashes_uv_tool_archive() {
+    fn uv_cache_root_requires_native_owner() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
-        let archive = bases.temp.join(UV_TOOL_ARCHIVE_DIR);
-        fs::create_dir_all(archive.join("mcp-venv")).unwrap();
+        let uv_cache = configured_uv_cache_root(&bases);
         let journal = tmp.path().join("journal.jsonl");
-        let targets = rules::cache_targets(&bases.temp).unwrap();
 
-        let results =
-            clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1).unwrap();
+        let error = clean_cache_contents_inner(&bases, &uv_cache, &[], &journal, 1)
+            .err()
+            .expect("generic Trash cleanup must not own the uv cache");
 
-        assert_eq!(results.len(), 1);
-        assert!(!results[0].ok);
-        assert_eq!(results[0].error, "cache-target-protected-uv-tool-archive");
-        assert!(archive.join("mcp-venv").is_dir());
+        assert_eq!(error, "uv-cache-native-owner-required");
     }
 
     #[test]
