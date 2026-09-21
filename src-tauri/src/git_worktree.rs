@@ -2598,6 +2598,16 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         ));
         blockers.sort();
         blockers.dedup();
+        // Ignored artifacts are invisible to the ordinary cleanliness contract but still destroy
+        // local generated state on worktree removal. Classify them into core blockers before
+        // disposition and entry fingerprints so removal authority cannot form without this evidence.
+        if blockers.is_empty() && path_valid && !raw.bare {
+            match ignored_artifacts_present(canonical_path, options.command_timeout_ms) {
+                Ok(false) => {}
+                Ok(true) => blockers.push("ignored-artifacts-present".into()),
+                Err(_) => blockers.push("ignored-artifact-evidence-incomplete".into()),
+            }
+        }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -2695,6 +2705,75 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         issues,
         filesystem_mutation_executed: false,
     })
+}
+
+/// Observe ignored paths separately from the tracked/untracked cleanliness contract.
+///
+/// Kept adjacent to the core audit so contracts can pin ignored-artifact authority here rather than
+/// in the public facade. Non-ignored porcelain fields mean the worktree drifted after the clean
+/// status observation, so evidence fails closed instead of reclassifying optimistically.
+fn ignored_artifacts_present(path: &Path, timeout_ms: u64) -> Result<bool, String> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("status"),
+            OsString::from("--porcelain=v1"),
+            OsString::from("-z"),
+            OsString::from("--ignored=matching"),
+            OsString::from("--untracked-files=all"),
+            OsString::from("--ignore-submodules=none"),
+        ],
+        timeout_ms,
+        "git-ignored-status",
+    )?;
+    if result.status_code != Some(0) {
+        return Err("git-ignored-status-command-failed".into());
+    }
+
+    let mut ignored = false;
+    for field in result
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+    {
+        if field.starts_with(b"!! ") {
+            ignored = true;
+        } else {
+            return Err("git-ignored-status-drift".into());
+        }
+    }
+    Ok(ignored)
+}
+
+/// Execute-time recheck: remaining removal candidates must still be free of ignored artifacts.
+pub(crate) fn ensure_candidates_still_have_no_ignored_artifacts(
+    approved_report: &GitWorktreeAuditReport,
+    timeout_ms: u64,
+) -> Result<(), String> {
+    // Only remaining removal candidates must be free of ignored-artifact blockers. Preserved
+    // entries that already carry durable ignored-artifact evidence must not poison execution of
+    // an independent clean candidate in the same plan.
+    if approved_report.entries.iter().any(|entry| {
+        entry.disposition == GitWorktreeDisposition::RemovalCandidate
+            && entry.blockers.iter().any(|blocker| {
+                blocker == "ignored-artifacts-present"
+                    || blocker == "ignored-artifact-evidence-incomplete"
+            })
+    }) {
+        return Err("git-worktree-ignored-artifact-guarded-plan-not-executable".into());
+    }
+    for candidate in approved_report
+        .entries
+        .iter()
+        .filter(|entry| entry.disposition == GitWorktreeDisposition::RemovalCandidate)
+    {
+        match ignored_artifacts_present(Path::new(&candidate.path), timeout_ms) {
+            Ok(false) => {}
+            Ok(true) => return Err("git-worktree-ignored-artifact-drift".into()),
+            Err(_) => return Err("git-worktree-ignored-artifact-evidence-incomplete".into()),
+        }
+    }
+    Ok(())
 }
 
 pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublicSummary {
