@@ -7,9 +7,12 @@
 //! phrase remain authoritative.
 
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", test))]
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+#[cfg(target_os = "macos")]
 use std::fs::File;
+#[cfg(target_os = "macos")]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "macos", not(test)))]
@@ -117,6 +120,7 @@ pub struct OrphanCleanupResult {
     pub notices: Vec<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct Manifest {
     bytes: u64,
@@ -867,6 +871,7 @@ fn directory_candidate(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn digest_values(values: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"disksage-orphan-v1\0");
