@@ -41,11 +41,9 @@ fn init_repository(path: &std::path::Path) {
 }
 
 #[test]
-fn pull_request_membership_report_matches_shared_v4_contract() {
-    let contract: serde_json::Value = serde_json::from_str(include_str!(
-        "../../contracts/git-worktree-audit-v4.json"
-    ))
-    .unwrap();
+fn pull_request_membership_report_matches_shared_v5_contract() {
+    let contract: serde_json::Value =
+        serde_json::from_str(include_str!("../../contracts/git-worktree-audit-v5.json")).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repository");
     init_repository(&repository);
@@ -67,6 +65,14 @@ fn pull_request_membership_report_matches_shared_v4_contract() {
         contract["schema_kind"].as_str().unwrap()
     );
     assert_eq!(report.version, contract["version"].as_u64().unwrap() as u32);
+    assert_eq!(
+        report.path_fingerprint_algorithm,
+        contract["path_fingerprint_algorithm"].as_str().unwrap()
+    );
+    assert_eq!(
+        report.entry_fingerprint_algorithm,
+        contract["entry_fingerprint_algorithm"].as_str().unwrap()
+    );
 
     let serialized_entry = serde_json::to_value(report.entries.first().expect("audit entry"))
         .expect("serialize audit entry");

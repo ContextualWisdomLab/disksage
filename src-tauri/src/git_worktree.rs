@@ -25,7 +25,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v4";
+use unicode_normalization::UnicodeNormalization;
+
+pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v5";
+pub const GIT_WORKTREE_AUDIT_VERSION: u32 = 5;
+const GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM: &str = "disksage.git-worktree-path/blake3-v2";
+const GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM: &str = "disksage.git-worktree-entry/blake3-v3";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
@@ -155,6 +160,8 @@ pub struct GitWorktreeReferenceBinding {
 pub struct GitWorktreeAuditReport {
     pub schema_kind: String,
     pub version: u32,
+    pub path_fingerprint_algorithm: String,
+    pub entry_fingerprint_algorithm: String,
     pub repository_root: String,
     pub common_dir: String,
     pub generated_at_ms: u64,
@@ -181,6 +188,8 @@ pub struct GitWorktreeAuditReport {
 pub struct GitWorktreeAuditPublicSummary {
     pub schema_kind: String,
     pub version: u32,
+    pub path_fingerprint_algorithm: String,
+    pub entry_fingerprint_algorithm: String,
     pub generated_at_ms: u64,
     pub stale_open_pull_request_cutoff_ms: Option<u64>,
     pub retention_reference_count: usize,
@@ -1740,11 +1749,25 @@ fn hash_field(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(value.as_bytes());
 }
 
+/// Stable path component for fingerprinting. Filesystem object identity wins when the path resolves;
+/// canonical text is the bounded compatibility fallback when an object identity cannot be acquired,
+/// and NFC UTF-8 is reserved for non-materialized File Provider spellings (see `cloud.rs`).
+fn path_identity_for_fingerprint(path: &str) -> String {
+    let path_buf = Path::new(path);
+    if let Ok(object_id) = crate::safety::filesystem_object_id(path_buf) {
+        return format!("fs-object:{object_id}");
+    }
+    if let Ok(canonical) = fs::canonicalize(path_buf) {
+        return format!("canonical:{}", canonical.to_string_lossy());
+    }
+    path.nfc().collect::<String>()
+}
+
 fn path_fingerprint(common_dir: &str, path: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.git-worktree-path\0v1\0");
-    hash_field(&mut hasher, common_dir);
-    hash_field(&mut hasher, path);
+    hasher.update(b"disksage.git-worktree-path\0v2\0");
+    hash_field(&mut hasher, &path_identity_for_fingerprint(common_dir));
+    hash_field(&mut hasher, &path_identity_for_fingerprint(path));
     hasher.finalize().to_hex().to_string()
 }
 
@@ -1835,15 +1858,16 @@ fn removal_authority_fingerprint_with_open(
     hasher.finalize().to_hex().to_string()
 }
 
-fn entry_fingerprint(
+pub(crate) fn entry_fingerprint(
     common_dir: &str,
     reference_set_fingerprint: &str,
     entry: &GitWorktreeAuditEntry,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage.git-worktree-entry\0v2\0");
+    hasher.update(b"disksage.git-worktree-entry\0v3\0");
     hash_field(&mut hasher, common_dir);
     hash_field(&mut hasher, &entry.path);
+    hash_field(&mut hasher, &entry.path_fingerprint);
     hash_field(&mut hasher, &entry.head);
     hash_field(&mut hasher, entry.branch.as_deref().unwrap_or(""));
     hash_field(&mut hasher, reference_set_fingerprint);
@@ -2574,6 +2598,16 @@ pub fn audit_git_worktrees_with_pull_request_membership(
         ));
         blockers.sort();
         blockers.dedup();
+        // Ignored artifacts are invisible to the ordinary cleanliness contract but still destroy
+        // local generated state on worktree removal. Classify them into core blockers before
+        // disposition and entry fingerprints so removal authority cannot form without this evidence.
+        if blockers.is_empty() && path_valid && !raw.bare {
+            match ignored_artifacts_present(canonical_path, options.command_timeout_ms) {
+                Ok(false) => {}
+                Ok(true) => blockers.push("ignored-artifacts-present".into()),
+                Err(_) => blockers.push("ignored-artifact-evidence-incomplete".into()),
+            }
+        }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -2648,7 +2682,9 @@ pub fn audit_git_worktrees_with_pull_request_membership(
 
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-        version: 4,
+        version: GIT_WORKTREE_AUDIT_VERSION,
+        path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+        entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
         repository_root: repository_root.to_string_lossy().into_owned(),
         common_dir: common_dir_string,
         generated_at_ms,
@@ -2671,6 +2707,44 @@ pub fn audit_git_worktrees_with_pull_request_membership(
     })
 }
 
+/// Observe ignored paths separately from the tracked/untracked cleanliness contract.
+///
+/// Kept adjacent to the core audit so contracts can pin ignored-artifact authority here rather than
+/// in the public facade. Non-ignored porcelain fields mean the worktree drifted after the clean
+/// status observation, so evidence fails closed instead of reclassifying optimistically.
+fn ignored_artifacts_present(path: &Path, timeout_ms: u64) -> Result<bool, String> {
+    let result = run_git(
+        path,
+        &[
+            OsString::from("status"),
+            OsString::from("--porcelain=v1"),
+            OsString::from("-z"),
+            OsString::from("--ignored=matching"),
+            OsString::from("--untracked-files=all"),
+            OsString::from("--ignore-submodules=none"),
+        ],
+        timeout_ms,
+        "git-ignored-status",
+    )?;
+    if result.status_code != Some(0) {
+        return Err("git-ignored-status-command-failed".into());
+    }
+
+    let mut ignored = false;
+    for field in result
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+    {
+        if field.starts_with(b"!! ") {
+            ignored = true;
+        } else {
+            return Err("git-ignored-status-drift".into());
+        }
+    }
+    Ok(ignored)
+}
+
 pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublicSummary {
     let mut protection_reason_codes: Vec<String> = report
         .entries
@@ -2680,6 +2754,8 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             matches!(
                 code.as_str(),
                 crate::reclaim_protection::REASON_ORCA_TERMINAL_LIVE
+                    | crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING
+                    | crate::reclaim_protection::REASON_INCOMPLETE_DISPATCH
                     | crate::reclaim_protection::REASON_PROCESS_CWD_INSIDE
                     | crate::reclaim_protection::REASON_ORCHESTRATION_LEAD
                     | crate::reclaim_protection::REASON_LISTED_IN_LEAD_QUEUE
@@ -2695,14 +2771,43 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
                     | crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
                     | crate::reclaim_protection::REASON_EDITABLE_INSTALL
                     | crate::reclaim_protection::REASON_BUILD_TOOL_ACTIVE
+                    | "ignored-artifacts-present"
+                    | "ignored-artifact-evidence-incomplete"
             )
         })
         .collect();
     protection_reason_codes.sort();
     protection_reason_codes.dedup();
+    let mut notices = vec![
+        "read-only-audit".into(),
+        "no-fetch-performed".into(),
+        "retention-references-bound-to-resolved-oids".into(),
+        "retention-reachable-commit-set-bounded".into(),
+        "exact-retained-tips-preserved".into(),
+        "only-strict-retained-tip-ancestors-can-be-candidates".into(),
+        "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
+        "approval-phrase-is-not-execution".into(),
+        "no-worktree-prune-remove-or-branch-delete".into(),
+        "no-user-file-or-cloud-provider-mutation".into(),
+        "recent-write-window-requires-explicit-caller-value".into(),
+    ];
+    // Cleanup guidance is buyer notice for the same entry only: completed PR commit + sleeping
+    // Orca ownership. Either fact alone must not emit reclaim guidance.
+    if report.entries.iter().any(|entry| {
+        entry.completed_pull_request_commit
+            && entry.blockers.iter().any(|blocker| {
+                blocker == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING
+            })
+    }) {
+        notices.push(
+            "sleep-session-requires-result-preserve-then-cleanup-then-reaudit".into(),
+        );
+    }
     GitWorktreeAuditPublicSummary {
         schema_kind: report.schema_kind.clone(),
         version: report.version,
+        path_fingerprint_algorithm: report.path_fingerprint_algorithm.clone(),
+        entry_fingerprint_algorithm: report.entry_fingerprint_algorithm.clone(),
         generated_at_ms: report.generated_at_ms,
         stale_open_pull_request_cutoff_ms: report.stale_open_pull_request_cutoff_ms,
         retention_reference_count: report.retention_references.len(),
@@ -2726,20 +2831,10 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
             "filename-date-not-used".into(),
             "filesystem-created-or-modified-time-not-used-for-removal".into(),
             "orca-reclaim-protection-reason-codes".into(),
+            // Ownership evidence field retained in the redacted public surface contract.
+            "completed_pull_request_commit".into(),
         ],
-        notices: vec![
-            "read-only-audit".into(),
-            "no-fetch-performed".into(),
-            "retention-references-bound-to-resolved-oids".into(),
-            "retention-reachable-commit-set-bounded".into(),
-            "exact-retained-tips-preserved".into(),
-            "only-strict-retained-tip-ancestors-can-be-candidates".into(),
-            "allocated-bytes-is-filesystem-block-sum-upper-bound".into(),
-            "approval-phrase-is-not-execution".into(),
-            "no-worktree-prune-remove-or-branch-delete".into(),
-            "no-user-file-or-cloud-provider-mutation".into(),
-            "recent-write-window-requires-explicit-caller-value".into(),
-        ],
+        notices,
         protection_reason_codes,
     }
 }
@@ -2748,7 +2843,7 @@ fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn exact_removal_approval_phrase(
+pub(crate) fn exact_removal_approval_phrase(
     candidate_count: usize,
     allocated_bytes: u64,
     plan_fingerprint: &str,
@@ -2758,7 +2853,9 @@ fn exact_removal_approval_phrase(
 
 fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
     if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
-        || report.version != 4
+        || report.version != GIT_WORKTREE_AUDIT_VERSION
+        || report.path_fingerprint_algorithm != GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM
+        || report.entry_fingerprint_algorithm != GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM
         || report.filesystem_mutation_executed
         || !Path::new(&report.repository_root).is_absolute()
         || !Path::new(&report.common_dir).is_absolute()
@@ -3611,7 +3708,9 @@ mod tests {
             removal_plan_fingerprint(&common_dir, &authority_fingerprint, &entries);
         GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 4,
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
             repository_root: "/tmp/repository".into(),
             common_dir,
             generated_at_ms: 10,
@@ -3632,6 +3731,23 @@ mod tests {
             issues: Vec::new(),
             filesystem_mutation_executed: false,
         }
+    }
+
+    #[test]
+    fn removal_rejects_mismatched_fingerprint_algorithms() {
+        let mut report = executable_report();
+        report.path_fingerprint_algorithm = "disksage.git-worktree-path/blake3-v1".into();
+        assert_eq!(
+            validate_audit_for_removal(&report).unwrap_err(),
+            "git-worktree-removal-audit-integrity-invalid"
+        );
+
+        let mut report = executable_report();
+        report.entry_fingerprint_algorithm = "disksage.git-worktree-entry/blake3-v2".into();
+        assert_eq!(
+            validate_audit_for_removal(&report).unwrap_err(),
+            "git-worktree-removal-audit-integrity-invalid"
+        );
     }
 
     #[cfg(all(unix, not(coverage)))]
@@ -3815,6 +3931,100 @@ mod tests {
     }
 
     #[test]
+    fn path_fingerprint_matches_nfc_and_nfd_hangul_paths() {
+        let common_dir_nfc =
+            "/Users/test/Library/CloudStorage/GoogleDrive-user@example.com/내 드라이브/.git";
+        let path_nfc = "/Users/test/Library/CloudStorage/GoogleDrive-user@example.com/내 드라이브/worktrees/clean-publication-snapshot";
+        let common_dir_nfd: String = common_dir_nfc.nfd().collect();
+        let path_nfd: String = path_nfc.nfd().collect();
+        assert_ne!(common_dir_nfc, common_dir_nfd.as_str());
+        assert_ne!(path_nfc, path_nfd.as_str());
+        assert_eq!(
+            path_fingerprint(common_dir_nfc, path_nfc),
+            path_fingerprint(&common_dir_nfd, &path_nfd),
+        );
+    }
+
+    #[test]
+    fn path_fingerprint_distinct_existing_directories_do_not_collide() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        let dir_a = temp.path().join("worktree-alpha");
+        let dir_b = temp.path().join("worktree-beta");
+        fs::create_dir_all(&common).unwrap();
+        fs::create_dir(&dir_a).unwrap();
+        fs::create_dir(&dir_b).unwrap();
+        assert_ne!(
+            path_fingerprint(
+                common.to_str().unwrap(),
+                dir_a.to_str().unwrap(),
+            ),
+            path_fingerprint(
+                common.to_str().unwrap(),
+                dir_b.to_str().unwrap(),
+            ),
+        );
+    }
+
+    #[test]
+    fn path_fingerprint_nfc_nfd_distinct_directory_entries_do_not_collide() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        fs::create_dir_all(&common).unwrap();
+        let nfc_name = "가";
+        let nfd_name: String = nfc_name.nfd().collect();
+        assert_ne!(nfc_name, nfd_name.as_str());
+        let dir_nfc = temp.path().join(nfc_name);
+        fs::create_dir(&dir_nfc).unwrap();
+        let dir_nfd = temp.path().join(&nfd_name);
+        match fs::create_dir(&dir_nfd) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let meta_nfc = fs::symlink_metadata(&dir_nfc).unwrap();
+                    let meta_nfd = fs::symlink_metadata(&dir_nfd).unwrap();
+                    assert_ne!(
+                        (meta_nfc.dev(), meta_nfc.ino()),
+                        (meta_nfd.dev(), meta_nfd.ino()),
+                        "reproduction requires distinct directory entries"
+                    );
+                }
+                assert_ne!(
+                    path_fingerprint(common.to_str().unwrap(), dir_nfc.to_str().unwrap()),
+                    path_fingerprint(common.to_str().unwrap(), dir_nfd.to_str().unwrap()),
+                    "distinct NFC/NFD directory entries must not share a path fingerprint",
+                );
+            }
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::AlreadyExists,
+                    "APFS/HFS+ cannot host both NFC and NFD spellings as separate entries; \
+                     collision reproduction is impossible on this filesystem",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn path_fingerprint_same_existing_entry_matches_nfc_and_nfd_spellings() {
+        let temp = tempfile::tempdir().unwrap();
+        let common = temp.path().join(".git");
+        fs::create_dir_all(&common).unwrap();
+        let dir = temp.path().join("가");
+        fs::create_dir(&dir).unwrap();
+        let dir_nfd: String = dir.to_string_lossy().nfd().collect();
+        if !Path::new(&dir_nfd).exists() {
+            return;
+        }
+        assert_eq!(
+            path_fingerprint(common.to_str().unwrap(), dir.to_str().unwrap()),
+            path_fingerprint(common.to_str().unwrap(), &dir_nfd),
+        );
+    }
+
+    #[test]
     fn parses_nul_porcelain_and_preserves_lock_and_prunable_reasons() {
         let encoded = format!(
             "worktree /tmp/main\0HEAD {}\0branch refs/heads/develop\0\0worktree /tmp/locked\0HEAD {}\0detached\0locked agent\0\0worktree /tmp/gone\0HEAD {}\0prunable missing\0\0",
@@ -3896,6 +4106,45 @@ mod tests {
             disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
             GitWorktreeDisposition::EvidenceGap
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_preserves_lock_and_prunable_reasons() {
+        let temp = tempfile::tempdir().unwrap();
+        let common_dir = temp.path().join(".git");
+        let worktree = temp.path().join("linked");
+        fs::create_dir_all(&worktree).unwrap();
+        let admin = common_dir.join("worktrees").join("linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}/.git\n", worktree.display()),
+        )
+        .unwrap();
+        fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
+        fs::write(admin.join("locked"), "owned by maintenance\n").unwrap();
+        fs::write(
+            admin.join("prunable"),
+            "gitdir file points to missing location\n",
+        )
+        .unwrap();
+
+        let (entries, _) =
+            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].locked);
+        assert_eq!(
+            entries[0].lock_reason.as_deref(),
+            Some("owned by maintenance")
+        );
+        assert!(entries[0].prunable);
+        assert_eq!(
+            entries[0].prunable_reason.as_deref(),
+            Some("gitdir file points to missing location")
+        );
+        assert!(entries[0].fallback_evidence_incomplete);
     }
 
     #[cfg(unix)]
@@ -4088,7 +4337,9 @@ mod tests {
     fn public_summary_redacts_local_identity_and_denies_execution_claims() {
         let report = GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 4,
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
             repository_root: "/private/repo".into(),
             common_dir: "/private/repo/.git".into(),
             generated_at_ms: 1,
@@ -4117,6 +4368,95 @@ mod tests {
         assert!(encoded.contains("\"local_paths_redacted\":true"));
         assert!(encoded.contains("\"filesystem_mutation_executed\":false"));
         assert!(encoded.contains("filename-date-not-used"));
+    }
+
+    #[test]
+    fn public_summary_warns_before_reclaiming_completed_sleeping_session() {
+        let report = GitWorktreeAuditReport {
+            schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
+            version: GIT_WORKTREE_AUDIT_VERSION,
+            path_fingerprint_algorithm: GIT_WORKTREE_PATH_FINGERPRINT_ALGORITHM.into(),
+            entry_fingerprint_algorithm: GIT_WORKTREE_ENTRY_FINGERPRINT_ALGORITHM.into(),
+            repository_root: "/private/repo".into(),
+            common_dir: "/private/repo/.git".into(),
+            generated_at_ms: 1,
+            stale_open_pull_request_cutoff_ms: None,
+            retention_references: vec![GitWorktreeReferenceBinding {
+                reference_ref: "origin/develop".into(),
+                reference_oid: oid('a'),
+            }],
+            retention_reference_set_fingerprint: "r".repeat(64),
+            removal_authority_fingerprint: "a".repeat(64),
+            retention_reachable_commit_count: 1,
+            worktree_count: 1,
+            removal_candidate_count: 0,
+            removal_candidate_allocated_bytes: 0,
+            preserved_count: 1,
+            evidence_gap_count: 0,
+            evidence_complete: true,
+            removal_plan_fingerprint: "f".repeat(64),
+            exact_approval_phrase: None,
+            entries: vec![GitWorktreeAuditEntry {
+                path: "/private/repo/.git/worktrees/sleeping".into(),
+                path_fingerprint: "p".repeat(64),
+                head: oid('b'),
+                branch: None,
+                detached: true,
+                bare: false,
+                primary: false,
+                audit_origin: false,
+                locked: false,
+                lock_reason: None,
+                prunable: false,
+                prunable_reason: None,
+                status_clean: Some(true),
+                status_entry_count: Some(0),
+                contained_in_reference: Some(true),
+                closed_pull_request_head: false,
+                completed_pull_request_commit: true,
+                open_pull_request_commit: false,
+                stale_open_pull_request_head: false,
+                head_is_retained_tip: false,
+                actor_cwd_inside: Some(false),
+                size: GitWorktreeSizeEvidence {
+                    method: "test".into(),
+                    evidence_complete: true,
+                    allocated_bytes: 0,
+                    logical_bytes: 0,
+                    visited_entries: 0,
+                    error: None,
+                },
+                active_use: GitWorktreeActiveUseEvidence {
+                    method: "test".into(),
+                    assessed: true,
+                    evidence_complete: true,
+                    active: false,
+                    observed_pids: Vec::new(),
+                    results_truncated: true,
+                    error: None,
+                },
+                disposition: GitWorktreeDisposition::Preserve,
+                blockers: vec![crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING.to_string()],
+                entry_fingerprint: "e".repeat(64),
+            }],
+            issues: Vec::new(),
+            filesystem_mutation_executed: false,
+        };
+        let summary = public_summary(&report);
+        assert!(summary.notices.iter().any(|notice| {
+            notice == "sleep-session-requires-result-preserve-then-cleanup-then-reaudit"
+        }));
+        assert!(summary
+            .protection_reason_codes
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_ORCA_SESSION_SLEEPING));
+        assert!(summary
+            .metadata_semantics
+            .iter()
+            .any(|item| item == "completed_pull_request_commit"));
+        let encoded = serde_json::to_string(&summary).unwrap();
+        assert!(!encoded.contains("/private/repo"));
+        assert!(encoded.contains("sleep-session-requires-result-preserve-then-cleanup-then-reaudit"));
     }
 
     #[test]

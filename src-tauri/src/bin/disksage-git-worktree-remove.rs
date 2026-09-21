@@ -13,7 +13,8 @@ const USAGE: &str = "usage: disksage-git-worktree-remove \
 [--command-timeout-ms N] [--size-scan-timeout-ms N] \
 [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] \
 [--enable-orca-protections --recent-write-window-secs N] \
-[--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] \
+[--orca-terminal-json ABSOLUTE_JSON] [--orca-worktree-json ABSOLUTE_JSON] \
+[--incomplete-dispatch-worktree-path ABSOLUTE_PATH] [--open-pr-head-oid OID] \
 [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] \
 [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash] \
 --approved-removal-plan-fingerprint HEX64 \
@@ -77,6 +78,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut seen_recent_write_window = false;
     let mut seen_orca_terminal_json = false;
     let mut orca_terminal_json = None;
+    let mut seen_orca_worktree_json = false;
+    let mut orca_worktree_json = None;
     let mut lead_queue_files = Vec::new();
     let mut assess_filesystem_protections = false;
     let mut assess_unpushed_commits = false;
@@ -171,6 +174,22 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 orca_terminal_json = Some(path);
             }
             Some("--orca-terminal-json") => return Err("duplicate option".into()),
+            Some("--orca-worktree-json") if !seen_orca_worktree_json => {
+                seen_orca_worktree_json = true;
+                let path = next_path(&mut args, "--orca-worktree-json")?;
+                if !path.is_absolute() {
+                    return Err("--orca-worktree-json must be absolute".into());
+                }
+                orca_worktree_json = Some(path);
+            }
+            Some("--orca-worktree-json") => return Err("duplicate option".into()),
+            Some("--incomplete-dispatch-worktree-path") => {
+                let path = next_path(&mut args, "--incomplete-dispatch-worktree-path")?;
+                if !path.is_absolute() {
+                    return Err("--incomplete-dispatch-worktree-path must be absolute".into());
+                }
+                protection.incomplete_dispatch_worktree_paths.push(path);
+            }
             Some("--open-pr-head-oid") => protection
                 .open_pr_head_oids
                 .push(next_utf8(&mut args, "--open-pr-head-oid")?),
@@ -253,6 +272,10 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
         let bytes = std::fs::read(&path).map_err(|_| "orca-terminal-json-read-failed".to_string())?;
         protection.orca_live_worktree_paths =
             disksage_lib::reclaim_protection::parse_orca_terminal_worktree_paths(&bytes)?;
+    }
+    if let Some(path) = orca_worktree_json {
+        protection.orca_sleep_worktree_paths =
+            disksage_lib::reclaim_protection::parse_orca_sleep_worktree_paths_file(&path)?;
     }
     for path in lead_queue_files {
         let text = std::fs::read_to_string(&path)

@@ -4,9 +4,30 @@
 //! keep plan-drift rejection separate from argument-validation failures so a Windows CI failure
 //! identifies the causal contract without weakening either assertion set.
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct PathRestore(OsString);
+
+impl Drop for PathRestore {
+    fn drop(&mut self) {
+        std::env::set_var("PATH", &self.0);
+    }
+}
+
+fn prepend_path(path: &Path) -> PathRestore {
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut updated = OsString::from(path.as_os_str());
+    updated.push(";");
+    updated.push(&original);
+    std::env::set_var("PATH", updated);
+    PathRestore(original)
+}
 
 fn git(cwd: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -25,7 +46,7 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
-fn real_linked_worktree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+fn real_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().expect("temporary fixture root");
     let repository = temp.path().join("repository");
     let secondary = temp.path().join("secondary");
@@ -43,6 +64,86 @@ fn real_linked_worktree() -> (tempfile::TempDir, std::path::PathBuf, std::path::
         &["worktree", "add", "-q", secondary.to_str().unwrap(), "stale"],
     );
     (temp, repository, secondary)
+}
+
+#[cfg(windows)]
+fn copy_regular_directory(source: &Path, destination: &Path) {
+    fs::create_dir(destination).expect("replacement directory must exist before the race");
+    for entry in fs::read_dir(source).expect("source worktree must remain readable") {
+        let entry = entry.expect("worktree entry must be readable");
+        let file_type = entry.file_type().expect("worktree entry type must be readable");
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_regular_directory(&entry.path(), &target);
+        } else {
+            assert!(file_type.is_file(), "fixture refuses symlink or special entries");
+            fs::copy(entry.path(), target).expect("fixture copy must preserve worktree bytes");
+        }
+    }
+}
+
+#[cfg(windows)]
+fn real_git_executable() -> PathBuf {
+    let output = Command::new("where.exe")
+        .arg("git.exe")
+        .output()
+        .expect("where.exe must resolve the real Git executable before PATH interception");
+    assert!(
+        output.status.success(),
+        "where.exe git.exe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .expect("Git for Windows executable path")
+}
+
+#[cfg(windows)]
+fn compile_remove_race_git_wrapper(
+    tools: &Path,
+    real_git: &Path,
+    target: &Path,
+    replacement: &Path,
+) -> PathBuf {
+    fs::create_dir_all(tools).expect("intercepting Git directory");
+    let source_path = tools.join("git_race_wrapper.rs");
+    let executable = tools.join("git.exe");
+    let real_git_literal = format!("{:?}", real_git.to_string_lossy());
+    let target_literal = format!("{:?}", target.to_string_lossy());
+    let replacement_literal = format!("{:?}", replacement.to_string_lossy());
+    let source = format!(
+        r#"use std::{{env, fs, path::Path, process::{{Command, exit}}}};
+fn main() {{
+    let args = env::args_os().skip(1).collect::<Vec<_>>();
+    let is_remove = args.get(0).and_then(|value| value.to_str()) == Some("worktree")
+        && args.get(1).and_then(|value| value.to_str()) == Some("remove")
+        && args.get(2).and_then(|value| value.to_str()) == Some("--")
+        && args.get(3).map(Path::new) == Some(Path::new({target_literal}));
+    if is_remove {{
+        if fs::remove_dir_all({target_literal}).is_err() {{ exit(86); }}
+        if fs::rename({replacement_literal}, {target_literal}).is_err() {{ exit(87); }}
+    }}
+    let status = Command::new({real_git_literal}).args(&args).status().expect("real git must start");
+    exit(status.code().unwrap_or(1));
+}}
+"#
+    );
+    fs::write(&source_path, source).expect("write deterministic Git interceptor");
+    let output = Command::new("rustc")
+        .args(["--edition=2021", "-O", "-o"])
+        .arg(&executable)
+        .arg(&source_path)
+        .output()
+        .expect("rustc must compile deterministic Git interceptor");
+    assert!(
+        output.status.success(),
+        "Git interceptor compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    executable
 }
 
 #[test]
@@ -195,5 +296,80 @@ fn orca_enabled_remove_requires_explicit_recent_write_window_before_execution() 
         "argument validation must fail before creating approval/result records; status={:?}; binary={remove_binary:?}; stdout={stdout:?}; stderr={stderr:?}; record_root_exists={}",
         no_window.status,
         record_root.exists()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn replacement_after_final_validation_cannot_be_removed_by_path_race() {
+    let _guard = TEST_ENV_LOCK.lock().expect("test environment lock");
+    let (temp, repository, secondary) = real_linked_worktree();
+    let replacement = temp.path().join("replacement");
+    copy_regular_directory(&secondary, &replacement);
+
+    let audit_binary = env!("CARGO_BIN_EXE_disksage-git-worktree-audit");
+    let baseline = Command::new(audit_binary)
+        .arg("--repository-root")
+        .arg(&repository)
+        .arg("--reference-ref")
+        .arg("main")
+        .output()
+        .expect("shipped audit CLI should produce the reviewed removal plan");
+    assert!(
+        baseline.status.success(),
+        "baseline audit must be executable: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let baseline_summary: serde_json::Value =
+        serde_json::from_slice(&baseline.stdout).expect("baseline audit public JSON");
+    assert_eq!(baseline_summary["removal_candidate_count"], 1, "{baseline_summary:#}");
+    let plan_fingerprint = baseline_summary["removal_plan_fingerprint"]
+        .as_str()
+        .expect("reviewed plan fingerprint");
+    let approval_phrase = baseline_summary["exact_approval_phrase"]
+        .as_str()
+        .expect("reviewed exact approval phrase");
+
+    let real_git = real_git_executable();
+    let tools = temp.path().join("intercepting-git");
+    let wrapper = compile_remove_race_git_wrapper(&tools, &real_git, &secondary, &replacement);
+    assert!(wrapper.is_file(), "deterministic remove-boundary interceptor must exist");
+    let _path_restore = prepend_path(&tools);
+
+    let record_root = temp.path().join("records-race");
+    let remove_binary = env!("CARGO_BIN_EXE_disksage-git-worktree-remove");
+    let removal = Command::new(remove_binary)
+        .arg("--repository-root")
+        .arg(&repository)
+        .arg("--reference-ref")
+        .arg("main")
+        .arg("--approved-removal-plan-fingerprint")
+        .arg(plan_fingerprint)
+        .arg("--confirmation-exact-approval-phrase")
+        .arg(approval_phrase)
+        .arg("--reviewed-by")
+        .arg("human:disksage-race-test")
+        .arg("--rationale")
+        .arg("Reject a different filesystem object substituted after final validation.")
+        .arg("--record-root")
+        .arg(&record_root)
+        .output()
+        .expect("shipped remove CLI should start through the intercepting Git boundary");
+
+    if removal.status.success() {
+        let output: serde_json::Value =
+            serde_json::from_slice(&removal.stdout).expect("successful remove CLI output must be JSON");
+        assert_eq!(
+            output["result"]["removed_count"],
+            0,
+            "a post-validation replacement must never count as safely removed: {output:#}"
+        );
+    }
+    assert!(
+        secondary.exists() || replacement.exists(),
+        "the replacement object must survive a race at the Git removal boundary; status={:?}; stdout={}; stderr={}",
+        removal.status,
+        String::from_utf8_lossy(&removal.stdout),
+        String::from_utf8_lossy(&removal.stderr)
     );
 }
