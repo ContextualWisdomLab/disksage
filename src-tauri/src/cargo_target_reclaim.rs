@@ -92,7 +92,6 @@ fn executable_file(path: &Path) -> bool {
         return false;
     };
     if !meta.is_file() || meta.file_type().is_symlink() {
-        // Allow normal files; also accept symlink-to-file via canonicalize follow.
         if meta.file_type().is_symlink() {
             let Ok(real) = std::fs::canonicalize(path) else {
                 return false;
@@ -174,7 +173,6 @@ fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<
     }
     let project_canon = std::fs::canonicalize(project_dir)
         .map_err(|e| format!("cargo-target-project-canonicalize-failed:{e}"))?;
-    // `Path::exists` reports false for dangling links, so inspect the final component first.
     let target_canon = match std::fs::symlink_metadata(target_dir) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("cargo-target-dir-symlink".into());
@@ -227,7 +225,6 @@ fn read_bounded(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 fn terminate_child(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
-        // The child creates a private process group, so descendants cannot outlive timeout.
         let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
     }
     let _ = child.kill();
@@ -439,17 +436,6 @@ fn detach_verified_target_dir(
     Err("cargo-target-identity-bound-cleanup-unsupported".into())
 }
 
-/// Classify `lsof` completion for a cargo target tree.
-///
-/// macOS `lsof +D` may return exit 1 **with** holder lines in stdout (see
-/// independent review active-holder-reproduction.json). Any non-empty stdout is
-/// therefore treated as active holders regardless of exit 0/1.
-///
-/// Any non-empty stderr is incomplete inspection evidence and fails closed,
-/// including exit 0 + empty stdout + warning stderr (report-a118 warning_zero).
-///
-/// Only exit 0 or 1 with **both** stdout and stderr empty is an admissible
-/// empty no-match. Exit 127 and every other non-zero outcome fail closed.
 pub(crate) fn classify_target_lsof_result(
     exit_code: i32,
     stdout: &str,
@@ -487,7 +473,6 @@ fn ensure_target_owned_by_self(path: &Path) -> Result<(), String> {
 
 #[cfg(not(unix))]
 fn ensure_target_owned_by_self(_path: &Path) -> Result<(), String> {
-    // Non-Unix platforms lack a portable owner probe here; refuse mutation.
     Err("cargo-target-owner-probe-unsupported".into())
 }
 
@@ -521,7 +506,6 @@ fn run_target_lsof(
     })
 }
 
-/// Default production probe: ownership + fail-closed `lsof +D` on the measured target.
 pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), String> {
     if !target_dir.exists() {
         return Ok(());
@@ -535,16 +519,6 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
     classify_target_lsof_result(code, &stdout, &stderr)
 }
 
-/// Run `cargo clean` for a project directory that owns a `Cargo.toml`.
-///
-/// Always passes `--target-dir <project>/target` so measurement and deletion match.
-///
-/// Fail-closed:
-/// - missing cargo executable ⇒ `Err`
-/// - spawn failure / command-not-found ⇒ `Err`
-/// - active holders / lsof probe failure / owner mismatch ⇒ `Err` (no clean)
-/// - non-zero exit ⇒ `Err` (no success reclaim)
-/// - zero size delta with exit 0 ⇒ `Ok` with `observed_reduction_bytes == 0` (not a reclaim success claim)
 pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, String> {
     ensure_absolute_project(project_dir)?;
     let cargo = resolve_cargo_executable()?;
@@ -552,7 +526,6 @@ pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, 
     clean_cargo_target_with(project_dir, &target_dir, &cargo)
 }
 
-/// Test/hook seam: run clean with an explicit cargo binary and measured target dir.
 pub(crate) fn clean_cargo_target_with(
     project_dir: &Path,
     target_dir: &Path,
@@ -561,7 +534,6 @@ pub(crate) fn clean_cargo_target_with(
     clean_cargo_target_with_active_use(project_dir, target_dir, cargo, ensure_target_safe_to_reclaim)
 }
 
-/// Same as [`clean_cargo_target_with`] but with an injectable active-use probe.
 pub(crate) fn clean_cargo_target_with_active_use(
     project_dir: &Path,
     target_dir: &Path,
@@ -597,10 +569,10 @@ pub(crate) fn clean_cargo_target_with_active_use(
         Err(error) => return Err(format!("cargo-target-dir-metadata-failed:{error}")),
     };
     active_use(&target_dir)?;
-    // Bind measurement and cleanup to the authorized object, not its replaceable pathname.
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
     let bytes_before = bounded_dir_size(&opened_target.handle_path)?;
     let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
+    active_use(&detached_target.clean_path)?;
 
     let mut command = Command::new(cargo);
     command
@@ -636,7 +608,6 @@ pub(crate) fn clean_cargo_target_with_active_use(
     })
 }
 
-/// Classify a finished clean for ledgers: only positive observed reduction counts as reclaim.
 pub fn ledger_reclaim_bytes(result: &CargoTargetCleanResult) -> u64 {
     if result.status_code != 0 || !result.executed {
         0
@@ -795,7 +766,6 @@ mod tests {
         fs::write(shared.join("SENTINEL"), "must-survive").unwrap();
         let target_canon = fs::canonicalize(&target).unwrap();
 
-        // Mock cargo: record argv and mutate only the identity-verified detached target.
         let fake = project.join("fake-cargo");
         let script = format!(
             "#!/bin/sh\n\
@@ -1026,9 +996,6 @@ rmdir \"$target_arg\"\n",
 
     #[test]
     fn lsof_exit_1_with_holder_stdout_is_active_holders_not_empty_match() {
-        // Mirrors independent review active-holder-reproduction.json:
-        // Python PID held a synthetic file; lsof exit=1, stderr empty, stdout listed
-        // the holder. Original cargo|rustc grep would miss it and WOULD_PROCEED.
         let sample = "COMMAND     PID       USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\n\
 python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-holder/target/synthetic-artifact\n";
         assert_eq!(
@@ -1039,8 +1006,6 @@ python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-h
 
     #[test]
     fn lsof_exit_0_with_warning_stderr_is_fail_closed() {
-        // report-a118 warning_zero: exit0 + empty stdout + warning stderr invoked
-        // fake cargo under a118b237. Must refuse before clean.
         let err = classify_target_lsof_result(
             0,
             "",
