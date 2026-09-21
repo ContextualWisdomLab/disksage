@@ -31,6 +31,8 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
+/// uv cache child holding installed tool/MCP environments, not regenerable download cache.
+const UV_TOOL_ARCHIVE_DIR: &str = "archive-v0";
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -253,6 +255,15 @@ pub(crate) fn clean_cache_contents_inner(
     Ok(expected
         .into_iter()
         .map(|target| {
+            // uv tool/MCP venvs live in `archive-v0`; an idle one looks inactive but launchd MCP
+            // services start from it, so it is never a cache target.
+            if Path::new(&target.path).file_name() == Some(UV_TOOL_ARCHIVE_DIR.as_ref()) {
+                return CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: "cache-target-protected-uv-tool-archive".into(),
+                };
+            }
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
             // reclaiming unrelated, inactive cache archives in the same catalog root.
             let recursive = std::fs::symlink_metadata(&target.path)
@@ -411,6 +422,24 @@ mod tests {
 
         assert_eq!(error, "cache-cleanup-targets-stale");
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn cleanup_never_trashes_uv_tool_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let archive = bases.temp.join(UV_TOOL_ARCHIVE_DIR);
+        fs::create_dir_all(archive.join("mcp-venv")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let targets = rules::cache_targets(&bases.temp).unwrap();
+
+        let results =
+            clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert_eq!(results[0].error, "cache-target-protected-uv-tool-archive");
+        assert!(archive.join("mcp-venv").is_dir());
     }
 
     #[test]
