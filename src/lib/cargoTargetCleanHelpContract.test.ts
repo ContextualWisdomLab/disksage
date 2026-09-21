@@ -27,11 +27,19 @@ describe('cargo target clean help contract', () => {
 
     expect(parser).toContain('ParseOutcome::Help');
     expect(parser).toContain('help-cannot-be-combined-with-runtime-input');
+    expect(parser).toMatch(
+      /args\.len\(\)\s*==\s*1\s*&&\s*\(args\[0\]\s*==\s*"-h"\s*\|\|\s*args\[0\]\s*==\s*"--help"\)/,
+    );
     expect(parser).not.toContain('clean_cargo_target');
     expect(entry).toContain('parse_args');
     const helpArm = entry.indexOf('ParseOutcome::Help');
+    const runOutcome = entry.indexOf('Ok(ParseOutcome::Run');
     const runArm = entry.indexOf('clean_cargo_target');
     expect(helpArm).toBeGreaterThanOrEqual(0);
-    expect(runArm).toBeGreaterThan(helpArm);
+    expect(runOutcome).toBeGreaterThan(helpArm);
+    expect(runArm).toBeGreaterThan(runOutcome);
+    const helpBody = entry.slice(helpArm, runOutcome);
+    expect(helpBody).toContain('ExitCode::SUCCESS');
+    expect(helpBody).not.toContain('clean_cargo_target');
   });
 });
