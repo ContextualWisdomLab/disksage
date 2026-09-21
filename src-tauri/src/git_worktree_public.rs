@@ -256,10 +256,6 @@ pub fn execute_stale_worktree_removal(
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
     ensure_identity_bound_worktree_mutation_available()?;
-    crate::git_worktree_impl::ensure_candidates_still_have_no_ignored_artifacts(
-        approved_report,
-        options.command_timeout_ms,
-    )?;
     crate::git_worktree_impl::execute_stale_worktree_removal(
         approved_report,
         approval,
@@ -280,10 +276,6 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
     ensure_identity_bound_worktree_mutation_available()?;
-    crate::git_worktree_impl::ensure_candidates_still_have_no_ignored_artifacts(
-        approved_report,
-        options.command_timeout_ms,
-    )?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_closed_pull_requests(
         approved_report,
         approval,
@@ -306,10 +298,6 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
     ensure_identity_bound_worktree_mutation_available()?;
-    crate::git_worktree_impl::ensure_candidates_still_have_no_ignored_artifacts(
-        approved_report,
-        options.command_timeout_ms,
-    )?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_pull_requests(
         approved_report,
         approval,

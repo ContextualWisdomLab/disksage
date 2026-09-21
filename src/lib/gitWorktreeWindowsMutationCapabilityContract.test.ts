@@ -31,7 +31,7 @@ describe("Windows Git-worktree mutation capability boundary", () => {
     );
   });
 
-  it("guards every public stale-worktree execute entry point before ignored-artifact probing or private delegation", () => {
+  it("guards every public stale-worktree execute entry point before private delegation", () => {
     const entries = [
       "execute_stale_worktree_removal",
       "execute_stale_worktree_removal_with_github_closed_pull_requests",
@@ -41,14 +41,13 @@ describe("Windows Git-worktree mutation capability boundary", () => {
     for (const name of entries) {
       const body = rustFunctionBody(name);
       const capability = body.indexOf("ensure_identity_bound_worktree_mutation_available()?");
-      const ignoredArtifactProbe = body.indexOf("ensure_candidates_still_have_no_ignored_artifacts");
       const privateDelegation = body.indexOf("crate::git_worktree_impl::");
 
       expect(capability, `${name} must check the platform mutation capability`).toBeGreaterThanOrEqual(0);
-      expect(ignoredArtifactProbe, `${name} must retain the ignored-artifact guard`).toBeGreaterThanOrEqual(0);
       expect(privateDelegation, `${name} must retain the private implementation delegation on supported platforms`).toBeGreaterThanOrEqual(0);
-      expect(capability, `${name} must fail before any per-candidate execution probe`).toBeLessThan(ignoredArtifactProbe);
       expect(capability, `${name} must fail before the pathname-based private remover is reachable`).toBeLessThan(privateDelegation);
+      // Ignored-artifact authority lives in core live re-audit, not a second public/core execute probe.
+      expect(body).not.toContain("ensure_candidates_still_have_no_ignored_artifacts");
     }
   });
 });

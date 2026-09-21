@@ -2745,37 +2745,6 @@ fn ignored_artifacts_present(path: &Path, timeout_ms: u64) -> Result<bool, Strin
     Ok(ignored)
 }
 
-/// Execute-time recheck: remaining removal candidates must still be free of ignored artifacts.
-pub(crate) fn ensure_candidates_still_have_no_ignored_artifacts(
-    approved_report: &GitWorktreeAuditReport,
-    timeout_ms: u64,
-) -> Result<(), String> {
-    // Only remaining removal candidates must be free of ignored-artifact blockers. Preserved
-    // entries that already carry durable ignored-artifact evidence must not poison execution of
-    // an independent clean candidate in the same plan.
-    if approved_report.entries.iter().any(|entry| {
-        entry.disposition == GitWorktreeDisposition::RemovalCandidate
-            && entry.blockers.iter().any(|blocker| {
-                blocker == "ignored-artifacts-present"
-                    || blocker == "ignored-artifact-evidence-incomplete"
-            })
-    }) {
-        return Err("git-worktree-ignored-artifact-guarded-plan-not-executable".into());
-    }
-    for candidate in approved_report
-        .entries
-        .iter()
-        .filter(|entry| entry.disposition == GitWorktreeDisposition::RemovalCandidate)
-    {
-        match ignored_artifacts_present(Path::new(&candidate.path), timeout_ms) {
-            Ok(false) => {}
-            Ok(true) => return Err("git-worktree-ignored-artifact-drift".into()),
-            Err(_) => return Err("git-worktree-ignored-artifact-evidence-incomplete".into()),
-        }
-    }
-    Ok(())
-}
-
 pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublicSummary {
     let mut protection_reason_codes: Vec<String> = report
         .entries
