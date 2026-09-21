@@ -1,12 +1,23 @@
-use crate::cargo_target_reclaim::clean_cargo_target_with_active_use;
+use crate::cargo_target_reclaim::{
+    clean_cargo_target_with_active_use, ensure_target_safe_to_reclaim,
+};
+use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 static ACTIVE_USE_PROBES: AtomicUsize = AtomicUsize::new(0);
+static POST_PREFLIGHT_HOLDER: Mutex<Option<File>> = Mutex::new(None);
 
 fn holder_arrives_after_preflight(path: &Path) -> Result<(), String> {
     let call = ACTIVE_USE_PROBES.fetch_add(1, Ordering::SeqCst);
     if call == 0 {
+        ensure_target_safe_to_reclaim(path)?;
+        let holder = File::open(path.join("artifact"))
+            .map_err(|error| format!("post-detach-holder-open-failed:{error}"))?;
+        *POST_PREFLIGHT_HOLDER
+            .lock()
+            .map_err(|_| "post-detach-holder-lock-poisoned".to_string())? = Some(holder);
         return Ok(());
     }
     if !path
@@ -15,7 +26,7 @@ fn holder_arrives_after_preflight(path: &Path) -> Result<(), String> {
     {
         return Err("cargo-target-post-detach-probe-not-detached".into());
     }
-    Err("cargo-target-active-holders-present".into())
+    ensure_target_safe_to_reclaim(path)
 }
 
 #[test]
@@ -47,12 +58,14 @@ fn post_detach_holder_blocks_cargo_and_rolls_back_target() {
     fs::set_permissions(&fake_cargo, permissions).expect("fake cargo executable");
 
     ACTIVE_USE_PROBES.store(0, Ordering::SeqCst);
+    *POST_PREFLIGHT_HOLDER.lock().expect("reset holder") = None;
     let result = clean_cargo_target_with_active_use(
         &project,
         &target,
         &fake_cargo,
         holder_arrives_after_preflight,
     );
+    let _ = POST_PREFLIGHT_HOLDER.lock().expect("drop holder").take();
 
     assert_eq!(
         ACTIVE_USE_PROBES.load(Ordering::SeqCst),
@@ -62,7 +75,7 @@ fn post_detach_holder_blocks_cargo_and_rolls_back_target() {
     assert_eq!(
         result.unwrap_err(),
         "cargo-target-active-holders-present",
-        "the detached-path holder must refuse mutation before Cargo starts"
+        "a real file descriptor opened after preflight must survive rename and be detected on the detached path"
     );
     assert!(!cargo_ran.exists(), "Cargo must not run after the second probe refuses");
     assert!(
