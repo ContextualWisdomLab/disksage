@@ -252,6 +252,15 @@ jobs:
           } else {
             Write-Output 'SKIP log_archive::tests::windows_junction_is_not_traversed_for_archive_mutation: owner contract absent; no runtime regression executed'
           }
+      - name: Windows Cargo target reclaim regression when owner source is present
+        shell: pwsh
+        run: |
+          if (Test-Path 'src-tauri/tests/cargo_target_reclaim_windows.rs') {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked --test cargo_target_reclaim_windows
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Output 'SKIP cargo_target_reclaim_windows: owner source absent; no runtime regression executed'
+          }
 
   llm-engine-build:
     runs-on: ubuntu-latest
