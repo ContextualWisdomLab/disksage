@@ -4,10 +4,11 @@
 //! Help combined with any other argument is a bounded failure and must not clean.
 
 use std::ffi::OsString;
-
-use disksage_lib::cargo_target_reclaim::{clean_cargo_target, ledger_reclaim_bytes};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+use disksage_lib::cargo_target_reclaim::{clean_cargo_target, ledger_reclaim_bytes, CargoTargetCleanResult};
+use serde_json::json;
 
 const USAGE: &str = "Usage: disksage-cargo-target-clean --project-dir ABSOLUTE_PATH\n\
 Runs cargo clean with an absolute cargo executable. Exit 2 on tool/spawn/nonzero failure.\n\
@@ -52,6 +53,31 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
         .map(ParseOutcome::Run)
 }
 
+fn utf8_path<'a>(label: &str, path: &'a Path) -> Result<&'a str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("cargo-target-json-non-utf8-path:{label}"))
+}
+
+fn serialize_result(result: &CargoTargetCleanResult) -> Result<String, String> {
+    let cargo_path = utf8_path("cargo_path", &result.cargo_path)?;
+    let project_dir = utf8_path("project_dir", &result.project_dir)?;
+    let target_dir = utf8_path("target_dir", &result.target_dir)?;
+    let reclaim = ledger_reclaim_bytes(result);
+
+    serde_json::to_string_pretty(&json!({
+        "cargo_path": cargo_path,
+        "project_dir": project_dir,
+        "target_dir": target_dir,
+        "bytes_before": result.bytes_before,
+        "bytes_after": result.bytes_after,
+        "observed_reduction_bytes": result.observed_reduction_bytes,
+        "ledger_reclaim_bytes": reclaim,
+        "status_code": result.status_code,
+        "executed": result.executed,
+    }))
+    .map_err(|error| format!("cargo-target-json-serialize-failed:{error}"))
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match parse_args(&args) {
@@ -60,22 +86,16 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(ParseOutcome::Run(project_dir)) => match clean_cargo_target(&project_dir) {
-            Ok(result) => {
-                let reclaim = ledger_reclaim_bytes(&result);
-                println!(
-                    "{{\n  \"cargo_path\": {:?},\n  \"project_dir\": {:?},\n  \"target_dir\": {:?},\n  \"bytes_before\": {},\n  \"bytes_after\": {},\n  \"observed_reduction_bytes\": {},\n  \"ledger_reclaim_bytes\": {},\n  \"status_code\": {},\n  \"executed\": {}\n}}",
-                    result.cargo_path,
-                    result.project_dir,
-                    result.target_dir,
-                    result.bytes_before,
-                    result.bytes_after,
-                    result.observed_reduction_bytes,
-                    reclaim,
-                    result.status_code,
-                    result.executed
-                );
-                ExitCode::SUCCESS
-            }
+            Ok(result) => match serialize_result(&result) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("DiskSage cargo-target-clean: {error}");
+                    ExitCode::from(2)
+                }
+            },
             Err(error) => {
                 eprintln!("DiskSage cargo-target-clean: {error}");
                 ExitCode::from(2)
@@ -119,5 +139,45 @@ mod tests {
     fn missing_project_dir_does_not_parse_as_help() {
         let err = parse_args(&[]).unwrap_err();
         assert!(err.starts_with("--project-dir is required"));
+    }
+
+    #[test]
+    fn result_output_is_valid_json_with_escaped_paths() {
+        let result = CargoTargetCleanResult {
+            cargo_path: PathBuf::from("/tmp/cargo\"quoted"),
+            project_dir: PathBuf::from("/tmp/project\\segment"),
+            target_dir: PathBuf::from("/tmp/project\\segment/target"),
+            bytes_before: 5,
+            bytes_after: 2,
+            observed_reduction_bytes: 3,
+            status_code: 0,
+            executed: true,
+        };
+        let output = serialize_result(&result).expect("serialize result");
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(parsed["observed_reduction_bytes"], 3);
+        assert_eq!(parsed["ledger_reclaim_bytes"], 3);
+        assert_eq!(parsed["cargo_path"], "/tmp/cargo\"quoted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_fails_serialization_explicitly() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let result = CargoTargetCleanResult {
+            cargo_path: PathBuf::from(OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff])),
+            project_dir: PathBuf::from("/tmp/project"),
+            target_dir: PathBuf::from("/tmp/project/target"),
+            bytes_before: 0,
+            bytes_after: 0,
+            observed_reduction_bytes: 0,
+            status_code: 0,
+            executed: true,
+        };
+        assert_eq!(
+            serialize_result(&result).unwrap_err(),
+            "cargo-target-json-non-utf8-path:cargo_path"
+        );
     }
 }
