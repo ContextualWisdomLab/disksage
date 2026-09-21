@@ -20,11 +20,13 @@ const dirs = {
   macos: `release-disksage-macos-latest-${runAttempt}`,
 } as const;
 
+/** Write fixture bytes while creating any required parent directory. */
 function write(path: string, bytes: Buffer | string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, bytes);
 }
 
+/** Materialize one operational CLI and the checksum record that owns that adjacent file. */
 function addCli(root: string, dir: string, name: string) {
   const bytes = Buffer.from(`cli:${name}`);
   const path = join(root, dir, name);
@@ -32,6 +34,7 @@ function addCli(root: string, dir: string, name: string) {
   write(`${path}.sha256`, `${createHash('sha256').update(bytes).digest('hex')}  ${name}\n`);
 }
 
+/** Build the exact 17-file release tree emitted by the three-platform release matrix. */
 function materializeReleaseArtifacts(root: string) {
   write(join(root, dirs.linux, 'bundle/deb/disksage.deb'), 'deb');
   write(join(root, dirs.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
@@ -47,6 +50,7 @@ function materializeReleaseArtifacts(root: string) {
   addCli(root, dirs.macos, 'disksage-duplicate-audit-macos-arm64');
 }
 
+/** Execute the production release verifier against an isolated artifact tree. */
 function verify(artifactRoot: string) {
   return spawnSync(
     'bash',
@@ -59,6 +63,7 @@ function verify(artifactRoot: string) {
   );
 }
 
+/** Provide an exact release fixture and remove it regardless of assertion outcome. */
 function withFixture(assertion: (artifactRoot: string) => void) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-windows-namespace-'));
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
@@ -116,6 +121,35 @@ describe('release artifact Windows namespace regression', () => {
       const result = verify(artifactRoot);
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('non-regular path');
+    }),
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects an unexpected regular file through the exact 17-file invariant',
+    () => withFixture((artifactRoot) => {
+      write(join(artifactRoot, dirs.linux, 'unexpected-release-note.txt'), 'unexpected');
+
+      const result = verify(artifactRoot);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('expected exactly 17 regular files, found 18');
+    }),
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects a checksum record that claims ownership of another adjacent CLI',
+    () => withFixture((artifactRoot) => {
+      const otherName = 'disksage-duplicate-audit-linux-x86_64';
+      const otherBytes = Buffer.from(`cli:${otherName}`);
+      write(
+        join(artifactRoot, dirs.linux, 'disksage-cloud-plan-linux-x86_64.sha256'),
+        `${createHash('sha256').update(otherBytes).digest('hex')}  ${otherName}\n`,
+      );
+
+      const result = verify(artifactRoot);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        'must reference its adjacent operational CLI disksage-cloud-plan-linux-x86_64 exactly once',
+      );
     }),
   );
 });
