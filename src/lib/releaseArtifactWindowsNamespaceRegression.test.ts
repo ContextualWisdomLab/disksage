@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -40,29 +47,75 @@ function materializeReleaseArtifacts(root: string) {
   addCli(root, dirs.macos, 'disksage-duplicate-audit-macos-arm64');
 }
 
+function verify(artifactRoot: string) {
+  return spawnSync(
+    'bash',
+    [
+      resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+      artifactRoot,
+      runAttempt,
+    ],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+}
+
+function withFixture(assertion: (artifactRoot: string) => void) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-windows-namespace-'));
+  const artifactRoot = join(fixtureRoot, 'release-artifacts');
+  try {
+    materializeReleaseArtifacts(artifactRoot);
+    assertion(artifactRoot);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 describe('release artifact Windows namespace regression', () => {
   it.runIf(process.platform !== 'win32')(
     'accepts the exact windows-2022 directory emitted by the release matrix',
-    () => {
-      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-windows-namespace-'));
-      const artifactRoot = join(fixtureRoot, 'release-artifacts');
-      try {
-        materializeReleaseArtifacts(artifactRoot);
-        const result = spawnSync(
-          'bash',
-          [
-            resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
-            artifactRoot,
-            runAttempt,
-          ],
-          { cwd: repositoryRoot, encoding: 'utf8' },
-        );
+    () => withFixture((artifactRoot) => {
+      const result = verify(artifactRoot);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe('');
+    }),
+  );
 
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stderr).toBe('');
-      } finally {
-        rmSync(fixtureRoot, { recursive: true, force: true });
-      }
-    },
+  it.runIf(process.platform !== 'win32')(
+    'rejects a Windows bundle moved into another platform namespace',
+    () => withFixture((artifactRoot) => {
+      const source = join(artifactRoot, dirs.windows, 'bundle/msi/disksage.msi');
+      const escaped = join(artifactRoot, dirs.linux, 'bundle/msi/disksage.msi');
+      mkdirSync(dirname(escaped), { recursive: true });
+      renameSync(source, escaped);
+
+      const result = verify(artifactRoot);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Windows MSI bundle');
+    }),
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects an empty artifact even when the exact file count is preserved',
+    () => withFixture((artifactRoot) => {
+      write(join(artifactRoot, dirs.linux, 'bundle/deb/disksage.deb'), '');
+
+      const result = verify(artifactRoot);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Empty release artifact');
+    }),
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects a non-regular entry before provenance admission',
+    () => withFixture((artifactRoot) => {
+      symlinkSync(
+        'disksage-cloud-plan-linux-x86_64',
+        join(artifactRoot, dirs.linux, 'unexpected-cli-alias'),
+      );
+
+      const result = verify(artifactRoot);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('non-regular path');
+    }),
   );
 });
