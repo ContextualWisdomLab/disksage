@@ -51,6 +51,10 @@ mod windows_native {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     const FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
     const FILE_ID_INFO_CLASS: i32 = 18;
+    const FILE_RENAME_INFO_CLASS: i32 = 3;
+    const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+    const DELETE: u32 = 0x0001_0000;
+    const READ_CONTROL: u32 = 0x0002_0000;
     const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
     const SE_FILE_OBJECT: i32 = 1;
     const TOKEN_QUERY: u32 = 0x0008;
@@ -80,6 +84,14 @@ mod windows_native {
         file_id: FileId128,
     }
 
+    #[repr(C)]
+    struct FileRenameInfo {
+        replace_if_exists: u32,
+        root_directory: *mut c_void,
+        file_name_length: u32,
+        file_name: [u16; 1],
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) struct DirectoryIdentity(FileIdInfo);
 
@@ -100,6 +112,12 @@ mod windows_native {
             file: *mut c_void,
             file_information_class: i32,
             file_information: *mut c_void,
+            buffer_size: u32,
+        ) -> i32;
+        fn SetFileInformationByHandle(
+            file: *mut c_void,
+            file_information_class: i32,
+            file_information: *const c_void,
             buffer_size: u32,
         ) -> i32;
         fn GetCurrentProcess() -> *mut c_void;
@@ -158,7 +176,7 @@ mod windows_native {
 
     pub(super) fn open_directory(path: &Path) -> Result<File, String> {
         let file = OpenOptions::new()
-            .read(true)
+            .access_mode(DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
@@ -183,6 +201,51 @@ mod windows_native {
             return Err("cargo-target-dir-reparse-point".into());
         }
         Ok(file)
+    }
+
+    pub(super) fn rename_opened_directory(file: &File, destination: &Path) -> Result<(), String> {
+        if !destination.is_absolute() {
+            return Err("cargo-target-dir-rename-destination-not-absolute".into());
+        }
+        let wide: Vec<u16> = destination.as_os_str().encode_wide().collect();
+        if wide.is_empty() || wide.contains(&0) || wide.len() >= 32_767 {
+            return Err("cargo-target-dir-rename-destination-invalid".into());
+        }
+
+        let file_name_offset = std::mem::offset_of!(FileRenameInfo, file_name);
+        let file_name_bytes = wide
+            .len()
+            .checked_mul(size_of::<u16>())
+            .ok_or_else(|| "cargo-target-dir-rename-destination-invalid".to_string())?;
+        let buffer_size = file_name_offset
+            .checked_add(file_name_bytes)
+            .and_then(|size| u32::try_from(size).ok())
+            .ok_or_else(|| "cargo-target-dir-rename-destination-invalid".to_string())?;
+        let words = (buffer_size as usize).div_ceil(size_of::<usize>());
+        let mut buffer = vec![0usize; words];
+        let info = unsafe { &mut *buffer.as_mut_ptr().cast::<FileRenameInfo>() };
+        info.replace_if_exists = 0;
+        info.root_directory = null_mut();
+        info.file_name_length = file_name_bytes as u32;
+        unsafe {
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), info.file_name.as_mut_ptr(), wide.len());
+        }
+
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle().cast(),
+                FILE_RENAME_INFO_CLASS,
+                buffer.as_ptr().cast(),
+                buffer_size,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "cargo-target-dir-detach-failed:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn identity(file: &File) -> Result<DirectoryIdentity, String> {
@@ -297,7 +360,7 @@ mod windows_native {
                 let metadata = std::fs::symlink_metadata(entry.path())
                     .map_err(|error| format!("cargo-target-active-use-metadata-failed:{error}"))?;
                 if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                    continue;
+                    return Err("cargo-target-active-use-reparse-point".into());
                 }
                 if metadata.is_dir() {
                     stack.push(entry.path());
@@ -861,7 +924,10 @@ impl Drop for DetachedTargetDir {
             let same_opened_dir = windows_native::identity_at(&self.clean_path)
                 .is_ok_and(|identity| identity == self.opened.identity);
             if original_missing && same_opened_dir {
-                let _ = std::fs::rename(&self.clean_path, &self.original_path);
+                let _ = windows_native::rename_opened_directory(
+                    &self.opened.file,
+                    &self.original_path
+                );
             }
         }
         if self.committed || std::fs::symlink_metadata(&self.clean_path).is_err() {
@@ -881,15 +947,17 @@ fn detach_verified_target_dir(
         .tempdir_in(parent)
         .map_err(|error| format!("cargo-target-quarantine-create-failed:{error}"))?;
     let clean_path = quarantine.path().join("target");
-    std::fs::rename(target_dir, &clean_path)
-        .map_err(|error| format!("cargo-target-dir-detach-failed:{error}"))?;
+    if windows_native::identity_at(target_dir)? != opened.identity {
+        return Err("cargo-target-dir-replaced".into());
+    }
+    windows_native::rename_opened_directory(&opened.file, &clean_path)?;
     let quarantine_path = quarantine.keep();
     let moved_identity = windows_native::identity_at(&clean_path);
     if moved_identity.as_ref() != Ok(&opened.identity) {
         if std::fs::symlink_metadata(target_dir)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
         {
-            let _ = std::fs::rename(&clean_path, target_dir);
+            let _ = windows_native::rename_opened_directory(&opened.file, target_dir);
         }
         let _ = std::fs::remove_dir(&quarantine_path);
         return Err("cargo-target-dir-replaced".into());
@@ -1489,7 +1557,7 @@ exit 42\n",
             &project,
             &target,
             &fake_cargo,
-            |_| Ok(()),
+            ensure_target_safe_to_reclaim,
             |opened_path| {
                 fs::rename(opened_path, &reviewed)
                     .map_err(|error| format!("test-reviewed-rename-failed:{error}"))?;
