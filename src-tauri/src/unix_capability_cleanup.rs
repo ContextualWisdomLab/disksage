@@ -413,4 +413,27 @@ mod tests {
         let reviewed = File::open(&target).expect("open target");
         assert_eq!(measure_allocated_bytes(&reviewed).expect("measure"), expected);
     }
+
+    #[test]
+    fn repeated_walks_do_not_consume_retained_root_directory_offset() {
+        let root = tempfile::tempdir().expect("temp root");
+        let target = root.path().join("target");
+        std::fs::create_dir(&target).expect("target");
+        std::fs::write(target.join("artifact.bin"), vec![5u8; 8192]).expect("artifact");
+
+        let reviewed = File::open(&target).expect("open target");
+        let first = measure_allocated_bytes(&reviewed).expect("first measurement");
+        assert!(first > 0);
+        assert_eq!(
+            measure_allocated_bytes(&reviewed).expect("second measurement"),
+            first,
+            "a measurement must not consume the retained root's directory position"
+        );
+        let stats = remove_contents(&reviewed).expect("cleanup after repeated measurement");
+        assert_eq!(stats.entries_removed, 1);
+        assert_eq!(
+            std::fs::read_dir(&target).expect("read retained root").count(),
+            0
+        );
+    }
 }
