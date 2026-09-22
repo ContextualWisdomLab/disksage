@@ -49,18 +49,28 @@ struct DirStream(*mut libc::DIR);
 
 impl DirStream {
     fn from_fd(fd: RawFd) -> Result<Self, String> {
-        let duplicate = unsafe { libc::dup(fd) };
-        if duplicate < 0 {
+        // `dup` would share the caller's open-file-description offset. Reopen `.`
+        // relative to the reviewed descriptor so each walk owns an independent
+        // directory position without re-selecting the root through a global path.
+        let dot = b".\0";
+        let independent = unsafe {
+            libc::openat(
+                fd,
+                dot.as_ptr() as *const libc::c_char,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if independent < 0 {
             return Err(format!(
-                "cargo-target-capability-dup-failed:{}",
+                "cargo-target-capability-stream-open-failed:{}",
                 std::io::Error::last_os_error()
             ));
         }
-        let stream = unsafe { libc::fdopendir(duplicate) };
+        let stream = unsafe { libc::fdopendir(independent) };
         if stream.is_null() {
             let error = std::io::Error::last_os_error();
             unsafe {
-                libc::close(duplicate);
+                libc::close(independent);
             }
             return Err(format!("cargo-target-capability-fdopendir-failed:{error}"));
         }
