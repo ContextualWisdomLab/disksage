@@ -554,6 +554,7 @@ fn executable_file(path: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
 fn bounded_dir_size(path: &Path) -> Result<u64, String> {
     if !path.exists() {
         return Ok(0);
@@ -561,6 +562,7 @@ fn bounded_dir_size(path: &Path) -> Result<u64, String> {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     let mut entries = 0u64;
+    let mut seen = std::collections::HashSet::new();
     const MAX_ENTRIES: u64 = 2_000_000;
     while let Some(dir) = stack.pop() {
         let read = std::fs::read_dir(&dir).map_err(|e| format!("cargo-target-size-read-failed:{e}"))?;
@@ -570,24 +572,35 @@ fn bounded_dir_size(path: &Path) -> Result<u64, String> {
             if entries > MAX_ENTRIES {
                 return Err("cargo-target-size-entry-limit".into());
             }
-            let ft = entry
-                .file_type()
-                .map_err(|e| format!("cargo-target-size-type-failed:{e}"))?;
-            if ft.is_symlink() {
+            let entry_path = entry.path();
+            let metadata = std::fs::symlink_metadata(&entry_path)
+                .map_err(|e| format!("cargo-target-size-meta-failed:{e}"))?;
+            if metadata.file_type().is_symlink() {
                 continue;
             }
-            if ft.is_dir() {
-                stack.push(entry.path());
-            } else if ft.is_file() {
-                let len = entry
-                    .metadata()
-                    .map_err(|e| format!("cargo-target-size-meta-failed:{e}"))?
-                    .len();
-                total = total.saturating_add(len);
+            if metadata.is_dir() {
+                stack.push(entry_path);
+            } else if metadata.is_file() {
+                let identity = (metadata.dev(), metadata.ino());
+                if !seen.insert(identity) {
+                    continue;
+                }
+                let allocated = metadata
+                    .blocks()
+                    .checked_mul(512)
+                    .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
+                total = total
+                    .checked_add(allocated)
+                    .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
             }
         }
     }
     Ok(total)
+}
+
+#[cfg(not(unix))]
+fn bounded_dir_size(_path: &Path) -> Result<u64, String> {
+    Err("cargo-target-size-allocation-evidence-unsupported".into())
 }
 
 fn ensure_absolute_project(project_dir: &Path) -> Result<(), String> {
@@ -1233,13 +1246,10 @@ where
     })
 }
 
-/// Classify a finished clean for ledgers: only positive observed reduction counts as reclaim.
+/// Buyer-visible reclaim credit remains zero until the result schema proves physical release.
 pub fn ledger_reclaim_bytes(result: &CargoTargetCleanResult) -> u64 {
-    if result.status_code != 0 || !result.executed {
-        0
-    } else {
-        result.observed_reduction_bytes
-    }
+    let _ = result;
+    0
 }
 
 #[cfg(test)]
@@ -1278,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn positive_delta_with_zero_exit_counts_reclaim() {
+    fn positive_delta_without_release_proof_is_zero_credit() {
         let result = CargoTargetCleanResult {
             cargo_path: PathBuf::from("/tmp/cargo"),
             project_dir: PathBuf::from("/tmp/proj"),
@@ -1289,7 +1299,7 @@ mod tests {
             status_code: 0,
             executed: true,
         };
-        assert_eq!(ledger_reclaim_bytes(&result), 4000);
+        assert_eq!(ledger_reclaim_bytes(&result), 0);
     }
 
     #[test]
@@ -1427,7 +1437,7 @@ exit 42\n",
         assert!(result.executed);
         assert_eq!(result.status_code, 0);
         assert!(result.observed_reduction_bytes > 0);
-        assert_eq!(ledger_reclaim_bytes(&result), result.observed_reduction_bytes);
+        assert_eq!(ledger_reclaim_bytes(&result), 0);
 
         let argv = fs::read(&argv_log).unwrap_or_default();
         let argv_txt = String::from_utf8_lossy(&argv);
