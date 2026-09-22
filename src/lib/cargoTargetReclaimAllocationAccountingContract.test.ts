@@ -59,4 +59,30 @@ describe('cargo target reclaim accounting contract', () => {
       'ledger reclaim credit requires allocation-backed evidence; raw target-tree logical reduction is not enough',
     ).not.toMatch(/result\.observed_reduction_bytes/);
   });
+
+  it('requires allocation-view evidence without over-crediting physical reclaim', () => {
+    const measurement = between('fn bounded_dir_size(', 'fn ensure_absolute_project(');
+    expect(
+      measurement,
+      'Unix allocation evidence must use allocated blocks rather than logical length',
+    ).toMatch(/\.blocks\(\)/);
+    expect(
+      measurement,
+      'hard-linked entries inside the target view must be deduplicated by filesystem identity',
+    ).toMatch(/\.dev\(\)[\s\S]*?\.ino\(\)|\.ino\(\)[\s\S]*?\.dev\(\)/);
+    expect(
+      measurement,
+      'Rust MetadataExt::blocks is defined in 512-byte units; conversion must be explicit and overflow-safe',
+    ).toMatch(/(?:checked|saturating)_mul\(512\)/);
+    expect(
+      source,
+      'platforms without allocation evidence must fail closed instead of substituting logical bytes',
+    ).toContain('cargo-target-size-allocation-evidence-unsupported');
+
+    const ledger = between('pub fn ledger_reclaim_bytes(', '#[cfg(test)]');
+    expect(
+      ledger,
+      'the current result schema has no proof that external hard links/shared extents released physical storage',
+    ).toMatch(/->\s*u64\s*\{\s*(?:let\s+_\s*=\s*[^;]+;\s*)?0\s*\}/);
+  });
 });
