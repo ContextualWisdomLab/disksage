@@ -611,6 +611,18 @@ fn process_command_matches_target(command: &str, path: &Path) -> bool {
 }
 
 #[cfg(all(unix, not(coverage)))]
+/// Programs a reclaim gate spawns only to observe other processes; they never open the target.
+const READ_ONLY_PROBE_PROGRAMS: &[&str] = &["grep", "pgrep", "ps", "lsof"];
+
+fn is_read_only_probe(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .and_then(|program| Path::new(program).file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| READ_ONLY_PROBE_PROGRAMS.contains(&name))
+}
+
 fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) -> Vec<u32> {
     let text = String::from_utf8_lossy(output);
     let mut records = Vec::new();
@@ -652,11 +664,25 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
         lineage_pid = parent_pid;
     }
 
+    // The planner's own read-only probes (for example a gate's `grep -F <target> /proc/*/cmdline`)
+    // also carry the target in argv. Exclude only those descendants; any other descendant, such as
+    // a copy tool, still counts as active use.
+    let mut descendants = BTreeSet::new();
+    let mut frontier = vec![own_pid];
+    while let Some(parent) = frontier.pop() {
+        for (pid, parent_pid, _) in &records {
+            if *parent_pid == parent && *pid != parent && descendants.insert(*pid) {
+                frontier.push(*pid);
+            }
+        }
+    }
     let mut pids: Vec<u32> = records
         .into_iter()
         .filter_map(|(pid, _, command)| {
-            (!planner_lineage.contains(&pid) && process_command_matches_target(command, path))
-                .then_some(pid)
+            (!planner_lineage.contains(&pid)
+                && !(descendants.contains(&pid) && is_read_only_probe(command))
+                && process_command_matches_target(command, path))
+            .then_some(pid)
         })
         .collect();
     pids.sort_unstable();
@@ -1643,6 +1669,21 @@ mod tests {
         assert_eq!(
             parse_process_command_references(output, path, 501),
             vec![502]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn process_command_reference_parser_excludes_own_probe_children_only() {
+        // A gate's own `grep`/`ps` probe carries the target path in argv but does not use the file.
+        let path = Path::new("/data/grok/grok-1");
+        let output = b"  500 1 bash reclaim_gate.sh\n\
+  600 500 grep -lF /data/grok/grok-1 /proc/1/cmdline\n\
+  601 500 cp -R /data/grok/grok-1 /backup/grok-1\n\
+  700 1 python loader.py --weights /data/grok/grok-1\n";
+        assert_eq!(
+            parse_process_command_references(output, path, 500),
+            vec![601, 700]
         );
     }
 
