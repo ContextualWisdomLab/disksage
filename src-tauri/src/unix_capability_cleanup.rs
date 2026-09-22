@@ -3,8 +3,13 @@
 //! The caller supplies an already-reviewed directory [`File`]. This module never
 //! re-selects that root by pathname. Descendants are inspected relative to the
 //! retained directory descriptor with `fstatat(AT_SYMLINK_NOFOLLOW)`, directories
-//! are opened with `openat(O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)`, and entries are
-//! removed with `unlinkat`. Symlinks are unlinked as entries and are never followed.
+//! are opened with descriptor-relative no-follow semantics, and entries are removed
+//! with `unlinkat`. Symlinks are unlinked as entries and are never followed.
+//!
+//! Linux descent uses `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV)`
+//! so a pre-existing same-filesystem bind mount cannot turn a reviewed target tree
+//! into traversal of an external mount. macOS retains the dev/inode capability
+//! checks and rejects device transitions.
 //!
 //! The reviewed root itself is intentionally retained. POSIX does not provide an
 //! fd-self directory unlink primitive, so callers must prefer an empty retained
@@ -19,6 +24,21 @@ use std::time::{Duration, Instant};
 const MAX_ENTRIES: u64 = 2_000_000;
 const MAX_DEPTH: usize = 128;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(600);
+
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_XDEV: u64 = 0x01;
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+#[cfg(target_os = "linux")]
+const RESOLVE_BENEATH: u64 = 0x08;
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CleanupStats {
@@ -160,6 +180,61 @@ fn stat_at(dir_fd: RawFd, name: &CStr) -> Result<libc::stat, String> {
     Ok(stat)
 }
 
+fn verify_opened_child(
+    file: File,
+    expected: &libc::stat,
+    root_device: libc::dev_t,
+) -> Result<File, String> {
+    let mut opened = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut opened) } != 0 {
+        return Err(format!(
+            "cargo-target-capability-fstat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if opened.st_dev != expected.st_dev || opened.st_ino != expected.st_ino {
+        return Err("cargo-target-capability-child-replaced".into());
+    }
+    if opened.st_dev != root_device {
+        return Err("cargo-target-capability-cross-device".into());
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+fn open_child_directory(
+    parent_fd: RawFd,
+    name: &CStr,
+    expected: &libc::stat,
+    root_device: libc::dev_t,
+) -> Result<File, String> {
+    let how = OpenHow {
+        flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+    };
+    let raw_fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            parent_fd,
+            name.as_ptr(),
+            &how as *const OpenHow,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if raw_fd < 0 {
+        return Err(format!(
+            "cargo-target-capability-openat2-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let fd = i32::try_from(raw_fd)
+        .map_err(|_| "cargo-target-capability-openat2-fd-overflow".to_string())?;
+    let file = unsafe { File::from_raw_fd(fd) };
+    verify_opened_child(file, expected, root_device)
+}
+
+#[cfg(target_os = "macos")]
 fn open_child_directory(
     parent_fd: RawFd,
     name: &CStr,
@@ -180,20 +255,7 @@ fn open_child_directory(
         ));
     }
     let file = unsafe { File::from_raw_fd(fd) };
-    let mut opened = unsafe { std::mem::zeroed::<libc::stat>() };
-    if unsafe { libc::fstat(file.as_raw_fd(), &mut opened) } != 0 {
-        return Err(format!(
-            "cargo-target-capability-fstat-failed:{}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    if opened.st_dev != expected.st_dev || opened.st_ino != expected.st_ino {
-        return Err("cargo-target-capability-child-replaced".into());
-    }
-    if opened.st_dev != root_device {
-        return Err("cargo-target-capability-cross-device".into());
-    }
-    Ok(file)
+    verify_opened_child(file, expected, root_device)
 }
 
 fn unlink_at(dir_fd: RawFd, name: &CStr, flags: libc::c_int) -> Result<(), String> {
