@@ -3,10 +3,11 @@
 //! The reviewed target is supplied as an already-open directory [`File`]. Tree
 //! identities are collected descriptor-relatively; the root pathname is never
 //! selected again. Holder evidence is consumed from lsof's machine-readable field
-//! output and matched by `(device, inode)`, with the current DiskSage process
-//! excluded because it intentionally retains the root capability.
+//! output and matched by `(device, inode)`. Only the exact retained root descriptor
+//! held by this DiskSage process is exempted from holder rejection.
 //!
-//! Missing or permission-limited evidence fails closed. No process is terminated.
+//! Missing, permission-limited, or globally incomplete evidence fails closed. No
+//! process is terminated.
 
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -369,11 +370,10 @@ fn terminate_process_group(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn run_lsof(lsof: &Path) -> Result<LsofOutput, String> {
+fn run_lsof_command(lsof: &Path, args: &[&str]) -> Result<LsofOutput, String> {
     let mut command = Command::new(lsof);
     command
-        .arg("-nP")
-        .arg("-F0pftDi")
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -432,6 +432,54 @@ fn run_lsof(lsof: &Path) -> Result<LsofOutput, String> {
     })
 }
 
+fn run_lsof(lsof: &Path) -> Result<LsofOutput, String> {
+    run_lsof_command(lsof, &["-nP", "-F0pftDi"])
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+fn classify_lsof_global_visibility(
+    effective_uid: libc::uid_t,
+    real_uid: libc::uid_t,
+    status_code: i32,
+    stdout: &[u8],
+    stderr: &[u8],
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+) -> Result<(), String> {
+    if effective_uid == 0 && real_uid == 0 {
+        return Ok(());
+    }
+    if status_code != 0 || stdout_truncated || stderr_truncated {
+        return Err("cargo-target-lsof-global-visibility-unavailable".into());
+    }
+    const UNRESTRICTED: &[u8] = b"Anyone can list all files;";
+    if contains_bytes(stdout, UNRESTRICTED) || contains_bytes(stderr, UNRESTRICTED) {
+        return Ok(());
+    }
+    Err("cargo-target-lsof-global-visibility-unavailable".into())
+}
+
+fn verify_lsof_global_visibility(lsof: &Path) -> Result<(), String> {
+    let effective_uid = unsafe { libc::geteuid() };
+    let real_uid = unsafe { libc::getuid() };
+    if effective_uid == 0 && real_uid == 0 {
+        return Ok(());
+    }
+    let output = run_lsof_command(lsof, &["-h"])?;
+    classify_lsof_global_visibility(
+        effective_uid,
+        real_uid,
+        output.status.code().unwrap_or(127),
+        &output.stdout.bytes,
+        &output.stderr.bytes,
+        output.stdout.truncated,
+        output.stderr.truncated,
+    )
+}
+
 #[derive(Default)]
 struct FileRecord {
     pid: u32,
@@ -476,20 +524,31 @@ fn filesystem_type(file_type: &[u8]) -> bool {
         || file_type == b"NFS"
 }
 
+fn descriptor_number(descriptor: &[u8]) -> Option<RawFd> {
+    std::str::from_utf8(descriptor).ok()?.parse::<RawFd>().ok()
+}
+
 fn finish_record(
     record: &mut Option<FileRecord>,
     reviewed: &HashSet<FileIdentity>,
     self_pid: u32,
+    retained_root_fd: RawFd,
+    retained_root_identity: FileIdentity,
 ) -> Result<(), String> {
     let Some(record) = record.take() else {
         return Ok(());
     };
-    if record.pid == self_pid {
-        return Ok(());
-    }
     let descriptor = record.descriptor.as_deref().unwrap_or_default();
     if descriptor == b"NOFD" || descriptor == b"err" {
         return Err("cargo-target-active-use-probe-failed:lsof-permission-limited".into());
+    }
+    let descriptor_fd = descriptor_number(descriptor);
+    let exact_retained_root = record.pid == self_pid
+        && descriptor_fd == Some(retained_root_fd)
+        && record.device == Some(retained_root_identity.0)
+        && record.inode == Some(retained_root_identity.1);
+    if exact_retained_root {
+        return Ok(());
     }
     if let (Some(device), Some(inode)) = (record.device, record.inode) {
         if reviewed.contains(&(device, inode)) {
@@ -497,11 +556,7 @@ fn finish_record(
         }
         return Ok(());
     }
-    if record
-        .file_type
-        .as_deref()
-        .is_some_and(filesystem_type)
-    {
+    if record.file_type.as_deref().is_some_and(filesystem_type) {
         return Err("cargo-target-active-use-probe-failed:lsof-filesystem-identity-missing".into());
     }
     Ok(())
@@ -513,6 +568,8 @@ fn classify_lsof_fields(
     stdout: &[u8],
     stderr: &[u8],
     self_pid: u32,
+    retained_root_fd: RawFd,
+    retained_root_identity: FileIdentity,
 ) -> Result<(), String> {
     if status_code != 0 {
         return Err(format!(
@@ -534,7 +591,13 @@ fn classify_lsof_fields(
             .ok_or_else(|| "cargo-target-holder-lsof-empty-field".to_string())?;
         match *tag {
             b'p' => {
-                finish_record(&mut current_file, reviewed, self_pid)?;
+                finish_record(
+                    &mut current_file,
+                    reviewed,
+                    self_pid,
+                    retained_root_fd,
+                    retained_root_identity,
+                )?;
                 let pid = parse_u32_ascii(value, "pid")?;
                 current_pid = Some(pid);
                 process_records = process_records
@@ -542,7 +605,13 @@ fn classify_lsof_fields(
                     .ok_or_else(|| "cargo-target-holder-lsof-process-overflow".to_string())?;
             }
             b'f' => {
-                finish_record(&mut current_file, reviewed, self_pid)?;
+                finish_record(
+                    &mut current_file,
+                    reviewed,
+                    self_pid,
+                    retained_root_fd,
+                    retained_root_identity,
+                )?;
                 let pid = current_pid
                     .ok_or_else(|| "cargo-target-holder-lsof-file-without-process".to_string())?;
                 current_file = Some(FileRecord {
@@ -572,23 +641,33 @@ fn classify_lsof_fields(
             _ => {}
         }
     }
-    finish_record(&mut current_file, reviewed, self_pid)?;
+    finish_record(
+        &mut current_file,
+        reviewed,
+        self_pid,
+        retained_root_fd,
+        retained_root_identity,
+    )?;
     if process_records == 0 {
         return Err("cargo-target-active-use-probe-failed:lsof-empty-output".into());
     }
     Ok(())
 }
 
-/// Refuses cleanup when any non-DiskSage process holds the reviewed root or a descendant.
+/// Refuses cleanup when any holder other than DiskSage's exact retained root descriptor
+/// references the reviewed root or one of its descendants.
 ///
-/// The probe never starts from a pathname. It first snapshots the reviewed tree's
-/// `(device, inode)` identities through the retained directory capability, then matches
-/// those identities against complete machine-readable lsof records. Any warning,
-/// permission-limited `NOFD`, truncated output, malformed filesystem identity, timeout,
-/// or unsupported lsof result fails closed.
+/// The probe never starts from a pathname. It snapshots the reviewed tree's `(device,
+/// inode)` identities through the retained directory capability, proves that a non-root
+/// lsof build can provide system-wide evidence, then matches complete machine-readable
+/// records. Any warning, permission limitation, truncation, malformed filesystem identity,
+/// timeout, or unsupported lsof result fails closed.
 pub(crate) fn ensure_opened_target_has_no_active_holders(root: &File) -> Result<(), String> {
+    let (retained_root_identity, _) = fstat_identity(root)?;
+    let retained_root_fd = root.as_raw_fd();
     let reviewed = collect_reviewed_identities(root)?;
     let lsof = resolve_lsof_executable()?;
+    verify_lsof_global_visibility(&lsof)?;
     let output = run_lsof(&lsof)?;
     if output.stdout.truncated || output.stderr.truncated {
         return Err("cargo-target-active-use-probe-failed:lsof-output-truncated".into());
@@ -600,6 +679,8 @@ pub(crate) fn ensure_opened_target_has_no_active_holders(root: &File) -> Result<
         &output.stdout.bytes,
         &output.stderr.bytes,
         std::process::id(),
+        retained_root_fd,
+        retained_root_identity,
     )
 }
 
@@ -608,12 +689,30 @@ mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
 
-    fn field_snapshot(pid: u32, identity: FileIdentity) -> Vec<u8> {
+    fn field_snapshot(pid: u32, descriptor: &str, identity: FileIdentity) -> Vec<u8> {
         format!(
-            "p{pid}\0f3\0tREG\0D0x{:x}\0i{}\0\n",
+            "p{pid}\0f{descriptor}\0tREG\0D0x{:x}\0i{}\0\n",
             identity.0, identity.1
         )
         .into_bytes()
+    }
+
+    fn classify_for_test(
+        reviewed: &HashSet<FileIdentity>,
+        output: &[u8],
+        self_pid: u32,
+        retained_root_fd: RawFd,
+        retained_root_identity: FileIdentity,
+    ) -> Result<(), String> {
+        classify_lsof_fields(
+            reviewed,
+            0,
+            output,
+            b"",
+            self_pid,
+            retained_root_fd,
+            retained_root_identity,
+        )
     }
 
     #[test]
@@ -642,53 +741,139 @@ mod tests {
 
     #[test]
     fn matching_non_self_holder_blocks_authorization() {
-        let reviewed = HashSet::from([(0x1cu64, 42u64)]);
-        let output = field_snapshot(std::process::id().saturating_add(1), (0x1c, 42));
+        let root_identity = (0x1cu64, 41u64);
+        let held_identity = (0x1cu64, 42u64);
+        let reviewed = HashSet::from([root_identity, held_identity]);
+        let self_pid = std::process::id();
+        let output = field_snapshot(self_pid.saturating_add(1), "3", held_identity);
         assert_eq!(
-            classify_lsof_fields(&reviewed, 0, &output, b"", std::process::id()).unwrap_err(),
+            classify_for_test(&reviewed, &output, self_pid, 17, root_identity).unwrap_err(),
             "cargo-target-active-holders-present"
         );
     }
 
     #[test]
-    fn current_process_is_excluded_from_holder_match() {
-        let reviewed = HashSet::from([(0x1cu64, 42u64)]);
-        let output = field_snapshot(std::process::id(), (0x1c, 42));
-        assert!(classify_lsof_fields(&reviewed, 0, &output, b"", std::process::id()).is_ok());
+    fn exact_retained_root_fd_is_exempted() {
+        let self_pid = std::process::id();
+        let retained_root_fd = 17;
+        let retained_root_identity = (0x1cu64, 41u64);
+        let reviewed = HashSet::from([retained_root_identity]);
+        let output = field_snapshot(self_pid, "17", retained_root_identity);
+        assert!(classify_for_test(
+            &reviewed,
+            &output,
+            self_pid,
+            retained_root_fd,
+            retained_root_identity,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn self_descendant_holder_blocks_authorization() {
+        let self_pid = std::process::id();
+        let retained_root_fd = 17;
+        let retained_root_identity = (0x1cu64, 41u64);
+        let descendant_identity = (0x1cu64, 42u64);
+        let reviewed = HashSet::from([retained_root_identity, descendant_identity]);
+        let output = field_snapshot(self_pid, "18", descendant_identity);
+        assert_eq!(
+            classify_for_test(
+                &reviewed,
+                &output,
+                self_pid,
+                retained_root_fd,
+                retained_root_identity,
+            )
+            .unwrap_err(),
+            "cargo-target-active-holders-present"
+        );
     }
 
     #[test]
     fn nofd_is_permission_limited_and_fails_closed() {
-        let reviewed = HashSet::from([(0x1cu64, 42u64)]);
+        let root_identity = (0x1cu64, 41u64);
+        let reviewed = HashSet::from([root_identity]);
         let output = b"p999999\0fNOFD\0\n";
         assert_eq!(
-            classify_lsof_fields(&reviewed, 0, output, b"", std::process::id()).unwrap_err(),
+            classify_for_test(&reviewed, output, std::process::id(), 17, root_identity)
+                .unwrap_err(),
             "cargo-target-active-use-probe-failed:lsof-permission-limited"
         );
     }
 
     #[test]
     fn filesystem_record_without_device_inode_fails_closed() {
-        let reviewed = HashSet::from([(0x1cu64, 42u64)]);
+        let root_identity = (0x1cu64, 41u64);
+        let reviewed = HashSet::from([root_identity]);
         let output = b"p999999\0f3\0tREG\0\n";
         assert_eq!(
-            classify_lsof_fields(&reviewed, 0, output, b"", std::process::id()).unwrap_err(),
+            classify_for_test(&reviewed, output, std::process::id(), 17, root_identity)
+                .unwrap_err(),
             "cargo-target-active-use-probe-failed:lsof-filesystem-identity-missing"
         );
     }
 
     #[test]
     fn warning_or_nonzero_lsof_result_never_authorizes_cleanup() {
-        let reviewed = HashSet::from([(0x1cu64, 42u64)]);
+        let root_identity = (0x1cu64, 41u64);
+        let reviewed = HashSet::from([root_identity]);
         let output = b"p999999\0f3\0tREG\0D0x2\0i7\0\n";
-        assert!(classify_lsof_fields(&reviewed, 1, output, b"", std::process::id()).is_err());
+        assert!(classify_lsof_fields(
+            &reviewed,
+            1,
+            output,
+            b"",
+            std::process::id(),
+            17,
+            root_identity,
+        )
+        .is_err());
         assert!(classify_lsof_fields(
             &reviewed,
             0,
             output,
             b"lsof: WARNING: incomplete kernel visibility\n",
             std::process::id(),
+            17,
+            root_identity,
         )
         .is_err());
+    }
+
+    #[test]
+    fn restricted_lsof_security_mode_fails_closed_for_non_root() {
+        assert_eq!(
+            classify_lsof_global_visibility(
+                1000,
+                1000,
+                0,
+                b"",
+                b"Only root can list all files;\n",
+                false,
+                false,
+            )
+            .unwrap_err(),
+            "cargo-target-lsof-global-visibility-unavailable"
+        );
+    }
+
+    #[test]
+    fn unrestricted_lsof_security_mode_is_accepted_for_non_root() {
+        assert!(classify_lsof_global_visibility(
+            1000,
+            1000,
+            0,
+            b"",
+            b"Anyone can list all files;\n",
+            false,
+            false,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn root_does_not_depend_on_lsof_help_visibility_text() {
+        assert!(classify_lsof_global_visibility(0, 0, 127, b"", b"", true, true).is_ok());
     }
 }
