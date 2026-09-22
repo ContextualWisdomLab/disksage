@@ -52,6 +52,10 @@ pub(crate) mod unix_process_group;
 #[cfg(unix)]
 #[allow(dead_code)]
 pub(crate) mod unix_capability_cleanup;
+/// Unix exact-object active-holder authorization for destructive reclaim.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_holder_authority;
 pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
