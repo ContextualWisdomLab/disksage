@@ -21,6 +21,10 @@ describe('Windows Cargo target detach object-authority contract', () => {
       'pub(super) fn open_directory',
       'pub(super) fn identity',
     );
+    const openVerified = sourceSlice(
+      '#[cfg(windows)]\nfn open_verified_target_dir',
+      '#[cfg(not(any(unix, windows)))]\nstruct OpenedTargetDir',
+    );
     const windowsRollback = sourceSlice(
       '#[cfg(windows)]\nimpl Drop for DetachedTargetDir',
       '#[cfg(windows)]\nfn detach_verified_target_dir',
@@ -35,6 +39,11 @@ describe('Windows Cargo target detach object-authority contract', () => {
     // would allow a same-path replacement to become a transient mutation subject.
     expect(windowsNative).toContain('SetFileInformationByHandle');
     expect(windowsNative).toMatch(/fn\s+rename_opened_directory\s*\(\s*file:\s*&File,/);
+
+    // Ownership authorization must bind to the exact FILE_ID_INFO-reviewed handle
+    // that becomes the mutation authority. A path-level owner probe can race with
+    // replacement and restoration between preflight and open_verified_target_dir.
+    expect(openVerified).toContain('windows_native::ensure_owned_by_current_user(&file)?;');
 
     // The same handle is reused for owner inspection and rename. GetSecurityInfo
     // requires READ_CONTROL for OWNER_SECURITY_INFORMATION, while the mutation path
