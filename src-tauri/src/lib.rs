@@ -48,6 +48,10 @@ mod brew_cleanup;
 #[cfg(unix)]
 #[allow(dead_code)]
 pub(crate) mod unix_process_group;
+/// Unix capability-rooted traversal and contents cleanup for destructive reclaim.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_capability_cleanup;
 pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
