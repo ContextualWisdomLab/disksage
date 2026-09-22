@@ -21,6 +21,10 @@ describe('Windows Cargo target detach object-authority contract', () => {
       'pub(super) fn open_directory',
       'pub(super) fn identity',
     );
+    const windowsRollback = sourceSlice(
+      '#[cfg(windows)]\nimpl Drop for DetachedTargetDir',
+      '#[cfg(windows)]\nfn detach_verified_target_dir',
+    );
     const windowsDetach = sourceSlice(
       '#[cfg(windows)]\nfn detach_verified_target_dir',
       '#[cfg(not(any(unix, windows)))]\nstruct DetachedTargetDir',
@@ -62,9 +66,10 @@ describe('Windows Cargo target detach object-authority contract', () => {
     expect(windowsDetach).toMatch(
       /windows_native::rename_opened_directory\s*\(\s*&opened\.file\s*,\s*&clean_path\s*\)/,
     );
-    expect(windowsDetach).toMatch(
+    expect(windowsRollback).toMatch(
       /windows_native::rename_opened_directory\s*\(\s*&self\.opened\.file\s*,\s*&self\.original_path\s*\)/,
     );
     expect(windowsDetach).not.toContain('std::fs::rename(');
+    expect(windowsRollback).not.toContain('std::fs::rename(');
   });
 });
