@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn result_output_is_valid_json_with_escaped_paths() {
+    fn result_output_is_valid_json_with_escaped_paths_and_zero_unproven_credit() {
         let result = CargoTargetCleanResult {
             cargo_path: PathBuf::from("/tmp/cargo\"quoted"),
             project_dir: PathBuf::from("/tmp/project\\segment"),
@@ -156,7 +156,7 @@ mod tests {
         let output = serialize_result(&result).expect("serialize result");
         let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(parsed["observed_reduction_bytes"], 3);
-        assert_eq!(parsed["ledger_reclaim_bytes"], 3);
+        assert_eq!(parsed["ledger_reclaim_bytes"], 0);
         assert_eq!(parsed["cargo_path"], "/tmp/cargo\"quoted");
     }
 
