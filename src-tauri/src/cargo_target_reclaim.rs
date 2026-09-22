@@ -782,6 +782,7 @@ fn open_verified_target_dir(
     if identity != expected || windows_native::identity_at(target_dir)? != identity {
         return Err("cargo-target-dir-replaced".into());
     }
+    windows_native::ensure_owned_by_current_user(&file)?;
     Ok(OpenedTargetDir { file, identity })
 }
 
