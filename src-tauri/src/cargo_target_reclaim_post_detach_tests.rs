@@ -14,23 +14,17 @@ fn holder_arrives_after_preflight(path: &Path) -> Result<(), String> {
     if call == 0 {
         ensure_target_safe_to_reclaim(path)?;
         let holder = File::open(path.join("artifact"))
-            .map_err(|error| format!("post-detach-holder-open-failed:{error}"))?;
+            .map_err(|error| format!("post-open-holder-open-failed:{error}"))?;
         *POST_PREFLIGHT_HOLDER
             .lock()
-            .map_err(|_| "post-detach-holder-lock-poisoned".to_string())? = Some(holder);
+            .map_err(|_| "post-open-holder-lock-poisoned".to_string())? = Some(holder);
         return Ok(());
     }
-    if !path
-        .to_string_lossy()
-        .contains(".disksage-cargo-clean-")
-    {
-        return Err("cargo-target-post-detach-probe-not-detached".into());
-    }
-    ensure_target_safe_to_reclaim(path)
+    Err("cargo-target-unexpected-second-pathname-probe".into())
 }
 
 #[test]
-fn post_detach_holder_blocks_cargo_and_rolls_back_target() {
+fn post_open_holder_blocks_before_detach_and_cargo() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -44,7 +38,7 @@ fn post_detach_holder_blocks_cargo_and_rolls_back_target() {
     fs::create_dir_all(&target).expect("target dir");
     fs::write(
         project.join("Cargo.toml"),
-        "[package]\nname=\"post-detach-holder\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        "[package]\nname=\"post-open-holder\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
     )
     .expect("manifest");
     fs::write(&artifact, "must-survive").expect("artifact");
@@ -69,17 +63,30 @@ fn post_detach_holder_blocks_cargo_and_rolls_back_target() {
 
     assert_eq!(
         ACTIVE_USE_PROBES.load(Ordering::SeqCst),
-        2,
-        "mutation authorization must repeat active-use evidence after identity-bound detach"
+        1,
+        "pathname active-use evidence is preflight only; post-open authorization must use the reviewed object"
     );
     assert_eq!(
         result.unwrap_err(),
         "cargo-target-active-holders-present",
-        "a real file descriptor opened after preflight must survive rename and be detected on the detached path"
+        "a real descriptor acquired after preflight must be rejected by exact-object holder authorization before mutation"
     );
-    assert!(!cargo_ran.exists(), "Cargo must not run after the second probe refuses");
+    assert!(!cargo_ran.exists(), "Cargo must not run after post-open holder refusal");
     assert!(
         artifact.is_file(),
-        "failed post-detach authorization must roll the detached target back to its original path"
+        "post-open holder refusal must leave the reviewed target at its original path"
+    );
+    let detached_exists = fs::read_dir(&project)
+        .expect("project listing")
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".disksage-cargo-clean-")
+        });
+    assert!(
+        !detached_exists,
+        "holder refusal must occur before any quarantine detach is created"
     );
 }
