@@ -415,22 +415,24 @@ mod tests {
 
     #[test]
     fn active_use_evidence_blocks_cache_mutation() {
-        let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
-            method: "lsof-file-pid".into(),
-            assessed: true,
-            evidence_complete: false,
-            active: false,
-            observed_pids: Vec::new(),
-            results_truncated: false,
-            error: Some("active-use-timeout".into()),
-        };
-        assert_eq!(
-            active_use_blocker(&incomplete),
-            Some("cache-target-active-use-evidence-incomplete")
-        );
+        for error in ["active-use-ps-timeout", "active-use-ps-output-truncated"] {
+            let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
+                method: "lsof-file-pid+ps-path-ancestry".into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: error.ends_with("truncated"),
+                error: Some(error.into()),
+            };
+            assert_eq!(
+                active_use_blocker(&incomplete),
+                Some("cache-target-active-use-evidence-incomplete")
+            );
+        }
 
         let active = crate::git_worktree::GitWorktreeActiveUseEvidence {
-            method: "lsof-file-pid".into(),
+            method: "lsof-file-pid+ps-path-ancestry".into(),
             assessed: true,
             evidence_complete: true,
             active: true,
