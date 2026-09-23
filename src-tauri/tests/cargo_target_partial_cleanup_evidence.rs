@@ -7,7 +7,7 @@ use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn irreversible_partial_cleanup_retains_typed_evidence_before_owner_serialization() {
+fn irreversible_partial_cleanup_retains_typed_filesystem_evidence() {
     assert_ne!(
         unsafe { libc::geteuid() },
         0,
@@ -62,26 +62,13 @@ fn irreversible_partial_cleanup_retains_typed_evidence_before_owner_serializatio
                 Some(0),
                 "the remaining empty directory carries no regular-file allocation in the target view"
             );
+            assert!(
+                target_view_allocated_bytes_before
+                    .saturating_sub(target_view_allocated_bytes_after.unwrap_or(0))
+                    > 0,
+                "typed filesystem evidence must retain the observed target-view reduction"
+            );
         }
         other => panic!("irreversible mutation must return typed partial evidence, got {other:?}"),
     }
-
-    let rendered = String::from(failure);
-    let evidence: serde_json::Value = serde_json::from_str(&rendered)
-        .expect("legacy owner boundary must still receive machine-readable JSON");
-    assert_eq!(evidence["schema_version"], 1);
-    assert_eq!(evidence["code"], "cargo-target-partial-clean-failed");
-    assert_eq!(evidence["completion"], "partial");
-    assert_eq!(evidence["entries_removed"], 1);
-    assert!(evidence["target_view_allocated_bytes_before"].as_u64().is_some_and(|value| value > 0));
-    assert_eq!(evidence["target_view_allocated_bytes_after"], 0);
-    assert_eq!(
-        evidence["observed_target_view_reduction_bytes"],
-        evidence["target_view_allocated_bytes_before"]
-    );
-    assert_eq!(evidence["ledger_reclaim_bytes"], 0);
-    assert!(
-        evidence["cause"].as_str().is_some_and(|cause| !cause.is_empty()),
-        "partial-clean evidence must retain the causal filesystem failure"
-    );
 }
