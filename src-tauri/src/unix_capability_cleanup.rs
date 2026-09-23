@@ -357,18 +357,22 @@ pub(crate) fn measure_allocated_bytes(root: &File) -> Result<u64, String> {
 
 /// Removes descendants beneath an already-reviewed directory capability while retaining root.
 ///
-/// If an error occurs after one or more irreversible unlinks, the error is prefixed with
-/// `cargo-target-partial-clean-failed` so callers cannot claim rollback of removed descendants.
+/// If an error occurs after one or more irreversible unlinks, the error becomes a stable
+/// machine-readable JSON receipt so callers can preserve partial-mutation evidence verbatim.
 pub(crate) fn remove_contents(root: &File) -> Result<CleanupStats, String> {
     let mut state = WalkState::new(root_device(root)?);
     match walk_directory(root, 1, &mut state, true) {
         Ok(()) => Ok(CleanupStats {
             entries_removed: state.removed,
         }),
-        Err(error) if state.removed > 0 => Err(format!(
-            "cargo-target-partial-clean-failed:removed={}:{}",
-            state.removed, error
-        )),
+        Err(error) if state.removed > 0 => Err(serde_json::json!({
+            "schema_version": 1,
+            "code": "cargo-target-partial-clean-failed",
+            "completion": "partial",
+            "entries_removed": state.removed,
+            "cause": error,
+        })
+        .to_string()),
         Err(error) => Err(error),
     }
 }
