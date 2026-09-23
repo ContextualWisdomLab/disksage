@@ -14,7 +14,7 @@ pub struct CargoTargetPartialCleanupReceipt {
     entries_removed: u64,
     target_view_allocated_bytes_before: u64,
     target_view_allocated_bytes_after: Option<u64>,
-    observed_target_view_reduction_bytes: u64,
+    observed_target_view_reduction_bytes: Option<u64>,
     ledger_reclaim_bytes: u64,
     cause: String,
 }
@@ -32,8 +32,7 @@ impl CargoTargetPartialCleanupReceipt {
         target_view_allocated_bytes_after: Option<u64>,
     ) -> Self {
         let observed_target_view_reduction_bytes = target_view_allocated_bytes_after
-            .map(|after| target_view_allocated_bytes_before.saturating_sub(after))
-            .unwrap_or(0);
+            .map(|after| target_view_allocated_bytes_before.saturating_sub(after));
         Self {
             schema_version: Self::SCHEMA_VERSION,
             code: Self::CODE,
@@ -78,8 +77,8 @@ impl CargoTargetPartialCleanupReceipt {
         self.target_view_allocated_bytes_after
     }
 
-    /// Reduction observed in the retained target-tree view, not physical-release proof.
-    pub fn observed_target_view_reduction_bytes(&self) -> u64 {
+    /// Observed target-view reduction, or `None` when post-failure measurement was unavailable.
+    pub fn observed_target_view_reduction_bytes(&self) -> Option<u64> {
         self.observed_target_view_reduction_bytes
     }
 
@@ -164,5 +163,27 @@ impl From<crate::unix_capability_cleanup::CleanupFailure> for CargoTargetReclaim
                 target_view_allocated_bytes_after,
             )),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_receipt_serialization_preserves_unknown_post_failure_measurement() {
+        let receipt = CargoTargetPartialCleanupReceipt::from_partial_cleanup(
+            1,
+            "cargo-target-capability-unlinkat-failed:permission".into(),
+            4096,
+            None,
+        );
+        let json = serde_json::to_value(&receipt).expect("serialize partial receipt");
+        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["completion"], "partial");
+        assert_eq!(json["target_view_allocated_bytes_before"], 4096);
+        assert!(json["target_view_allocated_bytes_after"].is_null());
+        assert!(json["observed_target_view_reduction_bytes"].is_null());
+        assert_eq!(json["ledger_reclaim_bytes"], 0);
     }
 }
