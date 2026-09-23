@@ -16,17 +16,13 @@ fn pathname_selected_detach_can_move_replacement_after_reviewed_handle_open() {
     let reviewed_handle = File::open(&target).expect("open reviewed target");
     let reviewed_identity = reviewed_handle.metadata().expect("reviewed metadata");
 
-    // Deterministically interpose a same-user replacement after DiskSage has
-    // opened the reviewed object but before the current pathname-selected detach.
+    // Reproduce why pathname detach is not an admissible Unix mutation boundary:
+    // a same-user replacement can occupy the reviewed path after the descriptor is open.
     fs::rename(&target, &reviewed_stash).expect("stash reviewed object after open");
     fs::create_dir(&target).expect("replacement target");
     fs::write(target.join("REPLACEMENT_SENTINEL"), b"must-survive")
         .expect("replacement sentinel");
     fs::create_dir(&quarantine).expect("quarantine");
-
-    // This mirrors the current Unix detach mutation. The already-open handle
-    // still identifies the reviewed object, but the pathname now selects the
-    // unreviewed replacement and moves it into the quarantine.
     fs::rename(&target, &clean_path).expect("simulate pathname-selected detach");
 
     let opened_after_swap = reviewed_handle.metadata().expect("opened identity after swap");
@@ -43,17 +39,37 @@ fn pathname_selected_detach_can_move_replacement_after_reviewed_handle_open() {
     );
 
     let owner_source = include_str!("../src/cargo_target_reclaim.rs");
-    let unix_detach_start = owner_source
-        .find("#[cfg(unix)]\nfn detach_verified_target_dir(")
-        .expect("Unix detach boundary");
-    let windows_boundary = owner_source[unix_detach_start..]
-        .find("#[cfg(windows)]\nstruct DetachedTargetDir")
-        .map(|offset| unix_detach_start + offset)
-        .expect("Windows boundary after Unix detach");
-    let unix_detach = &owner_source[unix_detach_start..windows_boundary];
+    let flow_start = owner_source
+        .find("fn clean_cargo_target_with_active_use_and_opened_hook")
+        .expect("cargo target owner flow");
+    let flow_end = owner_source[flow_start..]
+        .find("/// Buyer-visible reclaim credit")
+        .map(|offset| flow_start + offset)
+        .expect("ledger boundary after owner flow");
+    let flow = &owner_source[flow_start..flow_end];
+    let holder = flow
+        .find("unix_holder_authority::ensure_opened_target_has_no_active_holders")
+        .expect("Unix exact-object holder authorization");
+    let windows = flow[holder..]
+        .find("#[cfg(windows)]")
+        .map(|offset| holder + offset)
+        .expect("Windows branch after Unix retained-capability branch");
+    let unix_mutation = &flow[holder..windows];
 
     assert!(
-        !unix_detach.contains("std::fs::rename(target_dir"),
-        "P1: Unix detach re-selects the requested target by pathname after opening the reviewed directory capability; a same-path replacement can become a transient mutation subject before post-move dev+ino detection"
+        unix_mutation.contains("unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)"),
+        "Unix reclaim must measure through the retained reviewed descriptor"
+    );
+    assert!(
+        unix_mutation.contains("unix_capability_cleanup::remove_contents(&opened_target.file)"),
+        "Unix reclaim must remove descendants through the retained reviewed descriptor"
+    );
+    assert!(
+        !unix_mutation.contains("detach_verified_target_dir"),
+        "P1: Unix owner flow must not re-select the requested target by pathname for detach after opening the reviewed capability"
+    );
+    assert!(
+        !unix_mutation.contains("Command::new(cargo)"),
+        "P1: Unix destructive authority must not be delegated to an external child selected by a mutable pathname"
     );
 }
