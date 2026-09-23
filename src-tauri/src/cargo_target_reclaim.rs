@@ -534,6 +534,7 @@ fn executable_file(path: &Path) -> bool {
         return false;
     };
     if !meta.is_file() || meta.file_type().is_symlink() {
+        // Allow normal files; also accept symlink-to-file via canonicalize follow.
         if meta.file_type().is_symlink() {
             let Ok(real) = std::fs::canonicalize(path) else {
                 return false;
@@ -613,18 +614,22 @@ fn ensure_absolute_project(project_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Canonical component containment (not string-prefix). Requires a strict child path.
 fn is_strict_canonical_child(root: &Path, candidate: &Path) -> bool {
     let root_c: Vec<_> = root.components().collect();
     let cand_c: Vec<_> = candidate.components().collect();
     cand_c.len() > root_c.len() && cand_c.iter().zip(root_c.iter()).all(|(a, b)| a == b)
 }
 
+/// Measured target must be absolute and a strict canonical child of `project_dir`
+/// (rejects symlink escapes / shared redirects outside the project tree).
 fn resolve_measured_target_dir(project_dir: &Path, target_dir: &Path) -> Result<PathBuf, String> {
     if !target_dir.is_absolute() {
         return Err("cargo-target-dir-not-absolute".into());
     }
     let project_canon = std::fs::canonicalize(project_dir)
         .map_err(|e| format!("cargo-target-project-canonicalize-failed:{e}"))?;
+    // `Path::exists` reports false for dangling links, so inspect the final component first.
     let target_canon = match std::fs::symlink_metadata(target_dir) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("cargo-target-dir-symlink".into());
@@ -677,6 +682,7 @@ fn read_bounded(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 fn terminate_child(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
+        // The child creates a private process group, so descendants cannot outlive timeout.
         let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
     }
     let _ = child.kill();
@@ -998,6 +1004,17 @@ fn detach_verified_target_dir(
     Err("cargo-target-identity-bound-cleanup-unsupported".into())
 }
 
+/// Classify `lsof` completion for a cargo target tree.
+///
+/// macOS `lsof +D` may return exit 1 **with** holder lines in stdout (see
+/// independent review active-holder-reproduction.json). Any non-empty stdout is
+/// therefore treated as active holders regardless of exit 0/1.
+///
+/// Any non-empty stderr is incomplete inspection evidence and fails closed,
+/// including exit 0 + empty stdout + warning stderr (report-a118 warning_zero).
+///
+/// Only exit 0 or 1 with **both** stdout and stderr empty is an admissible
+/// empty no-match. Exit 127 and every other non-zero outcome fail closed.
 pub(crate) fn classify_target_lsof_result(
     exit_code: i32,
     stdout: &str,
@@ -1074,6 +1091,7 @@ fn run_target_lsof(
     })
 }
 
+/// Default production probe: ownership plus fail-closed platform active-use evidence.
 pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), String> {
     if !target_dir.exists() {
         return Ok(());
@@ -1096,6 +1114,16 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
     Err("cargo-target-active-use-probe-unsupported".into())
 }
 
+/// Run `cargo clean` for a project directory that owns a `Cargo.toml`.
+///
+/// Always passes `--target-dir <project>/target` so measurement and deletion match.
+///
+/// Fail-closed:
+/// - missing cargo executable ⇒ `Err`
+/// - spawn failure / command-not-found ⇒ `Err`
+/// - active holders / lsof probe failure / owner mismatch ⇒ `Err` (no clean)
+/// - non-zero exit ⇒ `Err` (no success reclaim)
+/// - zero size delta with exit 0 ⇒ `Ok` with `observed_reduction_bytes == 0` (not a reclaim success claim)
 pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, String> {
     ensure_absolute_project(project_dir)?;
     let cargo = resolve_cargo_executable()?;
@@ -1103,6 +1131,7 @@ pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, 
     clean_cargo_target_with(project_dir, &target_dir, &cargo)
 }
 
+/// Test/hook seam: run clean with an explicit cargo binary and measured target dir.
 pub(crate) fn clean_cargo_target_with(
     project_dir: &Path,
     target_dir: &Path,
@@ -1111,6 +1140,7 @@ pub(crate) fn clean_cargo_target_with(
     clean_cargo_target_with_active_use(project_dir, target_dir, cargo, ensure_target_safe_to_reclaim)
 }
 
+/// Same as [`clean_cargo_target_with`] but with an injectable active-use probe.
 pub(crate) fn clean_cargo_target_with_active_use(
     project_dir: &Path,
     target_dir: &Path,
@@ -1170,6 +1200,7 @@ where
         windows_native::identity_at(&target_dir)?
     };
     active_use(&target_dir)?;
+    // Bind measurement and cleanup to the authorized object, not its replaceable pathname.
     #[cfg(unix)]
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
     #[cfg(windows)]
@@ -1177,12 +1208,7 @@ where
     #[cfg(not(any(unix, windows)))]
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
     after_open(&target_dir)?;
-    #[cfg(unix)]
-    crate::unix_holder_authority::ensure_opened_target_has_no_active_holders(
-        &opened_target.file,
-    )?;
     let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
-    #[cfg(windows)]
     active_use(&detached_target.clean_path)?;
     let bytes_before = detached_target.verified_size()?;
 
@@ -1220,6 +1246,7 @@ where
     })
 }
 
+/// Buyer-visible reclaim credit remains zero until the result schema proves physical release.
 pub fn ledger_reclaim_bytes(result: &CargoTargetCleanResult) -> u64 {
     let _ = result;
     0
@@ -1375,6 +1402,7 @@ mod tests {
         fs::write(shared.join("SENTINEL"), "must-survive").unwrap();
         let target_canon = fs::canonicalize(&target).unwrap();
 
+        // Mock cargo: record argv and mutate only the identity-verified detached target.
         let fake = project.join("fake-cargo");
         let script = format!(
             "#!/bin/sh\n\
@@ -1413,12 +1441,22 @@ exit 42\n",
 
         let argv = fs::read(&argv_log).unwrap_or_default();
         let argv_txt = String::from_utf8_lossy(&argv);
-        assert!(argv_txt.contains("--target-dir"));
         assert!(
-            argv_txt.contains(".disksage-cargo-clean-") && !argv_txt.contains(target_canon.to_string_lossy().as_ref())
+            argv_txt.contains("--target-dir"),
+            "consumer must pass --target-dir; argv={argv_txt:?}"
         );
-        assert!(shared.join("SENTINEL").is_file());
-        assert!(!target_canon.join("artifact").exists());
+        assert!(
+            argv_txt.contains(".disksage-cargo-clean-") && !argv_txt.contains(target_canon.to_string_lossy().as_ref()),
+            "consumer must pass the identity-verified detached target; argv={argv_txt:?}"
+        );
+        assert!(
+            shared.join("SENTINEL").is_file(),
+            "unrelated sentinel must survive pinned --target-dir clean"
+        );
+        assert!(
+            !target_canon.join("artifact").exists(),
+            "measured target contents should be removed"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1478,7 +1516,10 @@ exit 42\n",
 
         let err = clean_cargo_target_with(&project, &project.join("target"), &fake).unwrap_err();
         assert_eq!(err, "cargo-target-dir-symlink");
-        assert!(outside.join("SENTINEL").is_file());
+        assert!(
+            outside.join("SENTINEL").is_file(),
+            "symlink-escaped shared target must not be cleaned"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1540,8 +1581,14 @@ exit 42\n",
         );
 
         assert_eq!(result.unwrap_err(), "cargo-target-dir-replaced");
-        assert!(reviewed.join("reviewed.bin").is_file());
-        assert!(target.join("replacement.bin").is_file());
+        assert!(
+            reviewed.join("reviewed.bin").is_file(),
+            "the identity-bound reviewed object must not be cleaned"
+        );
+        assert!(
+            target.join("replacement.bin").is_file(),
+            "the same-path replacement must be restored without mutation"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -1599,11 +1646,6 @@ rmdir \"$target_arg\"\n",
         let _ = fs::remove_dir_all(&root);
         let target = root.join("target");
         fs::create_dir_all(&target).unwrap();
-        fs::write(
-            target.join("CACHEDIR.TAG"),
-            b"Signature: 8a477f597d28d172789f06886806bc55\n",
-        )
-        .unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
@@ -1635,6 +1677,9 @@ rmdir \"$target_arg\"\n",
 
     #[test]
     fn lsof_exit_1_with_holder_stdout_is_active_holders_not_empty_match() {
+        // Mirrors independent review active-holder-reproduction.json:
+        // Python PID held a synthetic file; lsof exit=1, stderr empty, stdout listed
+        // the holder. Original cargo|rustc grep would miss it and WOULD_PROCEED.
         let sample = "COMMAND     PID       USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\n\
 python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-holder/target/synthetic-artifact\n";
         assert_eq!(
@@ -1645,6 +1690,8 @@ python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-h
 
     #[test]
     fn lsof_exit_0_with_warning_stderr_is_fail_closed() {
+        // report-a118 warning_zero: exit0 + empty stdout + warning stderr invoked
+        // fake cargo under a118b237. Must refuse before clean.
         let err = classify_target_lsof_result(
             0,
             "",
@@ -1767,7 +1814,10 @@ python3.1 21407 seonghobae    3u   REG   1,16       23 664756961 /tmp/co-pr461-h
             "cargo-target-active-use-probe-failed:lsof-exit-status:127"
         );
         assert!(!ran.exists(), "cargo must not run when lsof probe fails");
-        assert!(target.join("keep-me").is_file());
+        assert!(
+            target.join("keep-me").is_file(),
+            "must not delete when active-use probe fails"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
