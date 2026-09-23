@@ -63,41 +63,6 @@ pub(crate) enum CleanupFailure {
     },
 }
 
-impl CleanupFailure {
-    fn into_owner_string(self) -> String {
-        match self {
-            Self::NoMutation { cause } => cause,
-            Self::Partial {
-                entries_removed,
-                cause,
-                target_view_allocated_bytes_before,
-                target_view_allocated_bytes_after,
-            } => {
-                let observed_target_view_reduction_bytes = target_view_allocated_bytes_after
-                    .map(|after| target_view_allocated_bytes_before.saturating_sub(after));
-                serde_json::json!({
-                    "schema_version": 1,
-                    "code": "cargo-target-partial-clean-failed",
-                    "completion": "partial",
-                    "entries_removed": entries_removed,
-                    "target_view_allocated_bytes_before": target_view_allocated_bytes_before,
-                    "target_view_allocated_bytes_after": target_view_allocated_bytes_after,
-                    "observed_target_view_reduction_bytes": observed_target_view_reduction_bytes,
-                    "ledger_reclaim_bytes": 0,
-                    "cause": cause,
-                })
-                .to_string()
-            }
-        }
-    }
-}
-
-impl From<CleanupFailure> for String {
-    fn from(value: CleanupFailure) -> Self {
-        value.into_owner_string()
-    }
-}
-
 struct DirStream(*mut libc::DIR);
 
 impl DirStream {
@@ -411,8 +376,8 @@ pub(crate) fn measure_allocated_bytes(root: &File) -> Result<u64, String> {
 /// Removes descendants beneath an already-reviewed directory capability while retaining root.
 ///
 /// Partial failures remain typed at this filesystem boundary and carry target-view allocation
-/// evidence. Conversion to the legacy owner `String` boundary is explicit and keeps physical
-/// reclaim credit at zero until a separate block-release contract exists.
+/// evidence. The owner maps that typed failure directly to its canonical recovery receipt; this
+/// adapter never serializes buyer-facing JSON or grants physical reclaim credit.
 pub(crate) fn remove_contents(root: &File) -> Result<CleanupStats, CleanupFailure> {
     let target_view_allocated_bytes_before = measure_allocated_bytes(root)
         .map_err(|cause| CleanupFailure::NoMutation { cause })?;
