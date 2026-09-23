@@ -48,38 +48,47 @@ impl CargoTargetPartialCleanupReceipt {
         }
     }
 
+    /// Receipt schema version consumed by durable recovery and presentation boundaries.
     pub fn schema_version(&self) -> u32 {
         self.schema_version
     }
 
+    /// Stable machine-readable failure code for irreversible partial cleanup.
     pub fn code(&self) -> &str {
         self.code
     }
 
+    /// Completion state. Version 1 uses `partial` for this receipt type.
     pub fn completion(&self) -> &str {
         self.completion
     }
 
+    /// Number of descendant entries irreversibly removed before the failure.
     pub fn entries_removed(&self) -> u64 {
         self.entries_removed
     }
 
+    /// Allocated bytes visible beneath the retained target capability before cleanup.
     pub fn target_view_allocated_bytes_before(&self) -> u64 {
         self.target_view_allocated_bytes_before
     }
 
+    /// Best-effort allocated bytes still visible after failure, when measurement succeeded.
     pub fn target_view_allocated_bytes_after(&self) -> Option<u64> {
         self.target_view_allocated_bytes_after
     }
 
+    /// Reduction observed in the retained target-tree view, not physical-release proof.
     pub fn observed_target_view_reduction_bytes(&self) -> u64 {
         self.observed_target_view_reduction_bytes
     }
 
+    /// Buyer reclaim credit; zero until a separate physical block-release contract exists.
     pub fn ledger_reclaim_bytes(&self) -> u64 {
         self.ledger_reclaim_bytes
     }
 
+    /// Causal filesystem failure recorded after irreversible mutation began.
     pub fn cause(&self) -> &str {
         &self.cause
     }
@@ -88,11 +97,14 @@ impl CargoTargetPartialCleanupReceipt {
 /// Owner-level cleanup failure. Irreversible partial mutation remains typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CargoTargetReclaimError {
+    /// Failure for which no versioned irreversible-partial receipt is required.
     Message(String),
+    /// Irreversible partial cleanup carrying the canonical recovery receipt.
     PartialCleanup(CargoTargetPartialCleanupReceipt),
 }
 
 impl CargoTargetReclaimError {
+    /// Compatibility predicate for existing callers that inspect stable textual reason codes.
     pub fn contains(&self, needle: &str) -> bool {
         self.to_string().contains(needle)
     }
