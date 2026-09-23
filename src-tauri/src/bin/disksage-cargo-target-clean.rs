@@ -78,6 +78,14 @@ fn serialize_result(result: &CargoTargetCleanResult) -> Result<String, String> {
     .map_err(|error| format!("cargo-target-json-serialize-failed:{error}"))
 }
 
+/// Formats a reclaim-domain error for the buyer CLI stderr boundary.
+///
+/// This helper is intentionally behavior-preserving in the RED ancestor: the public contract test
+/// below requires structured partial-clean receipts to remain JSON instead of receiving this prefix.
+fn render_clean_error(error: &str) -> String {
+    format!("DiskSage cargo-target-clean: {error}")
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match parse_args(&args) {
@@ -97,7 +105,7 @@ fn main() -> ExitCode {
                 }
             },
             Err(error) => {
-                eprintln!("DiskSage cargo-target-clean: {error}");
+                eprintln!("{}", render_clean_error(&error));
                 ExitCode::from(2)
             }
         },
@@ -158,6 +166,33 @@ mod tests {
         assert_eq!(parsed["observed_reduction_bytes"], 3);
         assert_eq!(parsed["ledger_reclaim_bytes"], 0);
         assert_eq!(parsed["cargo_path"], "/tmp/cargo\"quoted");
+    }
+
+    #[test]
+    fn structured_partial_clean_receipt_remains_pure_json_at_buyer_boundary() {
+        let receipt = serde_json::json!({
+            "schema_version": 1,
+            "code": "cargo-target-partial-clean-failed",
+            "completion": "partial",
+            "entries_removed": 1,
+            "cause": "cargo-target-capability-unlinkat-failed:Permission denied",
+        })
+        .to_string();
+
+        let rendered = render_clean_error(&receipt);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered)
+            .expect("buyer stderr contract must remain machine-readable JSON");
+        assert_eq!(parsed["code"], "cargo-target-partial-clean-failed");
+        assert_eq!(parsed["completion"], "partial");
+        assert_eq!(parsed["entries_removed"], 1);
+    }
+
+    #[test]
+    fn ordinary_clean_errors_keep_the_human_readable_prefix() {
+        assert_eq!(
+            render_clean_error("cargo-target-lsof-unavailable"),
+            "DiskSage cargo-target-clean: cargo-target-lsof-unavailable"
+        );
     }
 
     #[cfg(unix)]
