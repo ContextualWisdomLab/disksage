@@ -19,6 +19,8 @@ use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(test)]
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const MAX_ENTRIES: u64 = 2_000_000;
@@ -61,6 +63,79 @@ pub(crate) enum CleanupFailure {
         target_view_allocated_bytes_before: u64,
         target_view_allocated_bytes_after: Option<u64>,
     },
+}
+
+#[cfg(test)]
+struct BeforeFinalUnlinkHook {
+    target_name: Vec<u8>,
+    callback: Arc<dyn Fn() + Send + Sync + 'static>,
+}
+
+#[cfg(test)]
+static BEFORE_FINAL_UNLINK_HOOK: OnceLock<Mutex<Option<BeforeFinalUnlinkHook>>> = OnceLock::new();
+
+/// Scoped test scheduler for a real filesystem mutation immediately before final unlink.
+///
+/// The hook changes only test scheduling. The production traversal and kernel namespace
+/// operations remain unchanged, allowing race acceptance tests to select an exact interleaving
+/// without relying on thread timing or inflated fixture size.
+#[cfg(test)]
+pub(crate) struct BeforeFinalUnlinkHookGuard;
+
+#[cfg(test)]
+impl Drop for BeforeFinalUnlinkHookGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = BEFORE_FINAL_UNLINK_HOOK.get() {
+            *slot
+                .lock()
+                .expect("before-final-unlink test hook mutex poisoned") = None;
+        }
+    }
+}
+
+/// Installs a one-shot test scheduler for the named descendant's final unlink.
+#[cfg(test)]
+pub(crate) fn install_before_final_unlink_hook_for_test<F>(
+    target_name: &[u8],
+    callback: F,
+) -> BeforeFinalUnlinkHookGuard
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    let slot = BEFORE_FINAL_UNLINK_HOOK.get_or_init(|| Mutex::new(None));
+    let mut slot = slot
+        .lock()
+        .expect("before-final-unlink test hook mutex poisoned");
+    assert!(slot.is_none(), "before-final-unlink test hook already installed");
+    *slot = Some(BeforeFinalUnlinkHook {
+        target_name: target_name.to_vec(),
+        callback: Arc::new(callback),
+    });
+    BeforeFinalUnlinkHookGuard
+}
+
+#[cfg(test)]
+fn run_before_final_unlink_hook_for_test(name: &CStr) {
+    let Some(slot) = BEFORE_FINAL_UNLINK_HOOK.get() else {
+        return;
+    };
+    let callback = {
+        let mut slot = slot
+            .lock()
+            .expect("before-final-unlink test hook mutex poisoned");
+        let matched = slot
+            .as_ref()
+            .map(|hook| hook.target_name.as_slice() == name.to_bytes())
+            .unwrap_or(false);
+        if matched {
+            slot.take().map(|hook| hook.callback)
+        } else {
+            None
+        }
+    };
+    if let Some(callback) = callback {
+        callback();
+    }
 }
 
 struct DirStream(*mut libc::DIR);
@@ -287,6 +362,8 @@ fn open_child_directory(
 }
 
 fn unlink_at(dir_fd: RawFd, name: &CStr, flags: libc::c_int) -> Result<(), String> {
+    #[cfg(test)]
+    run_before_final_unlink_hook_for_test(name);
     if unsafe { libc::unlinkat(dir_fd, name.as_ptr(), flags) } != 0 {
         return Err(format!(
             "cargo-target-capability-unlinkat-failed:{}",
