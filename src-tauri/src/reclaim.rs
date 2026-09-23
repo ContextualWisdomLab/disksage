@@ -544,7 +544,11 @@ mod tests {
         .unwrap();
         let evidence = plan.paths[0].active_use.as_ref().unwrap();
         assert!(evidence.evidence_complete || evidence.error.is_some());
+        // Only the Unix probe adds the ps ancestry pass; the fallback keeps the lsof-only name.
+        #[cfg(unix)]
         assert_eq!(evidence.method, "lsof-file-pid+ps-path-ancestry");
+        #[cfg(not(unix))]
+        assert_eq!(evidence.method, "lsof-file-pid");
         assert!(evidence.observed_pids.len() <= ACTIVE_USE_PROBE_MAX_PIDS);
     }
 

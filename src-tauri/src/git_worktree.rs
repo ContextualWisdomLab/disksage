@@ -721,16 +721,20 @@ fn command_references_path(command: &str, path: &Path) -> bool {
         let before = command[..start].chars().next_back();
         let end = start + needle.len();
         let after = command[end..].chars().next();
+        // Shells and wrappers separate arguments with more than whitespace: a path can be
+        // followed by `,` `;` or `:` (list and PATH-style separators) and preceded by the same.
+        // Treating those as non-boundaries reported an argv-only user as inactive.
         let boundary = |value: Option<char>| {
             value.is_none_or(|character| {
-                character.is_whitespace() || matches!(character, '\'' | '"' | '=' | ':' | '(' | '[')
+                character.is_whitespace()
+                    || matches!(character, '\'' | '"' | '=' | ':' | '(' | '[' | ',' | ';')
             })
         };
         boundary(before)
             && after.is_none_or(|character| {
                 character == std::path::MAIN_SEPARATOR
                     || character.is_whitespace()
-                    || matches!(character, '\'' | '"' | ')' | ']')
+                    || matches!(character, '\'' | '"' | ')' | ']' | ',' | ';' | ':')
             })
     })
 }
@@ -741,8 +745,11 @@ fn process_path_pids(
     command_cwd: &Path,
     timeout_ms: u64,
 ) -> Result<BTreeSet<u32>, String> {
+    // `-ww` disables ps' width truncation on macOS/BSD and Linux alike. Without it a long
+    // command line is silently cut and an argv reference past the cut becomes a false negative.
     let args = [
-        OsString::from("-axo"),
+        OsString::from("-axww"),
+        OsString::from("-o"),
         OsString::from("pid=,ppid=,command="),
     ];
     let result = run_bounded_command("ps", &args, command_cwd, timeout_ms)?;
@@ -765,6 +772,12 @@ fn classify_process_path_result(
     }
     let text = std::str::from_utf8(&result.stdout)
         .map_err(|_| "active-use-ps-output-not-utf8".to_string())?;
+    // ps renders command lines as text. A path that is not valid UTF-8 cannot be compared
+    // against that text without guessing at the rendering, so the probe reports incomplete
+    // evidence instead of a silent "no match".
+    if path.to_str().is_none() {
+        return Err("active-use-ps-path-not-utf8".into());
+    }
     let mut records = Vec::new();
     for line in text.lines() {
         let line = line.trim_start();
@@ -2546,6 +2559,55 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[test]
+    fn command_reference_boundaries_include_list_and_path_separators() {
+        let path = Path::new("/tmp/disksage-target");
+        for command in [
+            "worker --paths /tmp/disksage-target,/tmp/other",
+            "worker --paths /tmp/other,/tmp/disksage-target",
+            "sh -c 'cd /tmp/disksage-target; make'",
+            "sh -c 'true; /tmp/disksage-target'",
+            "env PATH=/tmp/disksage-target:/usr/bin worker",
+        ] {
+            assert!(
+                command_references_path(command, path),
+                "delimiter-bounded reference must count as use: {command}"
+            );
+        }
+        for command in [
+            "worker --paths /tmp/disksage-target-sibling",
+            "worker --paths /tmp/prefix-disksage-target",
+        ] {
+            assert!(
+                !command_references_path(command, path),
+                "sibling path must stay reclaimable: {command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_is_incomplete_evidence_not_a_silent_miss() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let result = CommandResult {
+            child_pid: 1,
+            status_code: Some(0),
+            stdout: b"  101 1 worker --path /tmp/other\n".to_vec(),
+            stderr: Vec::new(),
+            timed_out: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/disksage-\xff"));
+
+        let error = classify_process_path_result(&result, &path)
+            .expect_err("a path ps cannot render as UTF-8 must fail closed");
+
+        assert_eq!(error, "active-use-ps-path-not-utf8");
+    }
+
     #[test]
     fn process_path_probe_failures_are_generic_and_fail_closed() {
         let path = Path::new("/tmp/candidate-cache");
