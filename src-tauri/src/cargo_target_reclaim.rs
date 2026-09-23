@@ -28,6 +28,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+#[path = "cargo_target_reclaim_error.rs"]
+mod cargo_target_reclaim_error;
+pub use cargo_target_reclaim_error::{CargoTargetPartialCleanupReceipt, CargoTargetReclaimError};
+
 const CARGO_CLEAN_TIMEOUT: Duration = Duration::from_secs(600);
 const ACTIVE_USE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
@@ -1130,7 +1134,9 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
 /// - Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving partial-clean evidence
 /// - Windows spawn failure / command-not-found / non-zero Cargo exit ⇒ `Err`
 /// - zero allocation delta after successful cleanup ⇒ `Ok` with `observed_reduction_bytes == 0`
-pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, String> {
+pub fn clean_cargo_target(
+    project_dir: &Path,
+) -> Result<CargoTargetCleanResult, CargoTargetReclaimError> {
     ensure_absolute_project(project_dir)?;
     let cargo = resolve_cargo_executable()?;
     let target_dir = resolve_measured_target_dir(project_dir, &project_dir.join("target"))?;
@@ -1142,7 +1148,7 @@ pub(crate) fn clean_cargo_target_with(
     project_dir: &Path,
     target_dir: &Path,
     cargo: &Path,
-) -> Result<CargoTargetCleanResult, String> {
+) -> Result<CargoTargetCleanResult, CargoTargetReclaimError> {
     clean_cargo_target_with_active_use(project_dir, target_dir, cargo, ensure_target_safe_to_reclaim)
 }
 
@@ -1152,7 +1158,7 @@ pub(crate) fn clean_cargo_target_with_active_use(
     target_dir: &Path,
     cargo: &Path,
     active_use: ActiveUseProbe,
-) -> Result<CargoTargetCleanResult, String> {
+) -> Result<CargoTargetCleanResult, CargoTargetReclaimError> {
     clean_cargo_target_with_active_use_and_opened_hook(
         project_dir,
         target_dir,
@@ -1168,7 +1174,7 @@ fn clean_cargo_target_with_active_use_and_opened_hook<F>(
     cargo: &Path,
     active_use: ActiveUseProbe,
     after_open: F,
-) -> Result<CargoTargetCleanResult, String>
+) -> Result<CargoTargetCleanResult, CargoTargetReclaimError>
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
@@ -1198,7 +1204,9 @@ where
                 executed: false,
             });
         }
-        Err(error) => return Err(format!("cargo-target-dir-metadata-failed:{error}")),
+        Err(error) => {
+            return Err(format!("cargo-target-dir-metadata-failed:{error}").into());
+        }
     };
     #[cfg(windows)]
     let initial_identity = {
@@ -1261,7 +1269,7 @@ where
 
         let status_code = output.status.code().unwrap_or(-1);
         if status_code != 0 {
-            return Err(format!("cargo-clean-exit-nonzero:{status_code}"));
+            return Err(format!("cargo-clean-exit-nonzero:{status_code}").into());
         }
 
         let bytes_after = detached_target.verified_size()?;
