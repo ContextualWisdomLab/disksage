@@ -45,6 +45,59 @@ pub(crate) struct CleanupStats {
     pub(crate) entries_removed: u64,
 }
 
+/// Typed cleanup failure retained at the filesystem boundary.
+///
+/// `Partial` means one or more irreversible descendant unlinks already succeeded.
+/// Allocation fields describe only the reviewed target-tree view; they are not proof
+/// that physical blocks were released and therefore never grant reclaim credit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupFailure {
+    NoMutation {
+        cause: String,
+    },
+    Partial {
+        entries_removed: u64,
+        cause: String,
+        target_view_allocated_bytes_before: u64,
+        target_view_allocated_bytes_after: Option<u64>,
+    },
+}
+
+impl CleanupFailure {
+    fn into_owner_string(self) -> String {
+        match self {
+            Self::NoMutation { cause } => cause,
+            Self::Partial {
+                entries_removed,
+                cause,
+                target_view_allocated_bytes_before,
+                target_view_allocated_bytes_after,
+            } => {
+                let observed_target_view_reduction_bytes = target_view_allocated_bytes_after
+                    .map(|after| target_view_allocated_bytes_before.saturating_sub(after));
+                serde_json::json!({
+                    "schema_version": 1,
+                    "code": "cargo-target-partial-clean-failed",
+                    "completion": "partial",
+                    "entries_removed": entries_removed,
+                    "target_view_allocated_bytes_before": target_view_allocated_bytes_before,
+                    "target_view_allocated_bytes_after": target_view_allocated_bytes_after,
+                    "observed_target_view_reduction_bytes": observed_target_view_reduction_bytes,
+                    "ledger_reclaim_bytes": 0,
+                    "cause": cause,
+                })
+                .to_string()
+            }
+        }
+    }
+}
+
+impl From<CleanupFailure> for String {
+    fn from(value: CleanupFailure) -> Self {
+        value.into_owner_string()
+    }
+}
+
 struct DirStream(*mut libc::DIR);
 
 impl DirStream {
@@ -357,23 +410,25 @@ pub(crate) fn measure_allocated_bytes(root: &File) -> Result<u64, String> {
 
 /// Removes descendants beneath an already-reviewed directory capability while retaining root.
 ///
-/// If an error occurs after one or more irreversible unlinks, the error becomes a stable
-/// machine-readable JSON receipt so callers can preserve partial-mutation evidence verbatim.
-pub(crate) fn remove_contents(root: &File) -> Result<CleanupStats, String> {
-    let mut state = WalkState::new(root_device(root)?);
+/// Partial failures remain typed at this filesystem boundary and carry target-view allocation
+/// evidence. Conversion to the legacy owner `String` boundary is explicit and keeps physical
+/// reclaim credit at zero until a separate block-release contract exists.
+pub(crate) fn remove_contents(root: &File) -> Result<CleanupStats, CleanupFailure> {
+    let target_view_allocated_bytes_before = measure_allocated_bytes(root)
+        .map_err(|cause| CleanupFailure::NoMutation { cause })?;
+    let root_device = root_device(root).map_err(|cause| CleanupFailure::NoMutation { cause })?;
+    let mut state = WalkState::new(root_device);
     match walk_directory(root, 1, &mut state, true) {
         Ok(()) => Ok(CleanupStats {
             entries_removed: state.removed,
         }),
-        Err(error) if state.removed > 0 => Err(serde_json::json!({
-            "schema_version": 1,
-            "code": "cargo-target-partial-clean-failed",
-            "completion": "partial",
-            "entries_removed": state.removed,
-            "cause": error,
-        })
-        .to_string()),
-        Err(error) => Err(error),
+        Err(cause) if state.removed > 0 => Err(CleanupFailure::Partial {
+            entries_removed: state.removed,
+            cause,
+            target_view_allocated_bytes_before,
+            target_view_allocated_bytes_after: measure_allocated_bytes(root).ok(),
+        }),
+        Err(cause) => Err(CleanupFailure::NoMutation { cause }),
     }
 }
 
