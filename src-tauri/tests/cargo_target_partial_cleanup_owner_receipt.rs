@@ -10,7 +10,7 @@ mod cargo_target_reclaim;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn owner_partial_receipt_preserves_target_view_evidence_without_reclaim_credit() {
+fn owner_partial_failure_remains_typed_through_the_owner_boundary() {
     assert_ne!(
         unsafe { libc::geteuid() },
         0,
@@ -58,7 +58,7 @@ fn owner_partial_receipt_preserves_target_view_evidence_without_reclaim_credit()
     )
     .expect("restore retained root permissions");
 
-    let error = outcome.expect_err("owner must report the irreversible partial cleanup");
+    let failure = outcome.expect_err("owner must report the irreversible partial cleanup");
     assert!(
         !artifact.exists(),
         "fixture must prove irreversible mutation happened before the failure"
@@ -68,31 +68,30 @@ fn owner_partial_receipt_preserves_target_view_evidence_without_reclaim_credit()
         "failed root-relative directory removal must leave the child directory"
     );
 
-    let receipt: serde_json::Value = serde_json::from_str(&error)
-        .expect("owner partial-clean failure must remain a versioned JSON receipt");
-    assert_eq!(receipt["schema_version"], 1);
-    assert_eq!(receipt["code"], "cargo-target-partial-clean-failed");
-    assert_eq!(receipt["completion"], "partial");
-    assert_eq!(receipt["entries_removed"], 1);
+    let cargo_target_reclaim::CargoTargetReclaimError::PartialCleanup(receipt) = failure else {
+        panic!("irreversible mutation must remain typed through the owner boundary");
+    };
+    assert_eq!(receipt.schema_version(), 1);
+    assert_eq!(receipt.code(), "cargo-target-partial-clean-failed");
+    assert_eq!(receipt.completion(), "partial");
+    assert_eq!(receipt.entries_removed(), 1);
 
-    let before = receipt["target_view_allocated_bytes_before"]
-        .as_u64()
-        .expect("owner receipt must retain pre-clean target-view allocation evidence");
-    let after = receipt["target_view_allocated_bytes_after"]
-        .as_u64()
-        .expect("owner receipt must retain best-effort post-failure target-view allocation evidence");
-    let reduction = receipt["observed_target_view_reduction_bytes"]
-        .as_u64()
-        .expect("owner receipt must expose only observed target-view reduction");
-
+    let before = receipt.target_view_allocated_bytes_before();
+    let after = receipt
+        .target_view_allocated_bytes_after()
+        .expect("owner typed failure must retain best-effort post-failure target-view allocation evidence");
     assert!(before > 0);
-    assert_eq!(reduction, before.saturating_sub(after));
     assert_eq!(
-        receipt["ledger_reclaim_bytes"], 0,
+        receipt.observed_target_view_reduction_bytes(),
+        before.saturating_sub(after)
+    );
+    assert_eq!(
+        receipt.ledger_reclaim_bytes(),
+        0,
         "target-view reduction is not proof that physical blocks were released"
     );
     assert!(
-        receipt["cause"].as_str().is_some_and(|cause| !cause.is_empty()),
-        "partial-clean receipt must retain the causal filesystem failure"
+        !receipt.cause().is_empty(),
+        "typed partial-clean evidence must retain the causal filesystem failure"
     );
 }
