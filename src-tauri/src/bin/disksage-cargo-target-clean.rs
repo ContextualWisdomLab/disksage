@@ -78,12 +78,32 @@ fn serialize_result(result: &CargoTargetCleanResult) -> Result<String, String> {
     .map_err(|error| format!("cargo-target-json-serialize-failed:{error}"))
 }
 
-/// Formats a reclaim-domain error for the buyer CLI stderr boundary.
-///
-/// This helper is intentionally behavior-preserving in the RED ancestor: the public contract test
-/// below requires structured partial-clean receipts to remain JSON instead of receiving this prefix.
+/// Returns whether an owner error is the complete versioned partial-clean receipt contract.
+fn is_partial_clean_receipt(error: &str) -> bool {
+    let Ok(receipt) = serde_json::from_str::<serde_json::Value>(error) else {
+        return false;
+    };
+    receipt.get("schema_version").and_then(serde_json::Value::as_u64) == Some(1)
+        && receipt.get("code").and_then(serde_json::Value::as_str)
+            == Some("cargo-target-partial-clean-failed")
+        && receipt.get("completion").and_then(serde_json::Value::as_str) == Some("partial")
+        && receipt
+            .get("entries_removed")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count > 0)
+        && receipt
+            .get("cause")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|cause| !cause.is_empty())
+}
+
+/// Preserves validated partial-clean receipts as pure JSON while retaining legacy text errors.
 fn render_clean_error(error: &str) -> String {
-    format!("DiskSage cargo-target-clean: {error}")
+    if is_partial_clean_receipt(error) {
+        error.to_owned()
+    } else {
+        format!("DiskSage cargo-target-clean: {error}")
+    }
 }
 
 fn main() -> ExitCode {
@@ -185,6 +205,15 @@ mod tests {
         assert_eq!(parsed["code"], "cargo-target-partial-clean-failed");
         assert_eq!(parsed["completion"], "partial");
         assert_eq!(parsed["entries_removed"], 1);
+    }
+
+    #[test]
+    fn incomplete_partial_receipt_keeps_the_human_readable_prefix() {
+        let incomplete = r#"{"schema_version":1,"code":"cargo-target-partial-clean-failed","completion":"partial"}"#;
+        assert_eq!(
+            render_clean_error(incomplete),
+            format!("DiskSage cargo-target-clean: {incomplete}")
+        );
     }
 
     #[test]
