@@ -2,14 +2,16 @@
 //!
 //! Operational scripts previously treated a missing `cargo` on PATH as a successful
 //! `CLEANED` row when directory size was unchanged. This module requires an absolute
-//! cargo executable, a zero exit status, and records reclaim bytes from measured
-//! before/after size (zero delta ⇒ reclaim 0, never a success reclaim claim).
+//! cargo executable, a zero exit status where an external Cargo compatibility path is
+//! used, and records reclaim bytes from measured before/after allocation evidence
+//! (zero delta ⇒ reclaim 0, never a success reclaim claim).
 //!
-//! Deletion scope is pinned with `cargo clean --target-dir <measured>` so workspace
-//! root targets, `CARGO_TARGET_DIR`, or `.cargo/config` `build.target-dir` cannot
-//! redirect deletion away from the inspected path.
+//! Unix destructive cleanup stays bound to the reviewed directory descriptor and
+//! removes descendants in-process. The Windows compatibility path still pins external
+//! `cargo clean --target-dir` to the handle-detached reviewed root until HANDLE-relative
+//! descendant traversal and measurement replace that compatibility boundary.
 //!
-//! Before any `cargo clean`, the measured target must pass ownership + active-use
+//! Before any destructive cleanup, the measured target must pass ownership + active-use
 //! probes. Missing or incomplete platform active-use evidence fails closed (no clean).
 
 use std::io::Read;
@@ -1114,16 +1116,20 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
     Err("cargo-target-active-use-probe-unsupported".into())
 }
 
-/// Run `cargo clean` for a project directory that owns a `Cargo.toml`.
+/// Reclaim a project's reviewed Cargo `target/` directory with platform-bound mutation authority.
 ///
-/// Always passes `--target-dir <project>/target` so measurement and deletion match.
+/// Unix keeps the reviewed root in place and performs descriptor-relative allocation measurement
+/// and descendant removal through the retained directory `File`. The explicit Cargo executable is
+/// still validated as compatibility/provenance input but is not destructive authority on Unix.
+/// Windows retains the handle-detach + explicit `cargo clean --target-dir` compatibility path until
+/// HANDLE-relative descendant traversal/measurement/disposition is implemented.
 ///
 /// Fail-closed:
 /// - missing cargo executable ⇒ `Err`
-/// - spawn failure / command-not-found ⇒ `Err`
-/// - active holders / lsof probe failure / owner mismatch ⇒ `Err` (no clean)
-/// - non-zero exit ⇒ `Err` (no success reclaim)
-/// - zero size delta with exit 0 ⇒ `Ok` with `observed_reduction_bytes == 0` (not a reclaim success claim)
+/// - active holders / active-use probe failure / owner mismatch ⇒ `Err` (no clean)
+/// - Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving partial-clean evidence
+/// - Windows spawn failure / command-not-found / non-zero Cargo exit ⇒ `Err`
+/// - zero allocation delta after successful cleanup ⇒ `Ok` with `observed_reduction_bytes == 0`
 pub fn clean_cargo_target(project_dir: &Path) -> Result<CargoTargetCleanResult, String> {
     ensure_absolute_project(project_dir)?;
     let cargo = resolve_cargo_executable()?;
@@ -1212,43 +1218,71 @@ where
     crate::unix_holder_authority::ensure_opened_target_has_no_active_holders(
         &opened_target.file,
     )?;
-    let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
-    #[cfg(windows)]
-    active_use(&detached_target.clean_path)?;
-    let bytes_before = detached_target.verified_size()?;
 
-    let mut command = Command::new(cargo);
-    command
-        .arg("clean")
-        .arg("--target-dir")
-        .arg(&detached_target.clean_path)
-        .current_dir(project_dir);
-    let output = run_bounded_command(&mut command, CARGO_CLEAN_TIMEOUT, "cargo-clean")
-        .map_err(|error| {
-            if error.contains("spawn-failed:No such file or directory") {
-                "cargo-executable-unavailable".to_string()
-            } else {
-                error
-            }
-        })?;
-
-    let status_code = output.status.code().unwrap_or(-1);
-    if status_code != 0 {
-        return Err(format!("cargo-clean-exit-nonzero:{status_code}"));
+    #[cfg(unix)]
+    {
+        let bytes_before =
+            crate::unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)?;
+        crate::unix_capability_cleanup::remove_contents(&opened_target.file)?;
+        let bytes_after =
+            crate::unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)?;
+        return Ok(CargoTargetCleanResult {
+            cargo_path: cargo.to_path_buf(),
+            project_dir: project_dir.to_path_buf(),
+            target_dir,
+            bytes_before,
+            bytes_after,
+            observed_reduction_bytes: bytes_before.saturating_sub(bytes_after),
+            status_code: 0,
+            executed: true,
+        });
     }
 
-    let bytes_after = detached_target.verified_size()?;
-    detached_target.commit();
-    Ok(CargoTargetCleanResult {
-        cargo_path: cargo.to_path_buf(),
-        project_dir: project_dir.to_path_buf(),
-        target_dir,
-        bytes_before,
-        bytes_after,
-        observed_reduction_bytes: bytes_before.saturating_sub(bytes_after),
-        status_code,
-        executed: true,
-    })
+    #[cfg(windows)]
+    {
+        let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
+        active_use(&detached_target.clean_path)?;
+        let bytes_before = detached_target.verified_size()?;
+
+        let mut command = Command::new(cargo);
+        command
+            .arg("clean")
+            .arg("--target-dir")
+            .arg(&detached_target.clean_path)
+            .current_dir(project_dir);
+        let output = run_bounded_command(&mut command, CARGO_CLEAN_TIMEOUT, "cargo-clean")
+            .map_err(|error| {
+                if error.contains("spawn-failed:No such file or directory") {
+                    "cargo-executable-unavailable".to_string()
+                } else {
+                    error
+                }
+            })?;
+
+        let status_code = output.status.code().unwrap_or(-1);
+        if status_code != 0 {
+            return Err(format!("cargo-clean-exit-nonzero:{status_code}"));
+        }
+
+        let bytes_after = detached_target.verified_size()?;
+        detached_target.commit();
+        return Ok(CargoTargetCleanResult {
+            cargo_path: cargo.to_path_buf(),
+            project_dir: project_dir.to_path_buf(),
+            target_dir,
+            bytes_before,
+            bytes_after,
+            observed_reduction_bytes: bytes_before.saturating_sub(bytes_after),
+            status_code,
+            executed: true,
+        });
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = opened_target;
+        Err("cargo-target-identity-bound-cleanup-unsupported".into())
+    }
 }
 
 /// Buyer-visible reclaim credit remains zero until the result schema proves physical release.
@@ -1364,42 +1398,51 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn consumer_nonzero_exit_is_fail_closed() {
+    fn unix_retained_cleanup_never_invokes_external_cargo() {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
-            "disksage-cargo-nonzero-{}",
+            "disksage-cargo-no-child-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         let target = root.join("target");
+        let cargo_ran = root.join("cargo-ran");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("junk"), "x").unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
         let fake = root.join("fake-cargo");
-        fs::write(&fake, "#!/bin/sh\nexit 9\n").unwrap();
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 9\n", cargo_ran.display()),
+        )
+        .unwrap();
         let mut perms = fs::metadata(&fake).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let err = clean_cargo_target_with_active_use(&root, &target, &fake, |_| Ok(())).unwrap_err();
-        assert!(err.starts_with("cargo-clean-exit-nonzero:"), "{err}");
-        assert!(target.join("junk").is_file(), "must not claim reclaim on nonzero");
+        let result = clean_cargo_target_with_active_use(&root, &target, &fake, |_| Ok(()))
+            .expect("retained capability cleanup");
+        assert!(result.executed);
+        assert_eq!(result.status_code, 0);
+        assert!(!cargo_ran.exists(), "Unix cleanup must not invoke the external Cargo child");
+        assert!(target.is_dir(), "reviewed root must remain present");
+        assert!(!target.join("junk").exists(), "reviewed contents must be removed");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
     #[test]
-    fn consumer_pin_target_dir_protects_unrelated_sentinel() {
+    fn unix_retained_cleanup_preserves_unrelated_sentinel_without_path_delegation() {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
-            "disksage-cargo-pin-{}",
+            "disksage-cargo-retained-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         let project = root.join("proj");
         let target = project.join("target");
         let shared = root.join("shared-target");
-        let argv_log = root.join("fake-cargo.argv");
+        let cargo_ran = root.join("cargo-ran");
         fs::create_dir_all(&target).unwrap();
         fs::create_dir_all(&shared).unwrap();
         fs::write(project.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
@@ -1407,61 +1450,38 @@ mod tests {
         fs::write(shared.join("SENTINEL"), "must-survive").unwrap();
         let target_canon = fs::canonicalize(&target).unwrap();
 
-        // Mock cargo: record argv and mutate only the identity-verified detached target.
         let fake = project.join("fake-cargo");
-        let script = format!(
-            "#!/bin/sh\n\
-ORIGINAL_TARGET='{original}'\n\
-ARGV_LOG='{log}'\n\
-printf '%s\\0' \"$@\" > \"$ARGV_LOG\"\n\
-target=\"\"\n\
-while [ \"$#\" -gt 0 ]; do\n\
-  if [ \"$1\" = \"--target-dir\" ]; then\n\
-    shift\n\
-    target=\"$1\"\n\
-  fi\n\
-  shift || true\n\
-done\n\
-if [ -n \"$target\" ] && [ \"$target\" != \"$ORIGINAL_TARGET\" ] && [ -d \"$target\" ]; then\n\
-  find -H \"$target\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
-  rmdir \"$target\"\n\
-  exit 0\n\
-fi\n\
-exit 42\n",
-            original = target_canon.display(),
-            log = argv_log.display()
-        );
-        fs::write(&fake, script).unwrap();
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 42\n", cargo_ran.display()),
+        )
+        .unwrap();
         let mut perms = fs::metadata(&fake).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
         let result =
             clean_cargo_target_with_active_use(&project, &target_canon, &fake, |_| Ok(()))
-                .expect("clean ok");
+                .expect("retained capability cleanup");
         assert!(result.executed);
         assert_eq!(result.status_code, 0);
         assert!(result.observed_reduction_bytes > 0);
         assert_eq!(ledger_reclaim_bytes(&result), 0);
-
-        let argv = fs::read(&argv_log).unwrap_or_default();
-        let argv_txt = String::from_utf8_lossy(&argv);
-        assert!(
-            argv_txt.contains("--target-dir"),
-            "consumer must pass --target-dir; argv={argv_txt:?}"
-        );
-        assert!(
-            argv_txt.contains(".disksage-cargo-clean-") && !argv_txt.contains(target_canon.to_string_lossy().as_ref()),
-            "consumer must pass the identity-verified detached target; argv={argv_txt:?}"
-        );
+        assert!(!cargo_ran.exists(), "Unix cleanup must not delegate to Cargo");
         assert!(
             shared.join("SENTINEL").is_file(),
-            "unrelated sentinel must survive pinned --target-dir clean"
+            "unrelated sentinel must survive retained-capability cleanup"
         );
+        assert!(target_canon.is_dir(), "reviewed target root must remain present");
         assert!(
             !target_canon.join("artifact").exists(),
-            "measured target contents should be removed"
+            "reviewed target contents should be removed"
         );
+        let quarantine_exists = fs::read_dir(&project)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(".disksage-cargo-clean-"));
+        assert!(!quarantine_exists, "Unix cleanup must not create pathname quarantine state");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1598,8 +1618,8 @@ exit 42\n",
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn target_path_swap_during_clean_cannot_redirect_deletion() {
-        use std::os::unix::fs::PermissionsExt;
+    fn target_path_swap_after_open_cannot_redirect_retained_cleanup() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
         let root = std::env::temp_dir().join(format!(
             "disksage-cargo-target-swap-{}", std::process::id()
         ));
@@ -1608,6 +1628,7 @@ exit 42\n",
         let target = project.join("target");
         let moved_target = project.join("target-moved");
         let outside = root.join("outside");
+        let cargo_ran = project.join("cargo-ran");
         fs::create_dir_all(&target).unwrap();
         fs::create_dir_all(&outside).unwrap();
         fs::write(project.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
@@ -1615,27 +1636,33 @@ exit 42\n",
         fs::write(outside.join("SENTINEL"), "must-survive").unwrap();
 
         let fake = project.join("fake-cargo");
-        let script = format!(
-            "#!/bin/sh\n\
-target_arg=''\n\
-while [ \"$#\" -gt 0 ]; do\n\
-  if [ \"$1\" = '--target-dir' ]; then shift; target_arg=\"$1\"; fi\n\
-  shift || true\n\
-done\n\
-mv '{target}' '{moved}'\n\
-ln -s '{outside}' '{target}'\n\
-find -H \"$target_arg\" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +\n\
-rmdir \"$target_arg\"\n",
-            target = target.display(), moved = moved_target.display(), outside = outside.display(),
-        );
-        fs::write(&fake, script).unwrap();
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 42\n", cargo_ran.display()),
+        )
+        .unwrap();
         let mut permissions = fs::metadata(&fake).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&fake, permissions).unwrap();
 
-        let result = clean_cargo_target_with_active_use(&project, &target, &fake, |_| Ok(()))
-            .expect("handle-bound cleanup should succeed");
+        let result = clean_cargo_target_with_active_use_and_opened_hook(
+            &project,
+            &target,
+            &fake,
+            |_| Ok(()),
+            |opened_path| {
+                fs::rename(opened_path, &moved_target)
+                    .map_err(|error| format!("test-reviewed-rename-failed:{error}"))?;
+                symlink(&outside, opened_path)
+                    .map_err(|error| format!("test-replacement-symlink-failed:{error}"))?;
+                Ok(())
+            },
+        )
+        .expect("retained capability cleanup should succeed");
+
+        assert!(result.executed);
         assert!(result.observed_reduction_bytes > 0);
+        assert!(!cargo_ran.exists(), "Unix cleanup must not invoke external Cargo");
         assert!(outside.join("SENTINEL").is_file());
         assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
         assert!(!moved_target.join("artifact").exists());
@@ -1644,7 +1671,7 @@ rmdir \"$target_arg\"\n",
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn real_cargo_cleans_identity_verified_detached_target() {
+    fn real_cargo_executable_is_compatibility_input_for_unix_retained_cleanup() {
         let root = std::env::temp_dir().join(format!(
             "disksage-cargo-real-handle-{}", std::process::id()
         ));
@@ -1663,9 +1690,10 @@ rmdir \"$target_arg\"\n",
         let cargo = fs::canonicalize(env!("CARGO")).unwrap();
 
         let result = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
-            .expect("real cargo should accept the detached target");
+            .expect("retained capability cleanup should accept resolved Cargo provenance");
         assert!(result.executed);
         assert!(result.observed_reduction_bytes > 0);
+        assert!(target.is_dir(), "reviewed root must remain present");
         assert!(!target.join("artifact").exists());
         let _ = fs::remove_dir_all(&root);
     }
