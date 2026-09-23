@@ -6,24 +6,46 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-fn assert_owner_no_longer_delegates_destructive_clean_to_mutable_path() {
+fn unix_owner_mutation_slice() -> &'static str {
     let owner_source = include_str!("../src/cargo_target_reclaim.rs");
+    let flow_start = owner_source
+        .find("fn clean_cargo_target_with_active_use_and_opened_hook")
+        .expect("cargo target owner flow");
+    let flow_end = owner_source[flow_start..]
+        .find("/// Buyer-visible reclaim credit")
+        .map(|offset| flow_start + offset)
+        .expect("ledger boundary after cargo target owner flow");
+    let flow = &owner_source[flow_start..flow_end];
+    let holder = flow
+        .find("unix_holder_authority::ensure_opened_target_has_no_active_holders")
+        .expect("Unix exact-object holder authorization");
+    let windows = flow[holder..]
+        .find("#[cfg(windows)]")
+        .map(|offset| holder + offset)
+        .expect("Windows branch after Unix retained-capability branch");
+    &flow[holder..windows]
+}
+
+fn assert_unix_owner_no_longer_delegates_destructive_clean_to_mutable_path() {
+    let unix_mutation = unix_owner_mutation_slice();
     assert!(
-        !(owner_source.contains(".arg(\"--target-dir\")")
-            && owner_source.contains(".arg(&detached_target.clean_path)")),
-        "P1: DiskSage still passes the replaceable detached pathname to an external destructive Cargo child; a post-authorization replacement can become the mutation subject"
+        !unix_mutation.contains("--target-dir") && !unix_mutation.contains("Command::new(cargo)"),
+        "P1: Unix DiskSage still delegates destructive cleanup to an external child selected by a mutable pathname"
+    );
+    assert!(
+        unix_mutation.contains("unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)")
+            && unix_mutation.contains("unix_capability_cleanup::remove_contents(&opened_target.file)"),
+        "P1: Unix cleanup must keep measurement and deletion on the retained reviewed filesystem capability"
     );
 }
 
-fn assert_owner_keeps_recovery_and_receipts_on_the_reviewed_object() {
-    let owner_source = include_str!("../src/cargo_target_reclaim.rs");
+fn assert_unix_owner_keeps_recovery_and_receipts_on_the_reviewed_object() {
+    let unix_mutation = unix_owner_mutation_slice();
     assert!(
-        !owner_source.contains("std::fs::rename(&self.clean_path, &self.original_path)"),
-        "P1: Unix rollback still re-selects the quarantine source by pathname after its identity check; a replacement can become the rollback mutation subject"
-    );
-    assert!(
-        !owner_source.contains("bounded_dir_size(&self.clean_path)"),
-        "P1: reclaim measurement still walks the mutable quarantine pathname after a separate identity check instead of measuring through the reviewed filesystem capability"
+        !unix_mutation.contains("detach_verified_target_dir")
+            && !unix_mutation.contains("bounded_dir_size")
+            && !unix_mutation.contains("std::fs::rename"),
+        "P1: Unix reclaim still re-selects mutable pathname state after exact-object authorization"
     );
 }
 
@@ -60,7 +82,7 @@ fn path_selected_destructive_child_can_mutate_an_unreviewed_replacement() {
     assert!(status.success(), "hazard reproduction child must complete");
     assert!(reviewed_stash.join("reviewed-artifact").is_file());
     assert!(!clean_path.exists());
-    assert_owner_no_longer_delegates_destructive_clean_to_mutable_path();
+    assert_unix_owner_no_longer_delegates_destructive_clean_to_mutable_path();
 }
 
 #[cfg(unix)]
@@ -80,8 +102,7 @@ fn path_checked_rollback_can_move_an_unreviewed_replacement() {
     assert_eq!(checked.dev(), reviewed_identity.dev());
     assert_eq!(checked.ino(), reviewed_identity.ino());
 
-    // Deterministically interpose the same-user pathname substitution after the
-    // authorization check but before the path-selected rollback mutation.
+    // Reproduce the stale path-authority hazard independently of production code.
     fs::rename(&clean_path, &reviewed_stash).expect("stash reviewed object after check");
     fs::create_dir(&clean_path).expect("replacement target");
     fs::write(clean_path.join("REPLACEMENT_SENTINEL"), b"must-survive").expect("replacement sentinel");
@@ -92,7 +113,7 @@ fn path_checked_rollback_can_move_an_unreviewed_replacement() {
         fs::read(original_path.join("REPLACEMENT_SENTINEL")).expect("replacement survives stale rollback"),
         b"must-survive"
     );
-    assert_owner_keeps_recovery_and_receipts_on_the_reviewed_object();
+    assert_unix_owner_keeps_recovery_and_receipts_on_the_reviewed_object();
 }
 
 #[cfg(windows)]
@@ -121,6 +142,4 @@ fn windows_path_selected_destructive_child_can_mutate_an_unreviewed_replacement(
     assert!(status.success(), "hazard reproduction child must complete");
     assert!(reviewed_stash.join("reviewed-artifact").is_file());
     assert!(!clean_path.exists());
-    assert_owner_no_longer_delegates_destructive_clean_to_mutable_path();
-    assert_owner_keeps_recovery_and_receipts_on_the_reviewed_object();
 }
