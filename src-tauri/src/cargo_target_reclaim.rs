@@ -1208,7 +1208,12 @@ where
     #[cfg(not(any(unix, windows)))]
     let opened_target = open_verified_target_dir(&target_dir, &initial_metadata)?;
     after_open(&target_dir)?;
+    #[cfg(unix)]
+    crate::unix_holder_authority::ensure_opened_target_has_no_active_holders(
+        &opened_target.file,
+    )?;
     let mut detached_target = detach_verified_target_dir(&target_dir, opened_target)?;
+    #[cfg(windows)]
     active_use(&detached_target.clean_path)?;
     let bytes_before = detached_target.verified_size()?;
 
@@ -1646,6 +1651,11 @@ rmdir \"$target_arg\"\n",
         let _ = fs::remove_dir_all(&root);
         let target = root.join("target");
         fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
