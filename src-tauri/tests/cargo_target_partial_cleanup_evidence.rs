@@ -8,9 +8,11 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn irreversible_partial_cleanup_emits_machine_readable_evidence() {
-    if unsafe { libc::geteuid() } == 0 {
-        return;
-    }
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "partial-clean acceptance requires the unprivileged product execution boundary"
+    );
 
     let temp = tempfile::tempdir().expect("temp root");
     let target = temp.path().join("target");
