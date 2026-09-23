@@ -7,7 +7,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use disksage_lib::cargo_target_reclaim::{clean_cargo_target, ledger_reclaim_bytes, CargoTargetCleanResult};
+use disksage_lib::cargo_target_reclaim::{
+    clean_cargo_target, ledger_reclaim_bytes, CargoTargetCleanResult, CargoTargetReclaimError,
+};
 use serde_json::json;
 
 const USAGE: &str = "Usage: disksage-cargo-target-clean --project-dir ABSOLUTE_PATH\n\
@@ -78,31 +80,12 @@ fn serialize_result(result: &CargoTargetCleanResult) -> Result<String, String> {
     .map_err(|error| format!("cargo-target-json-serialize-failed:{error}"))
 }
 
-/// Returns whether an owner error is the complete versioned partial-clean receipt contract.
-fn is_partial_clean_receipt(error: &str) -> bool {
-    let Ok(receipt) = serde_json::from_str::<serde_json::Value>(error) else {
-        return false;
-    };
-    receipt.get("schema_version").and_then(serde_json::Value::as_u64) == Some(1)
-        && receipt.get("code").and_then(serde_json::Value::as_str)
-            == Some("cargo-target-partial-clean-failed")
-        && receipt.get("completion").and_then(serde_json::Value::as_str) == Some("partial")
-        && receipt
-            .get("entries_removed")
-            .and_then(serde_json::Value::as_u64)
-            .is_some_and(|count| count > 0)
-        && receipt
-            .get("cause")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|cause| !cause.is_empty())
-}
-
-/// Preserves validated partial-clean receipts as pure JSON while retaining legacy text errors.
-fn render_clean_error(error: &str) -> String {
-    if is_partial_clean_receipt(error) {
-        error.to_owned()
-    } else {
-        format!("DiskSage cargo-target-clean: {error}")
+/// Serialize typed partial evidence once at the presentation boundary.
+fn render_clean_error(error: &CargoTargetReclaimError) -> Result<String, String> {
+    match error {
+        CargoTargetReclaimError::PartialCleanup(receipt) => serde_json::to_string(receipt)
+            .map_err(|error| format!("cargo-target-partial-receipt-serialize-failed:{error}")),
+        CargoTargetReclaimError::Message(_) => Ok(format!("DiskSage cargo-target-clean: {error}")),
     }
 }
 
@@ -125,7 +108,12 @@ fn main() -> ExitCode {
                 }
             },
             Err(error) => {
-                eprintln!("{}", render_clean_error(&error));
+                match render_clean_error(&error) {
+                    Ok(rendered) => eprintln!("{rendered}"),
+                    Err(render_error) => {
+                        eprintln!("DiskSage cargo-target-clean: {render_error}");
+                    }
+                }
                 ExitCode::from(2)
             }
         },
@@ -189,37 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn structured_partial_clean_receipt_remains_pure_json_at_buyer_boundary() {
-        let receipt = serde_json::json!({
-            "schema_version": 1,
-            "code": "cargo-target-partial-clean-failed",
-            "completion": "partial",
-            "entries_removed": 1,
-            "cause": "cargo-target-capability-unlinkat-failed:Permission denied",
-        })
-        .to_string();
-
-        let rendered = render_clean_error(&receipt);
-        let parsed: serde_json::Value = serde_json::from_str(&rendered)
-            .expect("buyer stderr contract must remain machine-readable JSON");
-        assert_eq!(parsed["code"], "cargo-target-partial-clean-failed");
-        assert_eq!(parsed["completion"], "partial");
-        assert_eq!(parsed["entries_removed"], 1);
-    }
-
-    #[test]
-    fn incomplete_partial_receipt_keeps_the_human_readable_prefix() {
-        let incomplete = r#"{"schema_version":1,"code":"cargo-target-partial-clean-failed","completion":"partial"}"#;
-        assert_eq!(
-            render_clean_error(incomplete),
-            format!("DiskSage cargo-target-clean: {incomplete}")
-        );
-    }
-
-    #[test]
     fn ordinary_clean_errors_keep_the_human_readable_prefix() {
+        let error = CargoTargetReclaimError::Message("cargo-target-lsof-unavailable".into());
         assert_eq!(
-            render_clean_error("cargo-target-lsof-unavailable"),
+            render_clean_error(&error).unwrap(),
             "DiskSage cargo-target-clean: cargo-target-lsof-unavailable"
         );
     }
