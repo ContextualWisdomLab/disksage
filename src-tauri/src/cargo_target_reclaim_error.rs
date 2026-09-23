@@ -137,7 +137,7 @@ impl PartialEq<&str> for CargoTargetReclaimError {
 impl From<crate::unix_capability_cleanup::CleanupFailure> for CargoTargetReclaimError {
     fn from(failure: crate::unix_capability_cleanup::CleanupFailure) -> Self {
         match failure {
-            crate::unix_capability_cleanup::CleanupFailure::NoMutation(cause) => {
+            crate::unix_capability_cleanup::CleanupFailure::NoMutation { cause } => {
                 Self::Message(cause)
             }
             crate::unix_capability_cleanup::CleanupFailure::Partial {
