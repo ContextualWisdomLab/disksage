@@ -2608,6 +2608,31 @@ mod tests {
         assert_eq!(error, "active-use-ps-path-not-utf8");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn malformed_ps_rows_fail_closed_instead_of_silently_disappearing() {
+        let path = Path::new("/tmp/candidate-cache");
+        for stdout in [
+            b"not-a-pid 1 worker --path /tmp/candidate-cache\n".to_vec(),
+            b"42420 not-a-ppid worker --path /tmp/candidate-cache\n".to_vec(),
+            b"42420\n".to_vec(),
+        ] {
+            let result = CommandResult {
+                child_pid: u32::MAX,
+                status_code: Some(0),
+                stdout,
+                stderr: Vec::new(),
+                timed_out: false,
+                stdout_truncated: false,
+                stderr_truncated: false,
+            };
+            assert_eq!(
+                classify_process_path_result(&result, path),
+                Err("active-use-ps-row-invalid".into())
+            );
+        }
+    }
+
     #[test]
     fn process_path_probe_failures_are_generic_and_fail_closed() {
         let path = Path::new("/tmp/candidate-cache");
