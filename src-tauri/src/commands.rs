@@ -3789,6 +3789,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let artifact = project.join("node_modules");
         fs::create_dir_all(&artifact).unwrap();
         fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(project.join("package-lock.json"), b"{}").unwrap();
         fs::write(artifact.join("payload.bin"), b"old").unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
