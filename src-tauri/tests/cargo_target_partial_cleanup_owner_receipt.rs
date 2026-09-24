@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, not(target_os = "linux")))]
 
 #[path = "../src/unix_capability_cleanup.rs"]
 mod unix_capability_cleanup;
