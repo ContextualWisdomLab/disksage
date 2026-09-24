@@ -6,12 +6,12 @@
 //! used, and records reclaim bytes from measured before/after allocation evidence
 //! (zero delta ⇒ reclaim 0, never a success reclaim claim).
 //!
-//! Non-Linux Unix destructive cleanup stays bound to the reviewed directory descriptor
-//! and removes descendants in-process. Linux authenticates and authorizes the reviewed
-//! target, then fails closed before descendant mutation until final-object authority is
-//! proven. The Windows compatibility path still pins external `cargo clean --target-dir`
-//! to the handle-detached reviewed root until HANDLE-relative descendant traversal and
-//! measurement replace that compatibility boundary.
+//! Linux and macOS authenticate and authorize the reviewed target, then fail closed
+//! before descendant mutation until final-object authority is proven. Any remaining
+//! Unix capability-cleanup path stays bound to the reviewed directory descriptor and
+//! removes descendants in-process. The Windows compatibility path still pins external
+//! `cargo clean --target-dir` to the handle-detached reviewed root until HANDLE-relative
+//! descendant traversal and measurement replace that compatibility boundary.
 //!
 //! Before any destructive cleanup, the measured target must pass ownership + active-use
 //! probes. Missing or incomplete platform active-use evidence fails closed (no clean).
@@ -992,20 +992,20 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
 
 /// Reclaim a project's reviewed Cargo `target/` directory with platform-bound mutation authority.
 ///
-/// Non-Linux Unix keeps the reviewed root in place and performs descriptor-relative allocation
-/// measurement and descendant removal through the retained directory `File`. Linux opens and
-/// authorizes the reviewed root, then refuses before descendant mutation while exact final-object
-/// authority remains unproven. The explicit Cargo executable is still validated as
-/// compatibility/provenance input but is not destructive authority on Unix. Windows retains the
-/// handle-detach + explicit `cargo clean --target-dir` compatibility path until HANDLE-relative
-/// descendant traversal/measurement/disposition is implemented.
+/// Linux and macOS open and authorize the reviewed root, then refuse before descendant mutation
+/// while exact final-object authority remains unproven. Any remaining Unix capability-cleanup
+/// path keeps the reviewed root in place and performs descriptor-relative allocation measurement
+/// and descendant removal through the retained directory `File`. The explicit Cargo executable is
+/// still validated as compatibility/provenance input but is not destructive authority on Unix.
+/// Windows retains the handle-detach + explicit `cargo clean --target-dir` compatibility path until
+/// HANDLE-relative descendant traversal/measurement/disposition is implemented.
 ///
 /// Fail-closed:
 /// - missing cargo executable ⇒ `Err`
 /// - active holders / active-use probe failure / owner mismatch ⇒ `Err` (no clean)
-/// - Linux final-object authority unproven ⇒ `Err` after retained-root holder authorization and
-///   before descendant mutation
-/// - non-Linux Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving
+/// - Linux or macOS final-object authority unproven ⇒ `Err` after retained-root holder authorization
+///   and before descendant mutation
+/// - remaining Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving
 ///   partial-clean evidence
 /// - Windows spawn failure / command-not-found / non-zero Cargo exit ⇒ `Err`
 /// - zero allocation delta after successful cleanup ⇒ `Ok` with `observed_reduction_bytes == 0`
@@ -1107,7 +1107,12 @@ where
         "cargo-target-linux-final-object-authority-unproven".to_string(),
     ));
 
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    return Err(CargoTargetReclaimError::Message(
+        "cargo-target-macos-final-object-authority-unproven".to_string(),
+    ));
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         let bytes_before =
             crate::unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)?;
@@ -1308,14 +1313,32 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let result = clean_cargo_target_with_active_use(&root, &target, &fake, |_| Ok(()))
-            .expect("retained capability cleanup");
-        assert!(result.executed);
-        assert_eq!(result.status_code, 0);
-        assert!(!cargo_ran.exists(), "Unix cleanup must not invoke the external Cargo child");
-        assert!(target.is_dir(), "reviewed root must remain present");
-        assert!(!target.join("junk").exists(), "reviewed contents must be removed");
-        let _ = fs::remove_dir_all(&root);
+        let result = clean_cargo_target_with_active_use(&root, &target, &fake, |_| Ok(()));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                result.unwrap_err(),
+                "cargo-target-macos-final-object-authority-unproven"
+            );
+            assert!(!cargo_ran.exists(), "macOS cutoff must not invoke external Cargo");
+            assert!(target.is_dir(), "reviewed root must remain present");
+            assert!(
+                target.join("junk").is_file(),
+                "macOS cutoff must preserve reviewed contents before final-object authority is proven"
+            );
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let result = result.expect("retained capability cleanup");
+            assert!(result.executed);
+            assert_eq!(result.status_code, 0);
+            assert!(!cargo_ran.exists(), "Unix cleanup must not invoke the external Cargo child");
+            assert!(target.is_dir(), "reviewed root must remain present");
+            assert!(!target.join("junk").exists(), "reviewed contents must be removed");
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[cfg(all(unix, not(target_os = "linux")))]
@@ -1348,29 +1371,52 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&fake, perms).unwrap();
 
-        let result =
-            clean_cargo_target_with_active_use(&project, &target_canon, &fake, |_| Ok(()))
-                .expect("retained capability cleanup");
-        assert!(result.executed);
-        assert_eq!(result.status_code, 0);
-        assert!(result.observed_reduction_bytes > 0);
-        assert_eq!(ledger_reclaim_bytes(&result), 0);
-        assert!(!cargo_ran.exists(), "Unix cleanup must not delegate to Cargo");
-        assert!(
-            shared.join("SENTINEL").is_file(),
-            "unrelated sentinel must survive retained-capability cleanup"
-        );
-        assert!(target_canon.is_dir(), "reviewed target root must remain present");
-        assert!(
-            !target_canon.join("artifact").exists(),
-            "reviewed target contents should be removed"
-        );
-        let quarantine_exists = fs::read_dir(&project)
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|entry| entry.file_name().to_string_lossy().starts_with(".disksage-cargo-clean-"));
-        assert!(!quarantine_exists, "Unix cleanup must not create pathname quarantine state");
-        let _ = fs::remove_dir_all(&root);
+        let result = clean_cargo_target_with_active_use(&project, &target_canon, &fake, |_| Ok(()));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                result.unwrap_err(),
+                "cargo-target-macos-final-object-authority-unproven"
+            );
+            assert!(!cargo_ran.exists(), "macOS cutoff must not delegate to Cargo");
+            assert!(shared.join("SENTINEL").is_file());
+            assert!(target_canon.is_dir(), "reviewed target root must remain present");
+            assert!(
+                target_canon.join("artifact").is_file(),
+                "macOS cutoff must preserve reviewed target contents"
+            );
+            let quarantine_exists = fs::read_dir(&project)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(".disksage-cargo-clean-"));
+            assert!(!quarantine_exists, "macOS cutoff must not create pathname quarantine state");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let result = result.expect("retained capability cleanup");
+            assert!(result.executed);
+            assert_eq!(result.status_code, 0);
+            assert!(result.observed_reduction_bytes > 0);
+            assert_eq!(ledger_reclaim_bytes(&result), 0);
+            assert!(!cargo_ran.exists(), "Unix cleanup must not delegate to Cargo");
+            assert!(
+                shared.join("SENTINEL").is_file(),
+                "unrelated sentinel must survive retained-capability cleanup"
+            );
+            assert!(target_canon.is_dir(), "reviewed target root must remain present");
+            assert!(
+                !target_canon.join("artifact").exists(),
+                "reviewed target contents should be removed"
+            );
+            let quarantine_exists = fs::read_dir(&project)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(".disksage-cargo-clean-"));
+            assert!(!quarantine_exists, "Unix cleanup must not create pathname quarantine state");
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[test]
