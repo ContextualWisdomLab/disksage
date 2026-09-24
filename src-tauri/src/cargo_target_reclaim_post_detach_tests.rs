@@ -91,6 +91,7 @@ fn post_open_holder_blocks_before_detach_and_cargo() {
     );
 }
 
+#[cfg(not(target_os = "linux"))]
 #[test]
 fn unix_reclaim_keeps_destructive_authority_on_retained_root() {
     use std::fs;
@@ -111,8 +112,9 @@ fn unix_reclaim_keeps_destructive_authority_on_retained_root() {
     .expect("manifest");
     fs::write(&artifact, vec![0x5a; 8192]).expect("artifact");
 
-    // Model a pathname substitution after DiskSage has already reviewed and opened the root.
-    // A retained-capability cleanup must never hand this mutable pathname to an external cleaner.
+    // This acceptance belongs only to Unix platforms where the owner still has an approved
+    // mutation path. Linux fails closed before descendant mutation until final-object authority
+    // is proven under the #170 same-identity namespace-substitution threat model.
     let script = format!(
         "#!/bin/sh\n\
 printf 'ran\\n' > '{cargo_ran}'\n\
