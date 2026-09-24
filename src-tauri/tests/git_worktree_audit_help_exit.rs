@@ -40,6 +40,23 @@ fn assert_exact_failure(arguments: &[&str], expected: &str) {
     );
 }
 
+/// Unix-style `/…` fixtures are not absolute on Windows (`Path::is_absolute` is false).
+/// Map them to a host-absolute path so later validators are exercised without weakening checks.
+fn platform_absolute(unix_abs: &str) -> String {
+    debug_assert!(
+        unix_abs.starts_with('/'),
+        "fixture must be a Unix-absolute path string"
+    );
+    #[cfg(windows)]
+    {
+        format!("C:{}", unix_abs.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        unix_abs.to_string()
+    }
+}
+
 fn git(repository: &Path, arguments: &[&str]) {
     let output = Command::new("git")
         .current_dir(repository)
@@ -163,6 +180,12 @@ fn private_output_fails_closed_when_secure_unix_mode_is_unavailable() {
 #[test]
 fn unknown_and_missing_arguments_are_exact_bounded_failures() {
     assert_exact_failure(&["--opaque-option=customer-secret"], "unknown-argument");
+    // Raw caller assertions are deliberately absent from the v4 deletion-authority surface.
+    assert_exact_failure(&["--closed-merged-head-oid", OID], "unknown-argument");
+    assert_exact_failure(
+        &["--closed-merged-branch", "refs/heads/not-merged"],
+        "unknown-argument",
+    );
     assert_exact_failure(&["--repository-root"], "--repository-root 값이 필요함");
     assert_exact_failure(
         &["--repository-root", "/repository", "--reference-ref"],
@@ -194,6 +217,7 @@ fn unknown_and_missing_arguments_are_exact_bounded_failures() {
 
 #[test]
 fn unsafe_paths_and_missing_reference_authority_fail_before_domain_work() {
+    let abs_missing_repo = platform_absolute("/definitely/not/a/real/repository");
     assert_exact_failure(
         &["--repository-root", "relative/repository", "--reference-ref", OID],
         "--repository-root는 절대 경로여야 함",
@@ -201,7 +225,7 @@ fn unsafe_paths_and_missing_reference_authority_fail_before_domain_work() {
     assert_exact_failure(
         &[
             "--repository-root",
-            "/definitely/not/a/real/repository",
+            abs_missing_repo.as_str(),
             "--reference-ref",
             OID,
             "--private-output",
@@ -210,7 +234,7 @@ fn unsafe_paths_and_missing_reference_authority_fail_before_domain_work() {
         "--private-output은 절대 경로여야 함",
     );
     assert_exact_failure(
-        &["--repository-root", "/definitely/not/a/real/repository"],
+        &["--repository-root", abs_missing_repo.as_str()],
         "--reference-ref 값이 하나 이상 필요함",
     );
 }
@@ -295,6 +319,7 @@ fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
 
 #[test]
 fn out_of_range_limits_fail_before_git_or_filesystem_work() {
+    let abs_missing_repo = platform_absolute("/definitely/not/a/real/repository");
     let cases = [
         ("--command-timeout-ms", "0", "git-worktree-command-timeout-out-of-bounds"),
         ("--command-timeout-ms", "300001", "git-worktree-command-timeout-out-of-bounds"),
@@ -312,7 +337,7 @@ fn out_of_range_limits_fail_before_git_or_filesystem_work() {
         assert_exact_failure(
             &[
                 "--repository-root",
-                "/definitely/not/a/real/repository",
+                abs_missing_repo.as_str(),
                 "--reference-ref",
                 OID,
                 flag,
