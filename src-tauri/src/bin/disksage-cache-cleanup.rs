@@ -5,19 +5,22 @@
 
 use disksage_lib::cache_cleanup::{
     clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+    selected_regenerable_cache_target_headless,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
-Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--target ABSOLUTE_DIRECT_CACHE_CHILD] [--purge-proven-cache-trash] [--journal-path PATH]\n\
+Without --execute it is read-only. With --execute it moves only observed,\n\
+inactive regenerable cache children to OS Trash. --target plans or moves one exact child.\n\
+--purge-proven-cache-trash permanently removes\n\
 only structurally proven cache directories already in OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
     purge_proven_cache_trash: bool,
+    target: Option<PathBuf>,
     journal_path: PathBuf,
 }
 
@@ -68,12 +71,20 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
 
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
+    let mut target = None;
     let mut journal_path = default_journal_path()?;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
             Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
+            Some("--target") => {
+                let path = PathBuf::from(args.next().ok_or("--target requires PATH")?);
+                if !path.is_absolute() {
+                    return Err("--target must be absolute".into());
+                }
+                target = Some(path);
+            }
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
                     args.next()
@@ -88,9 +99,13 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
+    if purge_proven_cache_trash && target.is_some() {
+        return Err("--target cannot be combined with --purge-proven-cache-trash".into());
+    }
     Ok(Some(Args {
         execute,
         purge_proven_cache_trash,
+        target,
         journal_path,
     }))
 }
@@ -107,6 +122,29 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         println!("{USAGE}");
         return Ok(());
     };
+    if let Some(target) = args.target {
+        if args.execute {
+            if let Some(parent) = args.journal_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+        }
+        let evidence = selected_regenerable_cache_target_headless(
+            &target,
+            &args.journal_path,
+            now_ms(),
+            args.execute,
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "executed": args.execute,
+                "target": target,
+                "journal_path": args.journal_path,
+                "evidence": evidence
+            })
+        );
+        return Ok(());
+    }
     if !args.execute {
         let cache_trash = if args.purge_proven_cache_trash {
             serde_json::to_value(proven_cache_trash_candidates(&home_directory()?))
@@ -172,11 +210,8 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 
@@ -197,5 +232,26 @@ mod tests {
             .unwrap();
         assert!(!args.execute);
         assert!(args.purge_proven_cache_trash);
+    }
+
+    #[test]
+    fn exact_target_requires_absolute_path() {
+        let error =
+            parse_args([OsString::from("--target"), OsString::from("relative")]).unwrap_err();
+        assert_eq!(error, "--target must be absolute");
+    }
+
+    #[test]
+    fn exact_target_cannot_be_combined_with_purge() {
+        let error = parse_args([
+            OsString::from("--target"),
+            OsString::from("/tmp/cache-child"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "--target cannot be combined with --purge-proven-cache-trash"
+        );
     }
 }
