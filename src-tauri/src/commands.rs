@@ -20,8 +20,9 @@ use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
-    organization_lineage,
+    cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
+    git_worktree_github_evidence,
+    icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
     provider_recovery, provider_sync, rules, orphan,
@@ -166,9 +167,8 @@ pub fn clean_dev_artifacts_inner(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
-    approved: bool,
 ) -> Vec<CleanResult> {
-    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms, approved)
+    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
         .into_iter()
         .map(|result| CleanResult {
             path: result.path,
@@ -482,8 +482,7 @@ fn podman_binary() -> PathBuf {
     .into_iter()
     .map(PathBuf::from)
     .find(|path| {
-        std::fs::symlink_metadata(path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
     })
     .unwrap_or_else(|| PathBuf::from("podman"))
 }
@@ -516,6 +515,46 @@ pub fn execute_podman_dangling_image_prune(
         &rationale,
         now_ms(),
     )
+}
+
+/// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn execute_runtime_storage_trim(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-trim-task-failed".to_string())?
+}
+
+/// Restarts a runtime that reports running but cannot serve guest commands.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn execute_runtime_storage_recovery(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageRecoveryExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+    })
+    .await
+    .map_err(|_| "runtime-storage-recovery-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -758,7 +797,7 @@ pub fn expand_clean_targets(dir: String) -> Vec<String> {
 
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
+pub async fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
     let files = dupes::collect_files(Path::new(&root));
     Ok(dupes::find_duplicates(files, 4096))
 }
@@ -818,8 +857,11 @@ pub async fn plan_icloud_local_copy_eviction(
     app: AppHandle,
 ) -> Result<cloud_local_eviction::IcloudLocalEvictionPlan, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -856,8 +898,11 @@ pub async fn evict_icloud_local_copy(
         return Err("icloud-local-eviction-double-confirmation-mismatch".into());
     }
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -866,7 +911,7 @@ pub async fn evict_icloud_local_copy(
         .path()
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
-    let record_dir = app_data_dir.join("icloud-local-evictions");
+    let record_dir = app_data_dir.join("cloud-local-evictions");
     if record_dir.starts_with(Path::new(&selected.path)) || path.starts_with(&record_dir) {
         return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
     }
@@ -875,7 +920,7 @@ pub async fn evict_icloud_local_copy(
         let record_dir = cloud_local_eviction::prepare_immutable_record_directory(
             &app_data_dir,
             Path::new(&selected.path),
-            "icloud-local-evictions",
+            "cloud-local-evictions",
         )?;
         let plan = cloud_local_eviction::plan_icloud_local_eviction(
             &selected,
@@ -911,7 +956,7 @@ pub async fn evict_icloud_local_copy(
             Err(error) => (None, Some(error)),
         };
         Ok(IcloudLocalCopyEvictionOutput {
-            action: "evict-icloud-local-copy",
+            action: "evict-cloud-local-copy",
             plan,
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
@@ -929,12 +974,25 @@ pub async fn evict_icloud_local_copy(
 pub async fn plan_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_worktree::audit_git_worktrees(
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options.clone(),
+        )?;
+        git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            git_worktree::GitWorktreeAuditOptions::default(),
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
+            stale_open_pull_request_cutoff_ms,
+            options,
             cloud::system_now_ms(),
         )
     })
@@ -959,6 +1017,8 @@ pub struct StaleGitWorktreeRemovalOutput {
 pub async fn remove_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     approved_removal_plan_fingerprint: String,
     confirmation_exact_approval_phrase: String,
     rationale: String,
@@ -972,10 +1032,20 @@ pub async fn remove_stale_git_worktrees(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let report = git_worktree::audit_git_worktrees(
+        let evidence = git_worktree_github_evidence::collect(
+            Path::new(&repository_root),
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options.clone(),
+        )?;
+        let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
             &retention_references,
-            options,
+            &evidence.closed_heads,
+            &evidence.stale_open_heads,
+            &evidence.pull_request_commits,
+            stale_open_pull_request_cutoff_ms,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
@@ -998,10 +1068,12 @@ pub async fn remove_stale_git_worktrees(
             &format!("{}.approval.json", approval.approval_id),
             &approval,
         )?;
-        let result = git_worktree::execute_stale_worktree_removal(
+        let result = git_worktree::execute_stale_worktree_removal_with_github_pull_requests(
             &report,
             &approval,
             &confirmation_exact_approval_phrase,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),
         )?;
@@ -1026,6 +1098,106 @@ pub async fn remove_stale_git_worktrees(
     })
     .await
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+) -> Result<git_clone_reclaim::GitCloneReclaimPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            git_worktree::GitWorktreeAuditOptions::default(),
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-plan-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct StaleGitCloneRemovalOutput {
+    pub action: &'static str,
+    pub plan: git_clone_reclaim::GitCloneReclaimPlan,
+    pub approval: git_clone_reclaim::GitCloneReclaimApproval,
+    pub approval_path: String,
+    pub result: git_clone_reclaim::GitCloneReclaimResult,
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn remove_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    approved_plan_fingerprint: String,
+    confirmation_exact_approval_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<StaleGitCloneRemovalOutput, String> {
+    use tauri::Manager;
+    let journal_path = journal_file_path(&app)?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let plan = git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options.clone(),
+            cloud::system_now_ms(),
+        )?;
+        if plan.plan_fingerprint != approved_plan_fingerprint {
+            return Err("git-clone-reclaim-plan-fingerprint-mismatch".into());
+        }
+        let approval = git_clone_reclaim::approve_git_clone_reclaim(
+            &plan,
+            &confirmation_exact_approval_phrase,
+            cloud::system_now_ms(),
+            &approved_by,
+            &rationale,
+        )?;
+        let approval_path =
+            app_data_dir.join(format!("{}.git-clone-approval.json", approval.approval_id));
+        crate::private_evidence::write_private_json_create_new(
+            Path::new(&plan.repository_root),
+            &approval_path,
+            &approval,
+        )?;
+        let result = git_clone_reclaim::execute_git_clone_reclaim(
+            &plan,
+            &approval,
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+            &journal_path,
+            cloud::system_now_ms(),
+        )?;
+        Ok(StaleGitCloneRemovalOutput {
+            action: "remove-stale-git-clone",
+            plan,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            result,
+        })
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-task-failed".to_string())?
 }
 
 /// Build a bounded, path-free ontology plan for uninstalled macOS application data.
@@ -3570,8 +3742,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
+                "edge-code-sign-clones",
                 "uv-cache",
                 "trivy-cache",
+                "appmap-download-cache",
+                "superset-http-cache",
+                "superset-code-cache",
+                "playwright-cache",
             ]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3586,15 +3763,22 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                "edge-code-sign-clones" => tmp
+                    .path()
+                    .join("X/com.microsoft.edgemac.code_sign_clone"),
                 "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
+                "appmap-download-cache" => bases.home.join(".appmap/lib"),
+                "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
+                "superset-code-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+                "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 6);
+        assert_eq!(results.len(), 11);
         assert!(results.iter().all(|result| result.ok));
     }
 
@@ -3620,7 +3804,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             0,
             &tmp.path().join("journal.jsonl"),
             now,
-            true,
         );
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);

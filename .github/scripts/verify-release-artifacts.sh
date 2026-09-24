@@ -2,10 +2,10 @@
 set -euo pipefail
 
 artifact_root="${1:-release-artifacts}"
-run_attempt="${2:-}"
+run_identity="${2:-}"
 
-if [[ -z "$run_attempt" || ! "$run_attempt" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'run attempt must be a positive integer.\n' >&2
+if [[ -z "$run_identity" || ! "$run_identity" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'run identity must be a positive integer.\n' >&2
   exit 1
 fi
 if [[ ! -d "$artifact_root" ]]; then
@@ -40,9 +40,9 @@ require_exactly_one_file() {
 }
 
 expected_dirs=(
-  "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-2022-${run_attempt}"
-  "release-disksage-macos-latest-${run_attempt}"
+  "release-disksage-ubuntu-22.04-${run_identity}"
+  "release-disksage-windows-2022-${run_identity}"
+  "release-disksage-macos-latest-${run_identity}"
 )
 
 mapfile -d '' top_level_entries < <(find "$artifact_root" -mindepth 1 -maxdepth 1 -print0 | sort -z)
@@ -126,5 +126,12 @@ regular_file_count=0
 while IFS= read -r -d '' _; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
 if [[ $regular_file_count -ne 17 ]]; then
   printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+  exit 1
+fi
+
+# Nonempty content is necessary for publication, but does not establish binary validity.
+empty_artifact="$(find "$artifact_root" -type f -size 0 -print -quit)"
+if [[ -n "$empty_artifact" ]]; then
+  printf 'Empty release artifact is not publishable: %s\n' "$empty_artifact" >&2
   exit 1
 fi

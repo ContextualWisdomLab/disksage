@@ -13,6 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const runAttempt = '1';
+const platformDirectories = {
+  linux: `release-disksage-ubuntu-22.04-${runAttempt}`,
+  windows: `release-disksage-windows-2022-${runAttempt}`,
+  macos: `release-disksage-macos-latest-${runAttempt}`,
+} as const;
 const operationalAssetNames = [
   'disksage-cloud-plan-linux-x86_64',
   'disksage-duplicate-audit-linux-x86_64',
@@ -38,70 +44,27 @@ function extractWorkflowJob(workflow: string, jobName: string): string {
   return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
 }
 
-/** Extract one literal Bash run block from a named workflow step. */
-function extractWorkflowRunScript(job: string, stepName: string): string {
-  const normalizedJob = job.replace(/\r\n?/g, '\n');
-  const stepMarker = `      - name: ${stepName}\n`;
-  const stepStart = normalizedJob.indexOf(stepMarker);
-  if (stepStart < 0) throw new Error(`Missing workflow step: ${stepName}`);
-  const runMarker = '        run: |\n';
-  const runStart = normalizedJob.indexOf(runMarker, stepStart);
-  if (runStart < 0) throw new Error(`Missing literal run block: ${stepName}`);
-  const remaining = normalizedJob.slice(runStart + runMarker.length);
-  const nextStepOffset = remaining.search(/\n      - (?:name:|uses:)/);
-  const script = nextStepOffset < 0 ? remaining : remaining.slice(0, nextStepOffset);
-  return script
-    .split('\n')
-    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
-    .join('\n');
-}
-
-/** Create one complete release-artifact tree for admission-boundary tests. */
+/** Create one complete 17-file release-artifact tree for admission-boundary tests. */
 function createReleaseArtifactFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-provenance-'));
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
-  mkdirSync(join(artifactRoot, 'sbom'), { recursive: true });
-  writeFileSync(
-    join(artifactRoot, 'sbom', 'disksage.spdx.json'),
-    JSON.stringify({
-      spdxVersion: 'SPDX-2.3',
-      dataLicense: 'CC0-1.0',
-      SPDXID: 'SPDXRef-DOCUMENT',
-      name: 'disksage-deadbeef',
-      documentNamespace: 'https://github.com/ContextualWisdomLab/disksage/sbom/deadbeef',
-      creationInfo: { created: '2000-01-01T00:00:00.000Z', creators: ['Tool: disksage-release-sbom'] },
-      documentDescribes: ['SPDXRef-Cargo-root'],
-      packages: [{
-        SPDXID: 'SPDXRef-Cargo-root',
-        name: 'cargo:disksage',
-        versionInfo: '0.1.0',
-        downloadLocation: 'NOASSERTION',
-        filesAnalyzed: false,
-        licenseConcluded: 'NOASSERTION',
-        licenseDeclared: 'NOASSERTION',
-        supplier: 'NOASSERTION',
-      }],
-      relationships: [],
-      documentComment: 'Dependency inventory bound to source revision deadbeef.',
-    }),
-  );
-  for (const bundlePath of [
-    'ubuntu/bundle/deb/disksage.deb',
-    'ubuntu/bundle/appimage/disksage.AppImage',
-    'windows/bundle/msi/disksage.msi',
-    'windows/bundle/nsis/disksage-setup.exe',
-    'macos/bundle/dmg/disksage.dmg',
-  ]) {
-    const absolutePath = join(artifactRoot, bundlePath);
+  for (const [directory, bundlePath] of [
+    [platformDirectories.linux, 'bundle/deb/disksage.deb'],
+    [platformDirectories.linux, 'bundle/appimage/disksage.AppImage'],
+    [platformDirectories.windows, 'bundle/msi/disksage.msi'],
+    [platformDirectories.windows, 'bundle/nsis/disksage-setup.exe'],
+    [platformDirectories.macos, 'bundle/dmg/disksage.dmg'],
+  ] as const) {
+    const absolutePath = join(artifactRoot, directory, bundlePath);
     mkdirSync(dirname(absolutePath), { recursive: true });
     writeFileSync(absolutePath, `bundle:${bundlePath}`);
   }
   for (const assetName of operationalAssetNames) {
     const platformDirectory = assetName.includes('windows')
-      ? 'windows'
+      ? platformDirectories.windows
       : assetName.includes('macos')
-        ? 'macos'
-        : 'ubuntu';
+        ? platformDirectories.macos
+        : platformDirectories.linux;
     const assetPath = join(artifactRoot, platformDirectory, assetName);
     const bytes = Buffer.from(`operational-cli:${assetName}`);
     mkdirSync(dirname(assetPath), { recursive: true });
@@ -114,21 +77,23 @@ function createReleaseArtifactFixture(): string {
   return fixtureRoot;
 }
 
-/** Execute the exact source-controlled release admission script in one fixture. */
+/** Execute the exact shared release admission boundary in one fixture. */
 function runReleaseArtifactVerifier(fixtureRoot: string) {
-  const workflow = readRepositoryFile('.github/workflows/release.yml');
-  const attestJob = extractWorkflowJob(workflow, 'attest-release');
-  const verifier = extractWorkflowRunScript(attestJob, 'Verify release artifact checksums');
-  return spawnSync('bash', ['-c', verifier], {
-    cwd: fixtureRoot,
-    encoding: 'utf8',
-    env: { ...process.env, GITHUB_WORKSPACE: repositoryRoot },
-  });
+  return spawnSync(
+    'bash',
+    [
+      resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+      join(fixtureRoot, 'release-artifacts'),
+      runAttempt,
+    ],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
 }
 
 describe('release artifact provenance contract', () => {
   it('separates build, attestation, and publication authority on exact artifacts', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const verifier = readRepositoryFile('.github/scripts/verify-release-artifacts.sh');
     const buildJob = extractWorkflowJob(workflow, 'build');
     const attestJob = extractWorkflowJob(workflow, 'attest-release');
     const publishJob = extractWorkflowJob(workflow, 'publish-release');
@@ -149,14 +114,17 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain('merge-multiple: false');
     expect(attestJob).toContain(
+      'bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_id }}"',
+    );
+    expect(attestJob).toContain(
       'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6',
     );
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
     expect(attestJob).toContain('disksage.spdx.json');
-    expect(attestJob).toContain('expected exactly 18 regular files');
-    expect(attestJob).toContain('require_exactly_one_file "$required_name"');
-    expect(attestJob).toContain('require_exactly_one_file "$required_name.sha256"');
+    expect(attestJob).not.toContain('require_exactly_one_file');
+    expect(verifier).toContain('expected exactly 17 regular files');
+    expect(verifier).toContain('require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64');
 
     expect(publishJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
     expect(publishJob).toContain('needs: attest-release');
@@ -173,7 +141,11 @@ describe('release artifact provenance contract', () => {
     () => {
       const fixtureRoot = createReleaseArtifactFixture();
       try {
-        const linuxDirectory = join(fixtureRoot, 'release-artifacts', 'ubuntu');
+        const linuxDirectory = join(
+          fixtureRoot,
+          'release-artifacts',
+          platformDirectories.linux,
+        );
         const checksumPath = join(
           linuxDirectory,
           'disksage-cloud-plan-linux-x86_64.sha256',
@@ -196,21 +168,30 @@ describe('release artifact provenance contract', () => {
   );
 
   it.runIf(process.platform !== 'win32')(
-    'rejects one required CLI duplicated across preserved artifact namespaces',
+    'rejects one required CLI duplicated into another platform namespace',
     () => {
       const fixtureRoot = createReleaseArtifactFixture();
       try {
         const duplicatedName = 'disksage-cloud-plan-linux-x86_64';
-        const sourcePath = join(fixtureRoot, 'release-artifacts', 'ubuntu', duplicatedName);
-        const duplicatePath = join(fixtureRoot, 'release-artifacts', 'windows', duplicatedName);
+        const sourcePath = join(
+          fixtureRoot,
+          'release-artifacts',
+          platformDirectories.linux,
+          duplicatedName,
+        );
+        const duplicatePath = join(
+          fixtureRoot,
+          'release-artifacts',
+          platformDirectories.windows,
+          duplicatedName,
+        );
         mkdirSync(dirname(duplicatePath), { recursive: true });
         writeFileSync(duplicatePath, readFileSync(sourcePath));
 
         const result = runReleaseArtifactVerifier(fixtureRoot);
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          `Expected exactly one release artifact named ${duplicatedName}, found 2.`,
-        );
+        expect(result.stderr).toContain('Unexpected release artifact entries');
+        expect(result.stderr).toContain('expected exactly 17 regular files, found 18');
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
       }
