@@ -511,6 +511,34 @@ mod tests {
     }
 
     #[test]
+    fn selection_never_scans_a_root_the_target_is_not_under() {
+        // Mutation guard for the direct-child predicate. A root whose snapshot cannot be
+        // taken (more children than the scan limit) must be SKIPPED for a target outside it.
+        // If `selected.parent() != Some(root)` were deleted, the loop would scan this root
+        // and surface `cache-target-limit-exceeded` instead of the not-current error.
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        fs::create_dir_all(&root).unwrap();
+        // One past rules::MAX_CACHE_TARGETS (4_096); the precondition below fails loudly if
+        // that limit is ever raised, so this cannot silently stop exercising the scan.
+        for index in 0..4_097 {
+            fs::write(root.join(format!("entry-{index}")), b"").unwrap();
+        }
+        assert_eq!(
+            rules::cache_targets(&root).expect_err("precondition: this root cannot be snapshotted"),
+            "cache-target-limit-exceeded"
+        );
+        let outside = tmp.path().join("elsewhere").join("child");
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = selected_regenerable_cache_target_inner(&bases, &outside, &journal, 1, false)
+            .expect_err("a target outside every approved root must be refused");
+
+        assert_eq!(error, "cache-target-not-current-or-safe");
+    }
+
+    #[test]
     fn selection_rejects_relative_path_before_touching_the_filesystem() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
