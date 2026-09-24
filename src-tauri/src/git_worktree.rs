@@ -33,6 +33,8 @@ const MAX_RATIONALE_BYTES: usize = 1_000;
 const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
 const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
+#[cfg(unix)]
+const ACTIVE_USE_PS_RESERVED_BUDGET_MS: u64 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -740,6 +742,15 @@ fn command_references_path(command: &str, path: &Path) -> bool {
 }
 
 #[cfg(unix)]
+fn lsof_active_use_budget(timeout_ms: u64) -> Result<u64, String> {
+    let lsof_budget = timeout_ms.saturating_sub(ACTIVE_USE_PS_RESERVED_BUDGET_MS);
+    if lsof_budget < POLL_INTERVAL_MS {
+        return Err("active-use-probe-budget-too-small".into());
+    }
+    Ok(lsof_budget)
+}
+
+#[cfg(unix)]
 fn process_path_pids(
     path: &Path,
     command_cwd: &Path,
@@ -852,8 +863,22 @@ pub(crate) fn active_use_evidence(
         lsof_args.push(OsString::from("+D"));
     }
     lsof_args.push(path.as_os_str().to_os_string());
+    let lsof_budget_ms = match lsof_active_use_budget(timeout_ms) {
+        Ok(budget) => budget,
+        Err(error) => {
+            return GitWorktreeActiveUseEvidence {
+                method: method.into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some(error),
+            };
+        }
+    };
     let started = Instant::now();
-    let result = match run_bounded_command("lsof", &lsof_args, command_cwd, timeout_ms) {
+    let result = match run_bounded_command("lsof", &lsof_args, command_cwd, lsof_budget_ms) {
         Ok(result) => result,
         Err(error) => {
             return GitWorktreeActiveUseEvidence {
@@ -940,7 +965,20 @@ pub(crate) fn active_use_evidence(
         pids.insert(pid);
     }
     let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    let remaining_ms = timeout_ms.saturating_sub(elapsed_ms).max(1);
+    let remaining_ms = timeout_ms.saturating_sub(elapsed_ms);
+    if remaining_ms < POLL_INTERVAL_MS {
+        let results_truncated = pids.len() > max_pids;
+        let observed_pids = pids.into_iter().take(max_pids).collect::<Vec<_>>();
+        return GitWorktreeActiveUseEvidence {
+            method: method.into(),
+            assessed: true,
+            evidence_complete: false,
+            active: !observed_pids.is_empty(),
+            observed_pids,
+            results_truncated,
+            error: Some("active-use-ps-budget-exhausted".into()),
+        };
+    }
     match process_path_pids(path, command_cwd, remaining_ms) {
         Ok(process_pids) => pids.extend(process_pids),
         Err(error) => {
@@ -2617,6 +2655,24 @@ mod tests {
             .expect_err("a path ps cannot render as UTF-8 must fail closed");
 
         assert_eq!(error, "active-use-ps-path-not-utf8");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_budget_reserves_time_for_ps_probe() {
+        assert_eq!(lsof_active_use_budget(2_000), Ok(1_900));
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS),
+            Err("active-use-probe-budget-too-small".into())
+        );
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS + POLL_INTERVAL_MS - 1),
+            Err("active-use-probe-budget-too-small".into())
+        );
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS + POLL_INTERVAL_MS),
+            Ok(POLL_INTERVAL_MS)
+        );
     }
 
     #[cfg(target_os = "macos")]
