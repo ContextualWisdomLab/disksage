@@ -6,10 +6,12 @@
 //! used, and records reclaim bytes from measured before/after allocation evidence
 //! (zero delta ⇒ reclaim 0, never a success reclaim claim).
 //!
-//! Unix destructive cleanup stays bound to the reviewed directory descriptor and
-//! removes descendants in-process. The Windows compatibility path still pins external
-//! `cargo clean --target-dir` to the handle-detached reviewed root until HANDLE-relative
-//! descendant traversal and measurement replace that compatibility boundary.
+//! Non-Linux Unix destructive cleanup stays bound to the reviewed directory descriptor
+//! and removes descendants in-process. Linux authenticates and authorizes the reviewed
+//! target, then fails closed before descendant mutation until final-object authority is
+//! proven. The Windows compatibility path still pins external `cargo clean --target-dir`
+//! to the handle-detached reviewed root until HANDLE-relative descendant traversal and
+//! measurement replace that compatibility boundary.
 //!
 //! Before any destructive cleanup, the measured target must pass ownership + active-use
 //! probes. Missing or incomplete platform active-use evidence fails closed (no clean).
@@ -1122,16 +1124,21 @@ pub(crate) fn ensure_target_safe_to_reclaim(target_dir: &Path) -> Result<(), Str
 
 /// Reclaim a project's reviewed Cargo `target/` directory with platform-bound mutation authority.
 ///
-/// Unix keeps the reviewed root in place and performs descriptor-relative allocation measurement
-/// and descendant removal through the retained directory `File`. The explicit Cargo executable is
-/// still validated as compatibility/provenance input but is not destructive authority on Unix.
-/// Windows retains the handle-detach + explicit `cargo clean --target-dir` compatibility path until
-/// HANDLE-relative descendant traversal/measurement/disposition is implemented.
+/// Non-Linux Unix keeps the reviewed root in place and performs descriptor-relative allocation
+/// measurement and descendant removal through the retained directory `File`. Linux opens and
+/// authorizes the reviewed root, then refuses before descendant mutation while exact final-object
+/// authority remains unproven. The explicit Cargo executable is still validated as
+/// compatibility/provenance input but is not destructive authority on Unix. Windows retains the
+/// handle-detach + explicit `cargo clean --target-dir` compatibility path until HANDLE-relative
+/// descendant traversal/measurement/disposition is implemented.
 ///
 /// Fail-closed:
 /// - missing cargo executable ⇒ `Err`
 /// - active holders / active-use probe failure / owner mismatch ⇒ `Err` (no clean)
-/// - Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving partial-clean evidence
+/// - Linux final-object authority unproven ⇒ `Err` after retained-root holder authorization and
+///   before descendant mutation
+/// - non-Linux Unix capability traversal/removal/measurement failure ⇒ `Err`, preserving
+///   partial-clean evidence
 /// - Windows spawn failure / command-not-found / non-zero Cargo exit ⇒ `Err`
 /// - zero allocation delta after successful cleanup ⇒ `Ok` with `observed_reduction_bytes == 0`
 pub fn clean_cargo_target(
@@ -1227,7 +1234,12 @@ where
         &opened_target.file,
     )?;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    return Err(CargoTargetReclaimError::Message(
+        "cargo-target-linux-final-object-authority-unproven".to_string(),
+    ));
+
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         let bytes_before =
             crate::unix_capability_cleanup::measure_allocated_bytes(&opened_target.file)?;
@@ -1404,7 +1416,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "linux")))]
     #[test]
     fn unix_retained_cleanup_never_invokes_external_cargo() {
         use std::os::unix::fs::PermissionsExt;
@@ -1438,7 +1450,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "linux")))]
     #[test]
     fn unix_retained_cleanup_preserves_unrelated_sentinel_without_path_delegation() {
         use std::os::unix::fs::PermissionsExt;
@@ -1653,7 +1665,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&fake, permissions).unwrap();
 
-        let result = clean_cargo_target_with_active_use_and_opened_hook(
+        let error = clean_cargo_target_with_active_use_and_opened_hook(
             &project,
             &target,
             &fake,
@@ -1666,14 +1678,16 @@ mod tests {
                 Ok(())
             },
         )
-        .expect("retained capability cleanup should succeed");
+        .unwrap_err();
 
-        assert!(result.executed);
-        assert!(result.observed_reduction_bytes > 0);
-        assert!(!cargo_ran.exists(), "Unix cleanup must not invoke external Cargo");
+        assert_eq!(error, "cargo-target-linux-final-object-authority-unproven");
+        assert!(!cargo_ran.exists(), "Linux cutoff must not invoke external Cargo");
         assert!(outside.join("SENTINEL").is_file());
         assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
-        assert!(!moved_target.join("artifact").exists());
+        assert!(
+            moved_target.join("artifact").is_file(),
+            "the reviewed object must remain unchanged when Linux refuses mutation"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1697,12 +1711,14 @@ mod tests {
         fs::write(target.join("artifact"), "delete-me").unwrap();
         let cargo = fs::canonicalize(env!("CARGO")).unwrap();
 
-        let result = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
-            .expect("retained capability cleanup should accept resolved Cargo provenance");
-        assert!(result.executed);
-        assert!(result.observed_reduction_bytes > 0);
+        let error = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error, "cargo-target-linux-final-object-authority-unproven");
         assert!(target.is_dir(), "reviewed root must remain present");
-        assert!(!target.join("artifact").exists());
+        assert!(
+            target.join("artifact").is_file(),
+            "Linux cutoff must preserve reviewed contents before final-object authority is proven"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
