@@ -562,50 +562,6 @@ fn executable_file(path: &Path) -> bool {
     }
 }
 
-#[cfg(unix)]
-fn bounded_dir_size(path: &Path) -> Result<u64, String> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    let mut entries = 0u64;
-    let mut seen = std::collections::HashSet::new();
-    const MAX_ENTRIES: u64 = 2_000_000;
-    while let Some(dir) = stack.pop() {
-        let read = std::fs::read_dir(&dir).map_err(|e| format!("cargo-target-size-read-failed:{e}"))?;
-        for entry in read {
-            let entry = entry.map_err(|e| format!("cargo-target-size-entry-failed:{e}"))?;
-            entries += 1;
-            if entries > MAX_ENTRIES {
-                return Err("cargo-target-size-entry-limit".into());
-            }
-            let entry_path = entry.path();
-            let metadata = std::fs::symlink_metadata(&entry_path)
-                .map_err(|e| format!("cargo-target-size-meta-failed:{e}"))?;
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-            if metadata.is_dir() {
-                stack.push(entry_path);
-            } else if metadata.is_file() {
-                let identity = (metadata.dev(), metadata.ino());
-                if !seen.insert(identity) {
-                    continue;
-                }
-                let allocated = metadata
-                    .blocks()
-                    .checked_mul(512)
-                    .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
-                total = total
-                    .checked_add(allocated)
-                    .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
-            }
-        }
-    }
-    Ok(total)
-}
-
 #[cfg(not(unix))]
 fn bounded_dir_size(_path: &Path) -> Result<u64, String> {
     Err("cargo-target-size-allocation-evidence-unsupported".into())
@@ -753,7 +709,6 @@ fn run_bounded_command(
 #[cfg(unix)]
 struct OpenedTargetDir {
     file: File,
-    handle_path: PathBuf,
 }
 
 #[cfg(unix)]
@@ -784,7 +739,7 @@ fn open_verified_target_dir(
     if handle_metadata.dev() != opened.dev() || handle_metadata.ino() != opened.ino() {
         return Err("cargo-target-dir-handle-identity-mismatch".into());
     }
-    Ok(OpenedTargetDir { file, handle_path })
+    Ok(OpenedTargetDir { file })
 }
 
 #[cfg(windows)]
@@ -816,93 +771,6 @@ fn open_verified_target_dir(
     _expected: &std::fs::Metadata,
 ) -> Result<OpenedTargetDir, String> {
     Err("cargo-target-identity-bound-cleanup-unsupported".into())
-}
-
-#[cfg(unix)]
-struct DetachedTargetDir {
-    opened: OpenedTargetDir,
-    original_path: PathBuf,
-    clean_path: PathBuf,
-    quarantine_path: PathBuf,
-    committed: bool,
-}
-
-#[cfg(unix)]
-impl DetachedTargetDir {
-    fn verified_size(&self) -> Result<u64, String> {
-        bounded_dir_size(&self.opened.handle_path)
-    }
-
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-#[cfg(unix)]
-impl Drop for DetachedTargetDir {
-    fn drop(&mut self) {
-        if !self.committed {
-            let clean = std::fs::symlink_metadata(&self.clean_path);
-            let opened = self.opened.file.metadata();
-            let original_missing = std::fs::symlink_metadata(&self.original_path)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-            let same_opened_dir = match (clean, opened) {
-                (Ok(clean), Ok(opened)) => {
-                    clean.is_dir()
-                        && !clean.file_type().is_symlink()
-                        && clean.dev() == opened.dev()
-                        && clean.ino() == opened.ino()
-                }
-                _ => false,
-            };
-            if original_missing && same_opened_dir {
-                let _ = std::fs::rename(&self.clean_path, &self.original_path);
-            }
-        }
-        if self.committed || std::fs::symlink_metadata(&self.clean_path).is_err() {
-            let _ = std::fs::remove_dir(&self.quarantine_path);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn detach_verified_target_dir(
-    target_dir: &Path,
-    opened: OpenedTargetDir,
-) -> Result<DetachedTargetDir, String> {
-    let parent = target_dir.parent().ok_or_else(|| "cargo-target-dir-parent-missing".to_string())?;
-    let quarantine = tempfile::Builder::new()
-        .prefix(".disksage-cargo-clean-")
-        .tempdir_in(parent)
-        .map_err(|error| format!("cargo-target-quarantine-create-failed:{error}"))?;
-    let clean_path = quarantine.path().join("target");
-    std::fs::rename(target_dir, &clean_path)
-        .map_err(|error| format!("cargo-target-dir-detach-failed:{error}"))?;
-    let quarantine_path = quarantine.keep();
-    let moved = std::fs::symlink_metadata(&clean_path)
-        .map_err(|error| format!("cargo-target-dir-detached-metadata-failed:{error}"))?;
-    let expected = opened.file.metadata()
-        .map_err(|error| format!("cargo-target-dir-open-metadata-failed:{error}"))?;
-    if moved.file_type().is_symlink()
-        || !moved.is_dir()
-        || moved.dev() != expected.dev()
-        || moved.ino() != expected.ino()
-    {
-        if std::fs::symlink_metadata(target_dir)
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
-            let _ = std::fs::rename(&clean_path, target_dir);
-        }
-        let _ = std::fs::remove_dir(&quarantine_path);
-        return Err("cargo-target-dir-replaced".into());
-    }
-    Ok(DetachedTargetDir {
-        opened,
-        original_path: target_dir.to_path_buf(),
-        clean_path,
-        quarantine_path,
-        committed: false,
-    })
 }
 
 #[cfg(windows)]
@@ -1462,7 +1330,7 @@ mod tests {
         let project = root.join("proj");
         let target = project.join("target");
         let shared = root.join("shared-target");
-        let cargo_ran = root.join("cargo-ran");
+        let cargo_ran = project.join("cargo-ran");
         fs::create_dir_all(&target).unwrap();
         fs::create_dir_all(&shared).unwrap();
         fs::write(project.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
