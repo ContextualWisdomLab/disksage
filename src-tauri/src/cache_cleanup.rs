@@ -239,6 +239,17 @@ pub(crate) fn clean_cache_contents_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
+    clean_cache_contents_selected_inner(bases, dir, requested_targets, None, journal_path, now_ms)
+}
+
+fn clean_cache_contents_selected_inner(
+    bases: &rules::BaseDirs,
+    dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    selected: Option<&Path>,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
@@ -250,8 +261,17 @@ pub(crate) fn clean_cache_contents_inner(
         return Err("cache-cleanup-targets-stale".into());
     }
 
+    if selected.is_some_and(|path| {
+        !expected
+            .iter()
+            .any(|target| Path::new(&target.path) == path)
+    }) {
+        return Err("cache-target-not-current-or-safe".into());
+    }
+
     Ok(expected
         .into_iter()
+        .filter(|target| selected.is_none_or(|path| Path::new(&target.path) == path))
         .map(|target| {
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
             // reclaiming unrelated, inactive cache archives in the same catalog root.
@@ -335,6 +355,49 @@ pub fn clean_regenerable_caches_headless(
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     serde_json::to_value(clean_regenerable_caches_inner(&bases, journal_path, now_ms))
         .map_err(|error| error.to_string())
+}
+
+/// Plan or execute one current direct child of an allowlisted regenerable cache root.
+/// The complete root snapshot is rechecked immediately before mutation.
+pub fn selected_regenerable_cache_target_headless(
+    selected: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+    execute: bool,
+) -> Result<serde_json::Value, String> {
+    if !selected.is_absolute() {
+        return Err("cache-target-must-be-absolute".into());
+    }
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    for candidate in rules::cache_candidates(&bases)
+        .into_iter()
+        .filter(|candidate| {
+            AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
+        })
+    {
+        let root = PathBuf::from(&candidate.path);
+        if selected.parent() != Some(root.as_path()) {
+            continue;
+        }
+        let targets = rules::cache_targets(&root)?;
+        let target = targets
+            .iter()
+            .find(|target| Path::new(&target.path) == selected)
+            .ok_or("cache-target-not-current-or-safe")?;
+        if !execute {
+            return serde_json::to_value(target).map_err(|error| error.to_string());
+        }
+        let results = clean_cache_contents_selected_inner(
+            &bases,
+            &root,
+            &targets,
+            Some(selected),
+            journal_path,
+            now_ms,
+        )?;
+        return serde_json::to_value(results).map_err(|error| error.to_string());
+    }
+    Err("cache-target-not-current-or-safe".into())
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
