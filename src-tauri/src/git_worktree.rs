@@ -786,14 +786,14 @@ fn classify_process_path_result(
         };
         let remainder = line[pid_text.len()..].trim_start();
         let Some(parent_pid_text) = remainder.split_whitespace().next() else {
-            continue;
+            return Err("active-use-ps-row-invalid".into());
         };
-        let Ok(pid) = pid_text.parse::<u32>() else {
-            continue;
-        };
-        let Ok(parent_pid) = parent_pid_text.parse::<u32>() else {
-            continue;
-        };
+        let pid = pid_text
+            .parse::<u32>()
+            .map_err(|_| "active-use-ps-row-invalid".to_string())?;
+        let parent_pid = parent_pid_text
+            .parse::<u32>()
+            .map_err(|_| "active-use-ps-row-invalid".to_string())?;
         let command = remainder[parent_pid_text.len()..].trim_start();
         records.push((pid, parent_pid, command));
     }
