@@ -654,6 +654,11 @@ fn days_from_civil(year: i64, month: i32, day: i32) -> i32 {
     (era * 146_097 + doe as i64 - 719_468) as i32
 }
 
+/// Unix volumes may mount with `noatime`; probe via `mount(8)`.
+/// Non-unix platforms have no portable `mount`/`atime` contract — fail closed
+/// (treat last-use atime as unreliable) so classification cannot become `stale`
+/// from atime alone. Matches `atime-unsupported-platform` in formula_last_use.
+#[cfg(unix)]
 fn volume_atime_unreliable(prefix: &Path) -> bool {
     let output = Command::new("mount").output().ok();
     let Some(output) = output else {
@@ -678,6 +683,11 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(not(unix))]
+fn volume_atime_unreliable(_prefix: &Path) -> bool {
+    true
 }
 
 fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
@@ -1346,6 +1356,13 @@ mod tests {
         let (class, reasons) = classify_package(&evidence, now, 90);
         assert_eq!(class, HomebrewClassification::Unknown);
         assert!(reasons.iter().any(|r| r == "atime-unreliable"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn volume_atime_unreliable_non_unix_fail_closed() {
+        // Windows/other non-unix: no mount(8); treat volume atime as unreliable.
+        assert!(volume_atime_unreliable(Path::new(r"C:\ProgramData\Homebrew")));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! it is neither locked nor prunable, and no active CWD or open-file consumer is observed. The
 //! resulting approval phrase is evidence, not execution.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -33,6 +33,8 @@ const MAX_RATIONALE_BYTES: usize = 1_000;
 const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
 const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
 const POLL_INTERVAL_MS: u64 = 10;
+#[cfg(unix)]
+const ACTIVE_USE_PS_RESERVED_BUDGET_MS: u64 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -715,6 +717,133 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
+fn command_references_path(command: &str, path: &Path) -> bool {
+    let needle = path.to_string_lossy();
+    command.match_indices(needle.as_ref()).any(|(start, _)| {
+        let before = command[..start].chars().next_back();
+        let end = start + needle.len();
+        let after = command[end..].chars().next();
+        // Shells and wrappers separate arguments with more than whitespace: a path can be
+        // followed by `,` `;` or `:` (list and PATH-style separators) and preceded by the same.
+        // Treating those as non-boundaries reported an argv-only user as inactive.
+        let boundary = |value: Option<char>| {
+            value.is_none_or(|character| {
+                character.is_whitespace()
+                    || matches!(character, '\'' | '"' | '=' | ':' | '(' | '[' | ',' | ';')
+            })
+        };
+        boundary(before)
+            && after.is_none_or(|character| {
+                character == std::path::MAIN_SEPARATOR
+                    || character.is_whitespace()
+                    || matches!(character, '\'' | '"' | ')' | ']' | ',' | ';' | ':')
+            })
+    })
+}
+
+#[cfg(unix)]
+fn lsof_active_use_budget(timeout_ms: u64) -> Result<u64, String> {
+    let lsof_budget = timeout_ms.saturating_sub(ACTIVE_USE_PS_RESERVED_BUDGET_MS);
+    if lsof_budget < POLL_INTERVAL_MS {
+        return Err("active-use-probe-budget-too-small".into());
+    }
+    Ok(lsof_budget)
+}
+
+#[cfg(unix)]
+fn process_path_pids(
+    path: &Path,
+    command_cwd: &Path,
+    timeout_ms: u64,
+) -> Result<BTreeSet<u32>, String> {
+    // `-ww` disables ps' width truncation on macOS/BSD and Linux alike. Without it a long
+    // command line is silently cut and an argv reference past the cut becomes a false negative.
+    let args = [
+        OsString::from("-axww"),
+        OsString::from("-o"),
+        OsString::from("pid=,ppid=,command="),
+    ];
+    let result = run_bounded_command("ps", &args, command_cwd, timeout_ms)?;
+    classify_process_path_result(&result, path)
+}
+
+#[cfg(unix)]
+fn classify_process_path_result(
+    result: &CommandResult,
+    path: &Path,
+) -> Result<BTreeSet<u32>, String> {
+    if result.timed_out {
+        return Err("active-use-ps-timeout".into());
+    }
+    if result.stdout_truncated || result.stderr_truncated {
+        return Err("active-use-ps-output-truncated".into());
+    }
+    if result.status_code != Some(0) || !result.stderr.is_empty() {
+        return Err("active-use-ps-command-failed".into());
+    }
+    let text = std::str::from_utf8(&result.stdout)
+        .map_err(|_| "active-use-ps-output-not-utf8".to_string())?;
+    // ps renders command lines as text. A path that is not valid UTF-8 cannot be compared
+    // against that text without guessing at the rendering, so the probe reports incomplete
+    // evidence instead of a silent "no match".
+    let path_text = path
+        .to_str()
+        .ok_or_else(|| "active-use-ps-path-not-utf8".to_string())?;
+    #[cfg(target_os = "macos")]
+    if path_text
+        .bytes()
+        .any(|byte| !matches!(byte, b' ' | b'!'..=b'~') || byte == b'\\')
+    {
+        // Darwin ps renders argv through strvis(3). Non-ASCII, control characters and literal
+        // backslashes can therefore be escaped even though stdout itself remains valid UTF-8.
+        // Until this probe owns a byte-exact argv source, do not treat such a textual miss as
+        // complete negative evidence.
+        return Err("active-use-ps-path-rendering-ambiguous".into());
+    }
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        let Some(pid_text) = line.split_whitespace().next() else {
+            continue;
+        };
+        let remainder = line[pid_text.len()..].trim_start();
+        let Some(parent_pid_text) = remainder.split_whitespace().next() else {
+            return Err("active-use-ps-row-invalid".into());
+        };
+        let pid = pid_text
+            .parse::<u32>()
+            .map_err(|_| "active-use-ps-row-invalid".to_string())?;
+        let parent_pid = parent_pid_text
+            .parse::<u32>()
+            .map_err(|_| "active-use-ps-row-invalid".to_string())?;
+        let command = remainder[parent_pid_text.len()..].trim_start();
+        records.push((pid, parent_pid, command));
+    }
+    let parent_by_pid: BTreeMap<_, _> = records
+        .iter()
+        .map(|(pid, parent_pid, _)| (*pid, *parent_pid))
+        .collect();
+    let mut own_lineage = BTreeSet::new();
+    let mut pid = std::process::id();
+    while own_lineage.insert(pid) {
+        let Some(parent) = parent_by_pid.get(&pid).copied() else {
+            break;
+        };
+        if parent == 0 || parent == pid {
+            break;
+        }
+        pid = parent;
+    }
+    own_lineage.insert(result.child_pid);
+    Ok(records
+        .into_iter()
+        .filter_map(|(pid, _, command)| {
+            (!own_lineage.contains(&pid) && command_references_path(command, path)).then_some(pid)
+        })
+        .collect())
+}
+
+#[cfg(unix)]
 pub(crate) fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
@@ -725,16 +854,31 @@ pub(crate) fn active_use_evidence(
     // A canonical worktree has an existing parent, which is outside the candidate directory.
     let command_cwd = path.parent().unwrap_or(path);
     let method = if recursive {
-        "lsof-recursive-pid"
+        "lsof-recursive-pid+ps-path-ancestry"
     } else {
-        "lsof-file-pid"
+        "lsof-file-pid+ps-path-ancestry"
     };
     let mut lsof_args = vec![OsString::from("-F0p")];
     if recursive {
         lsof_args.push(OsString::from("+D"));
     }
     lsof_args.push(path.as_os_str().to_os_string());
-    let result = match run_bounded_command("lsof", &lsof_args, command_cwd, timeout_ms) {
+    let lsof_budget_ms = match lsof_active_use_budget(timeout_ms) {
+        Ok(budget) => budget,
+        Err(error) => {
+            return GitWorktreeActiveUseEvidence {
+                method: method.into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: Some(error),
+            };
+        }
+    };
+    let started = Instant::now();
+    let result = match run_bounded_command("lsof", &lsof_args, command_cwd, lsof_budget_ms) {
         Ok(result) => result,
         Err(error) => {
             return GitWorktreeActiveUseEvidence {
@@ -819,6 +963,37 @@ pub(crate) fn active_use_evidence(
             continue;
         }
         pids.insert(pid);
+    }
+    let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let remaining_ms = timeout_ms.saturating_sub(elapsed_ms);
+    if remaining_ms < POLL_INTERVAL_MS {
+        let results_truncated = pids.len() > max_pids;
+        let observed_pids = pids.into_iter().take(max_pids).collect::<Vec<_>>();
+        return GitWorktreeActiveUseEvidence {
+            method: method.into(),
+            assessed: true,
+            evidence_complete: false,
+            active: !observed_pids.is_empty(),
+            observed_pids,
+            results_truncated,
+            error: Some("active-use-ps-budget-exhausted".into()),
+        };
+    }
+    match process_path_pids(path, command_cwd, remaining_ms) {
+        Ok(process_pids) => pids.extend(process_pids),
+        Err(error) => {
+            let results_truncated = pids.len() > max_pids;
+            let observed_pids = pids.into_iter().take(max_pids).collect::<Vec<_>>();
+            return GitWorktreeActiveUseEvidence {
+                method: method.into(),
+                assessed: true,
+                evidence_complete: false,
+                active: !observed_pids.is_empty(),
+                observed_pids,
+                results_truncated,
+                error: Some(error),
+            };
+        }
     }
     let results_truncated = pids.len() > max_pids;
     let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
@@ -2349,6 +2524,232 @@ pub fn write_immutable_worktree_record<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    struct ChildGuard(std::process::Child);
+
+    #[cfg(unix)]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_detects_executable_cwd_and_argv_path_but_not_sibling() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if Command::new("lsof").arg("-v").output().is_err()
+            || Command::new("ps").args(["-axo", "pid="]).output().is_err()
+        {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let candidate = temp.path().join("candidate-cache");
+        let sibling = temp.path().join("safe-sibling");
+        let runner_cwd = temp.path().join("runner");
+        fs::create_dir_all(&candidate).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::create_dir_all(&runner_cwd).unwrap();
+
+        let copied_sleep = candidate.join("live-executable");
+        fs::write(&copied_sleep, "#!/bin/sh\n/bin/sleep 30\n").unwrap();
+        fs::set_permissions(&copied_sleep, fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = ChildGuard(
+            Command::new(&copied_sleep)
+                .arg("30")
+                .current_dir(&runner_cwd)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let cwd = ChildGuard(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .current_dir(&candidate)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let evidence = active_use_evidence(&candidate, 10_000, 16, true);
+        assert!(evidence.evidence_complete, "{evidence:?}");
+        assert!(evidence.active, "{evidence:?}");
+        for pid in [executable.0.id(), cwd.0.id()] {
+            assert!(evidence.observed_pids.contains(&pid), "{evidence:?}");
+        }
+
+        let argv_probe = CommandResult {
+            child_pid: u32::MAX,
+            status_code: Some(0),
+            stdout: format!(
+                "42420 1 /usr/bin/runtime --module {}/mcp-command\n",
+                candidate.display()
+            )
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        assert_eq!(
+            classify_process_path_result(&argv_probe, &candidate).unwrap(),
+            BTreeSet::from([42420])
+        );
+
+        let sibling_evidence = active_use_evidence(&sibling, 10_000, 16, true);
+        assert!(sibling_evidence.evidence_complete, "{sibling_evidence:?}");
+        assert!(!sibling_evidence.active, "{sibling_evidence:?}");
+    }
+
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[test]
+    fn command_reference_boundaries_include_list_and_path_separators() {
+        let path = Path::new("/tmp/disksage-target");
+        for command in [
+            "worker --paths /tmp/disksage-target,/tmp/other",
+            "worker --paths /tmp/other,/tmp/disksage-target",
+            "sh -c 'cd /tmp/disksage-target; make'",
+            "sh -c 'true; /tmp/disksage-target'",
+            "env PATH=/tmp/disksage-target:/usr/bin worker",
+        ] {
+            assert!(
+                command_references_path(command, path),
+                "delimiter-bounded reference must count as use: {command}"
+            );
+        }
+        for command in [
+            "worker --paths /tmp/disksage-target-sibling",
+            "worker --paths /tmp/prefix-disksage-target",
+        ] {
+            assert!(
+                !command_references_path(command, path),
+                "sibling path must stay reclaimable: {command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_is_incomplete_evidence_not_a_silent_miss() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let result = CommandResult {
+            child_pid: 1,
+            status_code: Some(0),
+            stdout: b"  101 1 worker --path /tmp/other\n".to_vec(),
+            stderr: Vec::new(),
+            timed_out: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/disksage-\xff"));
+
+        let error = classify_process_path_result(&result, &path)
+            .expect_err("a path ps cannot render as UTF-8 must fail closed");
+
+        assert_eq!(error, "active-use-ps-path-not-utf8");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_use_budget_reserves_time_for_ps_probe() {
+        assert_eq!(lsof_active_use_budget(2_000), Ok(1_900));
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS),
+            Err("active-use-probe-budget-too-small".into())
+        );
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS + POLL_INTERVAL_MS - 1),
+            Err("active-use-probe-budget-too-small".into())
+        );
+        assert_eq!(
+            lsof_active_use_budget(ACTIVE_USE_PS_RESERVED_BUDGET_MS + POLL_INTERVAL_MS),
+            Ok(POLL_INTERVAL_MS)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_ps_rendering_ambiguity_fails_closed() {
+        for path in [
+            Path::new("/tmp/사용중"),
+            Path::new("/tmp/tab\tname"),
+            Path::new(r"/tmp/back\\slash"),
+        ] {
+            let result = CommandResult {
+                child_pid: u32::MAX,
+                status_code: Some(0),
+                stdout: b"42420 1 worker --path /tmp/other\n".to_vec(),
+                stderr: Vec::new(),
+                timed_out: false,
+                stdout_truncated: false,
+                stderr_truncated: false,
+            };
+            assert_eq!(
+                classify_process_path_result(&result, path),
+                Err("active-use-ps-path-rendering-ambiguous".into())
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_ps_rows_fail_closed_instead_of_silently_disappearing() {
+        let path = Path::new("/tmp/candidate-cache");
+        for stdout in [
+            b"not-a-pid 1 worker --path /tmp/candidate-cache\n".to_vec(),
+            b"42420 not-a-ppid worker --path /tmp/candidate-cache\n".to_vec(),
+            b"42420\n".to_vec(),
+        ] {
+            let result = CommandResult {
+                child_pid: u32::MAX,
+                status_code: Some(0),
+                stdout,
+                stderr: Vec::new(),
+                timed_out: false,
+                stdout_truncated: false,
+                stderr_truncated: false,
+            };
+            assert_eq!(
+                classify_process_path_result(&result, path),
+                Err("active-use-ps-row-invalid".into())
+            );
+        }
+    }
+
+    #[test]
+    fn process_path_probe_failures_are_generic_and_fail_closed() {
+        let path = Path::new("/tmp/candidate-cache");
+        let timeout = CommandResult {
+            child_pid: 1,
+            status_code: None,
+            stdout: Vec::new(),
+            stderr: b"secret=must-not-escape".to_vec(),
+            timed_out: true,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        assert_eq!(
+            classify_process_path_result(&timeout, path),
+            Err("active-use-ps-timeout".into())
+        );
+        let truncated = CommandResult {
+            timed_out: false,
+            stdout_truncated: true,
+            ..timeout
+        };
+        assert_eq!(
+            classify_process_path_result(&truncated, path),
+            Err("active-use-ps-output-truncated".into())
+        );
+    }
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
