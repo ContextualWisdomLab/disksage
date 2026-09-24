@@ -365,11 +365,23 @@ pub fn selected_regenerable_cache_target_headless(
     now_ms: u64,
     execute: bool,
 ) -> Result<serde_json::Value, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    selected_regenerable_cache_target_inner(&bases, selected, journal_path, now_ms, execute)
+}
+
+/// Same selection contract against caller-supplied bases so the direct-child rule is
+/// exercised by tests instead of only by the ambient environment.
+pub(crate) fn selected_regenerable_cache_target_inner(
+    bases: &rules::BaseDirs,
+    selected: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+    execute: bool,
+) -> Result<serde_json::Value, String> {
     if !selected.is_absolute() {
         return Err("cache-target-must-be-absolute".into());
     }
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    for candidate in rules::cache_candidates(&bases)
+    for candidate in rules::cache_candidates(bases)
         .into_iter()
         .filter(|candidate| {
             AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
@@ -388,7 +400,7 @@ pub fn selected_regenerable_cache_target_headless(
             return serde_json::to_value(target).map_err(|error| error.to_string());
         }
         let results = clean_cache_contents_selected_inner(
-            &bases,
+            bases,
             &root,
             &targets,
             Some(selected),
@@ -441,6 +453,98 @@ mod tests {
             local_data: root.join("local"),
             home: root.join("home"),
         }
+    }
+
+    /// npm cache root for the fake bases, matching rules::catalog per platform.
+    fn npm_root(bases: &rules::BaseDirs) -> PathBuf {
+        if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        }
+    }
+
+    #[test]
+    fn selection_accepts_one_direct_child_of_an_approved_cache_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        fs::create_dir_all(child.join("content-v2")).unwrap();
+        fs::write(child.join("content-v2").join("blob.bin"), vec![0u8; 64]).unwrap();
+        fs::create_dir_all(root.join("_logs")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let value = selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect("a direct child of an approved cache root must be selectable");
+
+        assert_eq!(value["path"], serde_json::json!(child.to_string_lossy()));
+        assert!(
+            child.is_dir(),
+            "planning must not mutate the selected child"
+        );
+    }
+
+    #[test]
+    fn selection_rejects_grandchild_sibling_root_and_outside_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        let grandchild = child.join("content-v2");
+        fs::create_dir_all(&grandchild).unwrap();
+        let sibling = root.parent().unwrap().join("not-a-cache-root");
+        fs::create_dir_all(sibling.join("child")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        for (label, path) in [
+            ("grandchild", grandchild.clone()),
+            ("root itself", root.clone()),
+            ("sibling tree child", sibling.join("child")),
+            ("outside temp", tmp.path().join("elsewhere")),
+        ] {
+            let error = selected_regenerable_cache_target_inner(&bases, &path, &journal, 1, false)
+                .expect_err(&format!("{label} must not be selectable"));
+            assert_eq!(error, "cache-target-not-current-or-safe", "{label}");
+        }
+        assert!(grandchild.is_dir(), "a rejected path must stay untouched");
+    }
+
+    #[test]
+    fn selection_rejects_relative_path_before_touching_the_filesystem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = selected_regenerable_cache_target_inner(
+            &bases,
+            Path::new("_cacache"),
+            &journal,
+            1,
+            false,
+        )
+        .expect_err("a relative target must be refused");
+
+        assert_eq!(error, "cache-target-must-be-absolute");
+    }
+
+    #[test]
+    fn selection_rejects_a_child_that_vanished_after_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(root.join("_logs")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect("precondition: selectable while present");
+
+        fs::remove_dir_all(&child).unwrap();
+        let error = selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect_err("a stale selection must not resolve");
+
+        assert_eq!(error, "cache-target-not-current-or-safe");
     }
 
     #[test]
