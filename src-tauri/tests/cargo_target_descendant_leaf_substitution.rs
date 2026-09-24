@@ -9,7 +9,7 @@ mod cargo_target_reclaim;
 
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc,
 };
 
@@ -19,21 +19,12 @@ enum LeafKind {
     Symlink,
 }
 
-struct CaseObservation {
-    hook_ran: bool,
-    reviewed_stash_survived: bool,
-    replacement_survived: bool,
-    owner_failed_closed: bool,
-}
-
-fn run_substitution_case(kind: LeafKind, leaf_name: &str) -> CaseObservation {
+fn run_pre_mutation_case(kind: LeafKind, leaf_name: &str) {
     let temp = tempfile::tempdir().expect("temp root");
     let project = temp.path().join("project");
     let target = project.join("target");
     let reviewed_leaf = target.join(leaf_name);
-    let reviewed_stash = project.join(format!("{leaf_name}-stash"));
-    let reviewed_symlink_target = project.join("reviewed-symlink-target");
-    let replacement_symlink_target = project.join("replacement-symlink-target");
+    let symlink_target = project.join("reviewed-symlink-target");
 
     std::fs::create_dir_all(&target).expect("target");
     std::fs::write(
@@ -47,11 +38,9 @@ fn run_substitution_case(kind: LeafKind, leaf_name: &str) -> CaseObservation {
             std::fs::write(&reviewed_leaf, b"reviewed-regular-file").expect("reviewed file");
         }
         LeafKind::Symlink => {
-            std::fs::write(&reviewed_symlink_target, b"reviewed-symlink-target")
+            std::fs::write(&symlink_target, b"reviewed-symlink-target")
                 .expect("reviewed symlink target");
-            std::fs::write(&replacement_symlink_target, b"replacement-symlink-target")
-                .expect("replacement symlink target");
-            symlink(&reviewed_symlink_target, &reviewed_leaf).expect("reviewed symlink");
+            symlink(&symlink_target, &reviewed_leaf).expect("reviewed symlink");
         }
     }
 
@@ -63,32 +52,20 @@ fn run_substitution_case(kind: LeafKind, leaf_name: &str) -> CaseObservation {
     cargo_permissions.set_mode(0o755);
     std::fs::set_permissions(&fake_cargo, cargo_permissions).expect("fake cargo executable");
 
-    let replacement_inode = Arc::new(AtomicU64::new(0));
-    let hook_replacement_inode = Arc::clone(&replacement_inode);
-    let hook_leaf = reviewed_leaf.clone();
-    let hook_stash = reviewed_stash.clone();
-    let hook_replacement_symlink_target = replacement_symlink_target.clone();
+    let before = std::fs::symlink_metadata(&reviewed_leaf).expect("reviewed leaf metadata");
+    let reviewed_inode = before.ino();
+    let reviewed_regular_content = matches!(kind, LeafKind::Regular)
+        .then(|| std::fs::read(&reviewed_leaf).expect("reviewed regular content"));
+
+    // The old exploit fixture performed the namespace substitution here. Under the accepted
+    // Linux contract this seam is a must-not-reach sentinel: the owner refuses before any
+    // name-selected final unlink can make an unreviewed replacement the mutation subject.
+    let final_unlink_boundary_reached = Arc::new(AtomicBool::new(false));
+    let hook_reached = Arc::clone(&final_unlink_boundary_reached);
     let _hook_guard = unix_capability_cleanup::install_before_final_unlink_hook_for_test(
         leaf_name.as_bytes(),
         move || {
-            std::fs::rename(&hook_leaf, &hook_stash)
-                .expect("move the reviewed leaf before its final unlink");
-            match kind {
-                LeafKind::Regular => {
-                    std::fs::write(&hook_leaf, b"unreviewed-replacement")
-                        .expect("insert same-name replacement file");
-                }
-                LeafKind::Symlink => {
-                    symlink(&hook_replacement_symlink_target, &hook_leaf)
-                        .expect("insert same-name replacement symlink");
-                }
-            }
-            hook_replacement_inode.store(
-                std::fs::symlink_metadata(&hook_leaf)
-                    .expect("replacement metadata")
-                    .ino(),
-                Ordering::SeqCst,
-            );
+            hook_reached.store(true, Ordering::SeqCst);
         },
     );
 
@@ -99,51 +76,41 @@ fn run_substitution_case(kind: LeafKind, leaf_name: &str) -> CaseObservation {
         |_| Ok(()),
     );
 
-    let expected_replacement_inode = replacement_inode.load(Ordering::SeqCst);
-    let replacement_survived = expected_replacement_inode != 0
-        && std::fs::symlink_metadata(&reviewed_leaf)
-            .is_ok_and(|metadata| metadata.ino() == expected_replacement_inode);
-    let reviewed_stash_survived = match kind {
-        LeafKind::Regular => reviewed_stash.is_file(),
-        LeafKind::Symlink => std::fs::symlink_metadata(&reviewed_stash)
-            .is_ok_and(|metadata| metadata.file_type().is_symlink()),
-    };
+    let error = outcome.expect_err("Linux leaf cleanup must refuse before final unlink");
+    assert_eq!(
+        error.to_string(),
+        "cargo-target-linux-final-object-authority-unproven"
+    );
+    assert!(
+        !final_unlink_boundary_reached.load(Ordering::SeqCst),
+        "Linux owner reached the final-unlink seam for {leaf_name}"
+    );
 
-    CaseObservation {
-        hook_ran: expected_replacement_inode != 0,
-        reviewed_stash_survived,
-        replacement_survived,
-        owner_failed_closed: outcome.is_err(),
+    let after = std::fs::symlink_metadata(&reviewed_leaf).expect("reviewed leaf survives");
+    assert_eq!(after.ino(), reviewed_inode, "reviewed leaf identity changed");
+    match kind {
+        LeafKind::Regular => assert_eq!(
+            std::fs::read(&reviewed_leaf).expect("reviewed regular content after refusal"),
+            reviewed_regular_content.expect("regular fixture content"),
+        ),
+        LeafKind::Symlink => {
+            assert!(after.file_type().is_symlink(), "reviewed symlink type changed");
+            assert_eq!(
+                std::fs::read_link(&reviewed_leaf).expect("reviewed symlink target after refusal"),
+                symlink_target,
+            );
+        }
     }
 }
 
 #[test]
-fn production_cleanup_never_deletes_leaf_replacements_inserted_after_review() {
+fn linux_owner_refuses_before_regular_and_symlink_final_disposition() {
     assert_ne!(
         unsafe { libc::geteuid() },
         0,
-        "substitution acceptance requires the unprivileged product execution boundary"
+        "Linux destructive-authority acceptance requires the unprivileged product boundary"
     );
 
-    let regular = run_substitution_case(LeafKind::Regular, "reviewed-regular");
-    let symlink = run_substitution_case(LeafKind::Symlink, "reviewed-symlink");
-
-    assert!(regular.hook_ran, "regular-file final-unlink hook did not execute");
-    assert!(symlink.hook_ran, "symlink final-unlink hook did not execute");
-    assert!(
-        regular.reviewed_stash_survived && symlink.reviewed_stash_survived,
-        "the reviewed leaf objects must remain distinguishable after substitution"
-    );
-    assert!(
-        regular.replacement_survived,
-        "cleanup deleted an unreviewed same-name regular-file replacement"
-    );
-    assert!(
-        symlink.replacement_survived,
-        "cleanup deleted an unreviewed same-name symlink replacement"
-    );
-    assert!(
-        regular.owner_failed_closed && symlink.owner_failed_closed,
-        "post-review leaf substitution must fail closed instead of returning cleanup success"
-    );
+    run_pre_mutation_case(LeafKind::Regular, "reviewed-regular");
+    run_pre_mutation_case(LeafKind::Symlink, "reviewed-symlink");
 }
