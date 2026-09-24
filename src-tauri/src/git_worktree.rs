@@ -775,8 +775,19 @@ fn classify_process_path_result(
     // ps renders command lines as text. A path that is not valid UTF-8 cannot be compared
     // against that text without guessing at the rendering, so the probe reports incomplete
     // evidence instead of a silent "no match".
-    if path.to_str().is_none() {
-        return Err("active-use-ps-path-not-utf8".into());
+    let path_text = path
+        .to_str()
+        .ok_or_else(|| "active-use-ps-path-not-utf8".to_string())?;
+    #[cfg(target_os = "macos")]
+    if path_text
+        .bytes()
+        .any(|byte| !matches!(byte, b' ' | b'!'..=b'~') || byte == b'\\')
+    {
+        // Darwin ps renders argv through strvis(3). Non-ASCII, control characters and literal
+        // backslashes can therefore be escaped even though stdout itself remains valid UTF-8.
+        // Until this probe owns a byte-exact argv source, do not treat such a textual miss as
+        // complete negative evidence.
+        return Err("active-use-ps-path-rendering-ambiguous".into());
     }
     let mut records = Vec::new();
     for line in text.lines() {
@@ -2606,6 +2617,30 @@ mod tests {
             .expect_err("a path ps cannot render as UTF-8 must fail closed");
 
         assert_eq!(error, "active-use-ps-path-not-utf8");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_ps_rendering_ambiguity_fails_closed() {
+        for path in [
+            Path::new("/tmp/사용중"),
+            Path::new("/tmp/tab\tname"),
+            Path::new(r"/tmp/back\\slash"),
+        ] {
+            let result = CommandResult {
+                child_pid: u32::MAX,
+                status_code: Some(0),
+                stdout: b"42420 1 worker --path /tmp/other\n".to_vec(),
+                stderr: Vec::new(),
+                timed_out: false,
+                stdout_truncated: false,
+                stderr_truncated: false,
+            };
+            assert_eq!(
+                classify_process_path_result(&result, path),
+                Err("active-use-ps-path-rendering-ambiguous".into())
+            );
+        }
     }
 
     #[cfg(unix)]
