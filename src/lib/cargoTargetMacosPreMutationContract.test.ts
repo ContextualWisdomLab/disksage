@@ -28,11 +28,11 @@ describe('macOS cargo-target pre-mutation final-object authority', () => {
     ).toBeGreaterThan(exactHolder);
     expect(
       measurement,
-      'non-Linux Unix measurement remains explicit for platforms with proven mutation authority',
+      'remaining Unix measurement stays explicit for platforms with proven mutation authority',
     ).toBeGreaterThan(macosCutoff);
     expect(
       mutation,
-      'non-Linux Unix mutation remains explicit for platforms with proven mutation authority',
+      'remaining Unix mutation stays explicit for platforms with proven mutation authority',
     ).toBeGreaterThan(macosCutoff);
   });
 
@@ -43,7 +43,9 @@ describe('macOS cargo-target pre-mutation final-object authority', () => {
 
     const guardWindow = flow.slice(Math.max(0, macosCutoff - 220), macosCutoff);
     expect(guardWindow).toContain('#[cfg(target_os = "macos")]');
-    expect(flow).toContain('#[cfg(all(unix, not(target_os = "linux")))]');
+    expect(flow).toContain(
+      '#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]',
+    );
     expect(flow).toContain('crate::unix_capability_cleanup::remove_contents(&opened_target.file)');
   });
 });
