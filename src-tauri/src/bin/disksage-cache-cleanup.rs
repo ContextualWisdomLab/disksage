@@ -12,7 +12,12 @@ use std::path::PathBuf;
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
 inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+only structurally proven cache directories already in OS Trash.\n\
+Exit codes: 0 = no-op or every executed item succeeded; 2 = command error;\n\
+3 = ran, but at least one item was refused or failed.";
+
+/// Exit status for a run that completed without a command error.
+const EXIT_ITEMS_FAILED: i32 = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -102,10 +107,19 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), String> {
+/// Plan-only runs never fail on item status; an executed run fails if any item did not succeed.
+fn exit_code(executed: bool, items_ok: impl IntoIterator<Item = bool>) -> i32 {
+    if executed && items_ok.into_iter().any(|ok| !ok) {
+        EXIT_ITEMS_FAILED
+    } else {
+        0
+    }
+}
+
+fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<i32, String> {
     let Some(args) = parse_args(raw_args)? else {
         println!("{USAGE}");
-        return Ok(());
+        return Ok(0);
     };
     if !args.execute {
         let cache_trash = if args.purge_proven_cache_trash {
@@ -124,7 +138,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "notice": "pass --execute to perform the guarded OS-Trash operation"
             })
         );
-        return Ok(());
+        return Ok(exit_code(false, []));
     }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -140,7 +154,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "results": results
             })
         );
-        return Ok(());
+        return Ok(exit_code(true, results.iter().map(|result| result.purged)));
     }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
@@ -151,13 +165,26 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
             "results": evidence
         })
     );
-    Ok(())
+    // An item without a boolean `ok` is counted as failed rather than silently succeeding.
+    let items_ok = evidence
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.get("ok").and_then(serde_json::Value::as_bool) == Some(true))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![false]);
+    Ok(exit_code(true, items_ok))
 }
 
 fn main() {
-    if let Err(error) = run_with_args(std::env::args_os().skip(1)) {
-        eprintln!("disksage-cache-cleanup: {error}");
-        std::process::exit(2);
+    match run_with_args(std::env::args_os().skip(1)) {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("disksage-cache-cleanup: {error}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -188,6 +215,16 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(error, "--journal-path must be absolute");
+    }
+
+    #[test]
+    fn exit_code_reports_refused_or_failed_items() {
+        assert_eq!(exit_code(true, [true, true]), 0);
+        assert_eq!(exit_code(true, []), 0);
+        assert_eq!(exit_code(true, [true, false, true]), 3);
+        assert_eq!(exit_code(true, [false; 19]), 3);
+        assert_eq!(exit_code(false, [false]), 0);
+        assert_ne!(EXIT_ITEMS_FAILED, 2);
     }
 
     #[test]
