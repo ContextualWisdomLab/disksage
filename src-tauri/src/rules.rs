@@ -520,6 +520,10 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     }
     let mut targets = Vec::with_capacity(paths.len());
     for path in paths {
+        // npx runs installed MCP servers from this directory; removing it can break live clients.
+        if (dir.ends_with(".npm") || dir.ends_with("npm-cache")) && path.ends_with("_npx") {
+            continue;
+        }
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
         if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
@@ -705,6 +709,20 @@ mod tests {
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("keep.bin"));
+    }
+
+    #[test]
+    fn cache_targets_preserve_npx_installs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".npm", "npm-cache"] {
+            let npm = tmp.path().join(name);
+            fs::create_dir_all(npm.join("_npx")).unwrap();
+            fs::create_dir(npm.join("_cacache")).unwrap();
+
+            let targets = cache_targets(&npm).unwrap();
+            assert_eq!(targets.len(), 1);
+            assert!(targets[0].path.ends_with("_cacache"));
+        }
     }
 
     #[test]
