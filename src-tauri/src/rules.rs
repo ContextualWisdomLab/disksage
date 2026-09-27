@@ -335,36 +335,46 @@ impl CatalogRoot {
 
     fn child_paths(&self) -> Vec<PathBuf> {
         #[cfg(target_os = "macos")]
-        {
-            return self.child_paths_from_handle();
-        }
+        let paths = self.child_paths_from_handle();
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return Vec::new() };
-        #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
-
-        #[cfg(not(target_os = "macos"))]
-        entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let stable_child = entry.path();
-                if is_disksage_trash_staging(&stable_child) {
-                    return None;
-                }
-                let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
-                if metadata.file_type().is_symlink() {
-                    return None;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let paths = {
+            let Some(stable) = self.stable_path() else {
+                return Vec::new();
+            };
+            let Ok(entries) = std::fs::read_dir(stable) else {
+                return Vec::new();
+            };
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let stable_child = entry.path();
+                    if is_disksage_trash_staging(&stable_child) {
                         return None;
                     }
-                }
-                Some(self.display_path.join(entry.file_name()))
+                    let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
+                    if metadata.file_type().is_symlink() {
+                        return None;
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::MetadataExt;
+                        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                            return None;
+                        }
+                    }
+                    Some(self.display_path.join(entry.file_name()))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // npx runs installed MCP servers here; both cleanup list APIs must preserve it.
+        paths
+            .into_iter()
+            .filter(|path| {
+                !((self.display_path.ends_with(".npm") || self.display_path.ends_with("npm-cache"))
+                    && path.ends_with("_npx"))
             })
             .collect()
     }
@@ -520,10 +530,6 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     }
     let mut targets = Vec::with_capacity(paths.len());
     for path in paths {
-        // npx runs installed MCP servers from this directory; removing it can break live clients.
-        if (dir.ends_with(".npm") || dir.ends_with("npm-cache")) && path.ends_with("_npx") {
-            continue;
-        }
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
         if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
@@ -722,6 +728,7 @@ mod tests {
             let targets = cache_targets(&npm).unwrap();
             assert_eq!(targets.len(), 1);
             assert!(targets[0].path.ends_with("_cacache"));
+            assert_eq!(clean_targets(&npm), vec![npm.join("_cacache")]);
         }
     }
 
