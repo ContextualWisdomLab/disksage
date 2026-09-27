@@ -42,6 +42,25 @@ fn is_macos_user_temp_descendant(path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    // Runtime dependencies remain in use even when their MCP process is temporarily stopped.
+    for ancestor in path.ancestors() {
+        if ancestor.ends_with("_npx")
+            && ancestor
+                .parent()
+                .is_some_and(|parent| parent.ends_with(".npm") || parent.ends_with("npm-cache"))
+        {
+            return true;
+        }
+        match std::fs::symlink_metadata(ancestor.join(".DISKSAGE_PROTECT")) {
+            Ok(_) => return true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(_) => return true,
+        }
+    }
     // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
@@ -882,6 +901,43 @@ mod tests {
         assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
         assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
     }
+
+    #[test]
+    fn runtime_dependencies_are_rejected_by_both_trash_apis() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let dependency = runtime.join("node_modules");
+        std::fs::create_dir_all(&dependency).unwrap();
+        let expected = filesystem_object_id(&dependency).unwrap();
+        // The runtime can become protected after the deletion selection was reviewed.
+        std::fs::write(runtime.join(".DISKSAGE_PROTECT"), b"MCP runtime").unwrap();
+        let mut paths = vec![runtime.clone(), dependency];
+        for cache in [".npm", "npm-cache"] {
+            let dependency = tmp.path().join(cache).join("_npx/server/node_modules");
+            std::fs::create_dir_all(&dependency).unwrap();
+            paths.push(dependency);
+        }
+        #[cfg(unix)]
+        {
+            let alias = tmp.path().join("runtime-alias");
+            std::os::unix::fs::symlink(&runtime, &alias).unwrap();
+            paths.push(alias.join("node_modules"));
+        }
+        let journal = tmp.path().join("journal.jsonl");
+        for path in paths {
+            assert!(matches!(
+                trash_delete(&path, 0, &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(matches!(
+                trash_delete_if_identity(&path, &expected, 0, &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(path.exists());
+        }
+        assert!(!journal.exists());
+    }
+
 
     #[test]
     fn staged_restore_reports_reappeared_source_and_retains_staged_object() {

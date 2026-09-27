@@ -224,6 +224,9 @@ pub fn find_artifacts(
         let path = e.path();
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
         let Some((_, markers)) = artifact_kind(&name) else { continue };
+        if crate::safety::is_protected(path) {
+            continue;
+        }
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
