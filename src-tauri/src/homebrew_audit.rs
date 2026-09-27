@@ -654,6 +654,7 @@ fn days_from_civil(year: i64, month: i32, day: i32) -> i32 {
     (era * 146_097 + doe as i64 - 719_468) as i32
 }
 
+#[cfg(unix)]
 fn volume_atime_unreliable(prefix: &Path) -> bool {
     let output = Command::new("mount").output().ok();
     let Some(output) = output else {
@@ -678,6 +679,11 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(not(unix))]
+fn volume_atime_unreliable(_prefix: &Path) -> bool {
+    true
 }
 
 fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
