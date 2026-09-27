@@ -544,6 +544,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_marker_excludes_candidates_and_blocks_stale_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dependency = project(tmp.path(), "runtime", "package.json", "node_modules");
+        let selected = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert_eq!(selected.len(), 1);
+        fs::write(
+            dependency.parent().unwrap().join(".DISKSAGE_PROTECT"),
+            b"MCP",
+        )
+        .unwrap();
+        for cache in [".npm", "npm-cache"] {
+            project(
+                &tmp.path().join(cache).join("_npx"),
+                "server",
+                "package.json",
+                "node_modules",
+            );
+        }
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
+        let journal = tmp.path().join("journal.jsonl");
+        let results = clean_artifacts(
+            &selected,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_UI,
+        );
+        assert!(!results[0].ok);
+        assert!(dependency.exists());
+        assert!(!journal.exists());
+    }
+
+    #[test]
     fn finds_regenerable_codegraph_indexes() {
         let tmp = tempfile::tempdir().unwrap();
         let index = tmp.path().join("repo/.codegraph");
