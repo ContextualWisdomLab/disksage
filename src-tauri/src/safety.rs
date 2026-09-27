@@ -322,7 +322,7 @@ pub fn trash_delete(
     // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
     // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
     let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    if is_protected(&guard_path) {
+    if is_protected(path) || is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let mut entry = JournalEntry {
@@ -432,7 +432,7 @@ pub fn trash_delete_if_identity(
     let guard_path = strip_verbatim(
         &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
     );
-    if is_protected(&guard_path) {
+    if is_protected(path) || is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -696,7 +696,7 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
-        if is_protected(&guard) {
+        if is_protected(p) || is_protected(&guard) {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
@@ -922,6 +922,11 @@ mod tests {
             let alias = tmp.path().join("runtime-alias");
             std::os::unix::fs::symlink(&runtime, &alias).unwrap();
             paths.push(alias.join("node_modules"));
+            let external = tmp.path().join("external-dependency");
+            std::fs::create_dir(&external).unwrap();
+            let alias = runtime.join("external-alias");
+            std::os::unix::fs::symlink(&external, &alias).unwrap();
+            paths.push(alias);
         }
         let journal = tmp.path().join("journal.jsonl");
         for path in paths {
@@ -931,6 +936,10 @@ mod tests {
             ));
             assert!(matches!(
                 trash_delete_if_identity(&path, &expected, 0, &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(matches!(
+                move_file(&path, &tmp.path().join("moved"), &journal, 1),
                 Err(SafetyError::Protected(_))
             ));
             assert!(path.exists());
