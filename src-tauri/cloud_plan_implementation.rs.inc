@@ -12,7 +12,12 @@ use std::io::Write;
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
+use std::sync::atomic::AtomicBool;
+#[cfg(not(coverage))]
 use std::time::{Duration, Instant};
+
+#[cfg(not(coverage))]
+const PROVIDER_API_COPY_DEADLINE_SECS: u64 = 30 * 60;
 
 #[cfg(not(coverage))]
 use disksage_lib::cloud::{
@@ -2785,6 +2790,15 @@ fn copy_candidate_via_provider_api(
         copied_at_ms,
     )?;
     let access_token = provider_oauth::refreshed_access_token(oauth_connections, selected)?;
+    let cancel = AtomicBool::new(false);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(PROVIDER_API_COPY_DEADLINE_SECS))
+        .ok_or_else(|| "cloud-copy-deadline-unavailable".to_string())?;
+    let control = provider_api_write::ProviderUploadControl::new(&cancel, deadline);
+    let failure_dir = receipt_dir
+        .parent()
+        .unwrap_or(receipt_dir)
+        .join("cloud-copy-failures");
     let upload = provider_api_write::upload_file(
         selected.provider,
         Path::new(&selected.path),
@@ -2792,7 +2806,14 @@ fn copy_candidate_via_provider_api(
         Path::new(&candidate.src),
         candidate.bytes,
         access_token.as_str(),
-    )?;
+        &control,
+    );
+    let upload = match upload {
+        Ok(upload) => upload,
+        Err(error) => return Err(cloud_transfer::journal_provider_api_copy_failure(
+            candidate, &error, &failure_dir,
+        )),
+    };
     if let Err(error) =
         cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
     {
@@ -2801,12 +2822,15 @@ fn copy_candidate_via_provider_api(
             &upload.object_id,
             access_token.as_str(),
         );
-        return Err(match cleanup {
+        let error = match cleanup {
             Ok(()) => error,
             Err(cleanup_error) => {
                 format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
             }
-        });
+        };
+        return Err(cloud_transfer::journal_provider_api_copy_failure(
+            candidate, &error, &failure_dir,
+        ));
     }
 
     let receipt_path = match cloud_transfer::write_provider_api_receipt(&receipt, receipt_dir) {
@@ -2817,12 +2841,15 @@ fn copy_candidate_via_provider_api(
                 &upload.object_id,
                 access_token.as_str(),
             );
-            return Err(match cleanup {
+            let error = match cleanup {
                 Ok(()) => error,
                 Err(cleanup_error) => {
                     format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
                 }
-            });
+            };
+            return Err(cloud_transfer::journal_provider_api_copy_failure(
+                candidate, &error, &failure_dir,
+            ));
         }
     };
 

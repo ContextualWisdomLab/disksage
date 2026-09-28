@@ -10,6 +10,8 @@ use crate::provider_api_client::{onedrive_path_locator, ProviderRemoteLocator};
 use serde::Deserialize;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 const ONEDRIVE_GRAPH_ROOT: &str = "https://graph.microsoft.com/v1.0/me/drive/root";
 const ONEDRIVE_GRAPH_ITEMS: &str = "https://graph.microsoft.com/v1.0/me/drive/items";
@@ -27,6 +29,22 @@ pub struct ProviderApiUploadResult {
     pub provider: CloudProvider,
     pub object_id: String,
     pub locator: ProviderRemoteLocator,
+}
+
+/// Command-owned cancellation and overall deadline for one provider upload.
+pub struct ProviderUploadControl<'a> {
+    cancel: &'a AtomicBool,
+    deadline: Instant,
+}
+
+impl<'a> ProviderUploadControl<'a> {
+    pub fn new(cancel: &'a AtomicBool, deadline: Instant) -> Self { Self { cancel, deadline } }
+    fn check_at(&self, now: Instant) -> Result<(), String> {
+        if self.cancel.load(Ordering::SeqCst) { return Err("cloud-copy-cancelled".into()); }
+        if now >= self.deadline { return Err("cloud-copy-deadline-exceeded".into()); }
+        Ok(())
+    }
+    fn check(&self) -> Result<(), String> { self.check_at(Instant::now()) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,12 +417,14 @@ fn upload_chunks(
     bytes: u64,
     chunk_bytes: usize,
     authorization: Option<&str>,
+    control: &ProviderUploadControl<'_>,
 ) -> Result<String, String> {
     let mut offset = 0_u64;
     let mut highest_offset = 0_u64;
     let mut no_progress_responses = 0_usize;
     let mut buffer = vec![0_u8; chunk_bytes];
     while offset < bytes {
+        control.check()?;
         let want = (bytes - offset).min(chunk_bytes as u64) as usize;
         read_source_chunk_at(&mut source, offset, &mut buffer[..want])?;
         let end = offset + want as u64 - 1;
@@ -452,12 +472,33 @@ fn upload_chunks(
     Err("provider-api-upload-completion-missing".into())
 }
 
+fn abandon_upload_session(agent: &ureq::Agent, session_url: &str, authorization: Option<&str>) -> Result<(), String> {
+    let mut request = agent.delete(session_url);
+    if let Some(authorization) = authorization { request = request.header("Authorization", authorization); }
+    match request.call() {
+        Ok(mut response) => read_response_body(&mut response),
+        Err(ureq::Error::StatusCode(404 | 410)) => Ok(()),
+        Err(error) => Err(safe_transport_error(error)),
+    }
+}
+
+fn preserve_upload_error_with_session_cleanup(agent: &ureq::Agent, session_url: &str, authorization: Option<&str>, upload: Result<String, String>) -> Result<String, String> {
+    match upload {
+        Ok(object_id) => Ok(object_id),
+        Err(error) => match abandon_upload_session(agent, session_url, authorization) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!("{error},provider-api-upload-session-cleanup-failed:{cleanup_error}")),
+        },
+    }
+}
+
 fn one_drive_upload(
     agent: &ureq::Agent,
     token: &str,
     source: &Path,
     relative_path: &str,
     bytes: u64,
+    control: &ProviderUploadControl<'_>,
 ) -> Result<String, String> {
     let metadata_probe = agent
         .get(onedrive_metadata_url(relative_path))
@@ -489,14 +530,16 @@ fn one_drive_upload(
         .filter(|url| url.starts_with("https://") && !url.bytes().any(|byte| byte.is_ascii_control()))
         .ok_or_else(|| "provider-api-upload-session-url-invalid".to_string())?;
     let source_file = validate_local_source(source, bytes)?;
-    upload_chunks(
+    let upload = upload_chunks(
         agent,
         &upload_url,
         source_file,
         bytes,
         ONEDRIVE_CHUNK_BYTES,
         None,
-    )
+        control,
+    );
+    preserve_upload_error_with_session_cleanup(agent, &upload_url, None, upload)
 }
 
 fn google_upload(
@@ -506,6 +549,7 @@ fn google_upload(
     destination: &Path,
     local_root: &Path,
     bytes: u64,
+    control: &ProviderUploadControl<'_>,
 ) -> Result<String, String> {
     let segments = crate::provider_api_client::destination_path_segments(local_root, destination)?;
     let (name, folders) = segments
@@ -517,7 +561,9 @@ fn google_upload(
     }
     let session = google_upload_session(agent, token, &parent, name, bytes)?;
     let source_file = validate_local_source(source, bytes)?;
-    upload_chunks(agent, &session, source_file, bytes, GOOGLE_CHUNK_BYTES, None)
+    let authorization = format!("Bearer {token}");
+    let upload = upload_chunks(agent, &session, source_file, bytes, GOOGLE_CHUNK_BYTES, Some(&authorization), control);
+    preserve_upload_error_with_session_cleanup(agent, &session, Some(&authorization), upload)
 }
 
 pub fn upload_file(
@@ -527,7 +573,9 @@ pub fn upload_file(
     source: &Path,
     bytes: u64,
     bearer_token: &str,
+    control: &ProviderUploadControl<'_>,
 ) -> Result<ProviderApiUploadResult, String> {
+    control.check()?;
     validate_bearer_token(bearer_token)?;
     let agent = agent();
     let object_id = match provider {
@@ -536,10 +584,10 @@ pub fn upload_file(
             let path = locator
                 .onedrive_path()
                 .ok_or_else(|| "provider-api-path-locator-invalid".to_string())?;
-            one_drive_upload(&agent, bearer_token, source, path, bytes)?
+            one_drive_upload(&agent, bearer_token, source, path, bytes, control)?
         }
         CloudProvider::GoogleDrive => {
-            google_upload(&agent, bearer_token, source, destination, local_root, bytes)?
+            google_upload(&agent, bearer_token, source, destination, local_root, bytes, control)?
         }
         CloudProvider::Icloud => return Err("provider-api-icloud-unsupported".into()),
     };
@@ -548,6 +596,10 @@ pub fn upload_file(
         CloudProvider::GoogleDrive => ProviderRemoteLocator::GoogleDriveFileId(object_id.clone()),
         CloudProvider::Icloud => unreachable!(),
     };
+    if let Err(error) = control.check() {
+        let cleanup = delete_uploaded_object(provider, &object_id, bearer_token);
+        return Err(match cleanup { Ok(()) => error, Err(cleanup_error) => format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}") });
+    }
     Ok(ProviderApiUploadResult {
         provider,
         object_id,
@@ -582,6 +634,40 @@ pub fn delete_uploaded_object(
 mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    #[test]
+    fn provider_upload_rejects_pre_start_cancellation() {
+        let cancel = AtomicBool::new(true);
+        let control = ProviderUploadControl::new(&cancel, Instant::now() + Duration::from_secs(1));
+        assert_eq!(control.check().unwrap_err(), "cloud-copy-cancelled");
+    }
+
+    #[test]
+    fn provider_upload_observes_cancellation_between_chunks() {
+        let cancel = AtomicBool::new(false);
+        let control = ProviderUploadControl::new(&cancel, Instant::now() + Duration::from_secs(1));
+        control.check().unwrap();
+        cancel.store(true, Ordering::SeqCst);
+        assert_eq!(control.check().unwrap_err(), "cloud-copy-cancelled");
+    }
+
+    #[test]
+    fn provider_upload_observes_post_success_cancellation_before_receipt() {
+        let cancel = AtomicBool::new(false);
+        let control = ProviderUploadControl::new(&cancel, Instant::now() + Duration::from_secs(1));
+        cancel.store(true, Ordering::SeqCst);
+        assert_eq!(control.check().unwrap_err(), "cloud-copy-cancelled");
+    }
+
+    #[test]
+    fn provider_upload_enforces_one_overall_deadline() {
+        let cancel = AtomicBool::new(false);
+        let now = Instant::now();
+        let control = ProviderUploadControl::new(&cancel, now);
+        assert_eq!(control.check_at(now).unwrap_err(), "cloud-copy-deadline-exceeded");
+    }
 
     #[test]
     fn upload_session_urls_encode_each_path_segment() {
