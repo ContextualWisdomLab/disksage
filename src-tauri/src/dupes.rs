@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -12,7 +12,8 @@ pub struct FileEntry {
 
 /// Metadata의 수정시각 → epoch millis. 지원 안 되면 0 (플랫폼별 실패는 드묾; 0 폴백).
 fn mtime_millis(md: &std::fs::Metadata) -> u64 {
-    md.modified().ok()
+    md.modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
@@ -28,8 +29,11 @@ pub fn group_by_size(files: Vec<FileEntry>) -> Vec<Vec<FileEntry>> {
         }
         by_size.entry(f.size).or_default().push(f);
     }
-    let mut groups: Vec<Vec<FileEntry>> =
-        by_size.into_iter().filter(|(_, v)| v.len() >= 2).map(|(_, v)| v).collect();
+    let mut groups: Vec<Vec<FileEntry>> = by_size
+        .into_iter()
+        .filter(|(_, v)| v.len() >= 2)
+        .map(|(_, v)| v)
+        .collect();
     groups.sort_by(|a, b| b[0].size.cmp(&a[0].size));
     groups
 }
@@ -111,8 +115,12 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
     // 낭비 용량 내림차순
     out.sort_by(|a, b| {
         // saturating: DupeGroup는 항상 paths>=2로 생성되지만, 다른 곳에서 만들어져도 패닉 없이
-        let wa = a.size.saturating_mul((a.paths.len() as u64).saturating_sub(1));
-        let wb = b.size.saturating_mul((b.paths.len() as u64).saturating_sub(1));
+        let wa = a
+            .size
+            .saturating_mul((a.paths.len() as u64).saturating_sub(1));
+        let wb = b
+            .size
+            .saturating_mul((b.paths.len() as u64).saturating_sub(1));
         wb.cmp(&wa)
     });
     out
@@ -146,8 +154,8 @@ pub fn collect_files_bounded(
     max_entries: usize,
     max_duration: Duration,
 ) -> Result<Vec<FileEntry>, String> {
-    let metadata = std::fs::symlink_metadata(root)
-        .map_err(|_| "organize-root-unavailable".to_string())?;
+    let metadata =
+        std::fs::symlink_metadata(root).map_err(|_| "organize-root-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("organize-root-not-directory".into());
     }
@@ -188,12 +196,16 @@ pub fn collect_files_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use std::path::PathBuf;
     use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::Duration;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
+        FileEntry {
+            path: PathBuf::from(p),
+            size,
+            mtime_ms: 0,
+        }
     }
 
     fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -208,9 +220,9 @@ mod tests {
         let files = vec![
             fe("/a", 100),
             fe("/b", 100),
-            fe("/c", 50),   // 단독 — 제외
-            fe("/d", 0),    // 0바이트 — 제외
-            fe("/e", 0),    // 0바이트 — 제외
+            fe("/c", 50), // 단독 — 제외
+            fe("/d", 0),  // 0바이트 — 제외
+            fe("/e", 0),  // 0바이트 — 제외
             fe("/f", 100),
         ];
         let groups = group_by_size(files);
@@ -222,10 +234,7 @@ mod tests {
 
     #[test]
     fn multiple_size_groups_sorted_desc() {
-        let files = vec![
-            fe("/a", 10), fe("/b", 10),
-            fe("/c", 999), fe("/d", 999),
-        ];
+        let files = vec![fe("/a", 10), fe("/b", 10), fe("/c", 999), fe("/d", 999)];
         let groups = group_by_size(files);
         assert_eq!(groups.len(), 2);
         // 그룹은 크기 내림차순: 999 그룹이 먼저
@@ -283,11 +292,31 @@ mod tests {
         let solo = write_file(tmp.path(), "solo", b"different length entirely");
 
         let files = vec![
-            FileEntry { path: d1, size: 16, mtime_ms: 0 },
-            FileEntry { path: d2, size: 16, mtime_ms: 0 },
-            FileEntry { path: n1, size: 16, mtime_ms: 0 },
-            FileEntry { path: n2, size: 16, mtime_ms: 0 },
-            FileEntry { path: solo.clone(), size: std::fs::metadata(&solo).unwrap().len(), mtime_ms: 0 },
+            FileEntry {
+                path: d1,
+                size: 16,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: d2,
+                size: 16,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: n1,
+                size: 16,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: n2,
+                size: 16,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: solo.clone(),
+                size: std::fs::metadata(&solo).unwrap().len(),
+                mtime_ms: 0,
+            },
         ];
         let groups = find_duplicates(files, 8);
 
@@ -298,7 +327,13 @@ mod tests {
         let names: Vec<String> = groups[0]
             .paths
             .iter()
-            .map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned())
+            .map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         assert!(names.contains(&"d1".to_string()) && names.contains(&"d2".to_string()));
     }
@@ -313,10 +348,26 @@ mod tests {
         let s1 = write_file(tmp.path(), "s1", b"tenbytes!!");
         let s2 = write_file(tmp.path(), "s2", b"tenbytes!!");
         let files = vec![
-            FileEntry { path: b1, size: 1000, mtime_ms: 0 },
-            FileEntry { path: b2, size: 1000, mtime_ms: 0 },
-            FileEntry { path: s1, size: 10, mtime_ms: 0 },
-            FileEntry { path: s2, size: 10, mtime_ms: 0 },
+            FileEntry {
+                path: b1,
+                size: 1000,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: b2,
+                size: 1000,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: s1,
+                size: 10,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: s2,
+                size: 10,
+                mtime_ms: 0,
+            },
         ];
         let groups = find_duplicates(files, 4096);
         assert_eq!(groups.len(), 2);
@@ -330,8 +381,16 @@ mod tests {
         let a = write_file(tmp.path(), "a", b"AAAA1111");
         let b = write_file(tmp.path(), "b", b"BBBB2222");
         let files = vec![
-            FileEntry { path: a, size: 8, mtime_ms: 0 },
-            FileEntry { path: b, size: 8, mtime_ms: 0 },
+            FileEntry {
+                path: a,
+                size: 8,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: b,
+                size: 8,
+                mtime_ms: 0,
+            },
         ];
         assert!(find_duplicates(files, 4).is_empty());
     }
@@ -342,9 +401,21 @@ mod tests {
         let d1 = write_file(tmp.path(), "d1", b"same content x");
         let d2 = write_file(tmp.path(), "d2", b"same content x");
         let files = vec![
-            FileEntry { path: d1, size: 14, mtime_ms: 0 },
-            FileEntry { path: d2, size: 14, mtime_ms: 0 },
-            FileEntry { path: tmp.path().join("ghost"), size: 14, mtime_ms: 0 }, // 존재하지 않음
+            FileEntry {
+                path: d1,
+                size: 14,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: d2,
+                size: 14,
+                mtime_ms: 0,
+            },
+            FileEntry {
+                path: tmp.path().join("ghost"),
+                size: 14,
+                mtime_ms: 0,
+            }, // 존재하지 않음
         ];
         // ghost는 크기 그룹엔 들어가지만 해시 단계서 실패 → 조용히 빠지고 d1/d2는 확정
         let groups = find_duplicates(files, 4096);
@@ -376,7 +447,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_file(tmp.path(), "x.bin", b"data");
         let files = collect_files(tmp.path());
-        assert!(files.iter().any(|f| f.mtime_ms > 0), "mtime_ms filled for a real file");
+        assert!(
+            files.iter().any(|f| f.mtime_ms > 0),
+            "mtime_ms filled for a real file"
+        );
     }
 
     #[test]
@@ -435,5 +509,4 @@ mod tests {
         assert_eq!(files[0].path, selected.join("inside.bin"));
         assert_eq!(files[0].size, 6);
     }
-
 }

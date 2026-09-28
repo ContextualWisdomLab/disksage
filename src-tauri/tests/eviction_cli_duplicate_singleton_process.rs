@@ -31,9 +31,12 @@ fn binaries() -> &'static [PathBuf] {
                 .expect("isolated Cargo target directory must be created");
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let mut command = Command::new(cargo);
-            command
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .args(["build", "--locked", "--features", "cloud-cli"]);
+            command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+                "build",
+                "--locked",
+                "--features",
+                "cloud-cli",
+            ]);
             for binary in BINARIES {
                 command.args(["--bin", binary]);
             }
@@ -67,7 +70,10 @@ fn assert_rejected(binary: &Path, args: &[&OsStr], expected: &str) {
         .output()
         .expect("CLI must launch for duplicate-option validation");
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty(), "invalid input must not emit success JSON");
+    assert!(
+        output.stdout.is_empty(),
+        "invalid input must not emit success JSON"
+    );
     let stderr = String::from_utf8(output.stderr).expect("diagnostic must remain valid UTF-8");
     assert_eq!(stderr.trim_end(), expected);
 }

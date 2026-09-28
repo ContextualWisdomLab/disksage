@@ -12,8 +12,7 @@ use std::cell::Cell;
 use std::io::{self, Cursor};
 
 const FIXTURE_PAYLOAD: &[u8] = b"deterministic-model-fixture";
-const FIXTURE_SHA256: &str =
-    "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
+const FIXTURE_SHA256: &str = "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
 
 /// Build the trusted model specification shared by deterministic opener tests.
 fn fixture_spec() -> ModelSpec {

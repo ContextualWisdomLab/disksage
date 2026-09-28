@@ -21,7 +21,12 @@ fn binary_path() -> &'static Path {
 fn malformed_retention_references_fail_before_git_domain_work() {
     let repository = tempfile::tempdir().expect("absolute temporary repository path");
     let oversized = "a".repeat(1025);
-    let invalid = ["", "-dangerous-option", "control\nreference", oversized.as_str()];
+    let invalid = [
+        "",
+        "-dangerous-option",
+        "control\nreference",
+        oversized.as_str(),
+    ];
 
     for reference in invalid {
         let output = Command::new(binary_path())

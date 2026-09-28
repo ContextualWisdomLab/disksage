@@ -27,7 +27,10 @@ fn write_executable(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod fake executable");
 }
 
-fn with_fake_tools(lsof_body: &str, target: &Path) -> disksage_lib::cloud_local_eviction::ActiveUseEvidence {
+fn with_fake_tools(
+    lsof_body: &str,
+    target: &Path,
+) -> disksage_lib::cloud_local_eviction::ActiveUseEvidence {
     let _lock = ENV_LOCK.lock().expect("serialize PATH mutation");
     let tools = tempfile::tempdir().expect("fake tool directory");
     write_executable(&tools.path().join("lsof"), lsof_body);

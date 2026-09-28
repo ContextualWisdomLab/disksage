@@ -354,7 +354,10 @@ fn validate_batch_plan(
     plan: &IcloudLocalEvictionBatchPlan,
 ) -> Result<(), String> {
     if plan.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
-        || !matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
+        || !matches!(
+            plan.provider,
+            CloudProvider::Icloud | CloudProvider::Onedrive
+        )
         || plan.provider != root.provider
         || plan.account_scope != root.account_scope
         || plan.cloud_root != root.path
@@ -480,7 +483,10 @@ fn plan_batch_with<F>(
 where
     F: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
 {
-    if !matches!(root.provider, CloudProvider::Icloud | CloudProvider::Onedrive) {
+    if !matches!(
+        root.provider,
+        CloudProvider::Icloud | CloudProvider::Onedrive
+    ) {
         return Err("cloud-local-eviction-batch-provider-unsupported".into());
     }
     if paths.is_empty() || paths.len() > MAX_BATCH_ITEMS {

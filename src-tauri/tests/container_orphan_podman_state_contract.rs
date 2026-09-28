@@ -8,7 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[cfg(unix)]
-fn podman_target_with_container_json(container_json: &str) -> (tempfile::TempDir, ContainerRuntimeTarget) {
+fn podman_target_with_container_json(
+    container_json: &str,
+) -> (tempfile::TempDir, ContainerRuntimeTarget) {
     let temp = tempfile::tempdir().expect("temporary Podman runtime directory");
     let runtime = temp.path().join("podman");
     let script = format!(
@@ -69,8 +71,7 @@ fn podman_stopped_is_removable_while_known_prestart_and_transitional_states_are_
         .expect("receipt directory metadata")
         .permissions();
     receipt_permissions.set_mode(0o700);
-    std::fs::set_permissions(&receipt_dir, receipt_permissions)
-        .expect("secure receipt directory");
+    std::fs::set_permissions(&receipt_dir, receipt_permissions).expect("secure receipt directory");
 
     let plan = disksage_lib::container_orphan_reclaim::probe_container_orphans_with_receipt_dir(
         &target,
@@ -104,5 +105,8 @@ fn podman_unknown_state_remains_fail_closed() {
         .expect("container category");
 
     assert!(!container.evidence_complete);
-    assert_eq!(container.issue.as_deref(), Some("unknown-container-state:unknown"));
+    assert_eq!(
+        container.issue.as_deref(),
+        Some("unknown-container-state:unknown")
+    );
 }

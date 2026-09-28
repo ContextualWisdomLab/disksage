@@ -95,13 +95,21 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                 if source_root.is_some() {
                     return Err("--source-root는 한 번만 지정할 수 있음".into());
                 }
-                source_root = Some(PathBuf::from(native_value(raw, &mut index, "--source-root")?));
+                source_root = Some(PathBuf::from(native_value(
+                    raw,
+                    &mut index,
+                    "--source-root",
+                )?));
             }
             Some("--cloud-root") => {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(raw, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    raw,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--destination-subdirectory") => {
                 if destination_subdirectory.is_some() {
@@ -178,15 +186,15 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                 if private_output.is_some() {
                     return Err("--private-output은 한 번만 지정할 수 있음".into());
                 }
-                private_output = Some(PathBuf::from(native_value(raw, &mut index, "--private-output")?));
+                private_output = Some(PathBuf::from(native_value(
+                    raw,
+                    &mut index,
+                    "--private-output",
+                )?));
             }
             Some("--help" | "-h") => return Err(usage()),
-            Some(_) => {
-                return Err("incomplete-download-destination-plan-unknown-argument".into())
-            }
-            None => {
-                return Err("incomplete-download-destination-plan-invalid-utf8-argument".into())
-            }
+            Some(_) => return Err("incomplete-download-destination-plan-unknown-argument".into()),
+            None => return Err("incomplete-download-destination-plan-invalid-utf8-argument".into()),
         }
         index += 1;
     }

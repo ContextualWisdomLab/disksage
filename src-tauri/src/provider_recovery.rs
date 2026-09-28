@@ -332,10 +332,9 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     let path = path
         .to_str()
         .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
-    let primary_runtime_observed = crate::provider_client_runtime::collect_provider_primary_runtime(
-        CloudProvider::Onedrive,
-    )
-    .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
+    let primary_runtime_observed =
+        crate::provider_client_runtime::collect_provider_primary_runtime(CloudProvider::Onedrive)
+            .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?;
     if primary_runtime_observed {
         if request_quit("OneDrive").is_err() {
             request_graceful_term("OneDrive")?;
@@ -344,12 +343,11 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     let operation = (|| {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let current_runtime_observed = require_primary_runtime_observation(CloudProvider::Onedrive)?;
+            let current_runtime_observed =
+                require_primary_runtime_observation(CloudProvider::Onedrive)?;
             ensure_onedrive_stop_authority(primary_runtime_observed, current_runtime_observed)?;
-            match onedrive_quit_wait_decision(
-                current_runtime_observed,
-                Instant::now() >= deadline,
-            ) {
+            match onedrive_quit_wait_decision(current_runtime_observed, Instant::now() >= deadline)
+            {
                 OneDriveQuitWaitDecision::Stopped => break,
                 OneDriveQuitWaitDecision::ContinueWaiting => {}
                 OneDriveQuitWaitDecision::TimedOut => {
@@ -367,10 +365,10 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
                 std::thread::sleep(Duration::from_secs(1));
                 match runtime_observation(CloudProvider::Onedrive, 0) {
                     Some(true) => Ok(()),
-                    Some(false) => {
-                        Err("provider-client-runtime-not-observed-after-restart".into())
+                    Some(false) => Err("provider-client-runtime-not-observed-after-restart".into()),
+                    None => {
+                        Err("provider-client-runtime-evidence-unavailable-after-restart".into())
                     }
-                    None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
                 }
             })
         },
@@ -539,12 +537,8 @@ mod tests {
 
     #[test]
     fn slow_post_restart_observation_is_structured_recovery_evidence() {
-        let output = recovery_output_after_launch(
-            CloudProvider::Onedrive,
-            true,
-            false,
-            Some(false),
-        );
+        let output =
+            recovery_output_after_launch(CloudProvider::Onedrive, true, false, Some(false));
         assert_eq!(output.post_runtime_observed, Some(false));
         assert_eq!(
             output.blockers,

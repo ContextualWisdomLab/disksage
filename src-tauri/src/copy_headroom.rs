@@ -20,9 +20,9 @@ fn destination_volume_probe_path(destination: &Path) -> Result<PathBuf, String> 
                 return Ok(probe.to_path_buf());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                probe = probe
-                    .parent()
-                    .ok_or_else(|| "local-volume-headroom-destination-parent-missing".to_string())?;
+                probe = probe.parent().ok_or_else(|| {
+                    "local-volume-headroom-destination-parent-missing".to_string()
+                })?;
             }
             Err(_) => return Err("local-volume-headroom-destination-parent-unavailable".into()),
         }
@@ -56,7 +56,10 @@ mod tests {
             .join("documents")
             .join("report.pdf");
 
-        assert_eq!(destination_volume_probe_path(&destination).unwrap(), root.path());
+        assert_eq!(
+            destination_volume_probe_path(&destination).unwrap(),
+            root.path()
+        );
     }
 
     #[test]
@@ -66,7 +69,10 @@ mod tests {
         std::fs::create_dir(&existing).unwrap();
         let destination = existing.join("documents").join("report.pdf");
 
-        assert_eq!(destination_volume_probe_path(&destination).unwrap(), existing);
+        assert_eq!(
+            destination_volume_probe_path(&destination).unwrap(),
+            existing
+        );
     }
 
     #[test]

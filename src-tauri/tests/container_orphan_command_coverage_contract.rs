@@ -11,7 +11,10 @@ fn shipped_container_orphan_commands_remain_present_in_coverage_builds() {
     let command_owner = source("src/container_orphan_commands.rs");
     let lib = source("src/lib.rs");
 
-    for command in ["inspect_container_orphans", "execute_container_orphan_prune"] {
+    for command in [
+        "inspect_container_orphans",
+        "execute_container_orphan_prune",
+    ] {
         let signature = format!("pub fn {command}(");
         let start = command_owner
             .find(&signature)

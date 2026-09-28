@@ -26,10 +26,10 @@ use std::ffi::OsStr;
 use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
-#[cfg(not(coverage))]
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(not(coverage), target_os = "macos"))]
 use std::process::{Command, Stdio};
+#[cfg(not(coverage))]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(not(coverage), target_os = "macos"))]
 use std::time::{Duration, Instant};
 
@@ -1189,7 +1189,10 @@ fn write_copy_failure_record(
             .map_err(|_| "failure-record-directory-unavailable".to_string())?;
         if entry_metadata.is_file()
             && !entry_metadata.file_type().is_symlink()
-            && entry.file_name().to_string_lossy().ends_with("-failure.json")
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-failure.json")
         {
             existing_records = existing_records.saturating_add(1);
         }
@@ -1373,7 +1376,11 @@ fn bounded_macos_command(
 }
 
 #[cfg(all(not(coverage), target_os = "macos"))]
-fn bounded_macos_mkdir(path: &Path, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<(), String> {
+fn bounded_macos_mkdir(
+    path: &Path,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
     bounded_macos_command(
         Path::new("/bin/mkdir"),
         &[OsStr::new("-p"), path.as_os_str()],
@@ -1384,11 +1391,20 @@ fn bounded_macos_mkdir(path: &Path, timeout: Duration, cancel: Option<&AtomicBoo
 
 /// Copy outside the UI process; the parent verifies bytes and hashes after the child exits.
 #[cfg(all(not(coverage), target_os = "macos"))]
-fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<(), String> {
+fn bounded_macos_copy(
+    source: &Path,
+    destination: &Path,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
     bounded_macos_command(
         Path::new("/bin/cp"),
         // Never replace a File Provider object that appeared after the read-only preflight.
-        &[OsStr::new("-n"), source.as_os_str(), destination.as_os_str()],
+        &[
+            OsStr::new("-n"),
+            source.as_os_str(),
+            destination.as_os_str(),
+        ],
         timeout,
         cancel,
     )
@@ -1476,7 +1492,12 @@ fn copy_and_verify(
 
     #[cfg(target_os = "macos")]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
-        bounded_macos_copy(source, &staging, copy_timeout_for_bytes(candidate.bytes), cancel)?;
+        bounded_macos_copy(
+            source,
+            &staging,
+            copy_timeout_for_bytes(candidate.bytes),
+            cancel,
+        )?;
         let source_hashes = hash_file(source)?;
         let staging_hashes = hash_file(&staging)?;
         let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
@@ -1843,7 +1864,8 @@ pub fn verify_provider_api_source_unchanged(
     hashes: &ContentDigests,
 ) -> Result<(), String> {
     let source = Path::new(&candidate.src);
-    let metadata = std::fs::symlink_metadata(source).map_err(|_| "source-unavailable".to_string())?;
+    let metadata =
+        std::fs::symlink_metadata(source).map_err(|_| "source-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("source-changed-during-provider-upload".into());
     }
@@ -2094,12 +2116,12 @@ pub fn adopt_existing_cloud_copy(
 mod tests {
     use super::*;
     use crate::cloud::{ArchiveKind, MetadataEvidence};
-    use crate::provider_evidence::{
-        create_sync_evidence_record, ProviderSyncEvidenceRecord, PROVIDER_EVIDENCE_RECORD_VERSION,
-    };
     use crate::provider_capacity::{
         self, CapacityEvidenceKind, CloudCapacitySnapshot, CloudCapacityState,
         CAPACITY_SCHEMA_VERSION,
+    };
+    use crate::provider_evidence::{
+        create_sync_evidence_record, ProviderSyncEvidenceRecord, PROVIDER_EVIDENCE_RECORD_VERSION,
     };
 
     #[cfg(windows)]
@@ -2218,7 +2240,11 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(&receipt_dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
-        assert!(path.file_name().unwrap().to_string_lossy().ends_with("-failure.json"));
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("-failure.json"));
         let decoded: CloudCopyFailureRecord =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(decoded.error_code, "cloud-copy-timeout");
@@ -2226,7 +2252,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o400);
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o400
+            );
         }
     }
 
@@ -2274,9 +2303,7 @@ mod tests {
             .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
             .collect();
         assert_ne!(records[0].failure_id, records[1].failure_id);
-        assert!(records
-            .iter()
-            .all(|record| record.occurred_at_ms == 123));
+        assert!(records.iter().all(|record| record.occurred_at_ms == 123));
     }
 
     fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
@@ -2314,12 +2341,8 @@ mod tests {
         std::fs::write(&staging, b"staging").unwrap();
         std::fs::write(&destination, b"provider").unwrap();
 
-        let result = bounded_macos_move_create_only(
-            &staging,
-            &destination,
-            Duration::from_secs(5),
-            None,
-        );
+        let result =
+            bounded_macos_move_create_only(&staging, &destination, Duration::from_secs(5), None);
 
         assert_eq!(result, Err("cloud-copy-finalize-race".into()));
         assert_eq!(std::fs::read(&staging).unwrap(), b"staging");
@@ -2764,8 +2787,9 @@ mod tests {
 
         let mut tampered = historical;
         tampered.lineage.as_mut().unwrap().ontology_class = Some("tampered".into());
-        assert!(receipt_blockers(&tampered)
-            .contains(&"receipt-lineage-integrity-mismatch".to_string()));
+        assert!(
+            receipt_blockers(&tampered).contains(&"receipt-lineage-integrity-mismatch".to_string())
+        );
     }
 
     #[test]

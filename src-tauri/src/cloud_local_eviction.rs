@@ -1556,11 +1556,46 @@ mod tests {
         assert!(eligible.eligible_after_human_approval);
 
         for (state, blocker) in [
-            ({ let mut state = file_provider_state(); state.is_sync_paused = Some(true); state }, "icloud-file-provider-sync-paused-or-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.is_trashed = Some(true); state }, "icloud-file-provider-item-trashed-or-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.allows_eviction = Some(false); state }, "icloud-file-provider-eviction-capability-unconfirmed"),
-            ({ let mut state = file_provider_state(); state.provider_reported_bytes = Some(99); state }, "icloud-file-provider-document-size-mismatch"),
-            ({ let mut state = file_provider_state(); state.item_identifier_fingerprint = None; state }, "icloud-file-provider-item-identity-unconfirmed"),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_sync_paused = Some(true);
+                    state
+                },
+                "icloud-file-provider-sync-paused-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_trashed = Some(true);
+                    state
+                },
+                "icloud-file-provider-item-trashed-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.allows_eviction = Some(false);
+                    state
+                },
+                "icloud-file-provider-eviction-capability-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.provider_reported_bytes = Some(99);
+                    state
+                },
+                "icloud-file-provider-document-size-mismatch",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.item_identifier_fingerprint = None;
+                    state
+                },
+                "icloud-file-provider-item-identity-unconfirmed",
+            ),
         ] {
             let plan = build_plan(
                 &root(temp.path()),

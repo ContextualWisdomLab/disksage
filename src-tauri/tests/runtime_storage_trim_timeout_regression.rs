@@ -34,7 +34,9 @@ esac
 "#,
     )
     .expect("write fake colima");
-    let mut permissions = fs::metadata(&colima).expect("fake colima metadata").permissions();
+    let mut permissions = fs::metadata(&colima)
+        .expect("fake colima metadata")
+        .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&colima, permissions).expect("make fake colima executable");
 

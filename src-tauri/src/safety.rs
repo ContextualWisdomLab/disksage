@@ -206,6 +206,25 @@ pub(crate) fn is_user_owned_shared_temp_tree(_path: &Path) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    // Runtime dependencies remain in use even when their MCP process is temporarily stopped.
+    for ancestor in path.ancestors() {
+        if ancestor.ends_with("_npx")
+            && ancestor
+                .parent()
+                .is_some_and(|parent| parent.ends_with(".npm") || parent.ends_with("npm-cache"))
+        {
+            return true;
+        }
+        match std::fs::symlink_metadata(ancestor.join(".DISKSAGE_PROTECT")) {
+            Ok(_) => return true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(_) => return true,
+        }
+    }
     // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
@@ -470,6 +489,7 @@ pub fn trash_delete(
     {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
+    // 가드는 정규화된 경로로 판정. canonicalize 실패면 lexical 경로로 판정한다.
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let shared_temp = is_shared_temp_path(&guard_path);
@@ -477,7 +497,7 @@ pub fn trash_delete(
     if shared_temp && !shared_temp_authorized {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    if !shared_temp_authorized && is_protected(&guard_path) {
+    if !shared_temp_authorized && (is_protected(path) || is_protected(&guard_path)) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let mut entry = JournalEntry {
@@ -639,10 +659,10 @@ fn trash_delete_if_identity_with_catalog_root(
     let guard_path =
         strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let catalog_authorized = catalog_root.is_some_and(|root| {
-        std::fs::symlink_metadata(root).is_ok_and(|metadata| {
-            metadata.is_dir() && !metadata.file_type().is_symlink()
-        }) && std::fs::canonicalize(root)
-            .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
+        std::fs::symlink_metadata(root)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+            && std::fs::canonicalize(root)
+                .is_ok_and(|root| guard_path.parent() == Some(root.as_path()))
             && !is_explicitly_protected(&guard_path)
     });
     let shared_temp = is_shared_temp_path(&guard_path);
@@ -650,7 +670,10 @@ fn trash_delete_if_identity_with_catalog_root(
     if shared_temp && !shared_temp_authorized {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    if !shared_temp_authorized && !catalog_authorized && is_protected(&guard_path) {
+    if !shared_temp_authorized
+        && !catalog_authorized
+        && (is_protected(path) || is_protected(&guard_path))
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
     let actual = filesystem_object_id(path)
@@ -970,7 +993,7 @@ pub fn move_file(
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
-        if is_protected(&guard) {
+        if is_protected(p) || is_protected(&guard) {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
     }
@@ -1266,9 +1289,8 @@ mod tests {
         let expected = filesystem_object_id(&victim).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = trash_delete_if_identity_in_catalog_root(
-            &victim, &root, &expected, 0, &journal, 1,
-        );
+        let error =
+            trash_delete_if_identity_in_catalog_root(&victim, &root, &expected, 0, &journal, 1);
 
         assert!(matches!(error, Err(SafetyError::Protected(_))));
         assert!(victim.exists());
@@ -1323,6 +1345,51 @@ mod tests {
         );
         assert!(!staged.join("removed.bin").exists());
         assert!(staged.join("retained.bin").exists());
+    }
+
+    #[test]
+    fn runtime_dependencies_are_rejected_by_both_trash_apis() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let dependency = runtime.join("node_modules");
+        std::fs::create_dir_all(&dependency).unwrap();
+        let expected = filesystem_object_id(&dependency).unwrap();
+        // The runtime can become protected after the deletion selection was reviewed.
+        std::fs::write(runtime.join(".DISKSAGE_PROTECT"), b"MCP runtime").unwrap();
+        let mut paths = vec![runtime.clone(), dependency];
+        for cache in [".npm", "npm-cache"] {
+            let dependency = tmp.path().join(cache).join("_npx/server/node_modules");
+            std::fs::create_dir_all(&dependency).unwrap();
+            paths.push(dependency);
+        }
+        #[cfg(unix)]
+        {
+            let alias = tmp.path().join("runtime-alias");
+            std::os::unix::fs::symlink(&runtime, &alias).unwrap();
+            paths.push(alias.join("node_modules"));
+            let external = tmp.path().join("external-dependency");
+            std::fs::create_dir(&external).unwrap();
+            let alias = runtime.join("external-alias");
+            std::os::unix::fs::symlink(&external, &alias).unwrap();
+            paths.push(alias);
+        }
+        let journal = tmp.path().join("journal.jsonl");
+        for path in paths {
+            assert!(matches!(
+                trash_delete(&path, 0, &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(matches!(
+                trash_delete_if_identity(&path, &expected, 0, &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(matches!(
+                move_file(&path, &tmp.path().join("moved"), &journal, 1),
+                Err(SafetyError::Protected(_))
+            ));
+            assert!(path.exists());
+        }
+        assert!(!journal.exists());
     }
 
     #[test]

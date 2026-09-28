@@ -73,7 +73,8 @@ fn stale_managed_photo_report() -> ExactDuplicateAuditReport {
         issue_counts: BTreeMap::new(),
         audit_fingerprint: "audit".into(),
         production_metadata_evaluated: true,
-        production_date_policy: "embedded>filename-explicit>filesystem-created>filesystem-modified".into(),
+        production_date_policy: "embedded>filename-explicit>filesystem-created>filesystem-modified"
+            .into(),
         exact_content_match_is_delete_approval: false,
         automatic_delete_allowed: false,
         mutation_performed: false,

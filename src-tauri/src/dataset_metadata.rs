@@ -657,10 +657,7 @@ mod tests {
     fn spreadsheet_profile_keeps_schema_but_not_cell_values() {
         let rows = vec![
             vec![Data::String("email".into()), Data::String("amount".into())],
-            vec![
-                Data::String("person@example.com".into()),
-                Data::Int(42),
-            ],
+            vec![Data::String("person@example.com".into()), Data::Int(42)],
             vec![Data::Empty, Data::Float(3.5)],
         ];
         let mut profile = DatasetProfile {

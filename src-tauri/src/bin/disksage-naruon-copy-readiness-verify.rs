@@ -128,7 +128,10 @@ mod tests {
         assert!(parse_args(&[]).is_err());
         assert!(parse_args(&["relative.json".into()]).is_err());
         assert!(parse_args(&["one.json".into(), "two.json".into()]).is_err());
-        assert_eq!(parse_args(&["--help".into()]).unwrap(), TerminalRequest::Help);
+        assert_eq!(
+            parse_args(&["--help".into()]).unwrap(),
+            TerminalRequest::Help
+        );
         assert_eq!(parse_args(&["-h".into()]).unwrap(), TerminalRequest::Help);
         assert!(parse_args(&["--help".into(), "relative.json".into()]).is_err());
 

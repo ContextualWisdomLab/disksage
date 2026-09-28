@@ -185,7 +185,9 @@ pub fn validate_file_provider_activity_evidence(
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         })
-        || evidence.active_upload_progress_millionths.is_some_and(|value| value > 1_000_000)
+        || evidence
+            .active_upload_progress_millionths
+            .is_some_and(|value| value > 1_000_000)
         || evidence
             .active_download_progress_millionths
             .is_some_and(|value| value > 1_000_000)
@@ -381,14 +383,15 @@ pub fn health_evidence_snapshot_from_report(
     {
         return Err("icloud-sync-health-evidence-claim-invalid".into());
     }
-    let managed_database_allocated_bytes = report
-        .managed_database_files
-        .iter()
-        .try_fold(0_u64, |total, file| {
-            total
-                .checked_add(file.allocated_bytes)
-                .ok_or_else(|| "icloud-sync-health-evidence-bytes-overflow".to_string())
-        })?;
+    let managed_database_allocated_bytes =
+        report
+            .managed_database_files
+            .iter()
+            .try_fold(0_u64, |total, file| {
+                total
+                    .checked_add(file.allocated_bytes)
+                    .ok_or_else(|| "icloud-sync-health-evidence-bytes-overflow".to_string())
+            })?;
     if managed_database_allocated_bytes != report.managed_database_allocated_bytes {
         return Err("icloud-sync-health-evidence-bytes-mismatch".into());
     }
@@ -400,8 +403,9 @@ pub fn health_evidence_snapshot_from_report(
         }
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        validate_file_provider_activity_evidence(activity)
-            .map_err(|_| "icloud-sync-health-evidence-file-provider-activity-invalid".to_string())?;
+        validate_file_provider_activity_evidence(activity).map_err(|_| {
+            "icloud-sync-health-evidence-file-provider-activity-invalid".to_string()
+        })?;
         if activity.observed_at_ms != report.observed_at_ms {
             return Err("icloud-sync-health-evidence-file-provider-activity-time-mismatch".into());
         }
@@ -430,7 +434,10 @@ pub fn validate_icloud_sync_health_evidence_snapshot(
 ) -> Result<(), String> {
     if snapshot.schema_version != ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION
         || snapshot.observed_at_ms == 0
-        || !matches!(snapshot.new_copy_admission_state.as_str(), "clear" | "blocked")
+        || !matches!(
+            snapshot.new_copy_admission_state.as_str(),
+            "clear" | "blocked"
+        )
         || ((snapshot.new_copy_admission_state == "clear")
             != snapshot.new_copy_admission_blockers.is_empty())
         || snapshot
@@ -449,8 +456,9 @@ pub fn validate_icloud_sync_health_evidence_snapshot(
         }
     }
     if let Some(activity) = snapshot.file_provider_activity.as_ref() {
-        validate_file_provider_activity_evidence(activity)
-            .map_err(|_| "icloud-sync-health-evidence-file-provider-activity-invalid".to_string())?;
+        validate_file_provider_activity_evidence(activity).map_err(|_| {
+            "icloud-sync-health-evidence-file-provider-activity-invalid".to_string()
+        })?;
         if activity.observed_at_ms != snapshot.observed_at_ms {
             return Err("icloud-sync-health-evidence-file-provider-activity-time-mismatch".into());
         }
@@ -574,8 +582,7 @@ fn prune_health_evidence(directory: &Path) -> Result<(), String> {
     records.sort_by(|left, right| left.0.cmp(&right.0));
     while records.len() > MAX_PERSISTED_HEALTH_SNAPSHOTS {
         let (_, path) = records.remove(0);
-        std::fs::remove_file(path)
-            .map_err(|_| "icloud-sync-health-evidence-retention-failed")?;
+        std::fs::remove_file(path).map_err(|_| "icloud-sync-health-evidence-retention-failed")?;
     }
     Ok(())
 }
@@ -922,14 +929,15 @@ fn native_status_summary_complete(output: &[u8]) -> bool {
     let output = String::from_utf8_lossy(output);
     let container_count = output.lines().any(|line| {
         let mut parts = line.split_whitespace();
-        parts.next().and_then(|value| value.parse::<u64>().ok()).is_some()
+        parts
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some()
             && parts.next() == Some("containers")
             && parts.next() == Some("matching")
     });
     let summary = output.lines().any(|line| {
-        line.contains("{client:")
-            && line.contains(" server:")
-            && line.contains(" sync:")
+        line.contains("{client:") && line.contains(" server:") && line.contains(" sync:")
     });
     container_count && summary
 }
@@ -1029,12 +1037,10 @@ fn parse_file_provider_activity_output(
     let active_download_progress_millionths = progress_millionths(output, "download progress:");
     // fileproviderctl always emits aggregate progress-object headers, including while idle. Only a
     // provider-reported incomplete fraction is evidence of an active transfer.
-    let active_upload_count = u64::from(
-        active_upload_progress_millionths.is_some_and(|progress| progress < 1_000_000),
-    );
-    let active_download_count = u64::from(
-        active_download_progress_millionths.is_some_and(|progress| progress < 1_000_000),
-    );
+    let active_upload_count =
+        u64::from(active_upload_progress_millionths.is_some_and(|progress| progress < 1_000_000));
+    let active_download_count =
+        u64::from(active_download_progress_millionths.is_some_and(|progress| progress < 1_000_000));
     let mut notices = if command_succeeded {
         vec!["icloud-file-provider-dump-observed".into()]
     } else {
@@ -1100,15 +1106,17 @@ fn parse_file_provider_activity_output(
 
 /// Extracts the oldest bounded relative age from a provider `last:` or `expired:` field.
 fn relative_age_ms(line: &str) -> Option<u64> {
-    ["last:'", "expired:'"].iter().filter_map(|marker| {
-        let value_start = line.rfind(marker)?.saturating_add(marker.len());
-        let value_end = value_start.checked_add(line[value_start..].find('\'')?)?;
-        let value = &line[value_start..value_end];
-        let age_start = value.rfind("(-")?.saturating_add(2);
-        let age_end = age_start.checked_add(value[age_start..].find(')')?)?;
-        parse_age_components(&value[age_start..age_end])
-    })
-    .max()
+    ["last:'", "expired:'"]
+        .iter()
+        .filter_map(|marker| {
+            let value_start = line.rfind(marker)?.saturating_add(marker.len());
+            let value_end = value_start.checked_add(line[value_start..].find('\'')?)?;
+            let value = &line[value_start..value_end];
+            let age_start = value.rfind("(-")?.saturating_add(2);
+            let age_end = age_start.checked_add(value[age_start..].find(')')?)?;
+            parse_age_components(&value[age_start..age_end])
+        })
+        .max()
 }
 
 /// Parses compact provider age components such as `4h9min` without floating-point rounding.
@@ -1160,7 +1168,9 @@ fn progress_millionths(output: &str, operation: &str) -> Option<u32> {
             return None;
         }
         let mut scaled = fraction.bytes().take(6).fold(0_u32, |value, byte| {
-            value.saturating_mul(10).saturating_add(u32::from(byte - b'0'))
+            value
+                .saturating_mul(10)
+                .saturating_add(u32::from(byte - b'0'))
         });
         for _ in fraction.len().min(6)..6 {
             scaled = scaled.saturating_mul(10);
@@ -1462,13 +1472,14 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                             if matches!(
                                 error.kind(),
                                 ErrorKind::WouldBlock | ErrorKind::Interrupted
-                            ) => {
-                                if Instant::now() >= drain_deadline {
-                                    kill_group();
-                                    break;
-                                }
-                                thread::sleep(Duration::from_millis(5));
+                            ) =>
+                        {
+                            if Instant::now() >= drain_deadline {
+                                kill_group();
+                                break;
                             }
+                            thread::sleep(Duration::from_millis(5));
+                        }
                         Err(_) => {
                             read_failed = true;
                             break;
@@ -1497,8 +1508,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     parse_native_status_output(
         &output,
         observed_at_ms,
-        !read_failed
-            && (bounded_after_summary || status.is_some_and(|status| status.success())),
+        !read_failed && (bounded_after_summary || status.is_some_and(|status| status.success())),
         timed_out,
         output_truncated,
     )
@@ -2021,10 +2031,10 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             .insert(0, "icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        let no_progress = activity.no_progress_fetch_count > 0
-            || activity.no_progress_create_count > 0;
-        let materialization_failed = activity.materialization_failure_count > 0
-            || activity.staged_item_missing_count > 0;
+        let no_progress =
+            activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0;
+        let materialization_failed =
+            activity.materialization_failure_count > 0 || activity.staged_item_missing_count > 0;
         let mut add_blocker = |blocker: &str| {
             if !report
                 .new_copy_admission_blockers
@@ -2326,7 +2336,9 @@ mod tests {
     fn stops_native_probe_after_summary_before_detail_stream() {
         let summary = b"1 containers matching '*'\\nforeground {client:needs-sync server:full-sync sync:needs-sync-up last-sync:now}\\n";
         assert!(native_status_summary_complete(summary));
-        assert!(!native_status_summary_complete(b"1 containers matching '*'\\n"));
+        assert!(!native_status_summary_complete(
+            b"1 containers matching '*'\\n"
+        ));
     }
 
     #[test]
@@ -2438,7 +2450,9 @@ mod tests {
             .notices
             .contains(&"icloud-file-provider-staged-item-missing-observed".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
-        assert!(!serde_json::to_string(&evidence).unwrap().contains("stagedItemMissing"));
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("stagedItemMissing"));
     }
 
     #[test]
@@ -2474,8 +2488,8 @@ mod tests {
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
         assert_eq!(evidence.stale_error_count, 2);
         assert_eq!(evidence.oldest_stale_error_age_ms, Some(14_940_000));
-        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
-            .unwrap();
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
         report.file_provider_activity = Some(evidence);
         attach_native_status_admission(&mut report);
         assert!(report
@@ -2566,8 +2580,8 @@ mod tests {
 
     #[test]
     fn locked_file_provider_item_blocks_new_copy_admission() {
-        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
-            .unwrap();
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
         report.file_provider_activity = Some(parse_file_provider_activity_output(
             "fetch-content: itemIsFlockedCanNotPropagate\n",
             1,
@@ -2914,8 +2928,8 @@ mod tests {
     #[test]
     fn health_evidence_is_create_only_and_bounded() {
         let directory = tempfile::tempdir().unwrap();
-        let report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
-            .unwrap();
+        let report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
         let first = write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
         assert!(first.exists());
         assert!(write_icloud_sync_health_evidence(directory.path(), &report).is_err());
@@ -2931,14 +2945,11 @@ mod tests {
             .unwrap();
             write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
         }
-        let records = std::fs::read_dir(
-            directory
-                .path()
-                .join(ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY),
-        )
-        .unwrap()
-        .filter_map(Result::ok)
-        .count();
+        let records =
+            std::fs::read_dir(directory.path().join(ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY))
+                .unwrap()
+                .filter_map(Result::ok)
+                .count();
         assert_eq!(records, MAX_PERSISTED_HEALTH_SNAPSHOTS);
         assert!(!first.exists());
     }
@@ -2954,7 +2965,9 @@ mod tests {
         );
 
         report.paths_redacted = true;
-        report.new_copy_admission_blockers.push("test-blocker".into());
+        report
+            .new_copy_admission_blockers
+            .push("test-blocker".into());
         assert_eq!(
             health_evidence_snapshot_from_report(&report).unwrap_err(),
             "icloud-sync-health-evidence-claim-invalid"

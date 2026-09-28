@@ -6,7 +6,13 @@ use crate::scanner;
 // A development tree can contain millions of generated entries. The inventory remains
 // fail-closed for cleanup when this bounded metadata manifest cannot finish; it must never turn
 // a partial observation into permission to move a recreated directory to the trash.
-const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
+
+/// UI / Tauri path keeps a short budget so incomplete large trees fail closed instead of
+/// blocking the interactive session. Headless `disksage-dev-artifacts` may raise this.
+pub const ARTIFACT_MANIFEST_BUDGET_UI: Duration = Duration::from_secs(3);
+/// Default for the CLI when neither `--manifest-budget-secs` nor the env override is set.
+/// Large Rust `target/` trees (1–5 GB) routinely exceed the UI 3s gate.
+pub const ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT: Duration = Duration::from_secs(300);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
 const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
 // Reversible Trash cleanup backs an interactive path, so an incomplete active-use probe must fail
@@ -16,6 +22,20 @@ const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_US
 // 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
 // longer operational timeout instead of silently weakening the active-use gate.
 const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+const MANIFEST_BUDGET_ENV: &str = "DISKSAGE_ARTIFACT_MANIFEST_BUDGET_SECS";
+
+/// Resolve the headless CLI manifest budget: explicit seconds win, else env, else 300s.
+pub fn resolve_cli_manifest_budget(explicit_secs: Option<u64>) -> Duration {
+    if let Some(secs) = explicit_secs {
+        return Duration::from_secs(secs);
+    }
+    if let Ok(raw) = std::env::var(MANIFEST_BUDGET_ENV) {
+        if let Ok(secs) = raw.trim().parse::<u64>() {
+            return Duration::from_secs(secs);
+        }
+    }
+    ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -48,7 +68,10 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("dist-electron", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
-    (".venv314", &["pyproject.toml", "requirements.txt", "setup.py", ".git"]),
+    (
+        ".venv314",
+        &["pyproject.toml", "requirements.txt", "setup.py", ".git"],
+    ),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
     (".mypy_cache", &[]),
@@ -73,8 +96,7 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
 
 fn is_python_314_environment(path: &Path) -> bool {
     let config = path.join("pyvenv.cfg");
-    std::fs::metadata(&config)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+    std::fs::metadata(&config).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
         && std::fs::read_to_string(config).is_ok_and(|text| {
             text.lines().any(|line| {
                 line.split_once('=').is_some_and(|(key, value)| {
@@ -106,7 +128,10 @@ fn cargo_target_cache(path: &Path) -> bool {
     tagged && path.join("debug").is_dir()
 }
 
-fn detected_artifact_kind(path: &Path, name: &str) -> Option<(&'static str, &'static [&'static str])> {
+fn detected_artifact_kind(
+    path: &Path,
+    name: &str,
+) -> Option<(&'static str, &'static [&'static str])> {
     if cargo_target_cache(path) {
         return Some(("cargo-target-cache", &[]));
     }
@@ -139,7 +164,7 @@ struct ArtifactManifest {
 /// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
 /// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
 /// unusually large trees instead of blocking the UI indefinitely.
-fn artifact_manifest(root: &Path) -> ArtifactManifest {
+fn artifact_manifest(root: &Path, budget: Duration) -> ArtifactManifest {
     let mut manifest = ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
@@ -149,7 +174,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         manifest.scan_complete = false;
     }
     manifest.object_id = root_object_id.unwrap_or_default();
-    let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let deadline = Instant::now() + budget;
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -338,10 +363,16 @@ fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'stat
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
-/// WalkDir의 부모 우선 순회를 이용해 검증된 아티팩트 아래는 즉시 건너뛴다. 생성물
-/// 내부의 중첩 `node_modules`까지 다시 훑지 않으므로 큰 개발 트리에서도 같은 바이트를
-/// 탐색 단계와 manifest 단계에서 두 번 읽지 않는다.
-pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+/// WalkDir visits a directory before its children, so a verified artifact directory is skipped
+/// before nested generated trees are counted twice. `manifest_budget` bounds each metadata
+/// inventory. UI callers should pass [`ARTIFACT_MANIFEST_BUDGET_UI`]; the headless CLI may pass
+/// a larger value.
+pub fn find_artifacts(
+    root: &Path,
+    min_age_days: u64,
+    now_ms: u64,
+    manifest_budget: Duration,
+) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut obsolete_extensions = Vec::new();
     let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
@@ -378,6 +409,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let Some((_, markers)) = detected_artifact_kind(path, &name) else {
             continue;
         };
+        if crate::safety::is_protected(path) {
+            continue;
+        }
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty()
             || markers
@@ -415,7 +449,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = detected_artifact_kind(path, &name)?;
             let parent = path.parent().unwrap_or(root);
-            let manifest = artifact_manifest(path);
+            let manifest = artifact_manifest(path, manifest_budget);
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -446,7 +480,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 if age < min_age_days {
                     return None;
                 }
-                let manifest = artifact_manifest(&path);
+                let manifest = artifact_manifest(&path, manifest_budget);
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
                     kind: "vscode-obsolete-extension".into(),
@@ -466,6 +500,132 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
+/// Locate the nearest enclosing worktree root (directory containing `.git`) for an artifact path.
+pub fn enclosing_worktree_root(artifact: &Path) -> Option<PathBuf> {
+    for ancestor in artifact.ancestors() {
+        if ancestor.join(".git").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Assess whether a rebuildable artifact should be withheld under Orca/dev protection criteria.
+pub fn assess_dev_artifact_protection(
+    artifact: &DevArtifact,
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> crate::reclaim_protection::ProtectionAssessment {
+    let path = Path::new(&artifact.path);
+    let mut reasons = Vec::new();
+
+    // Never reclaim protected data directory names if they somehow appear as candidates.
+    if crate::reclaim_protection::is_protected_data_dir_name(&artifact.kind) {
+        match artifact.kind.as_str() {
+            "local" => reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into()),
+            "results" => {
+                reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into())
+            }
+            _ => {}
+        }
+    }
+    for component in path.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name = name.to_string_lossy();
+            if crate::reclaim_protection::is_protected_data_dir_name(&name) {
+                match name.as_ref() {
+                    "local" => {
+                        reasons.push(crate::reclaim_protection::REASON_PROTECTED_DATA_LOCAL.into())
+                    }
+                    "results" => reasons
+                        .push(crate::reclaim_protection::REASON_PROTECTED_DATA_RESULTS.into()),
+                    _ => {}
+                }
+            }
+            if crate::reclaim_protection::is_orchestration_lead_name(&name) {
+                reasons.push(crate::reclaim_protection::REASON_ORCHESTRATION_LEAD.into());
+            }
+        }
+    }
+
+    if let Some(worktree) = enclosing_worktree_root(path) {
+        let assessment = crate::reclaim_protection::assess_worktree_protections(
+            &worktree,
+            None,
+            None,
+            context,
+            crate::reclaim_protection::path_is_under_any(
+                &worktree,
+                &context.orca_live_worktree_paths,
+            ),
+            false,
+            None,
+            false,
+            None,
+            true,
+        );
+        reasons.extend(
+            crate::reclaim_protection::artifact_blocking_reason_codes(&assessment).into_iter(),
+        );
+        // Editable install specifically protects target/python trees under the worktree.
+        if assessment
+            .reason_codes
+            .iter()
+            .any(|code| code == crate::reclaim_protection::REASON_EDITABLE_INSTALL)
+            && (artifact.kind == "target"
+                || artifact.kind == ".venv"
+                || artifact.kind == "venv"
+                || path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::Normal(n) if n == "python")))
+        {
+            if !reasons
+                .iter()
+                .any(|code| code == crate::reclaim_protection::REASON_EDITABLE_INSTALL)
+            {
+                reasons.push(crate::reclaim_protection::REASON_EDITABLE_INSTALL.into());
+            }
+        }
+    }
+
+    if let Some(window) = context.recent_write_window_secs {
+        let now = context
+            .now_unix_secs
+            .unwrap_or_else(crate::reclaim_protection::now_unix_secs);
+        if let Some(code) = crate::reclaim_protection::recent_write_reason(path, window, now) {
+            reasons.push(code.to_string());
+        }
+    }
+
+    crate::reclaim_protection::ProtectionAssessment::with_reasons(reasons)
+}
+
+/// Partition artifacts into reclaimable vs protected using stable reason codes.
+pub fn partition_artifacts_by_protection(
+    artifacts: &[DevArtifact],
+    context: &crate::reclaim_protection::ProtectionContext,
+) -> (
+    Vec<DevArtifact>,
+    Vec<(DevArtifact, crate::reclaim_protection::ProtectionAssessment)>,
+) {
+    let mut reclaimable = Vec::new();
+    let mut protected = Vec::new();
+    for artifact in artifacts {
+        let assessment = assess_dev_artifact_protection(artifact, context);
+        let blockers = crate::reclaim_protection::artifact_blocking_reason_codes(&assessment);
+        // Also block protected-data path hits for artifact cleanup.
+        let data_blocked = assessment.reason_codes.iter().any(|code| {
+            code.starts_with("protected-data-path:")
+                || code == crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+        });
+        if blockers.is_empty() && !data_blocked {
+            reclaimable.push(artifact.clone());
+        } else {
+            protected.push((artifact.clone(), assessment));
+        }
+    }
+    (reclaimable, protected)
+}
+
 /// Re-scan and move only unchanged development artifacts to OS Trash.
 ///
 /// The request manifest is deliberately compared against a fresh bounded scan. A path match is
@@ -477,8 +637,17 @@ pub fn clean_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    manifest_budget: Duration,
 ) -> Vec<DevArtifactCleanResult> {
-    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, false)
+    clean_artifacts_with_protection(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        manifest_budget,
+        None,
+    )
 }
 
 /// Permanently delete only unchanged, inactive development artifacts after an explicit caller
@@ -489,8 +658,40 @@ pub fn permanently_delete_artifacts(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    manifest_budget: Duration,
 ) -> Vec<DevArtifactCleanResult> {
-    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
+    clean_artifacts_with_disposition(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        manifest_budget,
+        None,
+        true,
+    )
+}
+
+/// Like [`clean_artifacts`], but refuses paths blocked by an optional protection context.
+pub fn clean_artifacts_with_protection(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    manifest_budget: Duration,
+    protection: Option<&crate::reclaim_protection::ProtectionContext>,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        manifest_budget,
+        protection,
+        false,
+    )
 }
 
 fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
@@ -507,12 +708,34 @@ fn clean_artifacts_with_disposition(
     min_age_days: u64,
     journal_path: &Path,
     now_ms: u64,
+    manifest_budget: Duration,
+    protection: Option<&crate::reclaim_protection::ProtectionContext>,
     permanent: bool,
 ) -> Vec<DevArtifactCleanResult> {
-    let current = find_artifacts(root, min_age_days, now_ms);
+    let current = find_artifacts(root, min_age_days, now_ms, manifest_budget);
     requests
         .iter()
         .map(|request| {
+            if let Some(context) = protection {
+                let assessment = assess_dev_artifact_protection(request, context);
+                let blockers =
+                    crate::reclaim_protection::artifact_blocking_reason_codes(&assessment);
+                let data_blocked = assessment.reason_codes.iter().any(|code| {
+                    code.starts_with("protected-data-path:")
+                        || code == crate::reclaim_protection::REASON_PROTECTED_CREDENTIALS
+                });
+                if !blockers.is_empty() || data_blocked {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: format!(
+                            "protected-by-criteria:{}",
+                            assessment.reason_codes.join(",")
+                        ),
+                    };
+                }
+            }
+
             let matches = current.iter().find(|candidate| {
                 candidate.path == request.path
                     && candidate.kind == request.kind
@@ -624,7 +847,7 @@ mod tests {
         let orphan = tmp.path().join("random").join("node_modules");
         fs::create_dir_all(&orphan).unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         let kinds: Vec<&str> = found.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"node_modules"));
@@ -650,12 +873,48 @@ mod tests {
         fs::write(generic_project.join("package.json"), b"{}").unwrap();
         fs::write(generic_project.join(".build/customer-data.bin"), b"owned").unwrap();
         fs::create_dir_all(tmp.path().join("unowned/.next")).unwrap();
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
         for name in [".next", "dist-electron"] {
             assert!(found.iter().any(|artifact| artifact.kind == name));
         }
         assert!(!found.iter().any(|artifact| artifact.kind == ".build"));
-        assert!(!found.iter().any(|artifact| artifact.path.contains("unowned")));
+        assert!(!found
+            .iter()
+            .any(|artifact| artifact.path.contains("unowned")));
+    }
+
+    #[test]
+    fn runtime_marker_excludes_candidates_and_blocks_stale_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dependency = project(tmp.path(), "runtime", "package.json", "node_modules");
+        let selected = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert_eq!(selected.len(), 1);
+        fs::write(
+            dependency.parent().unwrap().join(".DISKSAGE_PROTECT"),
+            b"MCP",
+        )
+        .unwrap();
+        for cache in [".npm", "npm-cache"] {
+            project(
+                &tmp.path().join(cache).join("_npx"),
+                "server",
+                "package.json",
+                "node_modules",
+            );
+        }
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
+        let journal = tmp.path().join("journal.jsonl");
+        let results = clean_artifacts(
+            &selected,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_UI,
+        );
+        assert!(!results[0].ok);
+        assert!(dependency.exists());
+        assert!(!journal.exists());
     }
 
     #[test]
@@ -665,7 +924,7 @@ mod tests {
         fs::create_dir_all(&index).unwrap();
         fs::write(index.join("db"), b"generated").unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert!(found.iter().any(|artifact| {
             artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
@@ -701,7 +960,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert_eq!(found.len(), 2);
         assert!(found
@@ -726,9 +985,12 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(find_artifacts(tmp.path(), 30, now_ms).is_empty());
+        assert!(find_artifacts(tmp.path(), 30, now_ms, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
         // min_age_days=0이면 포함
-        assert_eq!(find_artifacts(tmp.path(), 0, now_ms).len(), 1);
+        assert_eq!(
+            find_artifacts(tmp.path(), 0, now_ms, ARTIFACT_MANIFEST_BUDGET_UI).len(),
+            1
+        );
     }
 
     #[test]
@@ -740,14 +1002,17 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
 
-        assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
+        assert_eq!(
+            find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).len(),
+            1
+        );
     }
 
     #[test]
     fn cleanup_fails_closed_when_artifact_identity_changes() {
         let tmp = tempfile::tempdir().unwrap();
         project(tmp.path(), "app", "package.json", "node_modules");
-        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
         assert_eq!(candidates.len(), 1);
         let journal = tmp.path().join("journal.jsonl");
         let original = tmp.path().join("original-node-modules");
@@ -755,7 +1020,14 @@ mod tests {
         std::fs::rename(&live, &original).unwrap();
         std::fs::create_dir(&live).unwrap();
         std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
-        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        let results = clean_artifacts(
+            &candidates,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_UI,
+        );
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("changed"));
@@ -772,10 +1044,17 @@ mod tests {
     fn permanent_cleanup_physically_removes_an_unchanged_inactive_artifact() {
         let tmp = tempfile::tempdir().unwrap();
         let artifact = project(tmp.path(), "app", "package.json", "node_modules");
-        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
         let journal = tmp.path().join("journal.jsonl");
 
-        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        let results = permanently_delete_artifacts(
+            &candidates,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_UI,
+        );
 
         assert_eq!(results.len(), 1);
         assert!(results[0].ok, "{}", results[0].error);
@@ -794,7 +1073,7 @@ mod tests {
             std::fs::create_dir(&path).unwrap();
             std::fs::write(path.join("cache.bin"), b"cache").unwrap();
         }
-        let mut kinds = find_artifacts(tmp.path(), 0, u64::MAX)
+        let mut kinds = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI)
             .into_iter()
             .map(|artifact| artifact.kind)
             .collect::<Vec<_>>();
@@ -810,7 +1089,7 @@ mod tests {
         fs::write(tmp.path().join("noxfile.py"), "").unwrap();
         fs::create_dir(tmp.path().join(".nox")).unwrap();
 
-        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
@@ -822,7 +1101,7 @@ mod tests {
         fs::write(tmp.path().join("setup.cfg"), "[metadata]").unwrap();
         fs::create_dir(tmp.path().join(".tox")).unwrap();
 
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
     }
 
     #[test]
@@ -832,7 +1111,7 @@ mod tests {
         fs::create_dir(tmp.path().join(".venv314")).unwrap();
         fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.14.0").unwrap();
 
-        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, ".venv314");
@@ -850,7 +1129,7 @@ mod tests {
         .unwrap();
         fs::write(target.join(".rustc_info.json"), "{}").unwrap();
 
-        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, "cargo-target-cache");
@@ -868,7 +1147,7 @@ mod tests {
         .unwrap();
         fs::write(target.join(".rustc_info.json"), "{}").unwrap();
 
-        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, "cargo-target-cache");
@@ -883,7 +1162,7 @@ mod tests {
         }
         fs::write(target.join("customer-owned.sqlite"), b"business data").unwrap();
 
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
     }
 
     #[test]
@@ -896,7 +1175,7 @@ mod tests {
         tag.push_str(&"x".repeat(65_536));
         fs::write(cache.join("CACHEDIR.TAG"), tag).unwrap();
 
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
     }
 
     #[test]
@@ -906,13 +1185,113 @@ mod tests {
         fs::create_dir(tmp.path().join(".venv314")).unwrap();
         fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.13.9").unwrap();
 
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
 
         fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.140.0").unwrap();
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
 
         fs::remove_file(tmp.path().join(".git")).unwrap();
         fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
-        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI).is_empty());
+    }
+
+    #[test]
+    fn zero_manifest_budget_fails_closed_larger_budget_completes() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "crate", "Cargo.toml", "target");
+
+        let red = find_artifacts(tmp.path(), 0, u64::MAX, Duration::ZERO);
+        assert_eq!(red.len(), 1);
+        assert!(
+            !red[0].scan_complete,
+            "zero budget must leave scan_complete=false (RED)"
+        );
+
+        let green = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert_eq!(green.len(), 1);
+        assert!(
+            green[0].scan_complete,
+            "UI budget must finish a small tree (GREEN)"
+        );
+        assert!(green[0].files >= 1);
+        assert!(!green[0].object_id.is_empty());
+        assert!(!green[0].fingerprint.is_empty());
+        assert_ne!(
+            red[0].fingerprint, green[0].fingerprint,
+            "incomplete marker must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn incomplete_manifest_cannot_be_trashed_even_with_generous_budget_on_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "crate", "Cargo.toml", "target");
+        let incomplete = find_artifacts(tmp.path(), 0, u64::MAX, Duration::ZERO);
+        assert!(!incomplete[0].scan_complete);
+        let journal = tmp.path().join("journal.jsonl");
+        let results = clean_artifacts(
+            &incomplete,
+            tmp.path(),
+            0,
+            &journal,
+            1,
+            ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT,
+        );
+        assert!(!results[0].ok);
+        assert!(tmp.path().join("crate/target").exists());
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn resolve_cli_manifest_budget_prefers_explicit_then_default() {
+        assert_eq!(
+            resolve_cli_manifest_budget(Some(42)),
+            Duration::from_secs(42)
+        );
+        assert_eq!(ARTIFACT_MANIFEST_BUDGET_UI, Duration::from_secs(3));
+        assert_eq!(
+            ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT,
+            Duration::from_secs(300)
+        );
+        // Explicit None uses env-or-default; when env is unset this equals CLI default.
+        let resolved = resolve_cli_manifest_budget(None);
+        if std::env::var_os(MANIFEST_BUDGET_ENV).is_none() {
+            assert_eq!(resolved, ARTIFACT_MANIFEST_BUDGET_CLI_DEFAULT);
+        }
+    }
+
+    #[test]
+    fn partition_protects_orchestration_lead_and_editable_target_red_to_green() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lead = tmp.path().join("orchestration-lead-demo");
+        fs::create_dir_all(lead.join("target")).unwrap();
+        fs::write(lead.join("Cargo.toml"), b"[package]\nname=\"x\"\n").unwrap();
+        fs::write(lead.join("target/x.bin"), vec![0u8; 64]).unwrap();
+        fs::write(lead.join(".git"), b"gitdir: /tmp/fake\n").unwrap();
+
+        let idle = project(tmp.path(), "idle-crate", "Cargo.toml", "target");
+        fs::write(idle.parent().unwrap().join(".git"), b"gitdir: /tmp/fake2\n").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX, ARTIFACT_MANIFEST_BUDGET_UI);
+        assert!(found.len() >= 2);
+
+        // RED: lead worktree artifacts are blocked.
+        let context = crate::reclaim_protection::ProtectionContext::default();
+        let (reclaimable, protected) = partition_artifacts_by_protection(&found, &context);
+        assert!(protected.iter().any(|(artifact, assessment)| {
+            artifact.path.contains("orchestration-lead-demo")
+                && assessment
+                    .reason_codes
+                    .iter()
+                    .any(|code| code == crate::reclaim_protection::REASON_ORCHESTRATION_LEAD)
+        }));
+        assert!(reclaimable
+            .iter()
+            .any(|artifact| artifact.path.contains("idle-crate")));
+
+        // GREEN: idle crate remains reclaimable without recent-write window.
+        assert!(reclaimable
+            .iter()
+            .any(|artifact| { artifact.kind == "target" && artifact.path.contains("idle-crate") }));
     }
 }

@@ -26,7 +26,11 @@ impl BaseDirs {
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
         let local_data = absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-        Some(BaseDirs { temp, local_data, home })
+        Some(BaseDirs {
+            temp,
+            local_data,
+            home,
+        })
     }
 }
 
@@ -95,10 +99,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
-        ("cargo-registry-cache", "cargo 레지스트리 캐시",
-            bases.home.join(".cargo").join("registry").join("cache")),
-        ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
-            bases.home.join(".cargo").join("registry").join("src")),
+        (
+            "cargo-registry-cache",
+            "cargo 레지스트리 캐시",
+            bases.home.join(".cargo").join("registry").join("cache"),
+        ),
+        (
+            "cargo-registry-source",
+            "cargo 레지스트리 소스 캐시",
+            bases.home.join(".cargo").join("registry").join("src"),
+        ),
     ];
 
     #[cfg(target_os = "macos")]
@@ -112,14 +122,32 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         (
             "fileprovider-temporary-items",
             "macOS FileProvider 임시 진단 데이터",
-            bases.temp.join("com.apple.fileproviderd").join("TemporaryItems"),
+            bases
+                .temp
+                .join("com.apple.fileproviderd")
+                .join("TemporaryItems"),
         ),
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
-        ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
-        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
-        ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
-            bases.home.join("Library").join("Application Support").join("Caches")),
+        (
+            "codex-runtimes-cache",
+            "Codex 런타임 캐시",
+            bases.local_data.join("codex-runtimes"),
+        ),
+        (
+            "gradle-cache",
+            "Gradle 캐시",
+            bases.home.join(".gradle").join("caches"),
+        ),
+        (
+            "macos-app-support-cache",
+            "macOS 응용 프로그램 업데이트 캐시",
+            bases
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("Caches"),
+        ),
         (
             "pnpm-cache",
             "pnpm 캐시",
@@ -134,11 +162,7 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
                 .join("Caches")
                 .join("ms-playwright"),
         ),
-        (
-            "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
-        ),
+        ("node-cache", "Node.js 캐시", bases.local_data.join("node")),
         (
             "torch-cache",
             "PyTorch 캐시",
@@ -149,11 +173,7 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             "Prisma 캐시",
             bases.local_data.join("prisma"),
         ),
-        (
-            "gh-cache",
-            "GitHub CLI 캐시",
-            bases.local_data.join("gh"),
-        ),
+        ("gh-cache", "GitHub CLI 캐시", bases.local_data.join("gh")),
         (
             "adobe-cache",
             "Adobe 캐시",
@@ -162,7 +182,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         (
             "edge-cache",
             "Microsoft Edge 캐시",
-            bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+            bases
+                .home
+                .join("Library")
+                .join("Caches")
+                .join("Microsoft Edge"),
         ),
         (
             "trivy-cache",
@@ -187,12 +211,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         (
             "superset-http-cache",
             "Superset 임시 웹 콘텐츠",
-            bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
+            bases
+                .home
+                .join("Library/Application Support/Superset/Partitions/superset/Cache"),
         ),
         (
             "superset-code-cache",
             "Superset 임시 실행 파일",
-            bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+            bases
+                .home
+                .join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
         ),
     ]);
     #[cfg(target_os = "macos")]
@@ -218,12 +246,25 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
     #[cfg(windows)]
     entries.extend([
-        ("rdp-autotrace", "원격 데스크톱 추적 로그",
-            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
-        ("windows-crashdumps", "앱 크래시 덤프",
-            bases.local_data.join("CrashDumps")),
-        ("windows-wer", "Windows 오류 보고 (WER)",
-            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+        (
+            "rdp-autotrace",
+            "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace"),
+        ),
+        (
+            "windows-crashdumps",
+            "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps"),
+        ),
+        (
+            "windows-wer",
+            "Windows 오류 보고 (WER)",
+            bases
+                .local_data
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER"),
+        ),
     ]);
 
     entries
@@ -367,9 +408,13 @@ impl CatalogRoot {
         }
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return 0 };
+        let Some(stable) = self.stable_path() else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
         let mut bytes = 0u64;
 
@@ -379,7 +424,9 @@ impl CatalogRoot {
             if is_disksage_trash_staging(&path) {
                 continue;
             }
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -407,36 +454,46 @@ impl CatalogRoot {
 
     fn child_paths(&self) -> Vec<PathBuf> {
         #[cfg(target_os = "macos")]
-        {
-            return self.child_paths_from_handle();
-        }
+        let paths = self.child_paths_from_handle();
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return Vec::new() };
-        #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
-
-        #[cfg(not(target_os = "macos"))]
-        entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let stable_child = entry.path();
-                if is_disksage_trash_staging(&stable_child) {
-                    return None;
-                }
-                let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
-                if metadata.file_type().is_symlink() {
-                    return None;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let paths = {
+            let Some(stable) = self.stable_path() else {
+                return Vec::new();
+            };
+            let Ok(entries) = std::fs::read_dir(stable) else {
+                return Vec::new();
+            };
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let stable_child = entry.path();
+                    if is_disksage_trash_staging(&stable_child) {
                         return None;
                     }
-                }
-                Some(self.display_path.join(entry.file_name()))
+                    let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
+                    if metadata.file_type().is_symlink() {
+                        return None;
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::MetadataExt;
+                        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                            return None;
+                        }
+                    }
+                    Some(self.display_path.join(entry.file_name()))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // npx runs installed MCP servers here; both cleanup list APIs must preserve it.
+        paths
+            .into_iter()
+            .filter(|path| {
+                !((self.display_path.ends_with(".npm") || self.display_path.ends_with("npm-cache"))
+                    && path.ends_with("_npx"))
             })
             .collect()
     }
@@ -668,7 +725,11 @@ mod tests {
         let bases = fake_bases(tmp.path());
         // npm 캐시만 실제로 만들어 둔다 (한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이
         // 영구 미커버로 남는다 — is_protected의 home 변수명 선택과 동일한 관례)
-        let npm = if cfg!(windows) { bases.local_data.join("npm-cache") } else { bases.home.join(".npm") };
+        let npm = if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        };
         fs::create_dir_all(&npm).unwrap();
         fs::write(npm.join("blob.bin"), vec![0u8; 128]).unwrap();
 
@@ -684,7 +745,10 @@ mod tests {
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
-        let cargo_source = cands.iter().find(|c| c.id == "cargo-registry-source").unwrap();
+        let cargo_source = cands
+            .iter()
+            .find(|c| c.id == "cargo-registry-source")
+            .unwrap();
         assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
@@ -725,7 +789,9 @@ mod tests {
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("owned.bin"));
-        assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(&targets[0].path)));
+        assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(
+            &targets[0].path
+        )));
     }
 
     #[cfg(windows)]
@@ -753,7 +819,9 @@ mod tests {
             .iter()
             .find(|candidate| candidate.id == "macos-app-support-cache")
             .expect("macOS application-support cache must be catalogued");
-        assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+        assert!(candidate
+            .path
+            .ends_with("Library/Application Support/Caches"));
     }
 
     #[cfg(target_os = "macos")]
@@ -850,7 +918,9 @@ mod tests {
         fs::write(tmp.path().join("keep.bin"), b"keep").unwrap();
         fs::create_dir(tmp.path().join(".disksage-trash-fixture")).unwrap();
         fs::write(
-            tmp.path().join(".disksage-trash-fixture").join("staged.bin"),
+            tmp.path()
+                .join(".disksage-trash-fixture")
+                .join("staged.bin"),
             b"staged",
         )
         .unwrap();
@@ -858,6 +928,21 @@ mod tests {
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("keep.bin"));
+    }
+
+    #[test]
+    fn cache_targets_preserve_npx_installs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".npm", "npm-cache"] {
+            let npm = tmp.path().join(name);
+            fs::create_dir_all(npm.join("_npx")).unwrap();
+            fs::create_dir(npm.join("_cacache")).unwrap();
+
+            let targets = cache_targets(&npm).unwrap();
+            assert_eq!(targets.len(), 1);
+            assert!(targets[0].path.ends_with("_cacache"));
+            assert_eq!(clean_targets(&npm), vec![npm.join("_cacache")]);
+        }
     }
 
     #[test]
@@ -871,7 +956,8 @@ mod tests {
     fn clean_targets_excludes_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("real.bin"), b"x").unwrap();
-        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin"))
+            .unwrap();
         let names: Vec<String> = clean_targets(tmp.path())
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

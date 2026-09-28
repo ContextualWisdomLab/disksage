@@ -11,7 +11,12 @@ fn unrelated_target_layout_is_not_cleanup_authority() {
     std::fs::write(target.join("customer-owned.sqlite"), b"business data")
         .expect("write customer-owned fixture");
 
-    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+    let artifacts = find_artifacts(
+        tmp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
         artifacts.is_empty(),

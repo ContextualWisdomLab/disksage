@@ -11,20 +11,20 @@ fn bind_current_object(
 ) -> Result<String, String> {
     let object_id = filesystem_object_id(path)
         .map_err(|_| "ontology-protection-target-unavailable".to_string())?;
-    let current_object_id = filesystem_object_id(path)
-        .map_err(|_| "ontology-protection-target-changed".to_string())?;
+    let current_object_id =
+        filesystem_object_id(path).map_err(|_| "ontology-protection-target-changed".to_string())?;
     if current_object_id != object_id {
         return Err("ontology-protection-target-changed".into());
     }
     before_bind();
-    let pre_bind_object_id = filesystem_object_id(path)
-        .map_err(|_| "ontology-protection-target-changed".to_string())?;
+    let pre_bind_object_id =
+        filesystem_object_id(path).map_err(|_| "ontology-protection-target-changed".to_string())?;
     if pre_bind_object_id != object_id {
         return Err("ontology-protection-target-changed".into());
     }
     bind_retained_ontology_class(path, class_id)?;
-    let bound_object_id = filesystem_object_id(path)
-        .map_err(|_| "ontology-protection-target-changed".to_string())?;
+    let bound_object_id =
+        filesystem_object_id(path).map_err(|_| "ontology-protection-target-changed".to_string())?;
     if bound_object_id != object_id {
         return Err("ontology-protection-target-changed".into());
     }
@@ -91,8 +91,7 @@ fn main() {
 mod tests {
     use super::*;
 
-    const RETAINED_CLASS: &str =
-        "https://disksage.app/ontology#CustomerRelationshipManagementData";
+    const RETAINED_CLASS: &str = "https://disksage.app/ontology#CustomerRelationshipManagementData";
 
     #[test]
     fn retained_binding_protects_exact_file_without_exposing_its_path() {

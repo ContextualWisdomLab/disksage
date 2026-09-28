@@ -18,12 +18,8 @@ fn node_view_rejects_final_directory_symlink_escape() {
     let escape = scanned.path().join("escape");
     std::os::unix::fs::symlink(external.path(), &escape).expect("create directory symlink");
 
-    let result = scanner::scan_dir_with_interval(
-        scanned.path(),
-        &AtomicBool::new(false),
-        1,
-        |_| {},
-    );
+    let result =
+        scanner::scan_dir_with_interval(scanned.path(), &AtomicBool::new(false), 1, |_| {});
 
     let view = node_navigation::node_view(&result, &escape);
     assert!(

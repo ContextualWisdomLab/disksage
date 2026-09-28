@@ -732,8 +732,7 @@ pub fn clean_regenerable_caches_headless(
 /// Return a fresh exact-child snapshot for one fixed catalog cache ID.
 pub fn plan_catalog_cache_headless(cache_id: &str) -> Result<serde_json::Value, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let candidate = rules::cache_candidate(&bases, cache_id)
-        .ok_or("cache-catalog-id-unknown")?;
+    let candidate = rules::cache_candidate(&bases, cache_id).ok_or("cache-catalog-id-unknown")?;
     let targets = if candidate.exists {
         rules::cache_targets(Path::new(&candidate.path))?
     } else {

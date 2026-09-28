@@ -268,12 +268,8 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let target = ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::DockerNative,
-            docker,
-            None,
-        )
-        .unwrap();
+        let target =
+            ContainerRuntimeTarget::new(ContainerRuntimeKind::DockerNative, docker, None).unwrap();
         let mut plan = probe_container_orphans_with_receipt_dir(&target, &receipt_dir);
         let build_cache = plan
             .categories

@@ -42,10 +42,8 @@ fn init_repository(path: &std::path::Path) {
 
 #[test]
 fn pull_request_membership_report_matches_shared_v4_contract() {
-    let contract: serde_json::Value = serde_json::from_str(include_str!(
-        "../../contracts/git-worktree-audit-v4.json"
-    ))
-    .unwrap();
+    let contract: serde_json::Value =
+        serde_json::from_str(include_str!("../../contracts/git-worktree-audit-v4.json")).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repository");
     init_repository(&repository);

@@ -12,7 +12,9 @@ fn runtime_storage_commands_use_blocking_task_boundary() {
         "pub async fn execute_runtime_storage_trim(",
         "pub async fn execute_runtime_storage_recovery(",
     ] {
-        let start = command_source.find(signature).expect("async runtime-storage command");
+        let start = command_source
+            .find(signature)
+            .expect("async runtime-storage command");
         let body = &command_source[start
             ..command_source[start..]
                 .find("\n}\n")
@@ -22,9 +24,9 @@ fn runtime_storage_commands_use_blocking_task_boundary() {
     }
 
     let app_source = include_str!("../src/lib.rs");
-    assert!(app_source.lines().any(|line| {
-        line.trim() == "runtime_storage_commands::inspect_runtime_storage,"
-    }));
+    assert!(app_source
+        .lines()
+        .any(|line| { line.trim() == "runtime_storage_commands::inspect_runtime_storage," }));
     assert!(!app_source
         .lines()
         .any(|line| line.trim() == "commands::inspect_runtime_storage,"));

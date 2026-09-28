@@ -8,12 +8,19 @@ fn arbitrary_package_project_does_not_authorize_generic_build_directory() {
     let build = temp.path().join(".build");
 
     fs::create_dir_all(&build).expect("generic build directory");
-    fs::write(temp.path().join("package.json"), b"{}")
-        .expect("ordinary package manifest");
-    fs::write(build.join("customer-owned.sqlite"), b"not a disposable tool cache")
-        .expect("customer-owned payload");
+    fs::write(temp.path().join("package.json"), b"{}").expect("ordinary package manifest");
+    fs::write(
+        build.join("customer-owned.sqlite"),
+        b"not a disposable tool cache",
+    )
+    .expect("customer-owned payload");
 
-    let found = find_artifacts(temp.path(), 0, u64::MAX);
+    let found = find_artifacts(
+        temp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
         !found.iter().any(|artifact| {

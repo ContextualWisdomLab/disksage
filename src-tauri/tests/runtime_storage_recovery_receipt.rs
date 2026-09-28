@@ -56,7 +56,10 @@ fn completed_restart_is_recorded_even_when_reachability_remains_unavailable() {
         .status()
         .expect("run isolated recovery regression");
 
-    assert!(status.success(), "isolated production-boundary regression failed");
+    assert!(
+        status.success(),
+        "isolated production-boundary regression failed"
+    );
 }
 
 #[test]
@@ -104,13 +107,16 @@ fn successful_stop_with_failed_start_returns_partial_recovery_receipt() {
         .status()
         .expect("run isolated partial-recovery regression");
 
-    assert!(status.success(), "partial-recovery receipt regression failed");
+    assert!(
+        status.success(),
+        "partial-recovery receipt regression failed"
+    );
 }
 
 fn installed_colima_would_override_test_path() -> bool {
-    FIXED_COLIMA_CANDIDATES.iter().any(|candidate| {
-        fs::metadata(candidate).is_ok_and(|metadata| metadata.is_file())
-    })
+    FIXED_COLIMA_CANDIDATES
+        .iter()
+        .any(|candidate| fs::metadata(candidate).is_ok_and(|metadata| metadata.is_file()))
 }
 
 fn isolated_path_with(directory: &std::path::Path) -> std::ffi::OsString {

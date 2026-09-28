@@ -13,21 +13,27 @@ fn retained_editor_extension_is_not_reclassified_as_generic_dev_artifact() {
     fs::create_dir_all(&obsolete).expect("obsolete extension directory");
     fs::create_dir_all(retained.join("node_modules/dependency"))
         .expect("retained extension dependency tree");
-    fs::write(retained.join("package.json"), b"{}")
-        .expect("retained extension manifest");
-    fs::write(retained.join("node_modules/dependency/payload.js"), b"generated")
-        .expect("retained extension dependency payload");
+    fs::write(retained.join("package.json"), b"{}").expect("retained extension manifest");
+    fs::write(
+        retained.join("node_modules/dependency/payload.js"),
+        b"generated",
+    )
+    .expect("retained extension dependency payload");
     fs::write(
         extensions.join(".obsolete"),
         br#"{"publisher.old-1.0.0":true,"publisher.keep-1.0.0":false}"#,
     )
     .expect("native editor lifecycle metadata");
 
-    let found = find_artifacts(temp.path(), 0, u64::MAX);
+    let found = find_artifacts(
+        temp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(found.iter().any(|artifact| {
-        artifact.kind == "vscode-obsolete-extension"
-            && artifact.path == obsolete.to_string_lossy()
+        artifact.kind == "vscode-obsolete-extension" && artifact.path == obsolete.to_string_lossy()
     }));
     assert!(
         !found
@@ -53,10 +59,17 @@ fn newly_obsolete_editor_extension_respects_minimum_age() {
         .expect("system clock after epoch")
         .as_millis() as u64;
 
-    let found = find_artifacts(temp.path(), 30, now_ms);
+    let found = find_artifacts(
+        temp.path(),
+        30,
+        now_ms,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
-        !found.iter().any(|artifact| artifact.path == obsolete.to_string_lossy()),
+        !found
+            .iter()
+            .any(|artifact| artifact.path == obsolete.to_string_lossy()),
         "editor lifecycle metadata must not bypass the caller's minimum-age safety boundary"
     );
 }

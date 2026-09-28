@@ -72,7 +72,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--manifest") => {
                 if manifest.is_some() {
@@ -90,8 +94,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if approved_batch_fingerprint.is_some() {
                     return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                approved_batch_fingerprint =
-                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
+                approved_batch_fingerprint = Some(text_value(
+                    args,
+                    &mut index,
+                    "--approved-batch-fingerprint",
+                )?)
             }
             Some("--confirm-batch-fingerprint") => {
                 if confirm_batch_fingerprint.is_some() {
@@ -116,7 +123,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
             Some(_) => return Err("알 수 없는 인자".into()),

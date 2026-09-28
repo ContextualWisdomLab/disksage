@@ -9,8 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[cfg(unix)]
-const NETWORK_ID: &str =
-    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const NETWORK_ID: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 #[cfg(unix)]
 fn podman_network_target(attached: bool) -> (tempfile::TempDir, ContainerRuntimeTarget) {

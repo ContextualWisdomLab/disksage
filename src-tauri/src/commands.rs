@@ -14,18 +14,17 @@ use crate::scanner;
 use crate::scanner::ScanResult;
 
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
+use crate::dev_artifacts;
 use crate::organize;
 use crate::safety;
-use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
-    git_worktree_github_evidence,
-    icloud_sync_health, organization_lineage,
-    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
-    provider_recovery, provider_sync, rules, orphan,
+    git_worktree_github_evidence, icloud_sync_health, organization_lineage, orphan, podman_reclaim,
+    provider_api_client, provider_api_write, provider_capacity, provider_client_runtime,
+    provider_evidence, provider_global_sync, provider_oauth, provider_recovery, provider_sync,
+    rules,
 };
 
 #[cfg(not(coverage))]
@@ -169,21 +168,28 @@ pub fn clean_dev_artifacts_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
-        .into_iter()
-        .map(|result| CleanResult {
-            path: result.path,
-            ok: result.ok,
-            error: if result
-                .error
-                .starts_with("development artifact changed or its bounded manifest is incomplete")
-            {
-                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
-            } else {
-                result.error
-            },
-        })
-        .collect()
+    dev_artifacts::clean_artifacts(
+        requests,
+        root,
+        min_age_days,
+        journal_path,
+        now_ms,
+        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    )
+    .into_iter()
+    .map(|result| CleanResult {
+        path: result.path,
+        ok: result.ok,
+        error: if result
+            .error
+            .starts_with("development artifact changed or its bounded manifest is incomplete")
+        {
+            "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
+        } else {
+            result.error
+        },
+    })
+    .collect()
 }
 
 /// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
@@ -482,9 +488,7 @@ fn podman_binary() -> PathBuf {
     ]
     .into_iter()
     .map(PathBuf::from)
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
-    })
+    .find(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
     .unwrap_or_else(|| PathBuf::from("podman"))
 }
 
@@ -760,6 +764,7 @@ pub fn list_dev_artifacts(
         Path::new(&root),
         min_age_days,
         now_ms(),
+        dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
     ))
 }
 
@@ -1002,7 +1007,7 @@ pub async fn plan_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1055,7 +1060,7 @@ pub async fn remove_stale_git_worktrees(
             Path::new(&repository_root),
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
         )?;
         let report = git_worktree::audit_git_worktrees_with_pull_request_membership(
             Path::new(&repository_root),
@@ -1064,7 +1069,7 @@ pub async fn remove_stale_git_worktrees(
             &evidence.stale_open_heads,
             &evidence.pull_request_commits,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
@@ -1177,7 +1182,7 @@ pub async fn remove_stale_git_clone(
             &retention_references,
             include_closed_pull_requests,
             stale_open_pull_request_cutoff_ms,
-            options,
+            options.clone(),
             cloud::system_now_ms(),
         )?;
         if plan.plan_fingerprint != approved_plan_fingerprint {
@@ -1524,9 +1529,13 @@ fn attach_pre_copy_evidence_cohort(
         });
     let cohort = cloud::compare_pre_copy_evidence(vec![local, runtime, health]);
     if cohort.complete {
-        report.notices.push("pre-copy-evidence-cohort-complete".into());
+        report
+            .notices
+            .push("pre-copy-evidence-cohort-complete".into());
     } else {
-        report.notices.push("pre-copy-evidence-cohort-blocked".into());
+        report
+            .notices
+            .push("pre-copy-evidence-cohort-blocked".into());
         report.notices.extend(cohort.blockers.iter().cloned());
     }
     report.pre_copy_evidence = Some(cohort);
@@ -1630,11 +1639,14 @@ fn cloud_plan_for_inputs(
         )
     });
     if native_client_mode {
-        report.notices.push("native-client-copy-capacity-unverified".into());
+        report
+            .notices
+            .push("native-client-copy-capacity-unverified".into());
     }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        let health =
+            icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
         if let Some(health) = health.as_ref() {
             if !persist_icloud_health_evidence(app, health) {
                 report
@@ -1936,8 +1948,7 @@ fn create_cloud_candidate_receipt(
     if !adopt_existing {
         require_native_copy_not_cancelled(cancel)?;
     }
-    let planning =
-        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
         selected,
         report,
@@ -2013,13 +2024,12 @@ fn create_cloud_candidate_receipt(
             .capacity
             .as_ref()
             .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-        let native_client_mode =
-            provider_capacity::native_personal_client_copy_capacity_exception(
-                selected.provider,
-                selected.account_scope,
-                runtime.copy_prerequisite_met,
-                &snapshot.snapshot,
-            );
+        let native_client_mode = provider_capacity::native_personal_client_copy_capacity_exception(
+            selected.provider,
+            selected.account_scope,
+            runtime.copy_prerequisite_met,
+            &snapshot.snapshot,
+        );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
@@ -2082,12 +2092,10 @@ fn create_cloud_candidate_receipt(
             (None, None)
         }
     };
-    let goal_status = cloud_adr::read_goal_status(
-        &app_data_dir.join("cloud-goals"),
-        &receipt.receipt_id,
-    )
-    .ok()
-    .flatten();
+    let goal_status =
+        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
+            .ok()
+            .flatten();
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -2125,12 +2133,9 @@ fn create_cloud_candidate_provider_api_receipt(
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let planning =
-        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
-        selected,
-        report,
-        ..
+        selected, report, ..
     } = planning;
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-api-icloud-unsupported".into());
@@ -2195,7 +2200,8 @@ fn create_cloud_candidate_provider_api_receipt(
         candidate.bytes,
         access_token.as_str(),
     )?;
-    if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    if let Err(error) =
+        cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
     {
         let cleanup = provider_api_write::delete_uploaded_object(
             selected.provider,
@@ -2204,9 +2210,9 @@ fn create_cloud_candidate_provider_api_receipt(
         );
         return Err(match cleanup {
             Ok(()) => error,
-            Err(cleanup_error) => format!(
-                "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
-            ),
+            Err(cleanup_error) => {
+                format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+            }
         });
     }
     let app_data_dir = app
@@ -2224,9 +2230,9 @@ fn create_cloud_candidate_provider_api_receipt(
             );
             return Err(match cleanup {
                 Ok(()) => error,
-                Err(cleanup_error) => format!(
-                    "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
-                ),
+                Err(cleanup_error) => {
+                    format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+                }
             });
         }
     };
@@ -2256,8 +2262,8 @@ fn create_cloud_candidate_provider_api_receipt(
     let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
     let home = resolve_home(app)?;
     let cloud_roots = cloud::discover_cloud_roots(&home);
-    let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
-        .then(|| upload.object_id.clone());
+    let attestation_object_id =
+        (selected.provider == cloud::CloudProvider::GoogleDrive).then(|| upload.object_id.clone());
     match collect_cloud_attestation_for_receipt(
         &receipt,
         attestation_object_id,
@@ -2296,12 +2302,10 @@ fn create_cloud_candidate_provider_api_receipt(
             ));
         }
     }
-    let goal_status = cloud_adr::read_goal_status(
-        &app_data_dir.join("cloud-goals"),
-        &receipt.receipt_id,
-    )
-    .ok()
-    .flatten();
+    let goal_status =
+        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
+            .ok()
+            .flatten();
     Ok(CloudCopyOutput {
         action: "copy-only",
         goal_state,
@@ -3492,10 +3496,16 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(output.receipts_seen, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(
+            output.receipts_seen,
+            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
+        );
         assert_eq!(output.unprocessed_count, 1);
         assert!(output.incomplete_reconciliation);
-        assert_eq!(output.error_count, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(
+            output.error_count,
+            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
+        );
     }
 
     #[cfg(not(coverage))]
@@ -3782,14 +3792,18 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
-                "edge-code-sign-clones" => tmp
-                    .path()
-                    .join("X/com.microsoft.edgemac.code_sign_clone"),
+                "edge-code-sign-clones" => {
+                    tmp.path().join("X/com.microsoft.edgemac.code_sign_clone")
+                }
                 "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
-                "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
-                "superset-code-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+                "superset-http-cache" => bases
+                    .home
+                    .join("Library/Application Support/Superset/Partitions/superset/Cache"),
+                "superset-code-cache" => bases
+                    .home
+                    .join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
                 "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
                 _ => unreachable!(),
             };
@@ -3813,9 +3827,18 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
+        let observed = crate::dev_artifacts::find_artifacts(
+            tmp.path(),
+            0,
+            now,
+            crate::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+        );
         assert_eq!(observed.len(), 1);
-        fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
+        fs::write(
+            artifact.join("payload.bin"),
+            b"recreated-with-different-size",
+        )
+        .unwrap();
         let results = clean_dev_artifacts_inner(
             &observed,
             tmp.path(),

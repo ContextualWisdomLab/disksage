@@ -64,7 +64,10 @@ fn candidate(
         relative_path: "report.pdf".into(),
         source_context: "source".into(),
         requires_review,
-        review_reasons: review_reasons.iter().map(|reason| (*reason).into()).collect(),
+        review_reasons: review_reasons
+            .iter()
+            .map(|reason| (*reason).into())
+            .collect(),
         content_title: Some("Report".into()),
         content_authors: vec!["Author".into()],
         content_context: vec!["Context".into()],
@@ -83,7 +86,9 @@ fn candidate(
 }
 
 /// Create an exact approved review decision that deliberately lacks tenant-authority attestation.
-fn unconfirmed_decision(candidate: &CloudCandidate) -> disksage_lib::cloud_review::CloudReviewDecision {
+fn unconfirmed_decision(
+    candidate: &CloudCandidate,
+) -> disksage_lib::cloud_review::CloudReviewDecision {
     create_attributed_decision(
         candidate,
         CloudReviewDisposition::Approved,
@@ -95,7 +100,9 @@ fn unconfirmed_decision(candidate: &CloudCandidate) -> disksage_lib::cloud_revie
 }
 
 /// Create an exact approved decision with the canonical tenant-authority attestation marker.
-fn confirmed_decision(candidate: &CloudCandidate) -> disksage_lib::cloud_review::CloudReviewDecision {
+fn confirmed_decision(
+    candidate: &CloudCandidate,
+) -> disksage_lib::cloud_review::CloudReviewDecision {
     let rationale = format!(
         "{ORGANIZATION_TENANT_AUTHORITY_ATTESTATION} Organization tenant authority was independently confirmed."
     );

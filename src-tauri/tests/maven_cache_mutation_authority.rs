@@ -23,18 +23,11 @@ fn apply_fails_closed_without_identity_bound_reversible_recycle() {
     let original_jar = fs::read(&jar).unwrap();
     let original_pom = fs::read(&pom).unwrap();
     let original_marker = fs::read(&marker).unwrap();
-    let audit =
-        audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
+    let audit = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
     assert_eq!(audit.remote_recoverable_directories, 1);
 
-    let error = prune_maven_repository(
-        &root,
-        &audit.candidate_set_fingerprint,
-        true,
-        10_000,
-        456,
-    )
-    .unwrap_err();
+    let error = prune_maven_repository(&root, &audit.candidate_set_fingerprint, true, 10_000, 456)
+        .unwrap_err();
 
     assert_eq!(
         error,

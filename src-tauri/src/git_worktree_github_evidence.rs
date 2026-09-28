@@ -28,7 +28,7 @@ pub struct GitHubPullRequestEvidence {
 }
 
 fn remaining_local_options(
-    options: GitWorktreeAuditOptions,
+    options: &GitWorktreeAuditOptions,
     started: Instant,
 ) -> Result<GitWorktreeAuditOptions, String> {
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -41,7 +41,7 @@ fn remaining_local_options(
             .command_timeout_ms
             .min(MAX_LOCAL_COMMAND_TIMEOUT_MS)
             .min(remaining_operation_ms),
-        ..options
+        ..options.clone()
     })
 }
 
@@ -61,7 +61,7 @@ pub fn collect(
     let closed_heads = if include_closed_pull_requests {
         git_worktree::github_closed_pull_request_heads_with_options(
             repository_root,
-            remaining_local_options(options, started)?,
+            remaining_local_options(&options, started)?,
         )?
     } else {
         Default::default()
@@ -69,11 +69,11 @@ pub fn collect(
 
     let exact = git_worktree::github_exact_pull_request_commit_membership(
         repository_root,
-        remaining_local_options(options, started)?.command_timeout_ms,
+        remaining_local_options(&options, started)?.command_timeout_ms,
     )?;
     let mut pull_request_commits = git_worktree::github_pull_request_commit_membership_with_exact(
         repository_root,
-        remaining_local_options(options, started)?,
+        remaining_local_options(&options, started)?,
         exact,
     )?;
     if !include_closed_pull_requests {
@@ -81,7 +81,7 @@ pub fn collect(
     }
 
     let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
-        let remaining = remaining_local_options(options, started)?;
+        let remaining = remaining_local_options(&options, started)?;
         git_worktree::github_stale_open_pull_request_heads(
             repository_root,
             cutoff_ms,
@@ -108,7 +108,7 @@ mod tests {
             command_timeout_ms: 3_600_000,
             ..GitWorktreeAuditOptions::default()
         };
-        let local = remaining_local_options(options, Instant::now()).unwrap();
+        let local = remaining_local_options(&options, Instant::now()).unwrap();
         assert_eq!(local.command_timeout_ms, MAX_LOCAL_COMMAND_TIMEOUT_MS);
         assert!(local.command_timeout_ms < GITHUB_EVIDENCE_OPERATION_TIMEOUT_MS);
     }
@@ -120,10 +120,10 @@ mod tests {
             ..GitWorktreeAuditOptions::default()
         };
         let started = Instant::now();
-        let first = remaining_local_options(options, started).unwrap();
+        let first = remaining_local_options(&options, started).unwrap();
         assert!(first.command_timeout_ms <= 100);
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let later = remaining_local_options(options, started).unwrap();
+        let later = remaining_local_options(&options, started).unwrap();
         assert!(later.command_timeout_ms <= first.command_timeout_ms);
     }
 }

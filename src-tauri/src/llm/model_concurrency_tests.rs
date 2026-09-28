@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 const FIXTURE_PAYLOAD: &[u8] = b"deterministic-model-fixture";
-const FIXTURE_SHA256: &str =
-    "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
+const FIXTURE_SHA256: &str = "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
 
 /// Derive the legacy sibling `.part` name that foreign actors may still create.
 fn legacy_part_path(dest: &Path) -> PathBuf {

@@ -10,8 +10,7 @@ use std::path::PathBuf;
 #[cfg(unix)]
 #[test]
 fn podman_image_audit_uses_authoritative_dangling_filter_without_container_count() {
-    const DANGLING_ID: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const DANGLING_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let temp = tempfile::tempdir().expect("temporary Podman runtime directory");
     let runtime = temp.path().join("podman");
     let script = format!(

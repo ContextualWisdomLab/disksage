@@ -24,13 +24,19 @@ fn build_cache_cleanup() -> (tempfile::TempDir, PathBuf) {
         .arg(target_dir.path())
         .status()
         .expect("cache-cleanup CLI must be buildable for its process contract");
-    assert!(status.success(), "cache-cleanup CLI build must succeed before process assertions");
+    assert!(
+        status.success(),
+        "cache-cleanup CLI build must succeed before process assertions"
+    );
 
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!("disksage-cache-cleanup{}", std::env::consts::EXE_SUFFIX));
-    assert!(binary.is_file(), "cache-cleanup binary must exist after the explicit build");
+    let binary = target_dir.path().join("debug").join(format!(
+        "disksage-cache-cleanup{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    assert!(
+        binary.is_file(),
+        "cache-cleanup binary must exist after the explicit build"
+    );
     (target_dir, binary)
 }
 
@@ -56,9 +62,15 @@ fn assert_help_success(binary: &Path, flag: &str) {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty(), "successful help must not use stderr");
+    assert!(
+        output.stderr.is_empty(),
+        "successful help must not use stderr"
+    );
     let stdout = String::from_utf8(output.stdout).expect("help output must be UTF-8");
-    assert!(stdout.starts_with(USAGE_PREFIX), "help must emit the stable cache-cleanup synopsis");
+    assert!(
+        stdout.starts_with(USAGE_PREFIX),
+        "help must emit the stable cache-cleanup synopsis"
+    );
 }
 
 #[test]

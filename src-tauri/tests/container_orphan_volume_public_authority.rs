@@ -41,19 +41,18 @@ esac
     std::fs::set_permissions(&receipt_dir, std::fs::Permissions::from_mode(0o700))
         .expect("protect receipt directory");
 
-    let target = ContainerRuntimeTarget::new(
-        ContainerRuntimeKind::DockerNative,
-        runtime,
-        None,
-    )
-    .expect("valid Docker target");
+    let target = ContainerRuntimeTarget::new(ContainerRuntimeKind::DockerNative, runtime, None)
+        .expect("valid Docker target");
     let raw_plan = probe_container_orphans_with_receipt_dir(&target, &receipt_dir);
     let raw_volume = raw_plan
         .categories
         .iter()
         .find(|entry| entry.category == OrphanCategory::Volume)
         .expect("volume category");
-    assert!(raw_volume.approval_phrase.is_some(), "RED requires the backend to expose today's unsafe name-bound volume authority");
+    assert!(
+        raw_volume.approval_phrase.is_some(),
+        "RED requires the backend to expose today's unsafe name-bound volume authority"
+    );
 
     let public_plan = sanitize_plan(raw_plan);
     let volume = public_plan

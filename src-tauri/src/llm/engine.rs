@@ -50,8 +50,7 @@ impl LlamaEngine {
 
 impl InferenceEngine for LlamaEngine {
     fn infer(&self, prompt: &str) -> Result<String, String> {
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(N_CTX));
+        let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(N_CTX));
         let mut ctx = self
             .model
             .new_context(&self.backend, ctx_params)
@@ -65,7 +64,9 @@ impl InferenceEngine for LlamaEngine {
         let mut batch = LlamaBatch::new(512, 1);
         let last = tokens.len().saturating_sub(1);
         for (i, tok) in tokens.iter().enumerate() {
-            batch.add(*tok, i as i32, &[0], i == last).map_err(|e| e.to_string())?;
+            batch
+                .add(*tok, i as i32, &[0], i == last)
+                .map_err(|e| e.to_string())?;
         }
         ctx.decode(&mut batch).map_err(|e| e.to_string())?;
 
@@ -84,9 +85,16 @@ impl InferenceEngine for LlamaEngine {
             // requires threading an encoding_rs::Decoder through the caller. Not worth a new
             // dependency just to silence a warning for a single-token-at-a-time greedy loop.
             #[allow(deprecated)]
-            out.push_str(&self.model.token_to_str(token, Special::Tokenize).map_err(|e| e.to_string())?);
+            out.push_str(
+                &self
+                    .model
+                    .token_to_str(token, Special::Tokenize)
+                    .map_err(|e| e.to_string())?,
+            );
             batch.clear();
-            batch.add(token, n_cur, &[0], true).map_err(|e| e.to_string())?;
+            batch
+                .add(token, n_cur, &[0], true)
+                .map_err(|e| e.to_string())?;
             n_cur += 1;
             generated += 1;
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
@@ -105,7 +113,16 @@ mod tests {
     fn real_engine_returns_a_rated_verdict() {
         let path = std::env::var("DISKSAGE_MODEL").expect("set DISKSAGE_MODEL to a .gguf path");
         let engine = LlamaEngine::new(std::path::Path::new(&path)).unwrap();
-        let meta = FileMeta { path: "/tmp/x.log".into(), name: "x.log".into(), size: 10, mtime_days: 1, parent: "tmp".into(), production_time_ms: None, production_time_source: None, production_time_confidence: None };
+        let meta = FileMeta {
+            path: "/tmp/x.log".into(),
+            name: "x.log".into(),
+            size: 10,
+            mtime_days: 1,
+            parent: "tmp".into(),
+            production_time_ms: None,
+            production_time_source: None,
+            production_time_confidence: None,
+        };
         let fv = verdict_for(&engine, &meta);
         assert_ne!(fv.verdict, Verdict::Unrated); // 실제 모델이면 safe/caution/keep 중 하나
     }

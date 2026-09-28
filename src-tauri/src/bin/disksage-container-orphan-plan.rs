@@ -98,7 +98,8 @@ fn suppress_unexecutable_docker_plan(
 }
 
 fn resolve_default_docker_from_path() -> Result<PathBuf, String> {
-    let path = std::env::var_os("PATH").ok_or_else(|| "docker-native-cli-binary-unavailable".to_string())?;
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| "docker-native-cli-binary-unavailable".to_string())?;
     for directory in std::env::split_paths(&path) {
         if directory.as_os_str().is_empty() {
             continue;

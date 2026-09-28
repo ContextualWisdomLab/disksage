@@ -68,7 +68,9 @@ esac
         ),
     )
     .expect("write fake gh executable");
-    let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
+    let mut permissions = fs::metadata(&gh_path)
+        .expect("fake gh metadata")
+        .permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&gh_path, permissions).expect("make fake gh executable");
 

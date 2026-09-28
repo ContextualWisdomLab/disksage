@@ -9,11 +9,8 @@ use std::path::PathBuf;
 #[test]
 fn build_cache_execution_requires_fresh_runtime_evidence_before_mutation() {
     let receipt_dir = tempfile::tempdir().expect("private receipt tempdir");
-    std::fs::set_permissions(
-        receipt_dir.path(),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .expect("private receipt permissions");
+    std::fs::set_permissions(receipt_dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private receipt permissions");
 
     let target = ContainerRuntimeTarget::new(
         ContainerRuntimeKind::DockerNative,

@@ -8,10 +8,8 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 #[test]
 fn docker_image_used_by_a_container_is_not_a_prune_candidate() {
-    const IMAGE_ID: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const CONTAINER_ID: &str =
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const IMAGE_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CONTAINER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     let temp = tempfile::tempdir().expect("temporary Docker runtime directory");
     let runtime = temp.path().join("docker");
@@ -46,12 +44,8 @@ esac
     permissions.set_mode(0o700);
     std::fs::set_permissions(&runtime, permissions).expect("make fake Docker runtime executable");
 
-    let target = ContainerRuntimeTarget::new(
-        ContainerRuntimeKind::DockerNative,
-        runtime,
-        None,
-    )
-    .expect("valid Docker target");
+    let target = ContainerRuntimeTarget::new(ContainerRuntimeKind::DockerNative, runtime, None)
+        .expect("valid Docker target");
 
     let plan = probe_container_orphans(&target);
     let image = plan

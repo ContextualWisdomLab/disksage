@@ -90,10 +90,9 @@ fn stale_open_head_exempts_only_cutoff_authorized_pull_request_membership() {
         BTreeSet::from([stale_pull_request_number]),
     )]);
     let mut own_membership = PullRequestCommitMembership::default();
-    own_membership.open.insert(
-        base.clone(),
-        BTreeSet::from([stale_pull_request_number]),
-    );
+    own_membership
+        .open
+        .insert(base.clone(), BTreeSet::from([stale_pull_request_number]));
 
     let report = audit_git_worktrees_with_pull_request_membership(
         &repository,
@@ -122,10 +121,7 @@ fn stale_open_head_exempts_only_cutoff_authorized_pull_request_membership() {
     let mut independent_open_membership = PullRequestCommitMembership::default();
     independent_open_membership.open.insert(
         base.clone(),
-        BTreeSet::from([
-            stale_pull_request_number,
-            other_open_pull_request_number,
-        ]),
+        BTreeSet::from([stale_pull_request_number, other_open_pull_request_number]),
     );
     let report = audit_git_worktrees_with_pull_request_membership(
         &repository,
@@ -153,18 +149,12 @@ fn stale_open_head_exempts_only_cutoff_authorized_pull_request_membership() {
 
     let all_stale_heads = StaleOpenPullRequestHeads::from([(
         head_binding,
-        BTreeSet::from([
-            stale_pull_request_number,
-            second_stale_pull_request_number,
-        ]),
+        BTreeSet::from([stale_pull_request_number, second_stale_pull_request_number]),
     )]);
     let mut all_stale_membership = PullRequestCommitMembership::default();
     all_stale_membership.open = BTreeMap::from([(
         base,
-        BTreeSet::from([
-            stale_pull_request_number,
-            second_stale_pull_request_number,
-        ]),
+        BTreeSet::from([stale_pull_request_number, second_stale_pull_request_number]),
     )]);
     let report = audit_git_worktrees_with_pull_request_membership(
         &repository,

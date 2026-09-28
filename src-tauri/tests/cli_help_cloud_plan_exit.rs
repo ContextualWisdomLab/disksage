@@ -26,13 +26,19 @@ fn build_cloud_plan() -> (tempfile::TempDir, PathBuf) {
         .arg(target_dir.path())
         .status()
         .expect("cloud-plan CLI must be buildable for its process contract");
-    assert!(status.success(), "cloud-plan CLI build must succeed before process assertions");
+    assert!(
+        status.success(),
+        "cloud-plan CLI build must succeed before process assertions"
+    );
 
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!("disksage-cloud-plan{}", std::env::consts::EXE_SUFFIX));
-    assert!(binary.is_file(), "cloud-plan binary must exist after the explicit cloud-cli build");
+    let binary = target_dir.path().join("debug").join(format!(
+        "disksage-cloud-plan{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    assert!(
+        binary.is_file(),
+        "cloud-plan binary must exist after the explicit cloud-cli build"
+    );
     (target_dir, binary)
 }
 
@@ -54,7 +60,10 @@ fn assert_help_success(binary: &Path, flag: &str) {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty(), "successful help must not use stderr");
+    assert!(
+        output.stderr.is_empty(),
+        "successful help must not use stderr"
+    );
     assert_eq!(
         String::from_utf8(output.stdout).expect("help output must be UTF-8"),
         format!("{USAGE}\n"),
@@ -73,7 +82,10 @@ fn assert_invalid_argument_is_bounded(binary: &Path, args: &[&str]) {
         Some(2),
         "invalid host arguments must use the ordinary bounded argument-error exit"
     );
-    assert!(output.stdout.is_empty(), "invalid invocation must not emit success output");
+    assert!(
+        output.stdout.is_empty(),
+        "invalid invocation must not emit success output"
+    );
     let stderr = String::from_utf8(output.stderr).expect("diagnostics must remain valid UTF-8");
     assert!(!stderr.is_empty(), "invalid invocation must remain visible");
     assert!(
@@ -97,11 +109,19 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         Some(2),
         "non-UTF-8 option input must use the ordinary bounded error exit"
     );
-    assert!(output.stdout.is_empty(), "invalid non-UTF-8 input must not emit success output");
-    let stderr = String::from_utf8(output.stderr).expect("diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
     assert!(
-        !stderr.contains("opaque") && !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
+        output.stdout.is_empty(),
+        "invalid non-UTF-8 input must not emit success output"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics must remain valid UTF-8");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
+    assert!(
+        !stderr.contains("opaque")
+            && !stderr.contains("panicked")
+            && !stderr.contains("thread 'main'"),
         "malformed host input must neither reflect payload bytes nor escape through a Rust panic"
     );
 }

@@ -12,7 +12,12 @@ fn discovers_uv_python_314_environment_in_bare_repository() {
     )
     .expect("uv pyvenv metadata");
 
-    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+    let artifacts = find_artifacts(
+        tmp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].kind, ".venv314");

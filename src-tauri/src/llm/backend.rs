@@ -29,8 +29,14 @@ mod tests {
     use super::*;
     #[test]
     fn prefers_cuda_then_vulkan_then_cpu() {
-        assert_eq!(choose_backend(&[Backend::Cpu, Backend::Vulkan, Backend::Cuda], None), Backend::Cuda);
-        assert_eq!(choose_backend(&[Backend::Cpu, Backend::Vulkan], None), Backend::Vulkan);
+        assert_eq!(
+            choose_backend(&[Backend::Cpu, Backend::Vulkan, Backend::Cuda], None),
+            Backend::Cuda
+        );
+        assert_eq!(
+            choose_backend(&[Backend::Cpu, Backend::Vulkan], None),
+            Backend::Vulkan
+        );
         assert_eq!(choose_backend(&[Backend::Cpu], None), Backend::Cpu);
     }
     #[test]
@@ -39,15 +45,24 @@ mod tests {
     }
     #[test]
     fn honors_override_when_available() {
-        assert_eq!(choose_backend(&[Backend::Cpu, Backend::Cuda], Some(Backend::Cpu)), Backend::Cpu);
+        assert_eq!(
+            choose_backend(&[Backend::Cpu, Backend::Cuda], Some(Backend::Cpu)),
+            Backend::Cpu
+        );
     }
     #[test]
     fn ignores_override_when_unavailable() {
-        assert_eq!(choose_backend(&[Backend::Cpu], Some(Backend::Cuda)), Backend::Cpu);
+        assert_eq!(
+            choose_backend(&[Backend::Cpu], Some(Backend::Cuda)),
+            Backend::Cpu
+        );
     }
     #[test]
     fn prefers_metal_over_vulkan() {
         // Metal이 Vulkan보다 우선 — choose_backend의 Metal 분기 커버
-        assert_eq!(choose_backend(&[Backend::Vulkan, Backend::Metal, Backend::Cpu], None), Backend::Metal);
+        assert_eq!(
+            choose_backend(&[Backend::Vulkan, Backend::Metal, Backend::Cpu], None),
+            Backend::Metal
+        );
     }
 }

@@ -653,16 +653,8 @@ pub fn write_projection_pair_with_state_blockers_outcome(
     let mut adr = adr.clone();
     let mut goal = goal.clone();
     if let (Ok(Some(_previous_adr)), Ok(Some(previous_goal))) = (
-        read_latest_projection::<CloudOffloadAdrSnapshot>(
-            adr_dir,
-            &goal.receipt_id,
-            "adr",
-        ),
-        read_latest_projection::<CloudOffloadGoalSnapshot>(
-            goal_dir,
-            &goal.receipt_id,
-            "goal",
-        ),
+        read_latest_projection::<CloudOffloadAdrSnapshot>(adr_dir, &goal.receipt_id, "adr"),
+        read_latest_projection::<CloudOffloadGoalSnapshot>(goal_dir, &goal.receipt_id, "goal"),
     ) {
         if previous_goal.goal_state == CloudOffloadGoalState::SourceEvicted {
             return ProjectionWriteOutcome {
@@ -777,8 +769,13 @@ pub fn ensure_initial_projection_pair_with_source_state(
     goal_dir: &Path,
     updated_at_ms: u64,
 ) -> Vec<String> {
-    ensure_initial_projection_pair_with_source_state_outcome(receipt, adr_dir, goal_dir, updated_at_ms)
-        .warnings
+    ensure_initial_projection_pair_with_source_state_outcome(
+        receipt,
+        adr_dir,
+        goal_dir,
+        updated_at_ms,
+    )
+    .warnings
 }
 
 #[cfg(not(coverage))]
@@ -790,8 +787,7 @@ pub fn ensure_initial_projection_pair_with_source_state_outcome(
 ) -> ProjectionWriteOutcome {
     let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
     let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
-    let source_blocker =
-        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    let source_blocker = crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
     if let Some(blocker) = source_blocker {
         goal.status = "blocked".into();
         goal.completion_gates.insert("source-present".into(), false);
@@ -825,8 +821,7 @@ pub fn ensure_initial_projection_pair_with_provider_state_outcome(
 ) -> ProjectionWriteOutcome {
     let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
     let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
-    let source_blocker =
-        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    let source_blocker = crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
     if let Some(blocker) = source_blocker {
         goal.status = "blocked".into();
         goal.completion_gates.insert("source-present".into(), false);
@@ -932,12 +927,10 @@ pub fn read_projection_state(
 /// Read only the replaceable Goal status for UI/reconciliation reporting.
 /// The status is informational; eviction authority still comes from immutable evidence and gates.
 pub fn read_goal_status(goal_dir: &Path, receipt_id: &str) -> Result<Option<String>, String> {
-    Ok(read_latest_projection::<CloudOffloadGoalSnapshot>(
-        goal_dir,
-        receipt_id,
-        "goal",
-    )?
-    .map(|snapshot| snapshot.status))
+    Ok(
+        read_latest_projection::<CloudOffloadGoalSnapshot>(goal_dir, receipt_id, "goal")?
+            .map(|snapshot| snapshot.status),
+    )
 }
 
 #[cfg(test)]
@@ -1081,10 +1074,9 @@ mod tests {
             &goal_dir,
             &initial_goal_snapshot(&receipt, 5),
         );
-        let metadata = std::fs::symlink_metadata(
-            adr_dir.join(format!(".{}.pair.lock", receipt.receipt_id)),
-        )
-        .unwrap();
+        let metadata =
+            std::fs::symlink_metadata(adr_dir.join(format!(".{}.pair.lock", receipt.receipt_id)))
+                .unwrap();
         assert!(metadata.is_file());
     }
 
@@ -1159,8 +1151,12 @@ mod tests {
             "cloud-goal-state-regression"
         );
         let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(
-            &std::fs::read(directory.path().join(format!("{}-latest.json", receipt.receipt_id)))
-                .unwrap(),
+            &std::fs::read(
+                directory
+                    .path()
+                    .join(format!("{}-latest.json", receipt.receipt_id)),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(persisted.goal_state, CloudOffloadGoalState::SourceEvicted);
@@ -1172,11 +1168,7 @@ mod tests {
         let goal_directory = tempfile::tempdir().unwrap();
         let receipt = receipt();
         let record = pending_record();
-        let adr = snapshot_from_evidence(
-            &record,
-            CloudOffloadGoalState::SourceEvicted,
-            10,
-        );
+        let adr = snapshot_from_evidence(&record, CloudOffloadGoalState::SourceEvicted, 10);
         let goal = goal_snapshot_from_evidence(
             &receipt,
             &record,
@@ -1267,11 +1259,8 @@ mod tests {
         let goal_dir = temporary.path().join("goals");
         let receipt = receipt();
         let record = complete_record();
-        let advanced_adr = snapshot_from_evidence(
-            &record,
-            CloudOffloadGoalState::EvictionReady,
-            10,
-        );
+        let advanced_adr =
+            snapshot_from_evidence(&record, CloudOffloadGoalState::EvictionReady, 10);
         let advanced_goal = goal_snapshot_from_evidence(
             &receipt,
             &record,
@@ -1280,11 +1269,8 @@ mod tests {
         );
         write_projection_pair(&adr_dir, &advanced_adr, &goal_dir, &advanced_goal);
 
-        let mut blocked_adr = snapshot_from_evidence(
-            &record,
-            CloudOffloadGoalState::ProviderSyncConfirmed,
-            11,
-        );
+        let mut blocked_adr =
+            snapshot_from_evidence(&record, CloudOffloadGoalState::ProviderSyncConfirmed, 11);
         let mut blocked_goal = goal_snapshot_from_evidence(
             &receipt,
             &record,
@@ -1292,7 +1278,9 @@ mod tests {
             11,
         );
         blocked_goal.status = "blocked".into();
-        blocked_goal.completion_gates.insert("source-present".into(), false);
+        blocked_goal
+            .completion_gates
+            .insert("source-present".into(), false);
         blocked_adr.decision.push_str("-source-state-unverified");
         blocked_adr
             .consequences
@@ -1342,11 +1330,8 @@ mod tests {
         let mut receipt = receipt();
         receipt.source = source.to_string_lossy().into_owned();
         let record = pending_record();
-        let advanced_adr = snapshot_from_evidence(
-            &record,
-            CloudOffloadGoalState::PendingProviderSync,
-            10,
-        );
+        let advanced_adr =
+            snapshot_from_evidence(&record, CloudOffloadGoalState::PendingProviderSync, 10);
         let advanced_goal = goal_snapshot_from_evidence(
             &receipt,
             &record,
@@ -1368,14 +1353,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(persisted.status, "blocked");
-        assert_eq!(persisted.goal_state, CloudOffloadGoalState::PendingProviderSync);
+        assert_eq!(
+            persisted.goal_state,
+            CloudOffloadGoalState::PendingProviderSync
+        );
         assert!(!persisted.completion_gates["provider-sync-state-complete"]);
         assert!(!persisted.completion_gates["explicit-eviction-permit"]);
         let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
             &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
         )
         .unwrap();
-        assert!(persisted_adr.decision.ends_with("-provider-state-unverified"));
+        assert!(persisted_adr
+            .decision
+            .ends_with("-provider-state-unverified"));
         assert!(persisted_adr
             .consequences
             .contains(&"provider-state-blocked:provider-oauth-connection-missing".into()));
@@ -1442,11 +1432,8 @@ mod tests {
         let mut receipt = receipt();
         receipt.source = source.to_string_lossy().into_owned();
         let record = pending_record();
-        let advanced_adr = snapshot_from_evidence(
-            &record,
-            CloudOffloadGoalState::PendingProviderSync,
-            10,
-        );
+        let advanced_adr =
+            snapshot_from_evidence(&record, CloudOffloadGoalState::PendingProviderSync, 10);
         let advanced_goal = goal_snapshot_from_evidence(
             &receipt,
             &record,
@@ -1468,7 +1455,10 @@ mod tests {
             &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
         )
         .unwrap();
-        assert_eq!(persisted.goal_state, CloudOffloadGoalState::PendingProviderSync);
+        assert_eq!(
+            persisted.goal_state,
+            CloudOffloadGoalState::PendingProviderSync
+        );
         assert_eq!(persisted.status, "blocked");
         assert!(!persisted.completion_gates["provider-sync-state-complete"]);
         assert!(!persisted.completion_gates["explicit-eviction-permit"]);
@@ -1476,7 +1466,9 @@ mod tests {
             &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
         )
         .unwrap();
-        assert!(persisted_adr.decision.ends_with("-provider-state-unverified"));
+        assert!(persisted_adr
+            .decision
+            .ends_with("-provider-state-unverified"));
         assert!(persisted_adr
             .consequences
             .contains(&"provider-state-blocked:provider-oauth-connection-missing".into()));
@@ -1512,10 +1504,10 @@ mod tests {
         let adr_dir = temporary.path().join("adr");
         let goal_dir = temporary.path().join("goals");
         let receipt = receipt();
-        assert!(ensure_initial_projection_pair_with_source_state(
-            &receipt, &adr_dir, &goal_dir, 4
-        )
-        .is_empty());
+        assert!(
+            ensure_initial_projection_pair_with_source_state(&receipt, &adr_dir, &goal_dir, 4)
+                .is_empty()
+        );
 
         let adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
             &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),

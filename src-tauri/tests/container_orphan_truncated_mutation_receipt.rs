@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir,
-    ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
+    ContainerRuntimeTarget, OrphanCategory,
 };
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -86,7 +86,10 @@ esac
     )
     .expect("mutation outcome must be returned as conservative receipt evidence");
 
-    assert_eq!(execution.status_code, -1, "oversized output makes the mutation outcome indeterminate");
+    assert_eq!(
+        execution.status_code, -1,
+        "oversized output makes the mutation outcome indeterminate"
+    );
     assert!(
         execution.output_truncated,
         "discarded mutation output must be represented explicitly in the execution receipt"

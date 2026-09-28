@@ -11,7 +11,8 @@ fn general_recovery_keeps_slow_post_launch_observation_structured() {
         "launch_provider must not convert a slow post-launch runtime observation into a launch failure"
     );
     assert!(
-        source.contains("let post_runtime_observed = runtime_observation(provider, observed_at_ms);")
+        source
+            .contains("let post_runtime_observed = runtime_observation(provider, observed_at_ms);")
             && source.contains("post_runtime_blockers(post_runtime_observed)"),
         "slow or unavailable post-launch observation must remain structured recovery evidence"
     );

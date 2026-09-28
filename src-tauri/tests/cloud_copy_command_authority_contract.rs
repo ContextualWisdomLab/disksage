@@ -144,7 +144,8 @@ fn adoption_is_not_registered_as_a_cancellable_native_copy() {
 
 #[test]
 fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
-    let body = cloud_transfer_function_body("fn copy_and_verify(", "fn verify_existing_destination(");
+    let body =
+        cloud_transfer_function_body("fn copy_and_verify(", "fn verify_existing_destination(");
 
     let has_windows_cleanup = body.contains("#[cfg(windows)]")
         || body.contains("#[cfg(all(not(coverage), windows))]")

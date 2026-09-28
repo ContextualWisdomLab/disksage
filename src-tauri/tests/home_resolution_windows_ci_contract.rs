@@ -17,7 +17,8 @@ fn test_workflow_executes_home_resolution_contract_on_windows() {
         "home-resolution contract must execute with Windows path semantics"
     );
     assert!(
-        workflow.contains("rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs"),
+        workflow
+            .contains("rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs"),
         "Windows job must execute the real home_resolution_contract.rs regression"
     );
 }

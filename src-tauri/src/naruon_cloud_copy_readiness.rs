@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider, PreCopyEvidenceCohort};
 use crate::cloud_transfer;
 use crate::icloud_sync_health::{
-    native_sync_down_pending, native_sync_up_pending, validate_native_status_evidence,
-    validate_file_provider_activity_evidence, IcloudFileProviderActivityEvidence,
+    native_sync_down_pending, native_sync_up_pending, validate_file_provider_activity_evidence,
+    validate_native_status_evidence, IcloudFileProviderActivityEvidence,
     IcloudNativeStatusEvidence, IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
 };
 use crate::naruon_capacity;
@@ -310,7 +310,11 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     {
         blockers.push("icloud-native-status-command-timeout".into());
     }
-    if report.native_status.as_ref().is_some_and(native_sync_up_pending) {
+    if report
+        .native_status
+        .as_ref()
+        .is_some_and(native_sync_up_pending)
+    {
         blockers.push("icloud-native-sync-up-pending".into());
     }
     if report
@@ -321,10 +325,10 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         blockers.push("icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        let no_progress = activity.no_progress_fetch_count > 0
-            || activity.no_progress_create_count > 0;
-        let materialization_failed = activity.materialization_failure_count > 0
-            || activity.staged_item_missing_count > 0;
+        let no_progress =
+            activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0;
+        let materialization_failed =
+            activity.materialization_failure_count > 0 || activity.staged_item_missing_count > 0;
         if no_progress {
             blockers.push("icloud-file-provider-no-progress".into());
         }
@@ -351,7 +355,8 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         if activity.sync_excluded_root_count > 0 {
             blockers.push("icloud-file-provider-root-excluded".into());
         }
-        if !no_progress && !materialization_failed
+        if !no_progress
+            && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
         {
             blockers.push("icloud-file-provider-transfer-active".into());
@@ -403,8 +408,9 @@ fn validate_icloud_health(
         }
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        validate_file_provider_activity_evidence(activity)
-            .map_err(|_| "naruon-copy-readiness-icloud-file-provider-activity-invalid".to_string())?;
+        validate_file_provider_activity_evidence(activity).map_err(|_| {
+            "naruon-copy-readiness-icloud-file-provider-activity-invalid".to_string()
+        })?;
         if activity.observed_at_ms != report.observed_at_ms {
             return Err("naruon-copy-readiness-icloud-file-provider-activity-time-mismatch".into());
         }
@@ -789,7 +795,9 @@ fn validate_provider_global_sync_input(
         || (report.state == ProviderGlobalSyncState::Clear
             && (report.upload_progress_present
                 || report.download_progress_present
-                || report.pending_indexable_count.is_some_and(|count| count > 0)))
+                || report
+                    .pending_indexable_count
+                    .is_some_and(|count| count > 0)))
         || (report.state != ProviderGlobalSyncState::Clear && report.blockers.is_empty())
     {
         return Err("naruon-copy-readiness-provider-global-sync-invalid".into());
@@ -1182,7 +1190,11 @@ fn validate_icloud_admission_summary(
     {
         expected.push("icloud-native-status-command-timeout".to_string());
     }
-    if summary.native_status.as_ref().is_some_and(native_sync_up_pending) {
+    if summary
+        .native_status
+        .as_ref()
+        .is_some_and(native_sync_up_pending)
+    {
         expected.push("icloud-native-sync-up-pending".to_string());
     }
     if summary
@@ -1193,10 +1205,10 @@ fn validate_icloud_admission_summary(
         expected.push("icloud-native-sync-down-pending".to_string());
     }
     if let Some(activity) = summary.file_provider_activity.as_ref() {
-        let no_progress = activity.no_progress_fetch_count > 0
-            || activity.no_progress_create_count > 0;
-        let materialization_failed = activity.materialization_failure_count > 0
-            || activity.staged_item_missing_count > 0;
+        let no_progress =
+            activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0;
+        let materialization_failed =
+            activity.materialization_failure_count > 0 || activity.staged_item_missing_count > 0;
         if no_progress {
             expected.push("icloud-file-provider-no-progress".to_string());
         }
@@ -1223,7 +1235,8 @@ fn validate_icloud_admission_summary(
         if activity.sync_excluded_root_count > 0 {
             expected.push("icloud-file-provider-root-excluded".to_string());
         }
-        if !no_progress && !materialization_failed
+        if !no_progress
+            && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
         {
             expected.push("icloud-file-provider-transfer-active".to_string());
@@ -1258,13 +1271,10 @@ fn validate_icloud_admission_summary(
             != summary
                 .newest_item_error_timestamp_ms
                 .and_then(|timestamp| summary.observed_at_ms.checked_sub(timestamp))
-        || summary
-            .native_status
-            .as_ref()
-            .is_some_and(|native_status| {
-                validate_native_status_evidence(native_status).is_err()
-                    || native_status.observed_at_ms != summary.observed_at_ms
-            })
+        || summary.native_status.as_ref().is_some_and(|native_status| {
+            validate_native_status_evidence(native_status).is_err()
+                || native_status.observed_at_ms != summary.observed_at_ms
+        })
         || summary
             .file_provider_activity
             .as_ref()

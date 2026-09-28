@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
 use disksage_lib::container_orphan_reclaim::{
-    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir,
-    ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+    execute_container_orphan_prune, probe_container_orphans_with_receipt_dir, ContainerRuntimeKind,
+    ContainerRuntimeTarget, OrphanCategory,
 };
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -83,9 +83,8 @@ esac
 
     let log = std::fs::read_to_string(&log_path).unwrap();
     assert!(
-        log.lines().any(|line| {
-            line.ends_with("buildx prune --all --filter id~=^(cache123)$ --force")
-        }),
+        log.lines()
+            .any(|line| { line.ends_with("buildx prune --all --filter id~=^(cache123)$ --force") }),
         "exact prune command missing from log: {log}"
     );
     assert!(

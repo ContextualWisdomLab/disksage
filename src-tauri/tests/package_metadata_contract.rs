@@ -109,7 +109,9 @@ fn manifest_refuses_placeholders_deprecated_authors_and_registry_publication() {
         "Cargo's parsed package metadata must forbid every registry, not merely contain publish = false text"
     );
     assert!(
-        !manifest.lines().any(|line| line.trim_start().starts_with("authors =")),
+        !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("authors =")),
         "Cargo's deprecated authors field must not be reintroduced"
     );
 
@@ -154,7 +156,9 @@ note = "publish = false"
 fn tauri_bin_directory_contains_only_rust_sources() {
     let bin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin");
     for entry in fs::read_dir(&bin_dir).expect("Tauri bin directory must be readable") {
-        let path = entry.expect("Tauri bin directory entries must be readable").path();
+        let path = entry
+            .expect("Tauri bin directory entries must be readable")
+            .path();
         assert!(
             path.is_file() && path.extension().is_some_and(|extension| extension == "rs"),
             "Tauri scans every src/bin entry as a binary; keep non-Rust source fragments outside it: {}",

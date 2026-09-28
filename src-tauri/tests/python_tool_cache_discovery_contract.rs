@@ -9,7 +9,12 @@ fn bare_tox_section_does_not_authorize_setup_cfg_cache_discovery() {
     fs::create_dir(&tox).unwrap();
     fs::write(tox.join("cache.bin"), b"cache").unwrap();
 
-    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+    let artifacts = find_artifacts(
+        tmp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
         artifacts.iter().all(|artifact| artifact.kind != ".tox"),
@@ -27,7 +32,12 @@ fn rejected_python_314_environment_is_not_descended_for_nested_cache_candidates(
     fs::write(environment.join("pyvenv.cfg"), "version = 3.13.9\n").unwrap();
     fs::write(nested_cache.join("cache.bin"), b"cache").unwrap();
 
-    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+    let artifacts = find_artifacts(
+        tmp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
         artifacts.is_empty(),
@@ -44,7 +54,12 @@ fn markerless_python_314_environment_is_not_descended_for_nested_cache_candidate
     fs::write(environment.join("pyvenv.cfg"), "version = 3.14.1\n").unwrap();
     fs::write(nested_cache.join("cache.bin"), b"cache").unwrap();
 
-    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+    let artifacts = find_artifacts(
+        tmp.path(),
+        0,
+        u64::MAX,
+        disksage_lib::dev_artifacts::ARTIFACT_MANIFEST_BUDGET_UI,
+    );
 
     assert!(
         artifacts.is_empty(),

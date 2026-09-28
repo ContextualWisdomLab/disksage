@@ -51,7 +51,10 @@ fn reversible_cleanup_caps_stalled_active_use_probe() {
         .expect("development-artifact CLI should start");
     let elapsed = started.elapsed();
 
-    assert!(output.status.success(), "CLI should return a bounded result report");
+    assert!(
+        output.status.success(),
+        "CLI should return a bounded result report"
+    );
     assert!(
         elapsed < Duration::from_millis(4_500),
         "reversible cleanup inherited a destructive-path active-use timeout: {elapsed:?}"
@@ -67,6 +70,12 @@ fn reversible_cleanup_caps_stalled_active_use_probe() {
         result["error"],
         "development artifact active-use evidence incomplete; rescan before cleanup"
     );
-    assert!(artifact.exists(), "timeout must fail closed before Trash mutation");
-    assert!(!journal.exists(), "timeout must not create mutation evidence");
+    assert!(
+        artifact.exists(),
+        "timeout must fail closed before Trash mutation"
+    );
+    assert!(
+        !journal.exists(),
+        "timeout must not create mutation evidence"
+    );
 }
