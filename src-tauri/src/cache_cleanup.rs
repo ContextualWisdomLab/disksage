@@ -239,6 +239,17 @@ pub(crate) fn clean_cache_contents_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
+    clean_cache_contents_selected_inner(bases, dir, requested_targets, None, journal_path, now_ms)
+}
+
+fn clean_cache_contents_selected_inner(
+    bases: &rules::BaseDirs,
+    dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    selected: Option<&Path>,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
@@ -250,8 +261,17 @@ pub(crate) fn clean_cache_contents_inner(
         return Err("cache-cleanup-targets-stale".into());
     }
 
+    if selected.is_some_and(|path| {
+        !expected
+            .iter()
+            .any(|target| Path::new(&target.path) == path)
+    }) {
+        return Err("cache-target-not-current-or-safe".into());
+    }
+
     Ok(expected
         .into_iter()
+        .filter(|target| selected.is_none_or(|path| Path::new(&target.path) == path))
         .map(|target| {
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
             // reclaiming unrelated, inactive cache archives in the same catalog root.
@@ -337,6 +357,61 @@ pub fn clean_regenerable_caches_headless(
         .map_err(|error| error.to_string())
 }
 
+/// Plan or execute one current direct child of an allowlisted regenerable cache root.
+/// The complete root snapshot is rechecked immediately before mutation.
+pub fn selected_regenerable_cache_target_headless(
+    selected: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+    execute: bool,
+) -> Result<serde_json::Value, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    selected_regenerable_cache_target_inner(&bases, selected, journal_path, now_ms, execute)
+}
+
+/// Same selection contract against caller-supplied bases so the direct-child rule is
+/// exercised by tests instead of only by the ambient environment.
+pub(crate) fn selected_regenerable_cache_target_inner(
+    bases: &rules::BaseDirs,
+    selected: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+    execute: bool,
+) -> Result<serde_json::Value, String> {
+    if !selected.is_absolute() {
+        return Err("cache-target-must-be-absolute".into());
+    }
+    for candidate in rules::cache_candidates(bases)
+        .into_iter()
+        .filter(|candidate| {
+            AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
+        })
+    {
+        let root = PathBuf::from(&candidate.path);
+        if selected.parent() != Some(root.as_path()) {
+            continue;
+        }
+        let targets = rules::cache_targets(&root)?;
+        let target = targets
+            .iter()
+            .find(|target| Path::new(&target.path) == selected)
+            .ok_or("cache-target-not-current-or-safe")?;
+        if !execute {
+            return serde_json::to_value(target).map_err(|error| error.to_string());
+        }
+        let results = clean_cache_contents_selected_inner(
+            bases,
+            &root,
+            &targets,
+            Some(selected),
+            journal_path,
+            now_ms,
+        )?;
+        return serde_json::to_value(results).map_err(|error| error.to_string());
+    }
+    Err("cache-target-not-current-or-safe".into())
+}
+
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
 #[cfg(not(coverage))]
 #[tauri::command]
@@ -380,6 +455,126 @@ mod tests {
         }
     }
 
+    /// npm cache root for the fake bases, matching rules::catalog per platform.
+    fn npm_root(bases: &rules::BaseDirs) -> PathBuf {
+        if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        }
+    }
+
+    #[test]
+    fn selection_accepts_one_direct_child_of_an_approved_cache_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        fs::create_dir_all(child.join("content-v2")).unwrap();
+        fs::write(child.join("content-v2").join("blob.bin"), vec![0u8; 64]).unwrap();
+        fs::create_dir_all(root.join("_logs")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        let value = selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect("a direct child of an approved cache root must be selectable");
+
+        assert_eq!(value["path"], serde_json::json!(child.to_string_lossy()));
+        assert!(
+            child.is_dir(),
+            "planning must not mutate the selected child"
+        );
+    }
+
+    #[test]
+    fn selection_rejects_grandchild_sibling_root_and_outside_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        let grandchild = child.join("content-v2");
+        fs::create_dir_all(&grandchild).unwrap();
+        let sibling = root.parent().unwrap().join("not-a-cache-root");
+        fs::create_dir_all(sibling.join("child")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        for (label, path) in [
+            ("grandchild", grandchild.clone()),
+            ("root itself", root.clone()),
+            ("sibling tree child", sibling.join("child")),
+            ("outside temp", tmp.path().join("elsewhere")),
+        ] {
+            let error = selected_regenerable_cache_target_inner(&bases, &path, &journal, 1, false)
+                .expect_err(&format!("{label} must not be selectable"));
+            assert_eq!(error, "cache-target-not-current-or-safe", "{label}");
+        }
+        assert!(grandchild.is_dir(), "a rejected path must stay untouched");
+    }
+
+    #[test]
+    fn selection_never_scans_a_root_the_target_is_not_under() {
+        // Mutation guard for the direct-child predicate. A root whose snapshot cannot be
+        // taken (more children than the scan limit) must be SKIPPED for a target outside it.
+        // If `selected.parent() != Some(root)` were deleted, the loop would scan this root
+        // and surface `cache-target-limit-exceeded` instead of the not-current error.
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        fs::create_dir_all(&root).unwrap();
+        // One past rules::MAX_CACHE_TARGETS (4_096); the precondition below fails loudly if
+        // that limit is ever raised, so this cannot silently stop exercising the scan.
+        for index in 0..4_097 {
+            fs::write(root.join(format!("entry-{index}")), b"").unwrap();
+        }
+        assert_eq!(
+            rules::cache_targets(&root).expect_err("precondition: this root cannot be snapshotted"),
+            "cache-target-limit-exceeded"
+        );
+        let outside = tmp.path().join("elsewhere").join("child");
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = selected_regenerable_cache_target_inner(&bases, &outside, &journal, 1, false)
+            .expect_err("a target outside every approved root must be refused");
+
+        assert_eq!(error, "cache-target-not-current-or-safe");
+    }
+
+    #[test]
+    fn selection_rejects_relative_path_before_touching_the_filesystem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let journal = tmp.path().join("journal.jsonl");
+
+        let error = selected_regenerable_cache_target_inner(
+            &bases,
+            Path::new("_cacache"),
+            &journal,
+            1,
+            false,
+        )
+        .expect_err("a relative target must be refused");
+
+        assert_eq!(error, "cache-target-must-be-absolute");
+    }
+
+    #[test]
+    fn selection_rejects_a_child_that_vanished_after_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let root = npm_root(&bases);
+        let child = root.join("_cacache");
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(root.join("_logs")).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect("precondition: selectable while present");
+
+        fs::remove_dir_all(&child).unwrap();
+        let error = selected_regenerable_cache_target_inner(&bases, &child, &journal, 1, false)
+            .expect_err("a stale selection must not resolve");
+
+        assert_eq!(error, "cache-target-not-current-or-safe");
+    }
+
     #[test]
     fn cleanup_rejects_non_catalog_root() {
         let tmp = tempfile::tempdir().unwrap();
@@ -415,22 +610,24 @@ mod tests {
 
     #[test]
     fn active_use_evidence_blocks_cache_mutation() {
-        let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
-            method: "lsof-file-pid".into(),
-            assessed: true,
-            evidence_complete: false,
-            active: false,
-            observed_pids: Vec::new(),
-            results_truncated: false,
-            error: Some("active-use-timeout".into()),
-        };
-        assert_eq!(
-            active_use_blocker(&incomplete),
-            Some("cache-target-active-use-evidence-incomplete")
-        );
+        for error in ["active-use-ps-timeout", "active-use-ps-output-truncated"] {
+            let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
+                method: "lsof-file-pid+ps-path-ancestry".into(),
+                assessed: true,
+                evidence_complete: false,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: error.ends_with("truncated"),
+                error: Some(error.into()),
+            };
+            assert_eq!(
+                active_use_blocker(&incomplete),
+                Some("cache-target-active-use-evidence-incomplete")
+            );
+        }
 
         let active = crate::git_worktree::GitWorktreeActiveUseEvidence {
-            method: "lsof-file-pid".into(),
+            method: "lsof-file-pid+ps-path-ancestry".into(),
             assessed: true,
             evidence_complete: true,
             active: true,

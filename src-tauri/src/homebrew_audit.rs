@@ -1354,6 +1354,12 @@ mod tests {
         assert!(reasons.iter().any(|r| r == "atime-unreliable"));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn volume_atime_unreliable_non_unix_fail_closed() {
+        assert!(volume_atime_unreliable(Path::new(r"C:\ProgramData\Homebrew")));
+    }
+
     #[test]
     fn missing_last_use_is_unknown_even_when_install_is_old() {
         let mut evidence = base_evidence();
