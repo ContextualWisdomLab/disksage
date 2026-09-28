@@ -1627,18 +1627,35 @@ rmdir \"$target_arg\"\n",
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
+    /// Cargo refuses `cargo clean --target-dir` unless this signature is present,
+    /// so a detached directory cannot be wiped just because the path ends in `target`.
+    #[cfg(unix)]
+    fn cargo_cache_directory_tag() -> &'static str {
+        "Signature: 8a477f597d28d172789f06886806bc55\n\
+         # This file is a cache directory tag created by cargo.\n\
+         # For information about cache directory tags, see:\n\
+         #\thttps://bford.info/cachedir/\n"
+    }
+
+    #[cfg(unix)]
+    fn write_tiny_cargo_package(root: &Path) -> PathBuf {
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
+        target
+    }
+
+    #[cfg(unix)]
     #[test]
     fn real_cargo_cleans_identity_verified_detached_target() {
         let root = std::env::temp_dir().join(format!(
             "disksage-cargo-real-handle-{}", std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
-        let target = root.join("target");
-        fs::create_dir_all(&target).unwrap();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
-        fs::write(root.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
+        let target = write_tiny_cargo_package(&root);
+        fs::write(target.join("CACHEDIR.TAG"), cargo_cache_directory_tag()).unwrap();
         fs::write(target.join("artifact"), "delete-me").unwrap();
         let cargo = fs::canonicalize(env!("CARGO")).unwrap();
 
@@ -1647,6 +1664,24 @@ rmdir \"$target_arg\"\n",
         assert!(result.executed);
         assert!(result.observed_reduction_bytes > 0);
         assert!(!target.join("artifact").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_cargo_refuses_untagged_detached_dir_and_restores_it() {
+        let root = std::env::temp_dir().join(format!(
+            "disksage-cargo-untagged-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let target = write_tiny_cargo_package(&root);
+        fs::write(target.join("artifact"), "delete-me").unwrap();
+        let cargo = fs::canonicalize(env!("CARGO")).unwrap();
+
+        let error = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
+            .expect_err("cargo must refuse a directory it did not mark as a cache");
+        assert!(error.starts_with("cargo-clean-exit-nonzero:"), "{error}");
+        assert_eq!(fs::read_to_string(target.join("artifact")).unwrap(), "delete-me");
         let _ = fs::remove_dir_all(&root);
     }
 
