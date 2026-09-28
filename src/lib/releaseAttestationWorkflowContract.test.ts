@@ -19,6 +19,8 @@ describe("release attestation workflow contract", () => {
     expect(checkoutIndex).toBeGreaterThanOrEqual(0);
     expect(downloadIndex).toBeGreaterThanOrEqual(0);
     expect(checkoutIndex).toBeLessThan(downloadIndex);
+    const verifier = readFileSync(resolve(repositoryRoot, ".github/scripts/verify-release-artifacts.sh"), "utf8");
+    expect(verifier).toContain("expected exactly 17 regular files");
     expect(attestJob).toContain("expected exactly 18 regular files");
   });
 

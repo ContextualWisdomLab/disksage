@@ -7,6 +7,9 @@
 
   let repositoryRoot = $state("");
   let retentionText = $state("");
+  let includeClosedPullRequests = $state(false);
+  let includeStaleOpenPullRequests = $state(false);
+  let staleOpenPullRequestCutoffDate = $state("");
   let planning = $state(false);
   let executing = $state(false);
   let error = $state("");
@@ -44,6 +47,17 @@
     error = "";
   }
 
+  function staleOpenPullRequestCutoffMs(): number | null {
+    if (!includeStaleOpenPullRequests || !/^\d{4}-\d{2}-\d{2}$/.test(staleOpenPullRequestCutoffDate)) {
+      return null;
+    }
+    const parsed = Date.parse(`${staleOpenPullRequestCutoffDate}T00:00:00.000Z`);
+    return Number.isFinite(parsed)
+      && new Date(parsed).toISOString().slice(0, 10) === staleOpenPullRequestCutoffDate
+      ? parsed
+      : null;
+  }
+
   async function chooseRepository() {
     error = "";
     try {
@@ -51,13 +65,13 @@
         multiple: false,
         directory: true,
         defaultPath: repositoryRoot || scannedRoot || undefined,
-        title: "Git 저장소 또는 연결된 worktree 선택",
+        title: "Git 저장소 또는 보조 폴더 선택",
       });
       if (typeof selected !== "string") return;
       repositoryRoot = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "폴더를 선택하지 못했습니다. 다시 시도하세요.";
     }
   }
 
@@ -65,16 +79,21 @@
     const root = repositoryRoot.trim();
     const references = retentionReferences();
     if (!root || references.length === 0) return;
+    const staleCutoffMs = staleOpenPullRequestCutoffMs();
+    if (includeStaleOpenPullRequests && staleCutoffMs === null) {
+      error = "오래된 진행 중 작업을 확인하려면 기준일을 입력하세요.";
+      return;
+    }
     planning = true;
     resetDecision();
     try {
-      report = await api.planStaleGitWorktrees(root, references);
+      report = await api.planStaleGitWorktrees(root, references, includeClosedPullRequests, staleCutoffMs);
       repositoryRoot = report.repository_root;
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
         .join("\n");
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "보조 폴더를 확인하지 못했습니다. 경로와 보존할 기준을 확인한 뒤 다시 시도하세요.";
     } finally {
       planning = false;
     }
@@ -94,9 +113,9 @@
   async function removeWorktrees() {
     if (!report || !executionReady()) return;
     const approved = await confirm(
-      `${report.removal_candidate_count}개 worktree 디렉터리(최대 ${fmtBytes(report.removal_candidate_allocated_bytes)})를 제거합니다.\n\n`
-        + "각 항목은 실행 직전에 다시 검사합니다. 브랜치와 커밋은 유지하며 force·prune은 사용하지 않습니다. 제거된 디렉터리는 휴지통으로 가지 않습니다.",
-      { title: "DiskSage 오래된 Git worktree 제거", kind: "warning" },
+        `${report.removal_candidate_count}개 보조 폴더(최대 ${fmtBytes(report.removal_candidate_allocated_bytes)})를 정리합니다.\n\n`
+        + "각 항목은 실행 직전에 다시 확인합니다. 보존할 작업 기록은 유지됩니다. 정리한 폴더는 휴지통으로 가지 않습니다.",
+      { title: "오래된 보조 폴더 정리", kind: "warning" },
     );
     if (!approved) return;
     executing = true;
@@ -105,14 +124,16 @@
       removal = await api.removeStaleGitWorktrees(
         report.repository_root,
         report.retention_references.map((binding) => binding.reference_ref),
+        includeClosedPullRequests,
+        report.stale_open_pull_request_cutoff_ms,
         report.removal_plan_fingerprint,
         confirmationPhrase,
         rationale.trim(),
       );
       confirmationPhrase = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "보조 폴더를 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       executing = false;
     }
@@ -120,14 +141,14 @@
 </script>
 
 <div class="worktree-panel">
-  <strong>오래된 Git worktree</strong>
+  <strong>오래된 보조 폴더</strong>
   <p class="muted">
-    명시한 보존 ref에 이미 포함된 깨끗하고 사용 중이 아닌 보조 worktree만 찾습니다. 감사 단계는 읽기 전용입니다.
+    지정한 보존 기준에 이미 포함된 깨끗하고 사용하지 않는 보조 폴더만 찾습니다. 확인 단계에서는 파일을 변경하지 않습니다.
   </p>
 
   <div class="inputs">
     <label>
-      저장소 또는 worktree 절대 경로
+    저장소 또는 보조 폴더 위치
       <input
         class="path-input"
         type="text"
@@ -141,7 +162,7 @@
     <button onclick={chooseRepository} disabled={planning || executing}>폴더 선택</button>
   </div>
   <label>
-    보존할 Git ref — 한 줄에 하나, 현재 로컬에서 해석되는 정확한 ref
+    보존할 버전 기준 — 한 줄에 하나
     <textarea
       class="references"
       bind:value={retentionText}
@@ -150,34 +171,59 @@
       autocomplete="off"
       spellcheck="false"
       disabled={planning || executing}
-    ></textarea>
+  ></textarea>
   </label>
+  <label class="option">
+    <input type="checkbox" bind:checked={includeClosedPullRequests} onchange={resetDecision} disabled={planning || executing} />
+    완료된 작업과 연결된 항목도 확인
+  </label>
+  {#if includeClosedPullRequests}
+    <p class="muted">
+      병합 없이 종료된 PR의 깨끗한 보조 폴더도 정리 후보가 될 수 있습니다. 브랜치와 커밋은 유지됩니다. 선택한 저장소에 로그인된 GitHub 연결이 필요합니다.
+    </p>
+  {/if}
+  <label class="option">
+    <input type="checkbox" bind:checked={includeStaleOpenPullRequests} onchange={resetDecision} disabled={planning || executing} />
+    오래된 진행 중 작업도 확인
+  </label>
+  {#if includeStaleOpenPullRequests}
+    <label>
+      기준일 (이 날짜보다 먼저 생성된 작업)
+      <input
+        type="date"
+        bind:value={staleOpenPullRequestCutoffDate}
+        onchange={resetDecision}
+        disabled={planning || executing}
+      />
+    </label>
+  {/if}
   <button
     onclick={inspectWorktrees}
     disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
   >
-    {planning ? "worktree·브랜치·활성 사용 확인 중…" : "읽기 전용 worktree 감사"}
+    {planning ? "보조 폴더와 사용 여부 확인 중…" : "보조 폴더 확인"}
   </button>
 
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">작업에 실패했습니다. 상태를 확인한 뒤 다시 시도하세요: {error}</p>{/if}
 
   {#if report}
     <div class="report" aria-live="polite">
       <div class="summary">
         <strong>제거 후보 {report.removal_candidate_count}개 · 최대 {fmtBytes(report.removal_candidate_allocated_bytes)}</strong>
         <span>보존 {report.preserved_count}개</span>
-        <span>증거 공백 {report.evidence_gap_count}개</span>
+        <span>확인 필요 {report.evidence_gap_count}개</span>
+        {#if report.stale_open_pull_request_cutoff_ms !== null}
+          <span>진행 중 작업 기준일 {new Date(report.stale_open_pull_request_cutoff_ms).toISOString().slice(0, 10)}</span>
+        {/if}
       </div>
-      <p class="fingerprint">계획 지문: {report.removal_plan_fingerprint}</p>
-      <p class="fingerprint">보존 ref 지문: {report.retention_reference_set_fingerprint}</p>
+      <p class="fingerprint">승인 확인 코드: {report.removal_plan_fingerprint}</p>
 
       {#if candidateEntries().length > 0}
         <ul class="worktrees">
           {#each candidateEntries() as candidate (candidate.path_fingerprint)}
             <li>
-              <div><strong>{candidate.branch ?? "분리된 HEAD"}</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
+              <div><strong>보존 기준 연결 확인됨</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
               <div class="path" title={candidate.path}>{candidate.path}</div>
-              <div class="oid">HEAD {candidate.head}</div>
             </li>
           {/each}
         </ul>
@@ -185,10 +231,10 @@
 
       {#if evidenceGapEntries().length > 0}
         <div class="blocked">
-          <strong>증거가 부족해 전체 실행을 차단했습니다.</strong>
+          <strong>확인이 끝나지 않아 정리를 시작할 수 없습니다.</strong>
           <ul>
             {#each evidenceGapEntries() as entry (entry.path_fingerprint)}
-              <li><span class="path">{entry.path}</span> — {entry.blockers.join(", ")}</li>
+              <li><span class="path">{entry.path}</span> — 확인이 필요한 항목이 있습니다. 상태를 다시 확인하세요.</li>
             {/each}
           </ul>
         </div>
@@ -197,31 +243,30 @@
       {#if removal}
         {#if removal.result.verification_complete}
           <p class="safe">
-            {removal.result.removed_count}개 worktree 제거와 Git 등록 해제, 브랜치 보존을 확인했습니다.
+            {removal.result.removed_count}개 보조 폴더를 정리했고 보존할 작업 기록은 유지했습니다.
             사전 할당량 기준 최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}입니다.
           </p>
         {:else}
           <p class="warning">
-            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason ?? "검증 불완전"}.
-            확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
+            일부 항목의 확인이 끝나지 않았습니다. 확인된 정리 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다. 상태를 확인한 뒤 다시 시도하세요.
           </p>
         {/if}
-        <p class="muted">승인 기록: {removal.approval_path}</p>
+        <p class="muted">승인 기록을 저장했습니다.</p>
         {#if removal.result_path}
-          <p class="muted">결과 기록: {removal.result_path}</p>
+          <p class="muted">정리 결과를 저장했습니다.</p>
         {:else}
           <p class="error" role="alert">
-            실행 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {removal.result_record_error}
+            실행 결과는 확인됐지만 기록을 저장하지 못했습니다. 결과를 별도로 보관하세요.
           </p>
         {/if}
       {:else if report.evidence_complete && report.exact_approval_phrase}
         <div class="approval">
           <p class="warning">
-            아래 승인 문구 전체를 직접 입력해야 합니다. 실행 시 전체 계획과 각 후보를 재검증하며 한 항목이라도 달라지면 중단합니다.
+            아래 승인 확인 코드를 입력하세요. 실행 직전에 전체 계획과 각 후보를 다시 확인하며 달라지면 중단합니다.
           </p>
           <code>{report.exact_approval_phrase}</code>
           <label>
-            정확한 승인 문구 확인
+            승인 확인 코드
             <textarea
               class="confirmation"
               bind:value={confirmationPhrase}
@@ -231,20 +276,20 @@
             ></textarea>
           </label>
           <label>
-            제거 사유
+            정리 사유
             <textarea
               bind:value={rationale}
               maxlength="1000"
-              placeholder="예: main에 병합되고 활성 사용이 없는 보조 worktree임을 검토"
+              placeholder="예: 보존 기준에 포함되고 사용하지 않는 보조 폴더임을 확인"
               disabled={executing}
             ></textarea>
           </label>
           <button onclick={removeWorktrees} disabled={!executionReady()}>
-            {executing ? "재검증 후 worktree 제거 중…" : "재검증하고 worktree만 제거"}
+            {executing ? "상태 재확인 후 정리 중…" : "상태를 재확인하고 보조 폴더 정리"}
           </button>
         </div>
       {:else if report.removal_candidate_count === 0}
-        <p class="muted">현재 엄격한 제거 조건을 모두 만족하는 보조 worktree가 없습니다.</p>
+        <p class="muted">현재 정리 조건을 모두 만족하는 보조 폴더가 없습니다.</p>
       {/if}
     </div>
   {/if}
@@ -260,7 +305,7 @@
   .confirmation { min-height: 4.5rem; }
   .report { display: grid; gap: 0.55rem; padding: 0.75rem; border: 1px solid #72889c; border-radius: 4px; background: #f7fafc; }
   .summary { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: baseline; }
-  .fingerprint, .oid { margin: 0; overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
+  .fingerprint { margin: 0; overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
   .worktrees { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow-y: auto; }
   .worktrees li { padding: 0.45rem 0; border-bottom: 1px solid #d9e0e6; }
   .path { overflow-wrap: anywhere; color: #66717d; font-size: 0.78rem; }

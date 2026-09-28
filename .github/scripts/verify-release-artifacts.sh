@@ -70,6 +70,11 @@ for required_name in \
   disksage-duplicate-audit-macos-arm64; do
   require_exactly_one_file "$required_name"
   require_exactly_one_file "$required_name.sha256"
+  cli_path="$(find "$artifact_root" -type f -name "$required_name" -print -quit)"
+  if [[ ! -s "$cli_path" ]]; then
+    printf 'Operational CLI %s must be a non-empty regular file.\n' "$required_name" >&2
+    exit 1
+  fi
 done
 
 checksum_files=()

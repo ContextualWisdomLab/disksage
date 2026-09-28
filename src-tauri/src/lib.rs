@@ -3,107 +3,139 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 #[cfg_attr(coverage, allow(dead_code))]
-mod dupes;
+pub mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod container_orphan_commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
-pub mod cache_cleanup;
+mod runtime_storage_commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
-mod userrules;
-#[cfg_attr(coverage, allow(dead_code))]
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
-mod safety;
-#[cfg(all(test, target_os = "macos"))]
-mod macos_temp_guard_tests;
-#[cfg(all(test, unix))]
-mod node_view_security_tests;
-#[cfg_attr(coverage, allow(dead_code))]
-mod rules;
-#[cfg_attr(coverage, allow(dead_code))]
-pub mod dev_artifacts;
-#[cfg_attr(coverage, allow(dead_code))]
-mod ontology;
-#[cfg_attr(coverage, allow(dead_code))]
-mod inventory;
-#[cfg_attr(coverage, allow(dead_code))]
-mod organize;
-#[cfg_attr(coverage, allow(dead_code))]
-mod llm;
-#[cfg_attr(coverage, allow(dead_code))]
-mod web;
-#[cfg_attr(coverage, allow(dead_code))]
-mod reasoning;
-#[cfg_attr(coverage, allow(dead_code))]
-mod dataset_metadata;
-#[cfg_attr(coverage, allow(dead_code))]
-mod brew_cleanup;
-/// Unix-only identity-preserving child/process-group lifecycle mechanics.
-#[cfg(unix)]
-#[allow(dead_code)]
-pub(crate) mod unix_process_group;
-pub mod homebrew_audit;
+mod userrules;
+pub use safety::{bind_retained_ontology_class, filesystem_object_id, is_protected};
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
+mod brew_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_adr;
 /// Default app-managed library exclusions and free-space accounting for cloud offload.
 pub mod cloud_app_managed;
-pub mod cloud_adr;
-/// Typed backend-authored presentation contract for cloud archive plans.
-pub mod cloud_plan_view;
-pub mod cloud_local_inventory;
+#[cfg(not(coverage))]
+pub mod cloud_eviction;
 pub mod cloud_local_eviction;
 #[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
-#[cfg(not(coverage))]
-pub mod cloud_eviction;
+pub mod cloud_local_inventory;
+/// Typed backend-authored presentation contract for cloud archive plans.
+pub mod cloud_plan_view;
 pub mod cloud_review;
 pub mod cloud_transfer;
+/// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
+pub mod container_orphan_public;
+/// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
+pub mod container_orphan_reclaim;
 pub mod content_digest;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dataset_metadata;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod dev_artifacts;
+/// Public exact-duplicate boundary, including fail-closed legacy-report safety policy.
+#[path = "duplicate_audit_public.rs"]
 pub mod duplicate_audit;
+#[path = "duplicate_audit.rs"]
+mod duplicate_audit_implementation;
+/// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
+pub mod git_clone_reclaim;
+/// Public Git-worktree API that keeps aggregate operation budgets from becoming local subprocess deadlines.
+#[path = "git_worktree_public.rs"]
+pub mod git_worktree;
+/// One-deadline GitHub PR evidence acquisition shared by worktree CLI and desktop surfaces.
+pub mod git_worktree_github_evidence;
+#[path = "git_worktree.rs"]
+mod git_worktree_impl;
+pub mod homebrew_audit;
+pub mod icloud_provider_recovery;
 pub mod icloud_sync_health;
-pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
-pub mod git_worktree;
-/// Stable Orca/dev reclaim protection reason codes and pure assessors.
-pub mod reclaim_protection;
+#[cfg_attr(coverage, allow(dead_code))]
+mod inventory;
+pub mod judge_calibration;
+#[cfg_attr(coverage, allow(dead_code))]
+mod llm;
+#[cfg(all(test, target_os = "macos"))]
+mod macos_temp_guard_tests;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
+#[cfg(all(test, unix))]
+mod node_view_security_tests;
+#[cfg_attr(coverage, allow(dead_code))]
+mod ontology;
 /// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
 pub mod organization_lineage;
+#[cfg_attr(coverage, allow(dead_code))]
+mod organize;
+/// Bounded, path-free ontology planning for uninstalled macOS application data.
+pub mod orphan;
+/// Privacy-safe desktop projection of read-only Podman reclaim evidence.
+pub mod podman_desktop;
+/// Distinct IPC registration for the privacy-safe Podman evidence contract.
+pub mod podman_desktop_bridge;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
+pub mod private_evidence;
 pub mod provider_api_client;
 pub mod provider_api_write;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
-pub mod provider_recovery;
 pub mod provider_evidence;
-pub mod provider_oauth;
 pub mod provider_global_sync;
+pub mod provider_oauth;
+pub mod provider_recovery;
+/// Preserves provider-client running/stopped state across temporary maintenance stops.
+pub mod provider_runtime_state;
 pub mod provider_sync;
-pub mod private_evidence;
+#[cfg_attr(coverage, allow(dead_code))]
+mod reasoning;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
+/// Stable Orca/dev reclaim protection reason codes and pure assessors.
+pub mod reclaim_protection;
+#[cfg_attr(coverage, allow(dead_code))]
+mod rules;
+/// Read-only VM-backed storage inspection plus explicit guest trim for Podman and Colima.
+pub mod runtime_storage;
+#[cfg(all(test, unix))]
+mod safety_non_utf8_tests;
 pub mod semantic_catalog;
+/// Unix-only identity-preserving child/process-group lifecycle mechanics.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_process_group;
 pub mod volume_pressure;
+#[cfg_attr(coverage, allow(dead_code))]
+mod web;
 pub mod zotero_local;
-/// Bounded, path-free ontology planning for uninstalled macOS application data.
-pub mod orphan;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -147,7 +179,13 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
+            podman_desktop_bridge::inspect_podman_desktop_evidence,
             commands::execute_podman_dangling_image_prune,
+            runtime_storage_commands::inspect_runtime_storage,
+            commands::execute_runtime_storage_trim,
+            commands::execute_runtime_storage_recovery,
+            container_orphan_commands::inspect_container_orphans,
+            container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
@@ -157,6 +195,8 @@ pub fn run() {
             commands::evict_icloud_local_copy,
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
+            commands::plan_stale_git_clone,
+            commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,

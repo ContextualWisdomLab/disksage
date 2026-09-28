@@ -2,9 +2,7 @@ use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_global_sync::{parse_dump, ProviderGlobalSyncState};
 
 fn dump(marker: &str) -> String {
-    format!(
-        "com.google.drivefs.fpext\nsync engine state:\n error:'{marker}'\n"
-    )
+    format!("com.google.drivefs.fpext\nsync engine state:\n error:'{marker}'\n")
 }
 
 #[test]

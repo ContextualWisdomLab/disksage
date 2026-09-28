@@ -3,7 +3,9 @@ use disksage_lib::cloud_transfer::{
     ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm, RemoteContentProof,
     SyncEvidenceKind,
 };
-use disksage_lib::provider_evidence::{read_immutable_sync_evidence, write_immutable_sync_evidence};
+use disksage_lib::provider_evidence::{
+    read_immutable_sync_evidence, write_immutable_sync_evidence,
+};
 
 const EXPECTED_MAX_RECORDS_PER_RECEIPT: usize = 128;
 
@@ -47,7 +49,9 @@ fn recurring_attestation_retains_a_bounded_receipt_history() {
     records.sort();
 
     assert_eq!(records.len(), EXPECTED_MAX_RECORDS_PER_RECEIPT);
-    assert!(records.iter().all(|path| read_immutable_sync_evidence(path).is_ok()));
+    assert!(records
+        .iter()
+        .all(|path| read_immutable_sync_evidence(path).is_ok()));
 
     let oldest_remaining = read_immutable_sync_evidence(&records[0])
         .expect("oldest retained evidence must remain valid");

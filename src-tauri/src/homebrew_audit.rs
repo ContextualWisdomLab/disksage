@@ -236,9 +236,7 @@ pub fn classify_package(
         return (HomebrewClassification::InUse, reasons);
     }
 
-    if reasons
-        .iter()
-        .any(|r| r == "autoremove-orphan-candidate")
+    if reasons.iter().any(|r| r == "autoremove-orphan-candidate")
         && !evidence.is_leaf
         && evidence.kind == HomebrewPackageKind::Formula
     {
@@ -252,9 +250,7 @@ pub fn classify_package(
         return (HomebrewClassification::Unknown, reasons);
     }
 
-    if reasons
-        .iter()
-        .any(|r| r == "last-use-exceeds-threshold")
+    if reasons.iter().any(|r| r == "last-use-exceeds-threshold")
         && (evidence.is_leaf || evidence.kind == HomebrewPackageKind::Cask)
         && evidence.reverse_dependencies.is_empty()
         && evidence.running_pids.is_empty()
@@ -780,8 +776,14 @@ fn scan_repo_references(
                 let name = entry.file_name().to_string_lossy();
                 !matches!(
                     name.as_ref(),
-                    ".git" | "node_modules" | "target" | ".venv" | "venv" | "__pycache__"
-                        | ".Trash" | "Library"
+                    ".git"
+                        | "node_modules"
+                        | "target"
+                        | ".venv"
+                        | "venv"
+                        | "__pycache__"
+                        | ".Trash"
+                        | "Library"
                 )
             });
         for entry in walker {
@@ -793,15 +795,19 @@ fn scan_repo_references(
                 continue;
             }
             let name = entry.file_name().to_string_lossy();
-            let is_named = TOOLCHAIN_FILE_NAMES.iter().any(|candidate| *candidate == name);
+            let is_named = TOOLCHAIN_FILE_NAMES
+                .iter()
+                .any(|candidate| *candidate == name);
             let is_ci = name.starts_with('.') == false
                 && TOOLCHAIN_SUFFIXES
                     .iter()
                     .any(|suffix| name.ends_with(suffix))
-                && entry
-                    .path()
-                    .components()
-                    .any(|component| matches!(component.as_os_str().to_str(), Some(".github" | "ci" | ".circleci")));
+                && entry.path().components().any(|component| {
+                    matches!(
+                        component.as_os_str().to_str(),
+                        Some(".github" | "ci" | ".circleci")
+                    )
+                });
             if !is_named && !is_ci && name != "Brewfile.lock.json" {
                 continue;
             }
@@ -869,7 +875,11 @@ fn parse_info_json(
         .into_iter()
         .filter(|item| {
             item.get("token")
-                .or_else(|| item.get("name").and_then(|n| n.as_array()).and_then(|arr| arr.first()))
+                .or_else(|| {
+                    item.get("name")
+                        .and_then(|n| n.as_array())
+                        .and_then(|arr| arr.first())
+                })
                 .map(|token| {
                     if let Some(s) = token.as_str() {
                         cask_names.contains(s)
@@ -902,12 +912,7 @@ fn cask_app_paths(item: &serde_json::Value, brew_prefix: &Path) -> Vec<PathBuf> 
                     if let Some(name) = entry.as_str() {
                         paths.push(PathBuf::from("/Applications").join(name));
                         if let Some(token) = cask_token(item) {
-                            paths.push(
-                                brew_prefix
-                                    .join("Caskroom")
-                                    .join(token)
-                                    .join(name),
-                            );
+                            paths.push(brew_prefix.join("Caskroom").join(token).join(name));
                         }
                     }
                 }
@@ -1129,9 +1134,7 @@ pub fn audit_homebrew(
             &mut running_pid_set,
             &mut evidence_gaps,
         );
-        let running_pids = running_pid_set
-            .into_iter()
-            .collect::<Vec<_>>();
+        let running_pids = running_pid_set.into_iter().collect::<Vec<_>>();
 
         let last_use = formula_last_use(&opt_prefix, atime_unreliable_volume);
         let repo_references = repo_references_by_package
@@ -1254,9 +1257,11 @@ pub fn audit_homebrew(
         });
     }
 
-    packages.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| {
-        format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind))
-    }));
+    packages.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
+    });
 
     let mut classification_counts = BTreeMap::new();
     for package in &packages {
@@ -1513,9 +1518,7 @@ mod tests {
         // then unknown. Missing last-use does not block orphan.
         let (class, reasons) = classify_package(&evidence, 2_000_000, 90);
         assert_eq!(class, HomebrewClassification::Orphan);
-        assert!(reasons
-            .iter()
-            .any(|r| r == "autoremove-orphan-candidate"));
+        assert!(reasons.iter().any(|r| r == "autoremove-orphan-candidate"));
     }
 
     #[test]

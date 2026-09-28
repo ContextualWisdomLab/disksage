@@ -13,6 +13,8 @@ export default defineConfig({
         "src/lib/fmt.ts",
         "src/lib/dupeGuard.ts",
         "src/lib/verdictBadge.ts",
+        "src/lib/podmanEvidence.ts",
+        "src/lib/podmanEvidenceError.ts",
       ],
       reporter: ["text", "json", "json-summary"],
       // ponytail: 위 include 5개 순수 로직 파일은 헤드리스로 완전 검증 가능하므로

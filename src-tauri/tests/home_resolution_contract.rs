@@ -41,11 +41,8 @@ fn home_resolution_fails_closed_when_every_candidate_is_relative_or_missing() {
 fn home_resolution_preserves_first_absolute_candidate_precedence() {
     let app_home = absolute_fixture("app-home");
     let env_home = absolute_fixture("env-home");
-    let resolved = home_resolution::select_absolute_home([
-        Some(app_home.clone()),
-        Some(env_home),
-    ])
-    .expect("the first absolute home candidate should win");
+    let resolved = home_resolution::select_absolute_home([Some(app_home.clone()), Some(env_home)])
+        .expect("the first absolute home candidate should win");
 
     assert_eq!(resolved, app_home);
 }

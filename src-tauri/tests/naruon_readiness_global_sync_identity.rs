@@ -75,13 +75,8 @@ fn assert_rejected(report: &ProviderGlobalSyncReport) {
     );
 
     assert_eq!(
-        export_naruon_cloud_copy_readiness_with_global_sync(
-            &plan,
-            &runtime,
-            None,
-            Some(report),
-        )
-        .unwrap_err(),
+        export_naruon_cloud_copy_readiness_with_global_sync(&plan, &runtime, None, Some(report),)
+            .unwrap_err(),
         "naruon-copy-readiness-provider-global-sync-invalid"
     );
 }

@@ -138,7 +138,29 @@ fn run(args: &[String]) -> Result<(), String> {
 
 #[cfg(not(coverage))]
 fn main() {
-    if let Err(error) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!(
+            "usage: disksage-provider-recovery --provider onedrive|google-drive [--allow-graceful-term] [--output ABSOLUTE_NEW_FILE.json]"
+        );
+        return;
+    }
+    let args = match raw
+        .into_iter()
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "invalid argument encoding".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = run(&args) {
         eprintln!("{error}");
         std::process::exit(2);
     }

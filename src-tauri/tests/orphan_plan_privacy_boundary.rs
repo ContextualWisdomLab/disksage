@@ -23,8 +23,8 @@ fn public_plan_fingerprint_does_not_encode_home_scope() {
     ];
     let application_roots: [PathBuf; 0] = [];
 
-    let plan_a = plan_for_roots(home_a.path(), &watched_a, &application_roots, 1)
-        .expect("first empty plan");
+    let plan_a =
+        plan_for_roots(home_a.path(), &watched_a, &application_roots, 1).expect("first empty plan");
     let plan_b = plan_for_roots(home_b.path(), &watched_b, &application_roots, 2)
         .expect("second empty plan");
 

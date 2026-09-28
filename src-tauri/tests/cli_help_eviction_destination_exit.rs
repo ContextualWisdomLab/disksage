@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str, &str, &str); 3] = [
+const BINARIES: [(&str, &str, &str, &str); 4] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
@@ -18,6 +18,12 @@ const BINARIES: [(&str, &str, &str, &str); 3] = [
         "incomplete-download-destination-plan-invalid-utf8-argument",
     ),
     (
+        "disksage-cloud-local-eviction-batch",
+        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "알 수 없는 인자",
+        "icloud-local-eviction-batch-invalid-utf8-argument",
+    ),
+    (
         "disksage-icloud-local-eviction-batch",
         "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
@@ -29,9 +35,12 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(cargo);
-    command
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["build", "--locked", "--features", "cloud-cli"]);
+    command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+        "build",
+        "--locked",
+        "--features",
+        "cloud-cli",
+    ]);
     for (binary, _, _, _) in BINARIES {
         command.args(["--bin", binary]);
     }
@@ -133,7 +142,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "mixed invalid invocation must remain visible"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -160,7 +172,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path, expected_diagnostic: &str)
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         stderr.contains(expected_diagnostic),
         "invalid non-UTF-8 input must emit its fixed bounded diagnostic"
@@ -199,7 +214,11 @@ fn assert_native_path_values_are_not_forced_through_utf8(binaries: &[PathBuf]) {
         .arg(&native_path)
         .arg("--cloud-root")
         .arg(&native_path)
-        .args(["--destination-subdirectory", "Recovered", "--capacity-snapshot"])
+        .args([
+            "--destination-subdirectory",
+            "Recovered",
+            "--capacity-snapshot",
+        ])
         .arg(&capacity)
         .output()
         .expect("destination-plan CLI must launch with native path values");

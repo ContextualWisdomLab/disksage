@@ -24,14 +24,14 @@ fn build_binary() -> (tempfile::TempDir, PathBuf) {
         .status()
         .expect("local-eviction CLI must be buildable for the process contract");
     assert!(status.success(), "local-eviction CLI build must succeed");
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!(
-            "disksage-icloud-local-eviction{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-    assert!(binary.is_file(), "local-eviction CLI must exist after build");
+    let binary = target_dir.path().join("debug").join(format!(
+        "disksage-icloud-local-eviction{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    assert!(
+        binary.is_file(),
+        "local-eviction CLI must exist after build"
+    );
     (target_dir, binary)
 }
 
@@ -43,7 +43,10 @@ fn assert_duplicate_rejected(binary: &Path, args: &[&OsStr], expected: &str) {
         .output()
         .expect("local-eviction CLI must launch for duplicate-option validation");
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty(), "invalid authority input must not emit success JSON");
+    assert!(
+        output.stdout.is_empty(),
+        "invalid authority input must not emit success JSON"
+    );
     let stderr = String::from_utf8(output.stderr).expect("diagnostic must remain valid UTF-8");
     assert_eq!(stderr.trim_end(), expected);
 }

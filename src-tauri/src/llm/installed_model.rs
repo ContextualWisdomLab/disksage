@@ -80,8 +80,8 @@ pub(crate) fn prepare_verified_installed_model(
     spec: &ModelSpec,
     path: &Path,
 ) -> Result<VerifiedInstalledModel, String> {
-    let path_metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| ERROR_UNAVAILABLE.to_string())?;
+    let path_metadata =
+        std::fs::symlink_metadata(path).map_err(|_| ERROR_UNAVAILABLE.to_string())?;
     let observation = InstalledModelObservation {
         is_symbolic_link: path_metadata.file_type().is_symlink(),
         is_regular_file: path_metadata.is_file(),
@@ -100,8 +100,8 @@ pub(crate) fn prepare_verified_installed_model(
         return Err(ERROR_SIZE_MISMATCH.to_string());
     }
 
-    let current_metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| ERROR_IDENTITY_MISMATCH.to_string())?;
+    let current_metadata =
+        std::fs::symlink_metadata(path).map_err(|_| ERROR_IDENTITY_MISMATCH.to_string())?;
     if current_metadata.file_type().is_symlink() || !current_metadata.is_file() {
         return Err(ERROR_IDENTITY_MISMATCH.to_string());
     }
@@ -252,8 +252,7 @@ mod tests {
     use std::path::PathBuf;
 
     const FIXTURE_PAYLOAD: &[u8] = b"deterministic-model-fixture";
-    const FIXTURE_SHA256: &str =
-        "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
+    const FIXTURE_SHA256: &str = "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
     const FIXTURE_SHA256_UPPER: &str =
         "34CEC159D295EFF35A2CE56813C09E0466F4CAD846EDEB98A9DD94F06A9E7100";
 
@@ -375,10 +374,7 @@ mod tests {
     #[test]
     fn reader_failures_are_redacted_to_a_stable_code() {
         assert_eq!(
-            verify_reader(
-                &fixture_spec(FIXTURE_SHA256),
-                FailingReader { sent: false }
-            ),
+            verify_reader(&fixture_spec(FIXTURE_SHA256), FailingReader { sent: false }),
             Err(ERROR_READ_FAILED.to_string())
         );
     }
@@ -427,7 +423,10 @@ mod tests {
         assert!(verifier_index < backend_index);
         assert!(verifier_index < load_index);
         assert!(engine.contains("verified_model.load_path()"));
-        assert_eq!(engine.matches("prepare_verified_installed_model(").count(), 1);
+        assert_eq!(
+            engine.matches("prepare_verified_installed_model(").count(),
+            1
+        );
     }
 
     #[test]
@@ -471,8 +470,6 @@ mod tests {
                 "handle-binding doctoring must retain race-control evidence: {required}"
             );
         }
-        assert!(
-            changelog.contains("retain the verified model handle through llama.cpp loading")
-        );
+        assert!(changelog.contains("retain the verified model handle through llama.cpp loading"));
     }
 }

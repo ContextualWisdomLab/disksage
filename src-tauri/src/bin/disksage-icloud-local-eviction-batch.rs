@@ -1,4 +1,4 @@
-//! Headless, redacted, evidence-bound iCloud local-copy batch eviction.
+//! Headless, redacted, evidence-bound cloud local-copy batch eviction.
 //!
 //! Planning is read-only. Execution requires an exact batch fingerprint twice, attributed human
 //! approval, a rationale, and a local immutable-record directory outside cloud storage.
@@ -30,11 +30,13 @@ struct Args {
     record_dir: Option<PathBuf>,
 }
 
-fn usage() -> &'static str {
-    "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH \
-     --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 \
-     --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY \
-     --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
+fn usage() -> String {
+    format!(
+        "usage: {} --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON \
+         [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 \
+         --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        env!("CARGO_BIN_NAME")
+    )
 }
 
 fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
@@ -70,7 +72,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--cloud-root",
+                )?));
             }
             Some("--manifest") => {
                 if manifest.is_some() {
@@ -88,8 +94,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if approved_batch_fingerprint.is_some() {
                     return Err("--approved-batch-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                approved_batch_fingerprint =
-                    Some(text_value(args, &mut index, "--approved-batch-fingerprint")?)
+                approved_batch_fingerprint = Some(text_value(
+                    args,
+                    &mut index,
+                    "--approved-batch-fingerprint",
+                )?)
             }
             Some("--confirm-batch-fingerprint") => {
                 if confirm_batch_fingerprint.is_some() {
@@ -114,7 +123,11 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
                 if record_dir.is_some() {
                     return Err("--record-dir는 한 번만 지정할 수 있음".into());
                 }
-                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+                record_dir = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--record-dir",
+                )?))
             }
             Some("--help" | "-h") => return Err("알 수 없는 인자".into()),
             Some(_) => return Err("알 수 없는 인자".into()),
@@ -218,8 +231,15 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
         .collect();
     match matches.as_slice() {
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
-        [only] if only.provider == CloudProvider::Icloud => Ok(*only),
-        [_] => Err("iCloud root가 필요함".into()),
+        [only]
+            if matches!(
+                only.provider,
+                CloudProvider::Icloud | CloudProvider::Onedrive
+            ) =>
+        {
+            Ok(*only)
+        }
+        [_] => Err("로컬 보관 해제를 지원하는 클라우드 루트가 필요함".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
 }

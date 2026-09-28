@@ -14,10 +14,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "macos", not(test)))]
 use std::process::{Command, Stdio};
-#[cfg(target_os = "macos")]
-use std::time::Instant;
 #[cfg(all(target_os = "macos", not(test)))]
 use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 pub const ORPHAN_SCHEMA_VERSION: u32 = 1;
 const ORPHAN_SCHEMA_KIND: &str = "disksage.orphan-plan/v1";
@@ -307,7 +307,10 @@ pub fn move_to_trash(
 }
 
 #[cfg(target_os = "macos")]
-fn candidate_manifest_is_unchanged(candidate: &OrphanCandidate, deadline: std::time::Instant) -> bool {
+fn candidate_manifest_is_unchanged(
+    candidate: &OrphanCandidate,
+    deadline: std::time::Instant,
+) -> bool {
     // A disappeared path is left to the identity-bound trash boundary, which reports the
     // operation failure without exposing a local path. Existing directories must still match the
     // reviewed metadata manifest before any batch mutation begins.
@@ -404,7 +407,8 @@ pub fn plan_for_roots(
                 continue;
             }
             let manifest = bounded_manifest(&path, deadline);
-            let active_use = crate::cloud_local_eviction::observe_path_active_use_until(&path, deadline);
+            let active_use =
+                crate::cloud_local_eviction::observe_path_active_use_until(&path, deadline);
             let candidate = directory_candidate(
                 &path,
                 kind,
@@ -558,15 +562,16 @@ fn launch_services_bundle_ids(deadline: Instant) -> (BTreeSet<String>, bool) {
     }
     let mut ids = BTreeSet::new();
     let mut complete = true;
-    for raw_path in output.split(|byte| *byte == 0).filter(|value| !value.is_empty()) {
+    for raw_path in output
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+    {
         let Ok(path_text) = std::str::from_utf8(raw_path) else {
             complete = false;
             continue;
         };
         let path = Path::new(path_text);
-        if !path.is_absolute()
-            || path.extension().and_then(|value| value.to_str()) != Some("app")
-        {
+        if !path.is_absolute() || path.extension().and_then(|value| value.to_str()) != Some("app") {
             continue;
         }
         if let Some(id) = read_bundle_id(path) {

@@ -15,7 +15,7 @@
   let summaryLoaded = $state(false);
   let summaryBusy = $state(false);
 
-  // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
+  // 분류 일관성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
   let issues = $state<api.Issue[] | null>(null);
 
   // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
@@ -37,9 +37,9 @@
       const rules = await api.getUserRules();
       userRulesCount = rules.length;
       userRulesError = "";
-    } catch (e) {
+    } catch {
       userRulesCount = null;
-      userRulesError = String(e);
+      userRulesError = "사용자 규칙을 확인하지 못했습니다. 설정을 확인한 뒤 다시 시도하세요.";
     }
   }
 
@@ -54,8 +54,8 @@
       await loadUserRules();
       // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
       api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "인벤토리를 집계하지 못했습니다. 스캔 범위와 저장 공간을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -74,8 +74,8 @@
     try {
       await api.downloadModel();
       await loadModel();
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "분류 보조 기능을 준비하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       modelBusy = false;
     }
@@ -87,8 +87,8 @@
     summaryBusy = true;
     try {
       summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
-    } catch (e) {
-      summary = String(e);
+    } catch {
+      summary = "요약을 만들지 못했습니다. 다시 시도하세요.";
     } finally {
       summaryLoaded = true;
       summaryBusy = false;
@@ -118,11 +118,11 @@
 
   <div class="model-status">
     {#if model?.present}
-      <span>모델: {model.name} ✓</span>
+       <span>자동 분류 보조 기능 사용 가능 ✓</span>
     {:else}
-      <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "다운로드 중…" : "모델 다운로드"}</button>
+       <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "준비 중…" : "분류 보조 기능 준비"}</button>
     {/if}
-    <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
+     <span class="muted small">자동 분류는 참고용입니다 — 보조 기능 없이도 전체 기능이 동작합니다.</span>
   </div>
 
   <Settings />
@@ -148,7 +148,7 @@
           <div class="unknown-summary">
             <button onclick={summarizeUnknown} disabled={summaryBusy}>{summaryBusy ? "요약 중…" : "요약 보기"}</button>
             {#if summaryLoaded}
-              <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
+               <span class="summary-text">{summary ?? "미판정 (보조 기능 없음)"}</span>
             {/if}
           </div>
           {#if insights.length > 0}
@@ -168,7 +168,7 @@
     {#if issues !== null}
       <div class="coherence">
         {#if issues.length === 0}
-          <span class="ok small">온톨로지 정합 ✓</span>
+          <span class="ok small">분류 일관성 확인 ✓</span>
         {:else}
           <ul class="issues">
             {#each issues as i}

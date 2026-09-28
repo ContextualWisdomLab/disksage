@@ -34,14 +34,17 @@ pub fn app_managed_library_blocker(path: &Path) -> Option<&'static str> {
     let components: Vec<String> = path
         .components()
         .filter_map(|component| match component {
-            std::path::Component::Normal(name) => Some(normalize_component(&name.to_string_lossy())),
+            std::path::Component::Normal(name) => {
+                Some(normalize_component(&name.to_string_lossy()))
+            }
             _ => None,
         })
         .collect();
 
-    if components.iter().any(|name| {
-        name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
-    }) {
+    if components
+        .iter()
+        .any(|name| name.ends_with(".photoslibrary") || name.ends_with(".photolibrary"))
+    {
         return Some(REASON_SYSTEM_MANAGED_PHOTOS_LIBRARY);
     }
 
@@ -80,10 +83,7 @@ fn mendeley_blocker(components: &[String]) -> Option<&'static str> {
 fn zotero_blocker(components: &[String]) -> Option<&'static str> {
     // Library/Application Support/Zotero
     for window in components.windows(3) {
-        if window[0] == "library"
-            && window[1] == "application support"
-            && window[2] == "zotero"
-        {
+        if window[0] == "library" && window[1] == "application support" && window[2] == "zotero" {
             return Some(REASON_APP_MANAGED_ZOTERO);
         }
     }
@@ -122,9 +122,9 @@ fn parallels_blocker(components: &[String]) -> Option<&'static str> {
 }
 
 fn containers_blocker(components: &[String]) -> bool {
-    components.windows(2).any(|window| {
-        window[0] == "library" && window[1] == "containers"
-    })
+    components
+        .windows(2)
+        .any(|window| window[0] == "library" && window[1] == "containers")
 }
 
 /// Local bytes that may be credited as freed for operator accounting.
@@ -139,7 +139,9 @@ pub fn credited_free_bytes_after_cloud_offload(
     observed_allocation_reduction_bytes: u64,
 ) -> u64 {
     match goal_state {
-        CloudOffloadGoalState::SourceEvicted => observed_allocation_reduction_bytes.min(source_allocated_bytes_before),
+        CloudOffloadGoalState::SourceEvicted => {
+            observed_allocation_reduction_bytes.min(source_allocated_bytes_before)
+        }
         CloudOffloadGoalState::CopyVerified
         | CloudOffloadGoalState::PendingProviderSync
         | CloudOffloadGoalState::ProviderSyncConfirmed
@@ -219,9 +221,7 @@ mod tests {
     #[test]
     fn does_not_exclude_ordinary_user_documents() {
         assert_eq!(
-            app_managed_library_blocker(Path::new(
-                "/Users/a/Documents/cold-archive/report.pdf"
-            )),
+            app_managed_library_blocker(Path::new("/Users/a/Documents/cold-archive/report.pdf")),
             None
         );
         assert_eq!(

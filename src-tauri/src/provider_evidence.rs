@@ -98,9 +98,7 @@ pub fn create_sync_evidence_record(
     })
 }
 
-fn validate_sync_evidence_record_compat(
-    record: &ProviderSyncEvidenceRecord,
-) -> Result<(), String> {
+fn validate_sync_evidence_record_compat(record: &ProviderSyncEvidenceRecord) -> Result<(), String> {
     if record.version != PROVIDER_EVIDENCE_RECORD_VERSION {
         return Err("provider-evidence-record-version-unsupported".into());
     }
@@ -205,11 +203,7 @@ fn prune_receipt_evidence_history(
         if record.evidence.receipt_id != receipt_id {
             continue;
         }
-        records.push((
-            record.evidence.confirmed_at_ms,
-            record.record_id,
-            path,
-        ));
+        records.push((record.evidence.confirmed_at_ms, record.record_id, path));
     }
     if records.len() <= MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT {
         return Ok(());
@@ -288,11 +282,9 @@ pub fn write_immutable_sync_evidence(
         return Err(error);
     }
     drop(file);
-    if let Err(_error) = prune_receipt_evidence_history(
-        directory,
-        &record.evidence.receipt_id,
-        &record.record_id,
-    ) {
+    if let Err(_error) =
+        prune_receipt_evidence_history(directory, &record.evidence.receipt_id, &record.record_id)
+    {
         // Retention is maintenance, not part of the attestation's authority. Keep the
         // fsynced record so a transient directory/read/delete failure cannot discard valid proof;
         // the next reconciliation pass can retry bounded pruning.
@@ -432,10 +424,9 @@ pub fn latest_api_object_id(
             record.record_id.clone(),
             remote.object_id.clone(),
         );
-        if latest
-            .as_ref()
-            .is_none_or(|current| (candidate.0, candidate.1.as_str()) > (current.0, current.1.as_str()))
-        {
+        if latest.as_ref().is_none_or(|current| {
+            (candidate.0, candidate.1.as_str()) > (current.0, current.1.as_str())
+        }) {
             latest = Some(candidate);
         }
     }
@@ -522,7 +513,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
         assert_eq!(
-            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            latest_api_object_id(
+                temp.path(),
+                &record.evidence.receipt_id,
+                CloudProvider::Onedrive
+            ),
             Some("remote-id".into())
         );
     }
@@ -533,14 +528,19 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         for index in 0..4_096 {
             std::fs::write(
-                temp.path().join(format!("{}-{index:020}-unrelated.json", "b".repeat(64))),
+                temp.path()
+                    .join(format!("{}-{index:020}-unrelated.json", "b".repeat(64))),
                 b"unrelated",
             )
             .unwrap();
         }
         let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
         assert_eq!(
-            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            latest_api_object_id(
+                temp.path(),
+                &record.evidence.receipt_id,
+                CloudProvider::Onedrive
+            ),
             Some("remote-id".into())
         );
     }

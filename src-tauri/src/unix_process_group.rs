@@ -256,9 +256,7 @@ mod tests {
                 Ok(())
             });
         }
-        command
-            .spawn()
-            .expect("spawn private process-group leader")
+        command.spawn().expect("spawn private process-group leader")
     }
 
     fn wait_until_exited_without_reap(child_pid: u32) {
@@ -349,8 +347,12 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel();
         let writer_thread = thread::spawn(move || {
             let chunk = [b'x'; 1_024];
-            writer.write_all(&chunk).expect("write initial fixture bytes");
-            ready_tx.send(()).expect("publish continuous-writer readiness");
+            writer
+                .write_all(&chunk)
+                .expect("write initial fixture bytes");
+            ready_tx
+                .send(())
+                .expect("publish continuous-writer readiness");
             loop {
                 match writer.write_all(&chunk) {
                     Ok(()) => {}
@@ -430,7 +432,9 @@ mod tests {
 
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate timed-out private process group");
-        let status = child.wait().expect("reap timed-out leader after group cleanup");
+        let status = child
+            .wait()
+            .expect("reap timed-out leader after group cleanup");
         assert!(!status.success());
     }
 
@@ -444,7 +448,9 @@ mod tests {
         wait_until_exited_without_reap(child_pid);
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate descendants while leader identity is pinned");
-        let status = child.wait().expect("reap group leader after cleanup signal");
+        let status = child
+            .wait()
+            .expect("reap group leader after cleanup signal");
         assert!(status.success());
 
         let mut output = String::new();
@@ -466,7 +472,9 @@ mod tests {
 
         signal_private_process_group(child_pid, libc::SIGKILL)
             .expect("terminate live private process group");
-        let status = child.wait().expect("reap terminated leader after group cleanup");
+        let status = child
+            .wait()
+            .expect("reap terminated leader after group cleanup");
         assert!(!status.success());
     }
 }

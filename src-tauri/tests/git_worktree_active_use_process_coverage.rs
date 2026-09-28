@@ -57,10 +57,12 @@ fn initialized_repository() -> tempfile::TempDir {
     repository
 }
 
-fn detached_ancestor_worktree(repository: &Path, name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+fn detached_ancestor_worktree(
+    repository: &Path,
+    name: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     let ancestor = git(repository, &["rev-parse", "HEAD"]);
-    std::fs::write(repository.join("tracked.txt"), b"second\n")
-        .expect("advance retained fixture");
+    std::fs::write(repository.join("tracked.txt"), b"second\n").expect("advance retained fixture");
     git(repository, &["add", "tracked.txt"]);
     git(repository, &["commit", "-m", "second"]);
 
@@ -189,7 +191,10 @@ fn active_process_evidence_truncation_never_grants_removal_authority() {
     assert_eq!(linked.active_use.observed_pids.len(), 1);
     assert!(active_pids.contains(&linked.active_use.observed_pids[0]));
     assert!(linked.active_use.results_truncated);
-    assert_eq!(linked.active_use.error.as_deref(), Some("active-use-pid-limit"));
+    assert_eq!(
+        linked.active_use.error.as_deref(),
+        Some("active-use-pid-limit")
+    );
     assert!(linked
         .blockers
         .iter()

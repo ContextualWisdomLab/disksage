@@ -26,8 +26,28 @@ impl BaseDirs {
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
         let local_data = absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-        Some(BaseDirs { temp, local_data, home })
+        Some(BaseDirs {
+            temp,
+            local_data,
+            home,
+        })
     }
+}
+
+/// Returns the platform's shared temporary directory using a stable, real directory path.
+#[cfg(target_os = "macos")]
+pub(crate) fn shared_temp_root() -> PathBuf {
+    PathBuf::from("/private/tmp")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn shared_temp_root() -> PathBuf {
+    PathBuf::from("/tmp")
+}
+
+#[cfg(not(unix))]
+pub(crate) fn shared_temp_root() -> PathBuf {
+    PathBuf::new()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -79,10 +99,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
-        ("cargo-registry-cache", "cargo 레지스트리 캐시",
-            bases.home.join(".cargo").join("registry").join("cache")),
-        ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
-            bases.home.join(".cargo").join("registry").join("src")),
+        (
+            "cargo-registry-cache",
+            "cargo 레지스트리 캐시",
+            bases.home.join(".cargo").join("registry").join("cache"),
+        ),
+        (
+            "cargo-registry-source",
+            "cargo 레지스트리 소스 캐시",
+            bases.home.join(".cargo").join("registry").join("src"),
+        ),
     ];
 
     #[cfg(target_os = "macos")]
@@ -93,22 +119,50 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         .unwrap_or_else(|| bases.local_data.join("huggingface"));
     #[cfg(target_os = "macos")]
     entries.extend([
+        (
+            "fileprovider-temporary-items",
+            "macOS FileProvider 임시 진단 데이터",
+            bases
+                .temp
+                .join("com.apple.fileproviderd")
+                .join("TemporaryItems"),
+        ),
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
-        ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
-        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
-        ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
-            bases.home.join("Library").join("Application Support").join("Caches")),
+        (
+            "codex-runtimes-cache",
+            "Codex 런타임 캐시",
+            bases.local_data.join("codex-runtimes"),
+        ),
+        (
+            "gradle-cache",
+            "Gradle 캐시",
+            bases.home.join(".gradle").join("caches"),
+        ),
+        (
+            "macos-app-support-cache",
+            "macOS 응용 프로그램 업데이트 캐시",
+            bases
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("Caches"),
+        ),
         (
             "pnpm-cache",
             "pnpm 캐시",
             bases.home.join("Library").join("Caches").join("pnpm"),
         ),
         (
-            "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
+            "playwright-cache",
+            "Playwright 브라우저 캐시",
+            bases
+                .home
+                .join("Library")
+                .join("Caches")
+                .join("ms-playwright"),
         ),
+        ("node-cache", "Node.js 캐시", bases.local_data.join("node")),
         (
             "torch-cache",
             "PyTorch 캐시",
@@ -119,11 +173,7 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             "Prisma 캐시",
             bases.local_data.join("prisma"),
         ),
-        (
-            "gh-cache",
-            "GitHub CLI 캐시",
-            bases.local_data.join("gh"),
-        ),
+        ("gh-cache", "GitHub CLI 캐시", bases.local_data.join("gh")),
         (
             "adobe-cache",
             "Adobe 캐시",
@@ -132,26 +182,89 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         (
             "edge-cache",
             "Microsoft Edge 캐시",
-            bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+            bases
+                .home
+                .join("Library")
+                .join("Caches")
+                .join("Microsoft Edge"),
         ),
         (
             "trivy-cache",
             "Trivy 취약점 스캔 캐시",
             bases.home.join("Library").join("Caches").join("trivy"),
         ),
+        (
+            "appmap-download-cache",
+            "AppMap 다운로드 캐시",
+            bases.home.join(".appmap").join("lib"),
+        ),
+        (
+            "superset-network-logs",
+            "Superset 네트워크 진단 로그",
+            bases
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("Superset")
+                .join("network-logs"),
+        ),
+        (
+            "superset-http-cache",
+            "Superset 임시 웹 콘텐츠",
+            bases
+                .home
+                .join("Library/Application Support/Superset/Partitions/superset/Cache"),
+        ),
+        (
+            "superset-code-cache",
+            "Superset 임시 실행 파일",
+            bases
+                .home
+                .join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+        ),
     ]);
+    #[cfg(target_os = "macos")]
+    if let Some(session_root) = bases.temp.parent() {
+        entries.push((
+            "edge-code-sign-clones",
+            "Microsoft Edge code-sign 임시 복제본",
+            session_root
+                .join("X")
+                .join("com.microsoft.edgemac.code_sign_clone"),
+        ));
+    }
+
+    // `/tmp` is a symlink on macOS; use `/private/tmp` so the root itself is a real directory.
+    // Shared temporary cleanup is limited to current-user-owned, non-linked trees below.
+    #[cfg(unix)]
+    if bases.temp != shared_temp_root() {
+        entries.push(("shared-temp", "공유 임시 폴더", shared_temp_root()));
+    }
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
     // 대표적: 원격 접속 세션마다 쌓여 재발하므로, os-temp에 묻어두지 않고 명명 항목으로 노출해
     // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
     #[cfg(windows)]
     entries.extend([
-        ("rdp-autotrace", "원격 데스크톱 추적 로그",
-            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
-        ("windows-crashdumps", "앱 크래시 덤프",
-            bases.local_data.join("CrashDumps")),
-        ("windows-wer", "Windows 오류 보고 (WER)",
-            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+        (
+            "rdp-autotrace",
+            "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace"),
+        ),
+        (
+            "windows-crashdumps",
+            "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps"),
+        ),
+        (
+            "windows-wer",
+            "Windows 오류 보고 (WER)",
+            bases
+                .local_data
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER"),
+        ),
     ]);
 
     entries
@@ -295,9 +408,13 @@ impl CatalogRoot {
         }
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return 0 };
+        let Some(stable) = self.stable_path() else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
         let mut bytes = 0u64;
 
@@ -307,7 +424,9 @@ impl CatalogRoot {
             if is_disksage_trash_staging(&path) {
                 continue;
             }
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -480,22 +599,43 @@ impl CatalogRoot {
     }
 }
 
+fn measure_cache_candidate(id: &str, label: &str, path: PathBuf) -> CacheCandidate {
+    let root = CatalogRoot::open(&path);
+    let exists = root.is_some();
+    let bytes = if id == "shared-temp" {
+        cache_targets(&path)
+            .ok()
+            .map(|targets| {
+                targets
+                    .into_iter()
+                    .fold(0u64, |total, target| total.saturating_add(target.bytes))
+            })
+            .unwrap_or(0)
+    } else {
+        root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0)
+    };
+    CacheCandidate {
+        id: id.into(),
+        label: label.into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        exists,
+    }
+}
+
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
     catalog(bases)
         .into_iter()
-        .map(|(id, label, path)| {
-            let root = CatalogRoot::open(&path);
-            let exists = root.is_some();
-            let bytes = root.as_ref().map(CatalogRoot::directory_size).unwrap_or(0);
-            CacheCandidate {
-                id: id.into(),
-                label: label.into(),
-                path: path.to_string_lossy().into_owned(),
-                bytes,
-                exists,
-            }
-        })
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
         .collect()
+}
+
+/// Measure one fixed catalog root without traversing unrelated caches.
+pub fn cache_candidate(bases: &BaseDirs, requested_id: &str) -> Option<CacheCandidate> {
+    catalog(bases)
+        .into_iter()
+        .find(|(id, _, _)| *id == requested_id)
+        .map(|(id, label, path)| measure_cache_candidate(id, label, path))
 }
 
 /// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
@@ -524,6 +664,7 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
 /// The object identity, size, and modification timestamp bind the later mutation to this snapshot.
 pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
+    let shared_temp = cfg!(unix) && dir == shared_temp_root();
     let paths = root.child_paths();
     if paths.len() > MAX_CACHE_TARGETS {
         return Err("cache-target-limit-exceeded".into());
@@ -533,6 +674,9 @@ pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
         if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+            continue;
+        }
+        if shared_temp && !crate::safety::is_user_owned_shared_temp_tree(&path) {
             continue;
         }
         let bytes = if metadata.is_dir() {
@@ -581,7 +725,11 @@ mod tests {
         let bases = fake_bases(tmp.path());
         // npm 캐시만 실제로 만들어 둔다 (한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이
         // 영구 미커버로 남는다 — is_protected의 home 변수명 선택과 동일한 관례)
-        let npm = if cfg!(windows) { bases.local_data.join("npm-cache") } else { bases.home.join(".npm") };
+        let npm = if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        };
         fs::create_dir_all(&npm).unwrap();
         fs::write(npm.join("blob.bin"), vec![0u8; 128]).unwrap();
 
@@ -590,13 +738,60 @@ mod tests {
         let npm_c = cands.iter().find(|c| c.id == "npm-cache").unwrap();
         assert!(npm_c.exists);
         assert_eq!(npm_c.bytes, 128);
+        let targeted = cache_candidate(&bases, "npm-cache").unwrap();
+        assert_eq!(targeted.path, npm_c.path);
+        assert_eq!(targeted.bytes, 128);
+        assert!(cache_candidate(&bases, "not-in-catalog").is_none());
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
-        let cargo_source = cands.iter().find(|c| c.id == "cargo-registry-source").unwrap();
+        let cargo_source = cands
+            .iter()
+            .find(|c| c.id == "cargo-registry-source")
+            .unwrap();
         assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            cands
+                .iter()
+                .find(|candidate| candidate.id == "edge-code-sign-clones")
+                .unwrap()
+                .path,
+            tmp.path()
+                .join("X/com.microsoft.edgemac.code_sign_clone")
+                .to_string_lossy()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn catalog_includes_shared_temp_when_user_temp_is_separate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let shared = shared_temp_root();
+        assert_ne!(bases.temp, shared);
+        let entry = catalog(&bases)
+            .into_iter()
+            .find(|(id, _, _)| *id == "shared-temp")
+            .expect("shared temporary storage must be inspectable");
+        assert_eq!(entry.2, shared);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_temp_targets_accept_only_current_user_owned_trees() {
+        let Ok(tmp) = tempfile::tempdir_in(shared_temp_root()) else {
+            return;
+        };
+        fs::write(tmp.path().join("owned.bin"), b"owned").unwrap();
+        let targets = cache_targets(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("owned.bin"));
+        assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(
+            &targets[0].path
+        )));
     }
 
     #[cfg(windows)]
@@ -624,7 +819,9 @@ mod tests {
             .iter()
             .find(|candidate| candidate.id == "macos-app-support-cache")
             .expect("macOS application-support cache must be catalogued");
-        assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+        assert!(candidate
+            .path
+            .ends_with("Library/Application Support/Caches"));
     }
 
     #[cfg(target_os = "macos")]
@@ -635,6 +832,7 @@ mod tests {
         let candidates = cache_candidates(&bases);
         for (id, suffix) in [
             ("pnpm-cache", "Library/Caches/pnpm"),
+            ("playwright-cache", "Library/Caches/ms-playwright"),
             ("node-cache", "local/node"),
             ("torch-cache", "local/torch"),
             ("prisma-cache", "local/prisma"),
@@ -642,6 +840,19 @@ mod tests {
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
             ("trivy-cache", "Library/Caches/trivy"),
+            ("appmap-download-cache", ".appmap/lib"),
+            (
+                "superset-network-logs",
+                "Library/Application Support/Superset/network-logs",
+            ),
+            (
+                "superset-http-cache",
+                "Library/Application Support/Superset/Partitions/superset/Cache",
+            ),
+            (
+                "superset-code-cache",
+                "Library/Application Support/Superset/Partitions/superset/Code Cache",
+            ),
         ] {
             let candidate = candidates
                 .iter()
@@ -707,7 +918,9 @@ mod tests {
         fs::write(tmp.path().join("keep.bin"), b"keep").unwrap();
         fs::create_dir(tmp.path().join(".disksage-trash-fixture")).unwrap();
         fs::write(
-            tmp.path().join(".disksage-trash-fixture").join("staged.bin"),
+            tmp.path()
+                .join(".disksage-trash-fixture")
+                .join("staged.bin"),
             b"staged",
         )
         .unwrap();
@@ -743,7 +956,8 @@ mod tests {
     fn clean_targets_excludes_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("real.bin"), b"x").unwrap();
-        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin"))
+            .unwrap();
         let names: Vec<String> = clean_targets(tmp.path())
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

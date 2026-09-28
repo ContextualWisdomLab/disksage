@@ -65,7 +65,10 @@ fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminate
 
     let mut child = command.spawn().expect("probe fixture must spawn");
     let process_group = child.id() as libc::pid_t;
-    let mut stdout = child.stdout.take().expect("probe fixture stdout must be piped");
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("probe fixture stdout must be piped");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -74,7 +77,10 @@ fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminate
     });
 
     let status = child.wait().expect("probe fixture leader must be waitable");
-    assert!(status.success(), "probe fixture leader must exit successfully");
+    assert!(
+        status.success(),
+        "probe fixture leader must exit successfully"
+    );
 
     let before_group_kill = receiver.recv_timeout(Duration::from_millis(250));
     unsafe {

@@ -1192,6 +1192,9 @@ pub fn collect_archive_files_bounded(
                 return true;
             }
             let path = entry.path();
+            if crate::safety::is_explicitly_protected(path) {
+                return false;
+            }
             if excluded.iter().any(|cloud| path.starts_with(cloud)) {
                 return false;
             }
@@ -1222,7 +1225,10 @@ pub fn collect_archive_files_bounded(
             Ok(entry) => entry,
             Err(_) => {
                 complete = false;
-                if !stop_reasons.iter().any(|reason| reason == "source-scan-entry-error") {
+                if !stop_reasons
+                    .iter()
+                    .any(|reason| reason == "source-scan-entry-error")
+                {
                     stop_reasons.push("source-scan-entry-error".into());
                 }
                 continue;
@@ -2776,8 +2782,7 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
                     Ok(_) => {
                         let truncated = header.len() > read_limit;
                         header.truncate(read_limit);
-                        email_header_bytes = email_header_bytes
-                            .saturating_add(header.len() as u64);
+                        email_header_bytes = email_header_bytes.saturating_add(header.len() as u64);
                         email_scanned_count = email_scanned_count.saturating_add(1);
                         let email_metadata = email_metadata_from_header(
                             &header,
@@ -2806,8 +2811,7 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
                         }
                     }
                     Err(_) => {
-                        email_header_parse_failures =
-                            email_header_parse_failures.saturating_add(1);
+                        email_header_parse_failures = email_header_parse_failures.saturating_add(1);
                         email_scan_bounded = true;
                     }
                 }
@@ -5001,11 +5005,7 @@ fn prepare_cloud_archive_source_with_scan(
                 } else {
                     MetadataProbeFailure::Timeout
                 };
-                add_probe_warning(
-                    &mut prepared.content_metadata,
-                    "planner",
-                    failure,
-                );
+                add_probe_warning(&mut prepared.content_metadata, "planner", failure);
             }
         }
         prepared_files.push(prepared);
@@ -5036,8 +5036,8 @@ pub fn plan_cloud_archive_from_snapshot(
     let source_root = &snapshot.source_root;
     let now_ms = snapshot.prepared_at_ms;
     let options = snapshot.options;
-    let source_scan_blocker = (!snapshot.source_scan_complete)
-        .then(|| "source-scan-incomplete".to_string());
+    let source_scan_blocker =
+        (!snapshot.source_scan_complete).then(|| "source-scan-incomplete".to_string());
     let mut candidates = Vec::new();
     for file in files {
         let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
@@ -5432,7 +5432,10 @@ mod tests {
                 && evidence.value == "exiftool-batch:timeout"
                 && evidence.confidence == "high"
         }));
-        assert_eq!(MetadataProbeFailure::FileLimit.code(), "file-limit-exceeded");
+        assert_eq!(
+            MetadataProbeFailure::FileLimit.code(),
+            "file-limit-exceeded"
+        );
     }
 
     #[cfg(all(not(coverage), unix))]
@@ -5696,12 +5699,8 @@ mod tests {
         for name in ["one.pdf", "two.pdf", "three.pdf"] {
             std::fs::write(source_root.join(name), b"pdf").unwrap();
         }
-        let collection = collect_archive_files_bounded(
-            &source_root,
-            &[],
-            2,
-            Duration::from_secs(30),
-        );
+        let collection =
+            collect_archive_files_bounded(&source_root, &[], 2, Duration::from_secs(30));
         assert!(!collection.complete);
         assert!(collection
             .stop_reasons
@@ -5720,15 +5719,18 @@ mod tests {
         );
         let destination = source_root.join("cloud");
         writable_dir(&destination);
-        let report = plan_cloud_archive_from_snapshot(
-            &snapshot,
-            &root(CloudProvider::Icloud, &destination),
-        );
-        assert!(report.notices.contains(&"source-scan-incomplete".to_string()));
+        let report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::Icloud, &destination));
         assert!(report
-            .candidates
-            .iter()
-            .all(|candidate| candidate.blocked_reason.as_deref() == Some("source-scan-incomplete")));
+            .notices
+            .contains(&"source-scan-incomplete".to_string()));
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| candidate.blocked_reason.as_deref()
+                    == Some("source-scan-incomplete"))
+        );
         assert_eq!(report.potentially_reclaimable_bytes, 0);
         assert_eq!(
             report
@@ -5780,12 +5782,8 @@ mod tests {
         std::fs::create_dir_all(&source_root).unwrap();
         std::fs::write(source_root.join("report.pdf"), b"pdf").unwrap();
 
-        let collection = collect_archive_files_bounded(
-            &source_root,
-            &[],
-            100,
-            Duration::from_secs(30),
-        );
+        let collection =
+            collect_archive_files_bounded(&source_root, &[], 100, Duration::from_secs(30));
 
         assert!(!collection.complete);
         assert!(collection.files.is_empty());
@@ -5833,10 +5831,8 @@ mod tests {
                 limit: 10,
             },
         );
-        let report = plan_cloud_archive_from_snapshot(
-            &snapshot,
-            &root(CloudProvider::GoogleDrive, &cloud),
-        );
+        let report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &cloud));
         assert!(report.candidates[0]
             .metadata_evidence
             .iter()
@@ -6252,8 +6248,14 @@ mod tests {
             Some("embedded:zip-entry:rfc5322:latest-date")
         );
         assert_eq!(metadata.production_time_confidence.as_deref(), Some("high"));
-        assert_eq!(date_parts(metadata.production_time_ms.unwrap()), (2026, 8, 10));
-        assert!(metadata.context.iter().any(|value| value == "archive-content-class=email"));
+        assert_eq!(
+            date_parts(metadata.production_time_ms.unwrap()),
+            (2026, 8, 10)
+        );
+        assert!(metadata
+            .context
+            .iter()
+            .any(|value| value == "archive-content-class=email"));
         assert!(metadata.evidence.iter().any(|evidence| {
             evidence.field == "archive-email-entry-count" && evidence.value == "2"
         }));
@@ -6423,10 +6425,8 @@ mod tests {
         let destination = Path::new("/definitely/missing/disksage-destination");
         assert_eq!(
             planner_blocked_reason(
-                &Path::new(
-                    "/Users/test/Library/Group Containers/group.com.apple.iCloudDrive/"
-                )
-                .join("File Provider Storage/DownloadStage/content.wav"),
+                &Path::new("/Users/test/Library/Group Containers/group.com.apple.iCloudDrive/")
+                    .join("File Provider Storage/DownloadStage/content.wav"),
                 ArchiveKind::Media,
                 &ContentMetadata::default(),
                 destination,

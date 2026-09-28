@@ -50,8 +50,7 @@ fn archive_tree_help_does_not_hide_or_reflect_an_unknown_argument() {
             output.stdout.is_empty(),
             "invalid invocation must not emit help on stdout"
         );
-        let stderr =
-            String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
         assert!(
             !stderr.is_empty(),
             "invalid invocation must remain visible through stderr"

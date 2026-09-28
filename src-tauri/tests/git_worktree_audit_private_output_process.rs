@@ -38,7 +38,10 @@ fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
     let repository = temp.path().join("private-customer-repository");
     fs::create_dir(&repository).expect("repository directory should be created");
     git(&repository, &["init", "-q"]);
-    git(&repository, &["config", "user.email", "coverage@example.invalid"]);
+    git(
+        &repository,
+        &["config", "user.email", "coverage@example.invalid"],
+    );
     git(&repository, &["config", "user.name", "DiskSage Test"]);
     fs::write(repository.join("tracked.txt"), b"tracked\n")
         .expect("tracked fixture should be written");
@@ -73,7 +76,10 @@ fn private_report_is_owner_only_create_once_and_publicly_committed_by_digest() {
     assert_eq!(commitment["written"], true);
     assert_eq!(commitment["unix_mode"], "0600");
     assert_eq!(commitment["create_new"], true);
-    assert_eq!(commitment["contains_sensitive_local_paths_and_branches"], true);
+    assert_eq!(
+        commitment["contains_sensitive_local_paths_and_branches"],
+        true
+    );
     assert_eq!(commitment["is_approval"], false);
     assert!(
         !stdout.contains(&repository.to_string_lossy().to_string()),
@@ -104,8 +110,8 @@ fn private_report_is_owner_only_create_once_and_publicly_committed_by_digest() {
         0o600,
         "private report must be owner-readable/writable only at publication"
     );
-    let _: serde_json::Value =
-        serde_json::from_slice(&private_bytes).expect("private report should be valid JSON evidence");
+    let _: serde_json::Value = serde_json::from_slice(&private_bytes)
+        .expect("private report should be valid JSON evidence");
 
     let second = run_private_output(&repository, &private_output);
     assert_eq!(second.status.code(), Some(2));

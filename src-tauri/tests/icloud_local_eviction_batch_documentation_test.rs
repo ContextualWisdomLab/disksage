@@ -1,11 +1,10 @@
-//! Contract tests for the buyer-visible iCloud batch safety documentation.
+//! Contract tests for the operator-visible cloud batch safety documentation.
 //!
 //! These checks keep the operational claims, evidence boundary, standards mapping, and APA 7th
 //! references reviewable alongside the Rust behavior they describe.
 
 /// Operator guide compiled into the test binary so documentation claims are checked offline.
-const OPERATOR_GUIDE: &str =
-    include_str!("../../docs/development/icloud-local-eviction-batch.md");
+const OPERATOR_GUIDE: &str = include_str!("../../docs/development/icloud-local-eviction-batch.md");
 
 /// Verifies that the operator guide maps fail-closed behavior to authoritative controls.
 #[test]

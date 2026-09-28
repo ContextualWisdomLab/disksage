@@ -94,14 +94,9 @@ fn legacy_unknown_sync_state_cannot_authorize_eviction_permit() {
         &cloud_copy_approval_phrase(&candidate, action),
     )
     .expect("create exact copy approval");
-    let (receipt, _) = prepare_provider_api_source_receipt(
-        &candidate,
-        &cloud_root,
-        None,
-        &approval,
-        now_ms,
-    )
-    .expect("create production receipt through the public boundary");
+    let (receipt, _) =
+        prepare_provider_api_source_receipt(&candidate, &cloud_root, None, &approval, now_ms)
+            .expect("create production receipt through the public boundary");
 
     let legacy_evidence = ProviderSyncEvidence {
         receipt_id: receipt.receipt_id.clone(),
@@ -122,7 +117,9 @@ fn legacy_unknown_sync_state_cannot_authorize_eviction_permit() {
     let blockers = approve_local_eviction(&receipt, &record)
         .expect_err("unknown sync state must never authorize source eviction");
     assert!(
-        blockers.iter().any(|blocker| blocker == "provider-sync-incomplete"),
+        blockers
+            .iter()
+            .any(|blocker| blocker == "provider-sync-incomplete"),
         "legacy unknown sync state must fail closed at the eviction permit boundary: {blockers:?}"
     );
 }

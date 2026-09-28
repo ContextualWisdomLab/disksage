@@ -25,7 +25,13 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
         .arg("--root")
         .arg(source.path())
-        .args(["--min-bytes", "1", "--max-entries", "10", "--private-output"])
+        .args([
+            "--min-bytes",
+            "1",
+            "--max-entries",
+            "10",
+            "--private-output",
+        ])
         .arg(&private_output)
         .output()
         .expect("duplicate-audit CLI must launch with a native private-output path");
@@ -55,7 +61,10 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
     assert_eq!(summary["private_output"]["written"], true);
     assert_eq!(summary["private_output"]["create_new"], true);
     assert_eq!(summary["private_output"]["unix_mode"], "0600");
-    assert_eq!(summary["private_output"]["contains_sensitive_local_paths"], true);
+    assert_eq!(
+        summary["private_output"]["contains_sensitive_local_paths"],
+        true
+    );
     assert_eq!(summary["private_output"]["is_approval"], false);
     assert!(summary["private_output"].get("path").is_none());
 
@@ -102,5 +111,8 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
         "the private report must bind the canonical audited source path"
     );
 
-    assert_eq!(private_output.file_name().unwrap().as_bytes(), filename_bytes);
+    assert_eq!(
+        private_output.file_name().unwrap().as_bytes(),
+        filename_bytes
+    );
 }

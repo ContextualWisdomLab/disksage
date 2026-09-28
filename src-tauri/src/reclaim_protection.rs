@@ -112,7 +112,8 @@ pub fn is_protected_credential_file_name(name: &str) -> bool {
 pub fn parse_orca_terminal_worktree_paths(json_bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
     let value: serde_json::Value =
         serde_json::from_slice(json_bytes).map_err(|_| "orca-terminal-json-invalid".to_string())?;
-    let terminals = extract_terminal_array(&value).ok_or_else(|| "orca-terminal-json-shape".to_string())?;
+    let terminals =
+        extract_terminal_array(&value).ok_or_else(|| "orca-terminal-json-shape".to_string())?;
     let mut paths = BTreeSet::new();
     for terminal in terminals {
         let Some(object) = terminal.as_object() else {
@@ -180,9 +181,7 @@ pub fn lead_queue_mentioned_paths(queue_text: &str, workspace_root: &Path) -> Ve
 
 pub fn path_is_under_any(candidate: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| {
-        candidate == root.as_path()
-            || candidate.starts_with(root)
-            || root.starts_with(candidate)
+        candidate == root.as_path() || candidate.starts_with(root) || root.starts_with(candidate)
     })
 }
 
@@ -437,7 +436,9 @@ mod tests {
         let root = PathBuf::from("/Users/me/orca/workspaces");
         let text = "see `orchestration-lead-fmls` and /Users/me/orca/workspaces/disksage/disk-cleanup-lead\n";
         let paths = lead_queue_mentioned_paths(text, &root);
-        assert!(paths.iter().any(|path| path.ends_with("orchestration-lead-fmls")));
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("orchestration-lead-fmls")));
         assert!(paths
             .iter()
             .any(|path| path.ends_with("disksage/disk-cleanup-lead")));
@@ -510,10 +511,16 @@ mod tests {
             true,
         );
         assert!(red.protected);
-        assert!(red.reason_codes.contains(&REASON_ORCA_TERMINAL_LIVE.to_string()));
-        assert!(red.reason_codes.contains(&REASON_ORCHESTRATION_LEAD.to_string()));
+        assert!(red
+            .reason_codes
+            .contains(&REASON_ORCA_TERMINAL_LIVE.to_string()));
+        assert!(red
+            .reason_codes
+            .contains(&REASON_ORCHESTRATION_LEAD.to_string()));
         assert!(red.reason_codes.contains(&REASON_OPEN_PR_HEAD.to_string()));
-        assert!(red.reason_codes.contains(&REASON_PROTECTED_DATA_LOCAL.to_string()));
+        assert!(red
+            .reason_codes
+            .contains(&REASON_PROTECTED_DATA_LOCAL.to_string()));
         assert!(red
             .reason_codes
             .contains(&REASON_PROTECTED_CREDENTIALS.to_string()));

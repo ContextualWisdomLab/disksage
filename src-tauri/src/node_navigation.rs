@@ -13,7 +13,10 @@ use std::path::{Component, Path, PathBuf};
 const OUTSIDE_ROOT: &str = "path outside scanned root";
 
 fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, String> {
-    if path.components().any(|component| matches!(component, Component::ParentDir)) {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
         return Err(OUTSIDE_ROOT.into());
     }
     if !path.starts_with(&res.root) {
@@ -51,8 +54,7 @@ fn entry_is_link_or_reparse(path: &Path, file_type: &std::fs::FileType) -> bool 
 /// canonical scanned root.
 pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
     let canonical_path = canonical_navigation_path(res, path)?;
-    let canonical_root =
-        std::fs::canonicalize(&res.root).map_err(|_| OUTSIDE_ROOT.to_string())?;
+    let canonical_root = std::fs::canonicalize(&res.root).map_err(|_| OUTSIDE_ROOT.to_string())?;
     let relative = canonical_path
         .strip_prefix(&canonical_root)
         .map_err(|_| OUTSIDE_ROOT.to_string())?;
@@ -60,9 +62,13 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
     // the original namespace while reading entries through the verified canonical path.
     let display_path = res.root.join(relative);
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())? {
+    for entry in
+        std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())?
+    {
         let Ok(entry) = entry else { continue };
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         let entry_path = entry.path();
         if entry_is_link_or_reparse(&entry_path, &file_type) {
             continue;
@@ -188,7 +194,10 @@ mod tests {
         std::os::unix::fs::symlink(external.path(), &escape).unwrap();
         let result = scan(root.path());
 
-        assert_eq!(node_view(&result, &escape).err().as_deref(), Some(OUTSIDE_ROOT));
+        assert_eq!(
+            node_view(&result, &escape).err().as_deref(),
+            Some(OUTSIDE_ROOT)
+        );
     }
 
     #[cfg(unix)]

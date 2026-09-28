@@ -49,6 +49,11 @@ path = "src/bin/disksage-icloud-local-eviction-batch.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-cloud-local-eviction-batch"
+path = "src/bin/disksage-icloud-local-eviction-batch.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-multipart-archive-audit"
 path = "src/bin/disksage-multipart-archive-audit.rs"
 required-features = ["cloud-cli"]
@@ -83,6 +88,14 @@ name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
 
 [[bin]]
+name = "disksage-git-worktree-metadata-prune"
+path = "src/bin/disksage-git-worktree-metadata-prune.rs"
+
+[[bin]]
+name = "disksage-git-clone-reclaim"
+path = "src/bin/disksage-git-clone-reclaim.rs"
+
+[[bin]]
 name = "disksage-git-worktree-remove"
 path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
@@ -90,6 +103,11 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-icloud-sync-health"
 path = "src/bin/disksage-icloud-sync-health.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-icloud-provider-recovery"
+path = "src/bin/disksage-icloud-provider-recovery.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
@@ -128,6 +146,10 @@ name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-container-orphan-plan"
+path = "src/bin/disksage-container-orphan-plan.rs"
+
+[[bin]]
 name = "disksage-provider-oauth"
 path = "src/bin/disksage-provider-oauth.rs"
 required-features = ["cloud-cli"]
@@ -145,6 +167,69 @@ required-features = ["cloud-cli"]
 name = "archive_tree_help_exit"
 path = "tests/archive_tree_help_exit.rs"
 required-features = ["archive-cli"]
+
+[[test]]
+name = "volume_snapshot_help_exit"
+path = "tests/volume_snapshot_help_exit.rs"
+required-features = ["volume-cli"]
+
+[[test]]
+name = "zotero_local_help_exit"
+path = "tests/zotero_local_help_exit.rs"
+
+[[test]]
+name = "maven_cache_audit_help_exit"
+path = "tests/maven_cache_audit_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "protect_path_help_exit"
+path = "tests/protect_path_help_exit.rs"
+
+[[test]]
+name = "runtime_storage_help_exit"
+path = "tests/runtime_storage_help_exit.rs"
+
+[[test]]
+name = "git_worktree_metadata_prune_help_exit"
+path = "tests/git_worktree_metadata_prune_help_exit.rs"
+
+[[test]]
+name = "icloud_sync_health_help_exit"
+path = "tests/icloud_sync_health_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "provider_recovery_help_exit"
+path = "tests/provider_recovery_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "icloud_provider_recovery_help_exit"
+path = "tests/icloud_provider_recovery_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "naruon_copy_readiness_process_help"
+path = "tests/naruon_copy_readiness_process_help.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "dev_artifacts_help_exit"
+path = "tests/dev_artifacts_help_exit.rs"
+
+[[test]]
+name = "git_worktree_remove_help_exit"
+path = "tests/git_worktree_remove_help_exit.rs"
+required-features = ["cloud-cli"]
+
+[[test]]
+name = "cli_help_inventory_contract"
+path = "tests/cli_help_inventory_contract.rs"
+
+[[test]]
+name = "cli_help_contract_runtime"
+path = "tests/cli_help_contract_runtime.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

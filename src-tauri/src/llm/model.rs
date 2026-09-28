@@ -103,11 +103,7 @@ pub fn download_to(spec: &ModelSpec, dest: &Path) -> Result<(), String> {
         .bytes
         .checked_add(1)
         .ok_or_else(|| ERROR_INVALID_SPEC.to_string())?;
-    let reader = response
-        .body_mut()
-        .with_config()
-        .limit(read_limit)
-        .reader();
+    let reader = response.body_mut().with_config().limit(read_limit).reader();
     install_verified_reader(spec, reader, dest)
 }
 
@@ -115,11 +111,8 @@ pub fn download_to(spec: &ModelSpec, dest: &Path) -> Result<(), String> {
 fn validate_model_spec(spec: &ModelSpec) -> Result<(), String> {
     let valid_url = spec.url.starts_with("https://")
         || (cfg!(test) && spec.url.starts_with("http://127.0.0.1:"));
-    let valid_digest = spec.sha256_hex.len() == 64
-        && spec
-            .sha256_hex
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit());
+    let valid_digest =
+        spec.sha256_hex.len() == 64 && spec.sha256_hex.bytes().all(|byte| byte.is_ascii_hexdigit());
     if spec.name.trim().is_empty()
         || !valid_url
         || !valid_digest
@@ -361,15 +354,7 @@ fn install_verified_reader<R: Read>(
         .sync_all()
         .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
 
-    finalize_verified_file_with_hooks(
-        spec,
-        dest,
-        &staging,
-        || {},
-        || {},
-        || {},
-        || {},
-    )
+    finalize_verified_file_with_hooks(spec, dest, &staging, || {}, || {}, || {}, || {})
 }
 
 #[cfg(test)]
@@ -380,8 +365,7 @@ mod tests {
     use std::thread;
 
     const FIXTURE_PAYLOAD: &[u8] = b"deterministic-model-fixture";
-    const FIXTURE_SHA256: &str =
-        "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
+    const FIXTURE_SHA256: &str = "34cec159d295eff35a2ce56813c09e0466f4cad846edeb98a9dd94f06a9e7100";
 
     /// Build a trusted fixture specification for deterministic installer tests.
     fn fixture_spec(url: &'static str) -> ModelSpec {
@@ -501,7 +485,10 @@ mod tests {
 
     #[test]
     fn destination_parent_supports_relative_and_nested_paths() {
-        assert_eq!(destination_parent(Path::new("fixture.gguf")), Path::new("."));
+        assert_eq!(
+            destination_parent(Path::new("fixture.gguf")),
+            Path::new(".")
+        );
         assert_eq!(
             destination_parent(Path::new("nested/fixture.gguf")),
             Path::new("nested")
@@ -545,7 +532,10 @@ mod tests {
 
         assert!(!path_matches_handle(&alias, &owned_identity));
         cleanup_owned_path(&alias, &owned_identity);
-        assert!(fs::symlink_metadata(&alias).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&alias)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]

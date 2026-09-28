@@ -205,7 +205,9 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
     match action {
         Action::List => {
             if cloud_root.is_some() || client_id.is_some() || manual_browser || write_access {
-                return Err("--list does not accept root, client, browser, or write arguments".into());
+                return Err(
+                    "--list does not accept root, client, browser, or write arguments".into(),
+                );
             }
         }
         Action::Connect => {

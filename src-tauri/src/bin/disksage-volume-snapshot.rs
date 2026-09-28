@@ -14,7 +14,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    match run(std::env::args().skip(1)) {
+    match run(std::env::args_os().skip(1)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if error == "help" => {
             println!(
@@ -30,11 +30,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run<I, S>(args: I) -> Result<(), String>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
+fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), String> {
     let args = parse_args(args)?;
     let current = snapshot_volume(&args.path, now_ms()?)?;
     let stdout = std::io::stdout();
@@ -55,47 +51,58 @@ where
     Ok(())
 }
 
-fn parse_args<I, S>(args: I) -> Result<Args, String>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
+fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Args, String> {
+    let raw_args: Vec<std::ffi::OsString> = args.into_iter().collect();
+    let help_count = raw_args
+        .iter()
+        .filter(|arg| matches!(arg.to_str(), Some("-h" | "--help")))
+        .count();
+    if help_count > 0 {
+        if raw_args.len() == 1 && help_count == 1 {
+            return Err("help".into());
+        }
+        return Err("local-volume-help-requires-alone".into());
+    }
     let mut path = None;
     let mut baseline = None;
     let mut logical_removed_bytes = None;
-    let mut values = args.into_iter().map(Into::into);
+    let mut values = raw_args.into_iter();
     while let Some(flag) = values.next() {
-        match flag.as_str() {
-            "--help" | "-h" => return Err("help".into()),
-            "--path" => {
+        match flag.to_str() {
+            Some("--help") | Some("-h") => {
+                return Err("local-volume-help-requires-alone".into());
+            }
+            Some("--path") => {
                 if path.is_some() {
                     return Err("local-volume-path-duplicate".into());
                 }
-                path = Some(PathBuf::from(
-                    values.next().ok_or("local-volume-path-value-missing")?,
-                ));
+                let value = values.next().ok_or("local-volume-path-value-missing")?;
+                path = Some(PathBuf::from(value));
             }
-            "--baseline" => {
+            Some("--baseline") => {
                 if baseline.is_some() {
                     return Err("local-volume-baseline-duplicate".into());
                 }
-                baseline = Some(PathBuf::from(
-                    values.next().ok_or("local-volume-baseline-value-missing")?,
-                ));
+                let value = values.next().ok_or("local-volume-baseline-value-missing")?;
+                baseline = Some(PathBuf::from(value));
             }
-            "--logical-removed-bytes" => {
+            Some("--logical-removed-bytes") => {
                 if logical_removed_bytes.is_some() {
                     return Err("local-volume-logical-removed-duplicate".into());
                 }
+                let raw = values
+                    .next()
+                    .ok_or("local-volume-logical-removed-value-missing")?;
+                let text = raw
+                    .into_string()
+                    .map_err(|_| "local-volume-logical-removed-invalid")?;
                 logical_removed_bytes = Some(
-                    values
-                        .next()
-                        .ok_or("local-volume-logical-removed-value-missing")?
-                        .parse::<u64>()
+                    text.parse::<u64>()
                         .map_err(|_| "local-volume-logical-removed-invalid")?,
                 );
             }
-            _ => return Err("local-volume-argument-unknown".into()),
+            Some(_) => return Err("local-volume-argument-unknown".into()),
+            None => return Err("local-volume-argument-non-utf8".into()),
         }
     }
     if baseline.is_none() && logical_removed_bytes.is_some() {
@@ -146,12 +153,17 @@ fn now_ms() -> Result<u64, String> {
 mod tests {
     use super::*;
     use disksage_lib::volume_pressure::snapshot_volume;
+    use std::ffi::OsString;
     use std::fs;
+
+    fn os_args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
 
     #[test]
     fn parser_defaults_to_current_directory() {
         assert_eq!(
-            parse_args(Vec::<String>::new()).unwrap(),
+            parse_args(Vec::<OsString>::new()).unwrap(),
             Args {
                 path: PathBuf::from("."),
                 baseline: None,
@@ -163,14 +175,14 @@ mod tests {
     #[test]
     fn parser_accepts_bounded_comparison_arguments() {
         assert_eq!(
-            parse_args([
+            parse_args(os_args(&[
                 "--path",
                 "/volume",
                 "--baseline",
                 "/tmp/baseline.json",
                 "--logical-removed-bytes",
                 "123",
-            ])
+            ]))
             .unwrap(),
             Args {
                 path: PathBuf::from("/volume"),
@@ -183,21 +195,68 @@ mod tests {
     #[test]
     fn parser_rejects_unknown_duplicate_and_unbound_arguments() {
         assert_eq!(
-            parse_args(["--unknown"]).unwrap_err(),
+            parse_args(os_args(&["--unknown"])).unwrap_err(),
             "local-volume-argument-unknown"
         );
         assert_eq!(
-            parse_args(["--path", ".", "--path", "."]).unwrap_err(),
+            parse_args(os_args(&["--path", ".", "--path", "."])).unwrap_err(),
             "local-volume-path-duplicate"
         );
         assert_eq!(
-            parse_args(["--logical-removed-bytes", "1"]).unwrap_err(),
+            parse_args(os_args(&["--logical-removed-bytes", "1"])).unwrap_err(),
             "local-volume-logical-removed-requires-baseline"
         );
         assert_eq!(
-            parse_args(["--baseline"]).unwrap_err(),
+            parse_args(os_args(&["--baseline"])).unwrap_err(),
             "local-volume-baseline-value-missing"
         );
+    }
+
+    #[test]
+    fn parser_accepts_help_only_and_rejects_mixed_help() {
+        assert_eq!(parse_args(os_args(&["--help"])).unwrap_err(), "help");
+        assert_eq!(parse_args(os_args(&["-h"])).unwrap_err(), "help");
+        assert_eq!(
+            parse_args(os_args(&["--path", ".", "--help"])).unwrap_err(),
+            "local-volume-help-requires-alone"
+        );
+        assert_eq!(
+            parse_args(os_args(&["--help", "--path", "."])).unwrap_err(),
+            "local-volume-help-requires-alone"
+        );
+        assert_eq!(
+            parse_args(os_args(&["--help", "--help"])).unwrap_err(),
+            "local-volume-help-requires-alone"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_non_utf8_option_without_reflection_or_panic() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = OsString::from_vec(vec![0xFF, 0xFE]);
+            let error = parse_args([raw]).unwrap_err();
+            assert_eq!(error, "local-volume-argument-non-utf8");
+            assert!(!error.contains('\u{FFFD}'));
+        }
+    }
+
+    #[test]
+    fn parser_accepts_non_utf8_native_path_and_rejects_non_utf8_count() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw_path = OsString::from_vec(vec![b'/', 0xFF]);
+            let parsed = parse_args([OsString::from("--path"), raw_path.clone()]).unwrap();
+            assert_eq!(parsed.path, PathBuf::from(raw_path));
+            assert_eq!(parsed.baseline, None);
+
+            let raw_count = OsString::from_vec(vec![0xFF]);
+            let error =
+                parse_args([OsString::from("--logical-removed-bytes"), raw_count]).unwrap_err();
+            assert_eq!(error, "local-volume-logical-removed-invalid");
+        }
     }
 
     #[test]

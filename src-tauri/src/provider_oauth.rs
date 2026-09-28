@@ -1316,7 +1316,13 @@ mod tests {
             r#"{"error":"invalid_grant"}"#,
             r#"{"access_token":"access","token_type":"Bearer","expires_in":0}"#,
         ] {
-            assert!(parse_token_document(CloudProvider::GoogleDrive, GOOGLE_READ_SCOPE, invalid, true).is_err());
+            assert!(parse_token_document(
+                CloudProvider::GoogleDrive,
+                GOOGLE_READ_SCOPE,
+                invalid,
+                true
+            )
+            .is_err());
         }
     }
 }
