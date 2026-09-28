@@ -27,10 +27,17 @@
       stats = s;
       scanning = false;
       try {
+        // Publish the scanned root to cleanup components only after the backend admits navigation.
+        // A managed provider root is intentionally rejected there; exposing it through `crumbs`
+        // before that decision would let sibling cleanup flows rescan provider placeholders.
+        const admittedNode = await api.getNode(selectedRoot);
         crumbs = [selectedRoot];
-        node = await api.getNode(selectedRoot);
+        node = admittedNode;
         top = await api.topFiles(200);
       } catch (e) {
+        crumbs = [];
+        node = null;
+        top = [];
         console.error("post-scan load failed:", e);
       }
     });
