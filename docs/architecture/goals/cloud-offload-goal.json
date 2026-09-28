@@ -6,12 +6,14 @@
   "states": [
     "copy-verified",
     "pending-provider-sync",
+    "provider-sync-incomplete",
     "provider-sync-confirmed",
     "eviction-ready",
     "source-evicted"
   ],
   "completion_gates": [
     "metadata-and-lineage-bound",
+    "destination-headroom-bound",
     "copy-content-verified",
     "provider-sync-state-complete",
     "immutable-evidence-record-valid",
@@ -23,9 +25,10 @@
   "pre_copy_evidence_streams": [
     "volume-pressure-evidence",
     "provider-client-runtime-evidence",
-    "icloud-sync-health-evidence"
+    "icloud-sync-health-evidence",
+    "provider-global-sync-evidence"
   ],
-  "pre_copy_evidence_rule": "compare one canonical three-stream cohort; missing, malformed, incomplete, or skewed evidence remains blocked",
+  "pre_copy_evidence_rule": "compare one canonical evidence cohort; missing, malformed, incomplete, or skewed evidence remains blocked",
   "pre_copy_evidence_max_skew_ms": 300000,
   "runtime_evidence_failure_policy": "fail-closed; unavailable provider-client runtime evidence is not process absence",
   "operator_actions": [

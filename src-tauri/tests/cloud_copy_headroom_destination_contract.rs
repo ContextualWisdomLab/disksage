@@ -24,3 +24,20 @@ fn native_copy_headroom_is_bound_to_the_destination_staging_volume() {
         "source-volume free space must not authorize or veto destination staging"
     );
 }
+
+#[test]
+fn cloud_plan_preview_headroom_uses_destination_staging_volume() {
+    let cloud = include_str!("../src/cloud.rs");
+    let start = cloud
+        .find("let mut destination_headroom_insufficient")
+        .expect("cloud preview must evaluate destination headroom");
+    let tail = &cloud[start..];
+    let end = tail
+        .find("\n    if !snapshot.source_scan_complete")
+        .expect("destination preview gate must remain before source-scan notices");
+    let helper = &tail[..end];
+
+    assert!(helper.contains("require_destination_copy_headroom"));
+    assert!(helper.contains("candidate.dst"));
+    assert!(!helper.contains("candidate.src"));
+}

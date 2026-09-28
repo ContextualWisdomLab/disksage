@@ -17,6 +17,8 @@ describe("cloud-offload Goal projection contract", () => {
       runtime_evidence_failure_policy?: string;
       pre_copy_evidence_streams?: string[];
       lineage_relation_identifier_rule?: string;
+      states?: string[];
+      completion_gates?: string[];
     };
 
     expect(goal.operator_actions).toContain("cancel-finder-copy");
@@ -26,9 +28,12 @@ describe("cloud-offload Goal projection contract", () => {
     ]));
     expect(goal.runtime_evidence_failure_policy).toContain("fail-closed");
     expect(goal.runtime_evidence_failure_policy).toContain("not process absence");
+    expect(goal.states).toContain("provider-sync-incomplete");
+    expect(goal.completion_gates).toContain("destination-headroom-bound");
     expect(goal.pre_copy_evidence_streams).toEqual(expect.arrayContaining([
       "provider-client-runtime-evidence",
       "icloud-sync-health-evidence",
+      "provider-global-sync-evidence",
     ]));
     expect(goal.lineage_relation_identifier_rule).toContain("never a raw local or provider path");
   });

@@ -14,9 +14,11 @@ use sha2::{Digest, Sha256};
 use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider, PreCopyEvidenceCohort};
 use crate::cloud_transfer;
 use crate::icloud_sync_health::{
-    native_sync_down_pending, native_sync_up_pending, validate_native_status_evidence,
+    native_pending_scan, native_sync_down_pending, native_sync_up_pending,
+    validate_native_status_evidence,
     validate_file_provider_activity_evidence, IcloudFileProviderActivityEvidence,
     IcloudNativeStatusEvidence, IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
+    FILE_PROVIDER_DISK_IMPORT_NOTICE,
 };
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
@@ -33,7 +35,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 22] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 25] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -45,12 +47,15 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 22] = [
     "icloud-native-status-command-timeout",
     "icloud-native-sync-up-pending",
     "icloud-native-sync-down-pending",
+    "icloud-native-status-pending-scan",
     "icloud-file-provider-no-progress",
     "icloud-file-provider-materialization-failed",
     "icloud-file-provider-item-locked",
     "icloud-file-provider-stalled",
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
+    "icloud-file-provider-indexing-pending",
+    "icloud-file-provider-disk-import-active",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
@@ -320,6 +325,9 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     {
         blockers.push("icloud-native-sync-down-pending".into());
     }
+    if report.native_status.as_ref().is_some_and(native_pending_scan) {
+        blockers.push("icloud-native-status-pending-scan".into());
+    }
     if let Some(activity) = report.file_provider_activity.as_ref() {
         let no_progress = activity.no_progress_fetch_count > 0
             || activity.no_progress_create_count > 0;
@@ -350,6 +358,16 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if activity.sync_excluded_root_count > 0 {
             blockers.push("icloud-file-provider-root-excluded".into());
+        }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            blockers.push("icloud-file-provider-indexing-pending".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+        {
+            blockers.push("icloud-file-provider-disk-import-active".into());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
@@ -1192,6 +1210,9 @@ fn validate_icloud_admission_summary(
     {
         expected.push("icloud-native-sync-down-pending".to_string());
     }
+    if summary.native_status.as_ref().is_some_and(native_pending_scan) {
+        expected.push("icloud-native-status-pending-scan".to_string());
+    }
     if let Some(activity) = summary.file_provider_activity.as_ref() {
         let no_progress = activity.no_progress_fetch_count > 0
             || activity.no_progress_create_count > 0;
@@ -1222,6 +1243,16 @@ fn validate_icloud_admission_summary(
         }
         if activity.sync_excluded_root_count > 0 {
             expected.push("icloud-file-provider-root-excluded".to_string());
+        }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            expected.push("icloud-file-provider-indexing-pending".to_string());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == FILE_PROVIDER_DISK_IMPORT_NOTICE)
+        {
+            expected.push(FILE_PROVIDER_DISK_IMPORT_NOTICE.to_string());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
@@ -1440,6 +1471,7 @@ mod tests {
             schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
             output_mode: "icloud-local-sync-health".into(),
             observed_at_ms: 30,
+            admission_blocked_since_ms: None,
             provider: "icloud".into(),
             evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
             evidence_complete: true,
@@ -1489,6 +1521,7 @@ mod tests {
             server_state: Some("full-sync".into()),
             sync_state: Some("needs-sync-up".into()),
             last_sync_present: true,
+            pending_scan_count: 0,
             notices: vec!["icloud-native-status-summary-observed".into()],
         }
     }
@@ -1591,6 +1624,8 @@ mod tests {
             schema_version: provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
             provider: CloudProvider::Onedrive,
             evidence_kind: "fileproviderctl-global-dump".into(),
+            observed_at_ms: 1,
+            admission_blocked_since_ms: None,
             evidence_complete: true,
             state: ProviderGlobalSyncState::Pending,
             upload_progress_present: true,
@@ -1741,15 +1776,19 @@ mod tests {
         let report = report(CloudProvider::Icloud);
         let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
         let mut health = icloud_health(false);
-        health.native_status = Some(native_sync_up_status());
+        let mut native = native_sync_up_status();
+        native.pending_scan_count = 1;
+        health.native_status = Some(native);
         health.new_copy_admission_state = "blocked".into();
         health.new_copy_admission_blockers = vec![
             "icloud-native-status-command-timeout".into(),
             "icloud-native-sync-up-pending".into(),
+            "icloud-native-status-pending-scan".into(),
         ];
         health.blockers = vec![
             "icloud-native-status-command-timeout".into(),
             "icloud-native-sync-up-pending".into(),
+            "icloud-native-status-pending-scan".into(),
         ];
 
         let envelope =
@@ -1760,7 +1799,8 @@ mod tests {
             admission.blockers,
             vec![
                 "icloud-native-status-command-timeout",
-                "icloud-native-sync-up-pending"
+                "icloud-native-sync-up-pending",
+                "icloud-native-status-pending-scan"
             ]
         );
         assert_eq!(
@@ -1956,7 +1996,7 @@ mod tests {
         let mut forged_icloud_blocker =
             export_naruon_cloud_copy_readiness(&onedrive_report, &runtime, None).unwrap();
         forged_icloud_blocker.candidate_blocker_counts.insert(
-            "icloud-upload-queue-nonempty".into(),
+            "icloud-file-provider-indexing-pending".into(),
             CountBytes {
                 count: forged_icloud_blocker.candidate_count,
                 bytes: forged_icloud_blocker.candidate_bytes,

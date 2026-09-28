@@ -6,6 +6,8 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[path = "copy_headroom.rs"]
+pub(crate) mod copy_headroom;
 #[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]

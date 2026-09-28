@@ -672,6 +672,28 @@ pub fn candidate_blockers_with_review(
     candidate_blockers_for_action(candidate, cloud_root, review_decision, false)
 }
 
+/// Validate a provider-API copy while allowing only native staging headroom diagnostics.
+///
+/// Provider API uploads stream the source directly to the remote service and do not create the
+/// local File Provider staging file whose capacity probe produced `local-volume-headroom-*`.
+/// Every other planner blocker remains authoritative, including review, path, provider, and
+/// metadata gates.
+pub fn provider_api_candidate_blockers_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Vec<String> {
+    let mut blockers = candidate_blockers_for_action(candidate, cloud_root, review_decision, false);
+    if candidate
+        .blocked_reason
+        .as_deref()
+        .is_some_and(|reason| reason.starts_with("local-volume-headroom-"))
+    {
+        blockers.retain(|blocker| blocker != "planner-blocked");
+    }
+    blockers
+}
+
 /// Validate a fresh planner candidate for adopting a destination that already exists. This clears
 /// only the exact `destination-exists` planner condition; every metadata, review, account-scope,
 /// and path gate remains identical to a DiskSage-created copy.
@@ -2531,6 +2553,17 @@ mod tests {
         already_cloud.src = DESTINATION.into();
         assert!(candidate_blockers(&already_cloud, &root())
             .contains(&"source-already-in-cloud-root".to_string()));
+    }
+
+    #[test]
+    fn provider_api_copy_bypasses_only_native_staging_headroom() {
+        let mut candidate = candidate();
+        candidate.blocked_reason = Some("local-volume-headroom-insufficient".into());
+        assert!(provider_api_candidate_blockers_with_review(&candidate, &root(), None).is_empty());
+
+        candidate.blocked_reason = Some("destination-exists".into());
+        assert!(provider_api_candidate_blockers_with_review(&candidate, &root(), None)
+            .contains(&"planner-blocked".to_string()));
     }
 
     #[test]

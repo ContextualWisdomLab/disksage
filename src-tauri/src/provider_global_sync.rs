@@ -7,6 +7,8 @@
 
 use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 // macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
 // room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
@@ -41,6 +43,11 @@ pub struct ProviderGlobalSyncReport {
     pub schema_version: u32,
     pub provider: CloudProvider,
     pub evidence_kind: String,
+    #[serde(default)]
+    pub observed_at_ms: u64,
+    /// Earliest retained observation in the current provider admission-blocker run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_blocked_since_ms: Option<u64>,
     pub evidence_complete: bool,
     pub state: ProviderGlobalSyncState,
     pub upload_progress_present: bool,
@@ -167,14 +174,15 @@ pub fn parse_dump(
         has_item_not_found |= marker_lower.contains("code=-1005")
             || marker_lower.contains("itemnotfound")
             || marker.contains("파일이 존재하지 않습니다");
-        has_local_disk_full |= contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
-            || marker_lower.contains("enospc")
-            || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "osstatus ", "-34")
-            || marker_lower.contains("no space left on device")
-            || marker_lower.contains("disk full");
+        has_local_disk_full |=
+            contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
+                || marker_lower.contains("enospc")
+                || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "osstatus -", "34")
+                || marker_lower.contains("no space left on device")
+                || marker_lower.contains("disk full");
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
@@ -252,6 +260,8 @@ pub fn parse_dump(
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider,
         evidence_kind: "fileproviderctl-global-dump".into(),
+        observed_at_ms: 0,
+        admission_blocked_since_ms: None,
         evidence_complete: !probe_timed_out,
         state,
         upload_progress_present,
@@ -382,7 +392,9 @@ pub fn inspect_new_copy_admission(
     provider: CloudProvider,
 ) -> Result<ProviderGlobalSyncReport, String> {
     let output = run_dump(provider)?;
-    parse_dump(provider, &output)
+    let mut report = parse_dump(provider, &output)?;
+    report.observed_at_ms = system_time_ms();
+    Ok(report)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -399,6 +411,287 @@ fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
     report.schema_version == PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
         && report.evidence_kind == "fileproviderctl-global-dump"
         && provider_identifier(report.provider).is_some()
+}
+
+pub const PROVIDER_GLOBAL_SYNC_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const PROVIDER_GLOBAL_SYNC_EVIDENCE_DIRECTORY: &str = "provider-global-sync-evidence";
+const MAX_PERSISTED_PROVIDER_GLOBAL_SYNC_SNAPSHOTS: usize = 128;
+const MAX_PERSISTED_PROVIDER_GLOBAL_SYNC_SNAPSHOT_BYTES: usize = 64 * 1024;
+
+/// Path-free provider-global evidence retained only to measure a blocker across restarts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderGlobalSyncEvidenceSnapshot {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub provider: CloudProvider,
+    pub evidence_complete: bool,
+    pub state: ProviderGlobalSyncState,
+    pub upload_progress_present: bool,
+    pub download_progress_present: bool,
+    pub pending_indexable_count: Option<u64>,
+    pub blockers: Vec<String>,
+    pub evidence_fingerprint_sha256: String,
+}
+
+fn system_time_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+fn provider_global_sync_blocker_key(report: &ProviderGlobalSyncReport) -> String {
+    let mut blockers = report.blockers.clone();
+    blockers.sort_unstable();
+    blockers.dedup();
+    format!(
+        "{}|{}|{}|{}|{}|{}",
+        report.provider.as_str(),
+        report.state.as_str(),
+        report.upload_progress_present,
+        report.download_progress_present,
+        report
+            .pending_indexable_count
+            .is_some_and(|count| count > 0),
+        blockers.join(",")
+    )
+}
+
+fn provider_global_sync_snapshot_key(snapshot: &ProviderGlobalSyncEvidenceSnapshot) -> String {
+    let mut blockers = snapshot.blockers.clone();
+    blockers.sort_unstable();
+    blockers.dedup();
+    format!(
+        "{}|{}|{}|{}|{}|{}",
+        snapshot.provider.as_str(),
+        snapshot.state.as_str(),
+        snapshot.upload_progress_present,
+        snapshot.download_progress_present,
+        snapshot
+            .pending_indexable_count
+            .is_some_and(|count| count > 0),
+        blockers.join(",")
+    )
+}
+
+fn provider_global_sync_fingerprint(
+    snapshot: &ProviderGlobalSyncEvidenceSnapshot,
+) -> Result<String, String> {
+    let mut unsigned = snapshot.clone();
+    unsigned.evidence_fingerprint_sha256.clear();
+    let encoded = serde_json::to_vec(&unsigned)
+        .map_err(|_| "provider-global-sync-evidence-fingerprint-encode-failed".to_string())?;
+    let digest = Sha256::digest(encoded);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub fn provider_global_sync_evidence_snapshot_from_report(
+    report: &ProviderGlobalSyncReport,
+) -> Result<ProviderGlobalSyncEvidenceSnapshot, String> {
+    if !report_identity_is_valid(report)
+        || report.observed_at_ms == 0
+        || report
+            .blockers
+            .iter()
+            .any(|blocker| !is_stable_provider_blocker(blocker))
+    {
+        return Err("provider-global-sync-evidence-claim-invalid".into());
+    }
+    let mut snapshot = ProviderGlobalSyncEvidenceSnapshot {
+        schema_version: PROVIDER_GLOBAL_SYNC_EVIDENCE_SCHEMA_VERSION,
+        observed_at_ms: report.observed_at_ms,
+        provider: report.provider,
+        evidence_complete: report.evidence_complete,
+        state: report.state,
+        upload_progress_present: report.upload_progress_present,
+        download_progress_present: report.download_progress_present,
+        pending_indexable_count: report.pending_indexable_count,
+        blockers: report.blockers.clone(),
+        evidence_fingerprint_sha256: String::new(),
+    };
+    snapshot.evidence_fingerprint_sha256 = provider_global_sync_fingerprint(&snapshot)?;
+    Ok(snapshot)
+}
+
+pub fn validate_provider_global_sync_evidence_snapshot(
+    snapshot: &ProviderGlobalSyncEvidenceSnapshot,
+) -> Result<(), String> {
+    if snapshot.schema_version != PROVIDER_GLOBAL_SYNC_EVIDENCE_SCHEMA_VERSION
+        || snapshot.observed_at_ms == 0
+        || provider_identifier(snapshot.provider).is_none()
+        || snapshot
+            .blockers
+            .iter()
+            .any(|blocker| !is_stable_provider_blocker(blocker))
+    {
+        return Err("provider-global-sync-evidence-shape-invalid".into());
+    }
+    let expected = provider_global_sync_fingerprint(snapshot)?;
+    if snapshot.evidence_fingerprint_sha256 != expected {
+        return Err("provider-global-sync-evidence-fingerprint-invalid".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn provider_global_sync_evidence_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
+    if !app_data_dir.is_absolute()
+        || app_data_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("provider-global-sync-evidence-parent-invalid".into());
+    }
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "provider-global-sync-evidence-parent-create-failed".to_string())?;
+    let parent = std::fs::symlink_metadata(app_data_dir)
+        .map_err(|_| "provider-global-sync-evidence-parent-unavailable".to_string())?;
+    if parent.file_type().is_symlink() || !parent.is_dir() {
+        return Err("provider-global-sync-evidence-parent-unsafe".into());
+    }
+    let directory = app_data_dir.join(PROVIDER_GLOBAL_SYNC_EVIDENCE_DIRECTORY);
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "provider-global-sync-evidence-directory-create-failed".to_string())?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .map_err(|_| "provider-global-sync-evidence-directory-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("provider-global-sync-evidence-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).map_err(
+            |_| "provider-global-sync-evidence-directory-permissions-failed".to_string(),
+        )?;
+    }
+    Ok(directory)
+}
+
+#[cfg(not(coverage))]
+fn prune_provider_global_sync_evidence(directory: &Path) -> Result<(), String> {
+    let mut records = std::fs::read_dir(directory)
+        .map_err(|_| "provider-global-sync-evidence-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let (timestamp, fingerprint) = name.strip_suffix(".json")?.split_once('-')?;
+            (timestamp.len() == 20
+                && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+                && fingerprint.len() == 64
+                && fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+            .then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.0.cmp(&right.0));
+    while records.len() > MAX_PERSISTED_PROVIDER_GLOBAL_SYNC_SNAPSHOTS {
+        let (_, path) = records.remove(0);
+        std::fs::remove_file(path)
+            .map_err(|_| "provider-global-sync-evidence-retention-failed".to_string())?;
+    }
+    Ok(())
+}
+
+/// Persist a bounded, path-free provider observation; it never mutates the cloud root.
+#[cfg(not(coverage))]
+pub fn write_provider_global_sync_evidence(
+    app_data_dir: &Path,
+    report: &ProviderGlobalSyncReport,
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let snapshot = provider_global_sync_evidence_snapshot_from_report(report)?;
+    validate_provider_global_sync_evidence_snapshot(&snapshot)?;
+    let directory = provider_global_sync_evidence_directory(app_data_dir)?;
+    let path = directory.join(format!(
+        "{:020}-{}.json",
+        snapshot.observed_at_ms, snapshot.evidence_fingerprint_sha256
+    ));
+    let encoded = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|_| "provider-global-sync-evidence-encode-failed".to_string())?;
+    if encoded.len() > MAX_PERSISTED_PROVIDER_GLOBAL_SYNC_SNAPSHOT_BYTES {
+        return Err("provider-global-sync-evidence-too-large".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "provider-global-sync-evidence-create-failed".to_string())?;
+    let result = file
+        .write_all(&encoded)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "provider-global-sync-evidence-write-failed".to_string());
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    #[cfg(unix)]
+    std::fs::File::open(&directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "provider-global-sync-evidence-directory-sync-failed".to_string())?;
+    prune_provider_global_sync_evidence(&directory)?;
+    Ok(path)
+}
+
+/// Return the earliest retained observation with the same provider blocker fingerprint.
+#[cfg(not(coverage))]
+pub fn provider_global_sync_blocked_since_ms(
+    app_data_dir: &Path,
+    report: &ProviderGlobalSyncReport,
+) -> Option<u64> {
+    if report.blockers.is_empty() || report.observed_at_ms == 0 {
+        return None;
+    }
+    let current_key = provider_global_sync_blocker_key(report);
+    let directory = provider_global_sync_evidence_directory(app_data_dir).ok()?;
+    let mut records = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            name.strip_suffix(".json")?.split_once('-')?;
+            Some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut since = report.observed_at_ms;
+    for (_, path) in records {
+        let encoded = match std::fs::read(path) {
+            Ok(encoded) => encoded,
+            Err(_) => break,
+        };
+        let snapshot = match serde_json::from_slice::<ProviderGlobalSyncEvidenceSnapshot>(&encoded)
+        {
+            Ok(snapshot) => snapshot,
+            Err(_) => break,
+        };
+        if validate_provider_global_sync_evidence_snapshot(&snapshot).is_err() {
+            break;
+        }
+        if snapshot.provider != report.provider {
+            continue;
+        }
+        if !snapshot.evidence_complete {
+            break;
+        }
+        if snapshot.observed_at_ms >= report.observed_at_ms {
+            continue;
+        }
+        if provider_global_sync_snapshot_key(&snapshot) != current_key {
+            break;
+        }
+        since = snapshot.observed_at_ms;
+    }
+    Some(since)
 }
 
 fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
@@ -722,5 +1015,102 @@ sync engine state:
     fn malformed_or_icloud_dump_is_rejected() {
         assert!(parse_dump(CloudProvider::Onedrive, "sync engine state:").is_err());
         assert!(parse_dump(CloudProvider::Icloud, QUIET_DUMP).is_err());
+    }
+
+    #[test]
+    fn provider_blocker_onset_survives_restart_without_retaining_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut first = parse_dump(CloudProvider::GoogleDrive, ACTIVE_DUMP).unwrap();
+        first.observed_at_ms = 1_000;
+        write_provider_global_sync_evidence(directory.path(), &first).unwrap();
+
+        let mut second = first.clone();
+        second.observed_at_ms = 2_000;
+        write_provider_global_sync_evidence(directory.path(), &second).unwrap();
+
+        assert_eq!(
+            provider_global_sync_blocked_since_ms(directory.path(), &second),
+            Some(1_000)
+        );
+        let encoded = std::fs::read_dir(
+            directory
+                .path()
+                .join(PROVIDER_GLOBAL_SYNC_EVIDENCE_DIRECTORY),
+        )
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+        let contents = std::fs::read_to_string(encoded.path()).unwrap();
+        assert!(!contents.contains("/Users/"));
+        assert!(!contents.contains("fileproviderctl"));
+    }
+
+    #[test]
+    fn provider_blocker_onset_ignores_interleaved_provider_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut google = parse_dump(CloudProvider::GoogleDrive, ACTIVE_DUMP).unwrap();
+        google.observed_at_ms = 1_000;
+        write_provider_global_sync_evidence(directory.path(), &google).unwrap();
+
+        let onedrive_dump = ACTIVE_DUMP.replace(
+            "com.google.drivefs.fpext",
+            "com.microsoft.OneDrive.FileProvider",
+        );
+        let mut onedrive = parse_dump(CloudProvider::Onedrive, &onedrive_dump).unwrap();
+        onedrive.observed_at_ms = 1_500;
+        write_provider_global_sync_evidence(directory.path(), &onedrive).unwrap();
+
+        let mut later_google = google.clone();
+        later_google.observed_at_ms = 2_000;
+        assert_eq!(
+            provider_global_sync_blocked_since_ms(directory.path(), &later_google),
+            Some(1_000)
+        );
+    }
+
+    #[test]
+    fn malformed_older_provider_evidence_preserves_newer_onset() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut report = parse_dump(CloudProvider::GoogleDrive, ACTIVE_DUMP).unwrap();
+        report.observed_at_ms = 1_500;
+        write_provider_global_sync_evidence(directory.path(), &report).unwrap();
+        let malformed_path = directory
+            .path()
+            .join(PROVIDER_GLOBAL_SYNC_EVIDENCE_DIRECTORY)
+            .join(format!("{:020}-malformed.json", 1_000));
+        std::fs::write(malformed_path, b"not-json").unwrap();
+
+        let later = ProviderGlobalSyncReport {
+            observed_at_ms: 2_000,
+            ..report
+        };
+        assert_eq!(
+            provider_global_sync_blocked_since_ms(directory.path(), &later),
+            Some(1_500)
+        );
+    }
+
+    #[test]
+    fn tampered_provider_evidence_cannot_extend_blocker_duration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut report = parse_dump(CloudProvider::GoogleDrive, ACTIVE_DUMP).unwrap();
+        report.observed_at_ms = 1_000;
+        write_provider_global_sync_evidence(directory.path(), &report).unwrap();
+        let mut snapshot = provider_global_sync_evidence_snapshot_from_report(&report).unwrap();
+        snapshot.observed_at_ms = 1;
+        let tampered_path = directory
+            .path()
+            .join(PROVIDER_GLOBAL_SYNC_EVIDENCE_DIRECTORY)
+            .join(format!("{:020}-{}.json", 1, "0".repeat(64)));
+        std::fs::write(tampered_path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        let later = ProviderGlobalSyncReport {
+            observed_at_ms: 2_000,
+            ..report
+        };
+        assert_eq!(
+            provider_global_sync_blocked_since_ms(directory.path(), &later),
+            Some(1_000)
+        );
     }
 }
