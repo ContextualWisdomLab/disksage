@@ -528,19 +528,37 @@ fn descriptor_number(descriptor: &[u8]) -> Option<RawFd> {
     std::str::from_utf8(descriptor).ok()?.parse::<RawFd>().ok()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecordEffect {
+    None,
+    Holder,
+    Incomplete,
+}
+
+fn merge_effect(current: RecordEffect, next: RecordEffect) -> RecordEffect {
+    match (current, next) {
+        (RecordEffect::Holder, _) | (_, RecordEffect::Holder) => RecordEffect::Holder,
+        (RecordEffect::Incomplete, _) | (_, RecordEffect::Incomplete) => RecordEffect::Incomplete,
+        _ => RecordEffect::None,
+    }
+}
+
 fn finish_record(
     record: &mut Option<FileRecord>,
     reviewed: &HashSet<FileIdentity>,
     self_pid: u32,
     retained_root_fd: RawFd,
     retained_root_identity: FileIdentity,
-) -> Result<(), String> {
+) -> Result<RecordEffect, String> {
     let Some(record) = record.take() else {
-        return Ok(());
+        return Ok(RecordEffect::None);
     };
     let descriptor = record.descriptor.as_deref().unwrap_or_default();
+    // lsof(8): FD `NOFD` means this process's /proc/<pid>/fd directory could not be
+    // opened, and `err` means the descriptor information itself failed. Either record
+    // is incomplete evidence. A later complete record may still prove a holder.
     if descriptor == b"NOFD" || descriptor == b"err" {
-        return Err("cargo-target-active-use-probe-failed:lsof-permission-limited".into());
+        return Ok(RecordEffect::Incomplete);
     }
     let descriptor_fd = descriptor_number(descriptor);
     let exact_retained_root = record.pid == self_pid
@@ -548,18 +566,18 @@ fn finish_record(
         && record.device == Some(retained_root_identity.0)
         && record.inode == Some(retained_root_identity.1);
     if exact_retained_root {
-        return Ok(());
+        return Ok(RecordEffect::None);
     }
     if let (Some(device), Some(inode)) = (record.device, record.inode) {
         if reviewed.contains(&(device, inode)) {
-            return Err("cargo-target-active-holders-present".into());
+            return Ok(RecordEffect::Holder);
         }
-        return Ok(());
+        return Ok(RecordEffect::None);
     }
     if record.file_type.as_deref().is_some_and(filesystem_type) {
         return Err("cargo-target-active-use-probe-failed:lsof-filesystem-identity-missing".into());
     }
-    Ok(())
+    Ok(RecordEffect::None)
 }
 
 fn classify_lsof_fields(
@@ -582,6 +600,7 @@ fn classify_lsof_fields(
     let mut current_pid = None;
     let mut current_file = None;
     let mut process_records = 0u64;
+    let mut effect = RecordEffect::None;
     for field in stdout
         .split(|byte| *byte == 0 || *byte == b'\n')
         .filter(|field| !field.is_empty())
@@ -591,13 +610,16 @@ fn classify_lsof_fields(
             .ok_or_else(|| "cargo-target-holder-lsof-empty-field".to_string())?;
         match *tag {
             b'p' => {
-                finish_record(
-                    &mut current_file,
-                    reviewed,
-                    self_pid,
-                    retained_root_fd,
-                    retained_root_identity,
-                )?;
+                effect = merge_effect(
+                    effect,
+                    finish_record(
+                        &mut current_file,
+                        reviewed,
+                        self_pid,
+                        retained_root_fd,
+                        retained_root_identity,
+                    )?,
+                );
                 let pid = parse_u32_ascii(value, "pid")?;
                 current_pid = Some(pid);
                 process_records = process_records
@@ -605,13 +627,16 @@ fn classify_lsof_fields(
                     .ok_or_else(|| "cargo-target-holder-lsof-process-overflow".to_string())?;
             }
             b'f' => {
-                finish_record(
-                    &mut current_file,
-                    reviewed,
-                    self_pid,
-                    retained_root_fd,
-                    retained_root_identity,
-                )?;
+                effect = merge_effect(
+                    effect,
+                    finish_record(
+                        &mut current_file,
+                        reviewed,
+                        self_pid,
+                        retained_root_fd,
+                        retained_root_identity,
+                    )?,
+                );
                 let pid = current_pid
                     .ok_or_else(|| "cargo-target-holder-lsof-file-without-process".to_string())?;
                 current_file = Some(FileRecord {
@@ -641,13 +666,22 @@ fn classify_lsof_fields(
             _ => {}
         }
     }
-    finish_record(
-        &mut current_file,
-        reviewed,
-        self_pid,
-        retained_root_fd,
-        retained_root_identity,
-    )?;
+    effect = merge_effect(
+        effect,
+        finish_record(
+            &mut current_file,
+            reviewed,
+            self_pid,
+            retained_root_fd,
+            retained_root_identity,
+        )?,
+    );
+    if effect == RecordEffect::Holder {
+        return Err("cargo-target-active-holders-present".into());
+    }
+    if effect == RecordEffect::Incomplete {
+        return Err("cargo-target-active-use-probe-failed:lsof-permission-limited".into());
+    }
     if process_records == 0 {
         return Err("cargo-target-active-use-probe-failed:lsof-empty-output".into());
     }
@@ -799,6 +833,20 @@ mod tests {
             classify_for_test(&reviewed, output, std::process::id(), 17, root_identity)
                 .unwrap_err(),
             "cargo-target-active-use-probe-failed:lsof-permission-limited"
+        );
+    }
+
+    #[test]
+    fn reviewed_holder_outranks_an_earlier_unreadable_fd_table() {
+        let root_identity = (0x1cu64, 41u64);
+        let held_identity = (0x1cu64, 42u64);
+        let reviewed = HashSet::from([root_identity, held_identity]);
+        let self_pid = std::process::id();
+        let mut output = b"p1\0fNOFD\0\n".to_vec();
+        output.extend_from_slice(&field_snapshot(self_pid.saturating_add(7), "3", held_identity));
+        assert_eq!(
+            classify_for_test(&reviewed, &output, self_pid, 17, root_identity).unwrap_err(),
+            "cargo-target-active-holders-present"
         );
     }
 

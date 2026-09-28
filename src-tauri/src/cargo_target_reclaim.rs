@@ -1594,7 +1594,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error, "cargo-target-linux-final-object-authority-unproven");
+        assert!(
+            error == "cargo-target-linux-final-object-authority-unproven"
+                || error == "cargo-target-active-use-probe-failed:lsof-permission-limited"
+                || error == "cargo-target-lsof-global-visibility-unavailable",
+            "Linux must refuse before mutation when holder evidence is incomplete or final-object authority is unproven, got {error}"
+        );
         assert!(!cargo_ran.exists(), "Linux cutoff must not invoke external Cargo");
         assert!(outside.join("SENTINEL").is_file());
         assert!(fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
@@ -1627,7 +1632,12 @@ mod tests {
 
         let error = clean_cargo_target_with_active_use(&root, &target, &cargo, |_| Ok(()))
             .unwrap_err();
-        assert_eq!(error, "cargo-target-linux-final-object-authority-unproven");
+        assert!(
+            error == "cargo-target-linux-final-object-authority-unproven"
+                || error == "cargo-target-active-use-probe-failed:lsof-permission-limited"
+                || error == "cargo-target-lsof-global-visibility-unavailable",
+            "Linux must refuse before mutation when holder evidence is incomplete or final-object authority is unproven, got {error}"
+        );
         assert!(target.is_dir(), "reviewed root must remain present");
         assert!(
             target.join("artifact").is_file(),

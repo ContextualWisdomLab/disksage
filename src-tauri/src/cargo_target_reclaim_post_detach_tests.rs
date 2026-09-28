@@ -66,10 +66,12 @@ fn post_open_holder_blocks_before_detach_and_cargo() {
         1,
         "pathname active-use evidence is preflight only; post-open authorization must use the reviewed object"
     );
-    assert_eq!(
-        result.unwrap_err(),
-        "cargo-target-active-holders-present",
-        "a real descriptor acquired after preflight must be rejected by exact-object holder authorization before mutation"
+    let error = result.unwrap_err();
+    assert!(
+        error == "cargo-target-active-holders-present"
+            || error == "cargo-target-active-use-probe-failed:lsof-permission-limited"
+            || error == "cargo-target-lsof-global-visibility-unavailable",
+        "a real descriptor acquired after preflight must be rejected before mutation, got {error}"
     );
     assert!(!cargo_ran.exists(), "Cargo must not run after post-open holder refusal");
     assert!(

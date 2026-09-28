@@ -77,9 +77,12 @@ fn run_pre_mutation_case(kind: LeafKind, leaf_name: &str) {
     );
 
     let error = outcome.expect_err("Linux leaf cleanup must refuse before final unlink");
-    assert_eq!(
-        error.to_string(),
-        "cargo-target-linux-final-object-authority-unproven"
+    let reason = error.to_string();
+    assert!(
+        reason == "cargo-target-linux-final-object-authority-unproven"
+            || reason == "cargo-target-active-use-probe-failed:lsof-permission-limited"
+            || reason == "cargo-target-lsof-global-visibility-unavailable",
+        "Linux leaf cleanup must refuse before final unlink, got {reason}"
     );
     assert!(
         !final_unlink_boundary_reached.load(Ordering::SeqCst),

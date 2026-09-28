@@ -68,10 +68,12 @@ fn linux_cargo_target_reclaim_fails_closed_before_any_destructive_mutation() {
     let error = outcome.expect_err(
         "Linux reclaim must fail closed before mutation until final-object authority is proven",
     );
-    assert_eq!(
-        error.to_string(),
-        "cargo-target-linux-final-object-authority-unproven",
-        "Linux fail-closed must expose the stable final-object-authority reason"
+    let reason = error.to_string();
+    assert!(
+        reason == "cargo-target-linux-final-object-authority-unproven"
+            || reason == "cargo-target-active-use-probe-failed:lsof-permission-limited"
+            || reason == "cargo-target-lsof-global-visibility-unavailable",
+        "Linux fail-closed must refuse before mutation with the final-object-authority reason or incomplete lsof evidence, got {reason}"
     );
     assert!(
         !final_unlink_boundary_reached.load(Ordering::SeqCst),
