@@ -654,12 +654,21 @@ fn days_from_civil(year: i64, month: i32, day: i32) -> i32 {
     (era * 146_097 + doe as i64 - 719_468) as i32
 }
 
-/// Unix volumes may mount with `noatime`; probe via `mount(8)`.
-/// Non-unix platforms have no portable `mount`/`atime` contract — fail closed
-/// (treat last-use atime as unreliable) so classification cannot become `stale`
-/// from atime alone. Matches `atime-unsupported-platform` in formula_last_use.
+/// Non-unix platforms have no portable `mount`/`atime` contract, so last-use
+/// atime is unreliable and classification cannot become `stale` from atime
+/// alone. Unix defers to the `mount(8)` probe. Matches
+/// `atime-unsupported-platform` in formula_last_use.
+fn volume_atime_fail_closed(is_unix: bool, unix_probe_unreliable: bool) -> bool {
+    !is_unix || unix_probe_unreliable
+}
+
 #[cfg(unix)]
 fn volume_atime_unreliable(prefix: &Path) -> bool {
+    volume_atime_fail_closed(true, unix_mount_probe_unreliable(prefix))
+}
+
+#[cfg(unix)]
+fn unix_mount_probe_unreliable(prefix: &Path) -> bool {
     let output = Command::new("mount").output().ok();
     let Some(output) = output else {
         return true;
@@ -687,7 +696,7 @@ fn volume_atime_unreliable(prefix: &Path) -> bool {
 
 #[cfg(not(unix))]
 fn volume_atime_unreliable(_prefix: &Path) -> bool {
-    true
+    volume_atime_fail_closed(false, false)
 }
 
 fn classify_lsof_result(exit_code: i32, stdout: &str, stderr: &str) -> Result<Vec<u32>, String> {
@@ -1356,6 +1365,18 @@ mod tests {
         let (class, reasons) = classify_package(&evidence, now, 90);
         assert_eq!(class, HomebrewClassification::Unknown);
         assert!(reasons.iter().any(|r| r == "atime-unreliable"));
+    }
+
+    #[test]
+    fn non_unix_atime_fails_closed_even_when_a_probe_would_trust_it() {
+        assert!(volume_atime_fail_closed(false, false));
+        assert!(volume_atime_fail_closed(false, true));
+    }
+
+    #[test]
+    fn unix_atime_follows_the_mount_probe() {
+        assert!(!volume_atime_fail_closed(true, false));
+        assert!(volume_atime_fail_closed(true, true));
     }
 
     #[cfg(not(unix))]
