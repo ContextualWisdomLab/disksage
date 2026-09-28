@@ -19,7 +19,7 @@ The authoritative implementation is `.github/workflows/release.yml`.
 The release contract requires all of the following:
 
 - checkout binds every platform build to `github.event.pull_request.head.sha` for pull requests and `github.sha` for tags or manual runs, rather than silently treating a generated pull-request merge ref as exact-head evidence;
-- release concurrency uses `github.run_attempt == 1`, so a fresh first attempt supersedes stale work while explicit rerun attempts do not cancel themselves inside the same concurrency group;
+- release concurrency uses `github.event_name == 'pull_request' && github.run_attempt == 1`, so a fresh first PR attempt supersedes stale work while explicit rerun attempts do not cancel themselves inside the same concurrency group;
 - the three platform builds upload the exact bundle and operational CLI paths that later jobs consume;
 - release workflow artifacts use the `release-disksage-*` namespace, which excludes concurrently uploaded `disksage-gpu-*` diagnostic bundles;
 - attestation and publication downloads preserve each workflow artifact in its own directory instead of flattening archives, so duplicate basenames remain observable and last-writer-wins extraction cannot erase evidence before admission;

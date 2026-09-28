@@ -3,6 +3,7 @@
 DiskSage exposes only named, regenerable cache roots. The root itself is preserved; the UI first
 asks Rust for its bounded direct-child snapshot, including logical bytes, modification time, and
 filesystem object identity.
+The npm `_npx` directory is excluded because it holds installed MCP server packages between runs.
 
 The cleanup command accepts that exact snapshot and refuses the operation when the catalog root or
 any child changed. Each child is then moved to the operating-system Trash through the shared
