@@ -4,53 +4,55 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const workflow = readFileSync(
+  resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
+  "utf8",
+);
 
-describe("hourly contextual-orchestrator loop contract", () => {
-  it("keeps the foreign orchestrator dependency read-only and uses only its published runtime API", () => {
-    const workflow = readFileSync(
-      resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
-      "utf8",
+const centralWorkflowSha = "e6334e229581a918e2f22de18733b76fa65d7e71";
+
+describe("hourly product loop owner contract", () => {
+  it("is a thin exact-SHA caller of the canonical review-repair owner", () => {
+    expect(workflow).toContain(
+      `uses: ContextualWisdomLab/.github/.github/workflows/pr-review-fix-scheduler.yml@${centralWorkflowSha}`,
     );
+    expect(workflow).toContain("target_repository: ContextualWisdomLab/disksage");
+    expect(workflow).toContain("base_branch: main");
+    expect(workflow).toContain('max_prs: "200"');
+    expect(workflow).toContain('max_dispatches: "1"');
+    expect(workflow).toContain('scan_window_size: "50"');
+    expect(workflow).toContain('retry_hours: "2"');
+    expect(workflow).toContain("resolve_unreviewed_conflicts: true");
+  });
 
+  it("does not duplicate model routing or provider discovery in the product repository", () => {
     for (const forbidden of [
-      "CONTEXTUAL_ORCHESTRATOR_KV_DSN",
-      "CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE",
+      "/v1/models",
+      "/v1/chat/completions",
+      "ORCHESTRATOR_URL",
+      "ORCHESTRATOR_TOKEN",
+      "CONTEXTUAL_ORCHESTRATOR_URL",
+      "CONTEXTUAL_ORCHESTRATOR_TOKEN",
       "BYTEZ_API_KEY",
       "NVIDIA_NIM_API_KEY",
       "NVIDIA_NIM_API_KEY_SUB",
       "OPENROUTER_API_KEY",
       "OPENAI_API_KEY",
-      "repository: ContextualWisdomLab/contextual-orchestrator",
-      "register-credential",
-      "bootstrap-contextual-orchestrator-credentials",
-      "python3 -m pip install",
+      "COPILOT_GITHUB_TOKEN",
+      "model=",
+      "model:\n",
+      "provider",
     ]) {
       expect(workflow).not.toContain(forbidden);
     }
-
-    expect(workflow).toContain("ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}");
-    expect(workflow).toContain("ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}");
-    expect(workflow).toContain('"${base}/v1/models"');
-    expect(workflow).toContain('"${base}/v1/chat/completions"');
-    expect(workflow).toContain("persist-credentials: false");
-    expect(workflow).toContain("gh pr list --state open --limit 100");
-    expect(workflow).not.toContain("COPILOT_GITHUB_TOKEN");
-    expect(workflow).toContain("--max-filesize 65536");
-    expect(workflow).toContain("response_sha256");
-    expect(workflow).toContain("hourly-product-loop-receipt-${{ github.run_id }}");
-    expect(workflow).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
-    expect(workflow).toContain('status=" + .status');
-    expect(workflow).not.toContain('model=" + .model + " status=');
-    expect(workflow).not.toContain("/tmp/agent-ok.txt");
   });
 
-  it("binds repository context to the exact scheduled or manually dispatched commit", () => {
-    const workflow = readFileSync(
-      resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
-      "utf8",
-    );
-
-    expect(workflow).toContain('ref: ${{ github.sha }}');
-    expect(workflow).not.toContain("ref: main");
+  it("keeps the local entry point manual and grants only the reusable scheduler permissions it needs", () => {
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).not.toMatch(/^\s*schedule:\s*$/mu);
+    expect(workflow).toContain("contents: read");
+    expect(workflow).toContain("id-token: write");
+    expect(workflow).not.toContain("contents: write");
+    expect(workflow).not.toContain("pull-requests: write");
   });
 });

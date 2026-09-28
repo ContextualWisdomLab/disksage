@@ -1,97 +1,94 @@
-# ADR-0008: Keep the hourly loop read-only at foreign dependency boundaries
+# ADR-0008: Delegate product-loop review and model routing to the central owner
 
-**Status:** Accepted
+**Status:** Accepted, amended 2026-09-21
 **Date:** 2026-08-20
 
 ## Context
 
-The hourly product loop needs contextual-orchestrator model discovery and an
-advisory OpenCode review. An earlier design checked out the orchestrator
-repository and registered five provider credentials into its KV from this
-repository's workflow. That created a cross-repository write boundary and made
-the DiskSage workflow responsible for provider-secret custody even though the
-orchestrator deployment owns its own runtime configuration.
+DiskSage needs recurring review and repair of its protected PR queue, but it must not become a
+second owner of contextual-orchestrator provider discovery, model selection, GitHub App/OIDC
+review authority, or provider-secret custody. The earlier repository-local workflow called
+`/v1/models` and `/v1/chat/completions` directly. Even though that caller was read-only, it still
+implemented model-routing policy inside the product repository and duplicated a control-plane
+responsibility that now belongs to `ContextualWisdomLab/.github` and
+`contextual-orchestrator`.
+
+The organization control plane has since consolidated the former per-product hourly callers into
+`.github/workflows/hourly-review-repair.yml`. Native PR/review events own normal progress; the
+central schedule is a distributed missed-event recovery. At protected `.github` revision
+`e6334e229581a918e2f22de18733b76fa65d7e71`, DiskSage is the `37 10 * * *` recovery target and
+the reusable engine is `.github/workflows/pr-review-fix-scheduler.yml`.
 
 ## Decision
 
-The repository-local advisory workflow uses only contextual-orchestrator's
-published HTTP API. It reads `CONTEXTUAL_ORCHESTRATOR_URL` and
-`CONTEXTUAL_ORCHESTRATOR_TOKEN`, discovers a model through `/v1/models`, and
-sends bounded repository context to `/v1/chat/completions`. It checks out the
-exact manually-dispatched `github.sha`, keeps repository and pull-request
-permissions read-only, and never checks out or mutates the foreign
-orchestrator repository.
+The repository-local `.github/workflows/hourly-product-loop.yml` remains manual-only, but it is
+now only a thin admission point. It calls the central reusable scheduler at the exact protected
+owner revision:
 
-The repository-local workflow is intentionally **manual-only**. A direct HTTP
-model call is not a pinned OpenCode review worker, so a repository-local
-schedule would create an unpinned autonomous reviewer. The hourly product and
-PR review loop is owned by the trusted central workflow
-[`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml)
-at `37 * * * *`. That caller dispatches the pinned reusable scheduler at
-[`a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`](https://github.com/ContextualWisdomLab/.github/blob/a3fdaa1aacaba9443a18573c309fe1841fc2f0/.github/workflows/pr-review-fix-scheduler.yml),
-which performs its own OpenCode OIDC exchange and exact-head lease. This keeps
-the hourly requirement live without making DiskSage's local advisory workflow
-an unpinned mutation authority.
+`ContextualWisdomLab/.github/.github/workflows/pr-review-fix-scheduler.yml@e6334e229581a918e2f22de18733b76fa65d7e71`
 
-The five provider credentials (`BYTEZ_API_KEY`, both NVIDIA NIM keys,
-`OPENROUTER_API_KEY`, and `OPENAI_API_KEY`) remain deployment-side
-configuration of contextual-orchestrator. They are not imported into this
-workflow, copied into its KV, passed to the advisory Agent, or printed in
-logs. A missing orchestrator URL/token produces a visible skip; there is no
-OAuth, Copilot, or local mutation fallback.
+The caller supplies only DiskSage queue parameters (`target_repository`, `base_branch`, bounded
+scan/dispatch limits, retry window, and conflict-repair policy). It grants `contents: read` and
+`id-token: write`, because the central scheduler exchanges the established OpenCode application
+identity through OIDC. The product repository does not hold a local write token for this loop.
 
-## Operational evidence
+DiskSage does not discover providers or models, call inference endpoints, choose a paid fallback,
+or copy contextual-orchestrator provider credentials. Model-backed review remains behind the
+central owner contract, whose protected workflow fixes OpenCode review to
+`contextual-orchestrator/orchestrator/free`; contextual-orchestrator owns provider discovery and
+runtime failover behind that virtual model.
 
-On 2026-08-21, the latest central scheduled runs (including
-[`31991358711`](https://github.com/ContextualWisdomLab/.github/actions/runs/31991358711))
-ended in `startup_failure` before creating a job. The called scheduler requests
-`id-token: write`, while the caller exposed only `contents: read`; the missing
-caller permission prevented the OpenCode OIDC exchange from starting. The
-minimal repair is tracked in
-[`ContextualWisdomLab/.github#1188`](https://github.com/ContextualWisdomLab/.github/pull/1188)
-at current head `3ab34b57a7ab04eb14b5fca7994dd047df676748`; it applies the same OIDC
-permission fix to DiskSage and its sibling Clearfolio caller and updates the
-contract tests. The earlier DiskSage-only repair remains open as #1180. Until
-one of these fixes is normally merged and a scheduled run completes, the
-hourly cadence is not claimed as operational evidence.
+This preserves the product/domain boundary: DiskSage owns disk-space, filesystem, deletion,
+recovery, and platform-adapter truth; `.github` owns review/recovery workflow orchestration; and
+contextual-orchestrator owns model/provider routing.
 
 ## Consequences
 
-- The GitHub workflow cannot change a foreign database or repository and does
-  not become a second provider-secret store.
-- Model discovery and advisory review continue when the orchestrator endpoint
-  is configured, while the standalone personal installation remains OAuth-free.
-- Provider credentials must be configured where contextual-orchestrator is
-  deployed; this repository cannot prove that external deployment state.
-- Exact event-SHA context prevents either loop from reviewing a stale `main` tree.
-- Source revision `9b1c270` additionally uploads a seven-day, path-free advisory receipt when the
-  endpoint is configured. The receipt contains only schema version, event SHA, model identifier,
-  status, response byte count, and response hash; the model response body is never persisted.
+- The manual product entry point and the central missed-event recovery use one review/repair
+  implementation instead of two model-routing implementations.
+- The workflow is exact-SHA pinned, so a protected owner change requires an explicit consumer
+  bump rather than silently changing DiskSage behavior.
+- DiskSage no longer needs `CONTEXTUAL_ORCHESTRATOR_URL`,
+  `CONTEXTUAL_ORCHESTRATOR_TOKEN`, `/v1/models`, or `/v1/chat/completions` in its own workflow.
+- Provider credentials stay inside contextual-orchestrator's owner boundary. No Bytez, NVIDIA
+  NIM, OpenRouter, OpenAI, or Copilot provider secret is accepted by the DiskSage caller.
+- The repository-local workflow is not a second scheduler. It has no `schedule` trigger; normal
+  PR/review events plus the central owner recovery cadence remain authoritative.
 
 ## Rejected alternatives
 
-- **Checkout contextual-orchestrator in the DiskSage workflow:** rejected
-  because it couples the loop to foreign source and dependency installation.
-- **Register provider secrets into foreign KV from GitHub Actions:** rejected
-  because it expands write authority and secret custody without a product need
-  in this repository.
-- **Pass provider secrets to the Agent prompt:** rejected because advisory
-  review does not need provider credentials and must remain redaction-safe.
-- **Restore a schedule to the repository-local HTTP advisory:** rejected because
-  it would be an unpinned autonomous reviewer; the central pinned OpenCode
-  scheduler already provides the required hourly loop.
+- **Keep dynamic `/v1/models` discovery in DiskSage:** rejected because product-local model
+  selection duplicates contextual-orchestrator policy and can drift from the organization free
+  pool.
+- **Pin a provider/model group in DiskSage:** rejected because provider routing belongs to
+  contextual-orchestrator; the workflow-level contract is only `orchestrator/free` through the
+  central owner.
+- **Copy the central scheduler into DiskSage:** rejected because source copies create mutable
+  dual ownership and bypass the reusable-workflow contract.
+- **Call the central workflow by branch name:** rejected because a mutable branch cannot provide
+  exact workflow provenance.
+- **Restore a repository-local schedule:** rejected because the organization control plane owns
+  recurring recovery and already carries DiskSage in its target registry.
+
+## Evidence
+
+- `.github/workflows/hourly-product-loop.yml`
+- `src/lib/hourlyProductLoopContract.test.ts`
+- `src/lib/hourlyProductLoopWorkflow.test.ts`
+- `ContextualWisdomLab/.github@e6334e229581a918e2f22de18733b76fa65d7e71`
+  - `.github/workflows/hourly-review-repair.yml`
+  - `.github/workflows/pr-review-fix-scheduler.yml`
+  - central OpenCode contract tests pinning `contextual-orchestrator/orchestrator/free`
 
 ## Evidence basis
 
-- Saltzer, J. H., & Schroeder, M. D. (1975). The protection of information in
-  computer systems. *Proceedings of the IEEE, 63*(9), 1278–1308.
-  https://doi.org/10.1109/PROC.1975.9939
-- Joint Task Force. (2020). *Security and privacy controls for information
-  systems and organizations* (NIST SP 800-53 Rev. 5, Release 5.2.0, 2025).
+- Saltzer, J. H., & Schroeder, M. D. (1975). The protection of information in computer systems.
+  *Proceedings of the IEEE, 63*(9), 1278–1308. https://doi.org/10.1109/PROC.1975.9939
+- Joint Task Force. (2020). *Security and privacy controls for information systems and
+  organizations* (NIST SP 800-53 Rev. 5). National Institute of Standards and Technology.
   https://doi.org/10.6028/NIST.SP.800-53r5
 
 ## Related decisions
 
-- [ADR-0005](0005-hourly-agent-loop-is-advisory.md) — original advisory loop
-  contract, superseded by this decision.
+- [ADR-0005](0005-hourly-agent-loop-is-advisory.md) — historical bootstrap design, superseded.
 - [ADR-0007](0007-pre-copy-evidence-cohort.md) — fail-closed evidence cohort.

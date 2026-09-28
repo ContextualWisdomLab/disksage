@@ -209,6 +209,7 @@ fn permanent_approval_phrase(
         }
         for value in [
             candidate.bytes,
+            candidate.allocated_bytes,
             candidate.files,
             candidate.skipped,
             candidate.age_days,
@@ -451,6 +452,7 @@ mod tests {
             kind: "target".into(),
             project: root.to_string_lossy().into_owned(),
             bytes: 4096,
+            allocated_bytes: 8192,
             files: 8,
             skipped: 0,
             scan_complete: true,
@@ -460,10 +462,14 @@ mod tests {
         };
         let first = permanent_approval_phrase(&root, Some("target"), 30, &[candidate.clone()])
             .unwrap();
-        let mut changed = candidate;
-        changed.object_id = "object-b".into();
-        let second = permanent_approval_phrase(&root, Some("target"), 30, &[changed]).unwrap();
+        let mut renamed = candidate.clone();
+        renamed.object_id = "object-b".into();
+        let second = permanent_approval_phrase(&root, Some("target"), 30, &[renamed]).unwrap();
         assert_ne!(first, second);
+        let mut reallocated = candidate;
+        reallocated.allocated_bytes = 16384;
+        let third = permanent_approval_phrase(&root, Some("target"), 30, &[reallocated]).unwrap();
+        assert_ne!(first, third);
         assert!(permanent_approval_phrase(&root, Some("target"), 30, &[]).is_none());
     }
 }

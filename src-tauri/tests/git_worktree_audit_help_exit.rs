@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]";
+const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N] [--enable-orca-protections --recent-write-window-secs N] [--orca-terminal-json ABSOLUTE_JSON] [--orca-worktree-json ABSOLUTE_JSON] [--incomplete-dispatch-worktree-path ABSOLUTE_PATH] [--open-pr-head-oid OID] [--open-pr-head-branch NAME] [--lead-queue-file ABSOLUTE_PATH] [--assess-filesystem-protections] [--assess-unpushed-commits] [--assess-stash]";
 const OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn binary_path() -> &'static Path {
@@ -41,7 +41,8 @@ fn assert_exact_failure(arguments: &[&str], expected: &str) {
 }
 
 /// Unix-style `/…` fixtures are not absolute on Windows (`Path::is_absolute` is false).
-/// Map them to a host-absolute path so later validators are exercised without weakening checks.
+/// Map them to a host-absolute path so later validators (private-output, limits) are reached
+/// instead of stopping at `--repository-root는 절대 경로여야 함`. Does not weaken checks.
 fn platform_absolute(unix_abs: &str) -> String {
     debug_assert!(
         unix_abs.starts_with('/'),
@@ -140,8 +141,8 @@ fn primary_worktree_audit_keeps_machine_json_path_redacted_and_read_only() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).expect("audit stdout should remain UTF-8 JSON");
     let report: serde_json::Value = serde_json::from_str(&stdout).expect("audit stdout should be JSON");
-    assert_eq!(report["schema_kind"], "disksage.git-worktree-audit/v4");
-    assert_eq!(report["version"], 4);
+    assert_eq!(report["schema_kind"], "disksage.git-worktree-audit/v5");
+    assert_eq!(report["version"], 5);
     assert_eq!(report["worktree_count"], 1);
     assert_eq!(report["removal_candidate_count"], 0);
     assert_eq!(report["preserved_count"], 1);
