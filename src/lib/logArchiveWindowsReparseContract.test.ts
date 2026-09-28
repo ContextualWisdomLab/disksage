@@ -5,12 +5,15 @@ const logArchive = readFileSync('src-tauri/src/log_archive.rs', 'utf8');
 const scanner = readFileSync('src-tauri/src/scanner.rs', 'utf8');
 
 describe('log archive Windows reparse traversal contract', () => {
-  it('reuses the canonical scanner entry filter before evaluating archive candidates', () => {
+  it('blocks Windows reparse descent while yielding symlink leaves for skip classification', () => {
     expect(scanner).toMatch(
       /pub\(crate\) fn keep_entry[\s\S]*FILE_ATTRIBUTE_REPARSE_POINT/,
     );
     expect(logArchive).toMatch(
-      /WalkDir::new\(&options\.root\)[\s\S]*?\.filter_entry\(crate::scanner::keep_entry\)/,
+      /WalkDir::new\(&options\.root\)[\s\S]*?\.filter_entry\(keep_log_archive_walk_entry\)/,
+    );
+    expect(logArchive).toMatch(
+      /fn keep_log_archive_walk_entry[\s\S]*FILE_ATTRIBUTE_REPARSE_POINT/,
     );
   });
 
