@@ -654,10 +654,6 @@ fn days_from_civil(year: i64, month: i32, day: i32) -> i32 {
     (era * 146_097 + doe as i64 - 719_468) as i32
 }
 
-/// Unix volumes may mount with `noatime`; probe via `mount(8)`.
-/// Non-unix platforms have no portable `mount`/`atime` contract — fail closed
-/// (treat last-use atime as unreliable) so classification cannot become `stale`
-/// from atime alone.
 #[cfg(unix)]
 fn volume_atime_unreliable(prefix: &Path) -> bool {
     let output = Command::new("mount").output().ok();
