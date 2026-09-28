@@ -19,9 +19,11 @@ fn help_exits_successfully_with_usage_on_stdout() {
             output.stderr.is_empty(),
             "bare {flag} must not write stderr"
         );
-        assert!(String::from_utf8(output.stdout)
-            .expect("help must be UTF-8")
-            .starts_with(EXPECTED_USAGE));
+        let stdout = String::from_utf8(output.stdout).expect("help must be UTF-8");
+        assert!(stdout.starts_with(EXPECTED_USAGE));
+        assert!(stdout.contains("--manifest-budget-secs"));
+        assert!(stdout.contains("--kind"));
+        assert!(stdout.contains("--permanent --confirm EXACT_PHRASE --rationale TEXT"));
     }
 }
 
