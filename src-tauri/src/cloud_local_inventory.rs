@@ -129,7 +129,7 @@ fn base_notices() -> Vec<String> {
     ]
 }
 
-fn validate_options(options: CloudLocalInventoryOptions) -> Result<(), String> {
+pub fn validate_options(options: CloudLocalInventoryOptions) -> Result<(), String> {
     if options.max_entries == 0 || options.max_entries > MAX_ENTRY_LIMIT {
         return Err("cloud-local-inventory-max-entries-invalid".into());
     }
