@@ -1,5 +1,7 @@
 # DiskSage
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ContextualWisdomLab/disksage)
+
 > **The wise way to reclaim your disk.**
 > 디스크의 현자 — 내 디스크에 뭐가 있는지 알려주고, 지워도 되는지 판별해주는 크로스플랫폼 디스크 정리 앱.
 
