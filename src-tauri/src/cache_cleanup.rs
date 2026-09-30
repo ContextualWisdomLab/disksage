@@ -224,7 +224,12 @@ fn active_use_blocker(
     evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
 ) -> Option<&'static str> {
     if !evidence.assessed || !evidence.evidence_complete {
-        Some("cache-target-active-use-evidence-incomplete")
+        // Only the exact lsof timeout code is surfaced; everything else stays generic.
+        if evidence.error.as_deref() == Some("active-use-timeout") {
+            Some("cache-target-active-use-timeout")
+        } else {
+            Some("cache-target-active-use-evidence-incomplete")
+        }
     } else if evidence.active {
         Some("cache-target-active-use-detected")
     } else {
@@ -426,7 +431,7 @@ mod tests {
         };
         assert_eq!(
             active_use_blocker(&incomplete),
-            Some("cache-target-active-use-evidence-incomplete")
+            Some("cache-target-active-use-timeout")
         );
 
         let active = crate::git_worktree::GitWorktreeActiveUseEvidence {
@@ -442,6 +447,49 @@ mod tests {
             active_use_blocker(&active),
             Some("cache-target-active-use-detected")
         );
+    }
+
+    #[test]
+    fn active_use_timeout_is_typed_and_still_blocks() {
+        let evidence = |error: Option<&str>, complete: bool, active: bool| {
+            crate::git_worktree::GitWorktreeActiveUseEvidence {
+                method: "lsof-recursive-pid+ps-path-ancestry".into(),
+                assessed: true,
+                evidence_complete: complete,
+                active,
+                observed_pids: if active { vec![42] } else { Vec::new() },
+                results_truncated: false,
+                error: error.map(Into::into),
+            }
+        };
+        assert_eq!(
+            active_use_blocker(&evidence(Some("active-use-timeout"), false, false)),
+            Some("cache-target-active-use-timeout")
+        );
+        // A timeout that already saw a live PID must still refuse.
+        assert!(active_use_blocker(&evidence(Some("active-use-timeout"), false, true)).is_some());
+        // Only the exact lsof code is typed; lookalikes and other causes stay generic.
+        for error in [
+            Some("active-use-ps-timeout"),
+            Some("active-use-ps-output-truncated"),
+            Some("active-use-timeout "),
+            None,
+        ] {
+            assert_eq!(
+                active_use_blocker(&evidence(error, false, false)),
+                Some("cache-target-active-use-evidence-incomplete")
+            );
+        }
+        let unassessed = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            assessed: false,
+            ..evidence(Some("active-use-timeout"), true, false)
+        };
+        assert!(active_use_blocker(&unassessed).is_some());
+        assert_eq!(
+            active_use_blocker(&evidence(None, true, true)),
+            Some("cache-target-active-use-detected")
+        );
+        assert_eq!(active_use_blocker(&evidence(None, true, false)), None);
     }
 
     #[test]
