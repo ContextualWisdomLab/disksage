@@ -426,11 +426,14 @@ fn write_immutable_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(
     if encoded.len() as u64 > MAX_RECORD_BYTES {
         return Err("eviction-record-too-large".into());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| error.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options.open(path).map_err(|error| error.to_string())?;
     let result = (|| -> Result<(), String> {
         file.write_all(&encoded)
             .map_err(|error| error.to_string())?;
@@ -440,7 +443,8 @@ fn write_immutable_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(
             .map_err(|error| error.to_string())?
             .permissions();
         permissions.set_readonly(true);
-        std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
+        file.set_permissions(permissions)
+            .map_err(|error| error.to_string())?;
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
             std::fs::File::open(parent)
@@ -524,6 +528,13 @@ fn ensure_record_directory(path: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("eviction-dir-must-be-real-directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("eviction-dir-writable-by-others".into());
+        }
     }
     Ok(())
 }
