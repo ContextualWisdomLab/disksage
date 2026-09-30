@@ -70,7 +70,7 @@ describe("CloudArchive bounded error feedback", () => {
       },
     );
     expect(boundedCloudArchiveErrorMessage("copy", descriptorProxy)).toBe(
-      "클라우드 복사를 실행하지 못했습니다.",
+      "클라우드 복사를 실행하지 못했습니다. 연결 상태와 대상 위치를 확인한 뒤 다시 시도하십시오.",
     );
     expect(isCloudCopyCancelled(descriptorProxy)).toBe(false);
 
@@ -83,7 +83,7 @@ describe("CloudArchive bounded error feedback", () => {
       },
     );
     expect(boundedCloudArchiveErrorMessage("copy", prototypeProxy)).toBe(
-      "클라우드 복사를 실행하지 못했습니다.",
+      "클라우드 복사를 실행하지 못했습니다. 연결 상태와 대상 위치를 확인한 뒤 다시 시도하십시오.",
     );
     expect(isCloudCopyCancelled(prototypeProxy)).toBe(false);
   });
@@ -112,6 +112,17 @@ describe("CloudArchive bounded error feedback", () => {
     );
 
     expect(messages.size).toBe(operations.length);
+  });
+
+  it("keeps every visible failure message actionable and implementation-neutral", () => {
+    const forbidden = ["공급자", "OAuth", "attestation", "File Provider", "eviction permit"];
+    const nextAction = /(확인|다시|새로고침|기다|연결|열어|권한|시도)/;
+
+    for (const operation of operations) {
+      const message = boundedCloudArchiveErrorMessage(operation, "backend detail");
+      for (const term of forbidden) expect(message).not.toContain(term);
+      expect(message).toMatch(nextAction);
+    }
   });
 
   it("routes every CloudArchive catch boundary through bounded feedback", () => {

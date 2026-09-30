@@ -1,4 +1,4 @@
-//! Contract tests for the buyer-visible iCloud batch safety documentation.
+//! Contract tests for the operator-visible iCloud batch safety documentation.
 //!
 //! These checks keep the operational claims, evidence boundary, standards mapping, and APA 7th
 //! references reviewable alongside the Rust behavior they describe.
