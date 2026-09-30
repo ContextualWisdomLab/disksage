@@ -1,11 +1,11 @@
 //! Fingerprint-bound Maven cache pruning. Dry-run is the default.
 
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use disksage_lib::maven_cache::{prune_maven_repository, MavenCachePruneReport};
+use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 const DEFAULT_MAX_ENTRIES: u64 = 2_000_000;
 
@@ -19,44 +19,80 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]"
+    "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]\n\
+다음 단계: 먼저 --apply 없이 결과와 지문을 확인한 뒤, 일치하는 계획에만 --apply를 사용하세요."
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "알 수 없는 인자".to_string())
+}
+
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let mut repository_root = None;
     let mut expected_candidate_set_fingerprint = None;
     let mut apply = false;
+    let mut apply_seen = false;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut output = None;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--repository-root" => {
-                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?))
+        match args[index].to_str() {
+            Some("--repository-root") => {
+                if repository_root.is_some() {
+                    return Err("--repository-root는 한 번만 지정할 수 있음".into());
+                }
+                repository_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--repository-root",
+                )?));
             }
-            "--expected-candidate-set-fingerprint" => {
-                expected_candidate_set_fingerprint = Some(value(
+            Some("--expected-candidate-set-fingerprint") => {
+                if expected_candidate_set_fingerprint.is_some() {
+                    return Err(
+                        "--expected-candidate-set-fingerprint는 한 번만 지정할 수 있음".into(),
+                    );
+                }
+                expected_candidate_set_fingerprint = Some(text_value(
                     args,
                     &mut index,
                     "--expected-candidate-set-fingerprint",
-                )?)
+                )?);
             }
-            "--apply" => apply = true,
-            "--max-entries" => {
-                max_entries = value(args, &mut index, "--max-entries")?
+            Some("--apply") => {
+                if apply_seen {
+                    return Err("--apply는 한 번만 지정할 수 있음".into());
+                }
+                apply_seen = true;
+                apply = true;
+            }
+            Some("--max-entries") => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
+                max_entries = text_value(args, &mut index, "--max-entries")?
                     .parse()
-                    .map_err(|_| "--max-entries는 정수여야 함".to_string())?
+                    .map_err(|_| "--max-entries는 정수여야 함".to_string())?;
             }
-            "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            Some("--output") => {
+                if output.is_some() {
+                    return Err("--output은 한 번만 지정할 수 있음".into());
+                }
+                output = Some(PathBuf::from(native_value(args, &mut index, "--output")?));
+            }
+            Some("--help" | "-h") => return Err(usage().into()),
+            Some(_) | None => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -68,8 +104,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     }
     let expected_candidate_set_fingerprint = expected_candidate_set_fingerprint
         .ok_or_else(|| "--expected-candidate-set-fingerprint 값이 필요함".to_string())?;
-    if max_entries == 0 {
-        return Err("--max-entries는 1 이상이어야 함".into());
+    if !(1..=DEFAULT_MAX_ENTRIES).contains(&max_entries) {
+        return Err(format!(
+            "--max-entries는 1..={DEFAULT_MAX_ENTRIES} 범위여야 함"
+        ));
     }
     if output.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err("--output은 절대 경로여야 함".into());
@@ -84,6 +122,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,27 +136,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|_| "maven-cache-prune-output-create-failed".to_string())?;
-    file.write_all(encoded)
-        .map_err(|_| "maven-cache-prune-output-write-failed".to_string())?;
-    file.sync_all()
-        .map_err(|_| "maven-cache-prune-output-sync-failed".to_string())
-}
-
-fn output_summary(path: &PathBuf, report: &MavenCachePruneReport) -> Result<String, String> {
+fn output_summary(
+    receipt: &PrivateEvidenceReceipt,
+    report: &MavenCachePruneReport,
+) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "schema_kind": report.schema_kind,
-        "output": path.to_string_lossy(),
+        "private_output": receipt,
         "observed_candidate_set_fingerprint": report.observed_candidate_set_fingerprint,
         "candidate_directories": report.candidate_directories,
         "candidate_bytes": report.candidate_bytes,
@@ -127,8 +157,12 @@ fn output_summary(path: &PathBuf, report: &MavenCachePruneReport) -> Result<Stri
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let args = parse_args(&raw)?;
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args_os(&raw)?;
     let report = prune_maven_repository(
         &args.repository_root,
         &args.expected_candidate_set_fingerprint,
@@ -136,11 +170,11 @@ fn run() -> Result<(), String> {
         args.max_entries,
         now_ms(),
     )?;
-    let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
-        write_new_private_json(output, &encoded)?;
-        println!("{}", output_summary(output, &report)?);
+        let receipt = write_private_json_create_new(&args.repository_root, output, &report)?;
+        println!("{}", output_summary(&receipt, &report)?);
     } else {
+        let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         println!("{}", String::from_utf8_lossy(&encoded));
     }
     Ok(())
@@ -205,13 +239,38 @@ mod tests {
     }
 
     #[test]
-    fn private_output_is_create_new_and_not_overwritten() {
-        let tmp = tempfile::tempdir().unwrap();
-        let output = tmp.path().join("prune.json");
+    fn output_summary_exposes_only_private_evidence_commitment() {
+        let receipt = PrivateEvidenceReceipt {
+            written: true,
+            sha256: "b".repeat(64),
+            bytes: 321,
+            unix_mode: "0600".into(),
+            create_new: true,
+            contains_sensitive_local_paths: true,
+            is_approval: false,
+        };
+        let report = MavenCachePruneReport {
+            schema_kind: "disksage.maven-cache-prune/v1".into(),
+            repository_root: "/private/repository".into(),
+            generated_at_ms: 1,
+            expected_candidate_set_fingerprint: "a".repeat(64),
+            observed_candidate_set_fingerprint: "a".repeat(64),
+            candidate_directories: 0,
+            candidate_bytes: 0,
+            removed_directories: 0,
+            removed_bytes: 0,
+            skipped_directories: 0,
+            skip_reason_counts: Default::default(),
+            apply_requested: false,
+            filesystem_mutation_executed: false,
+            complete: true,
+        };
 
-        write_new_private_json(&output, b"{\"first\":true}").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
+        let encoded = output_summary(&receipt, &report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(parsed["private_output"]["written"], true);
+        assert_eq!(parsed["private_output"]["sha256"], "b".repeat(64));
+        assert!(parsed.get("output").is_none());
+        assert_eq!(parsed["filesystem_mutation_executed"], false);
     }
 }
