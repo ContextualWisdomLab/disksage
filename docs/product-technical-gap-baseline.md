@@ -165,6 +165,26 @@ authoritative, and no merge is claimed from queued or stale status.
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
 
+## 2026-08-29 PostgreSQL temporary test-cluster reclaim update
+
+- A bounded read-only inventory found two PostgreSQL 18 test clusters under the macOS temporary
+  filesystem, together allocating about 250 MiB. Native `psql` observations showed one explicitly
+  expected non-system test database per cluster and zero other client backends. Names and local
+  paths remain in mode-0600 private evidence and are not copied into this shareable baseline.
+- `disksage-postgres-test-reclaim` now defaults to plan-only and accepts authority only through a
+  repeated explicit database allowlist and database user. It binds the canonical PostgreSQL
+  structure, postmaster PID/port/socket, native executable identities, exact live database set,
+  zero-client observation, plan fingerprint, and exact approval phrase. Execution repeats those
+  observations, journals pending/result state, uses bounded native shutdown, rechecks the directory
+  inode, and records the post-delete `statvfs` delta.
+- Both live clusters first passed plan-only validation. Each exact fingerprint and approval phrase
+  was then revalidated independently; native shutdown completed, the original directories and
+  postmaster processes were absent, and four mode-0600 pending/result records remained. The two
+  result receipts attribute 262,156,288 physically reclaimed bytes in total; the surrounding APFS
+  observation rose by 256,960 KiB while the operations ran. Focused fake-runner/real-filesystem
+  tests cover allowlist mismatch, external clients, execution revalidation, private journals,
+  identity-bound deletion, and physical-delta reporting.
+
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
