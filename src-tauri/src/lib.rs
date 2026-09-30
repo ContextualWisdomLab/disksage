@@ -48,6 +48,14 @@ mod brew_cleanup;
 #[cfg(unix)]
 #[allow(dead_code)]
 pub(crate) mod unix_process_group;
+/// Unix capability-rooted traversal and contents cleanup for destructive reclaim.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_capability_cleanup;
+/// Unix exact-object active-holder authorization for destructive reclaim.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) mod unix_holder_authority;
 pub mod homebrew_audit;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -75,6 +83,10 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// Fail-closed cargo target-dir reclaim (measured path pin + symlink escape guards).
+pub mod cargo_target_reclaim;
+#[cfg(all(test, unix))]
+mod cargo_target_reclaim_post_detach_tests;
 /// Stable Orca/dev reclaim protection reason codes and pure assessors.
 pub mod reclaim_protection;
 pub mod maven_cache;
