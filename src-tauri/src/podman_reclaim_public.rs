@@ -157,6 +157,16 @@ fn run_text(
     Ok(output.stdout)
 }
 
+/// Shared bounded provider-command boundary for local container runtime evidence collectors.
+pub(crate) fn run_bounded_provider_text(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+    label: &str,
+) -> Result<String, String> {
+    run_text(executable, args, timeout, label)
+}
+
 fn hash_frame(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
