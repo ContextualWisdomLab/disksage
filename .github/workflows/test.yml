@@ -42,6 +42,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - name: Generate deterministic native icon resources
+        run: node scripts/generate-icons.mjs
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -60,9 +65,6 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20.19.0
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -93,6 +95,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - name: Generate deterministic native icon resources
+        run: node scripts/generate-icons.mjs
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:

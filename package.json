@@ -4,8 +4,10 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/generate-icons.mjs",
     "dev": "vite dev",
     "verify:release-version": "node scripts/ci/release-version.mjs",
+    "prebuild": "node scripts/generate-icons.mjs",
     "build": "npm run verify:release-version && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -17,7 +19,7 @@
   },
   "license": "MIT",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": "20.19.0"
   },
   "overrides": {
     "cookie": "^0.7.2",

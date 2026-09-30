@@ -65,6 +65,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/ontology/default.ttl"]
+    "resources": [
+      "resources/ontology/default.ttl",
+      "icons/icon-manifest.json"
+    ]
   }
 }

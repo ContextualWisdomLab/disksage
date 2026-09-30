@@ -1,0 +1,42 @@
+{
+  "schema": "disksage.icon-contract/v1",
+  "brand": "DiskSage",
+  "source": "icon-source.svg",
+  "source_sha256": "42ba6bb93f6ee9faf4783adc279dee900fd2a33c14a926a7bbb16685c0862419",
+  "generator": "scripts/generate-icons.mjs",
+  "generator_sha256": "b02fea34609ba63de20351837e8138d0e23b85ae182739ffc826171000ef4953",
+  "generator_runtime": {
+    "node_major": 20,
+    "zlib": "1.3.0.1-motley-82a5fec"
+  },
+  "png_assets": [
+    { "path": "32x32.png", "width": 32, "height": 32, "mode": "RGBA" },
+    { "path": "128x128.png", "width": 128, "height": 128, "mode": "RGBA" },
+    { "path": "128x128-2x.png", "width": 256, "height": 256, "mode": "RGBA" },
+    { "path": "Square30x30Logo.png", "width": 30, "height": 30, "mode": "RGBA" },
+    { "path": "Square44x44Logo.png", "width": 44, "height": 44, "mode": "RGBA" },
+    { "path": "Square71x71Logo.png", "width": 71, "height": 71, "mode": "RGBA" },
+    { "path": "Square89x89Logo.png", "width": 89, "height": 89, "mode": "RGBA" },
+    { "path": "Square107x107Logo.png", "width": 107, "height": 107, "mode": "RGBA" },
+    { "path": "Square142x142Logo.png", "width": 142, "height": 142, "mode": "RGBA" },
+    { "path": "Square150x150Logo.png", "width": 150, "height": 150, "mode": "RGBA" },
+    { "path": "Square284x284Logo.png", "width": 284, "height": 284, "mode": "RGBA" },
+    { "path": "Square310x310Logo.png", "width": 310, "height": 310, "mode": "RGBA" },
+    { "path": "StoreLogo.png", "width": 50, "height": 50, "mode": "RGBA" },
+    { "path": "icon.png", "width": 512, "height": 512, "mode": "RGBA" }
+  ],
+  "ico": {
+    "path": "icon.ico",
+    "sizes": [32, 16, 24, 48, 64, 256],
+    "bit_depth": 32
+  },
+  "icns": {
+    "path": "icon.icns",
+    "chunks": [
+      { "type": "ic07", "size": 128 },
+      { "type": "ic08", "size": 256 },
+      { "type": "ic09", "size": 512 },
+      { "type": "ic10", "size": 1024 }
+    ]
+  }
+}

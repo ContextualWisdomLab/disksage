@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" data-brand="disksage-v1">
+  <title>DiskSage</title>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="#12314A"/>
+  <circle cx="512" cy="512" r="300" fill="#F4F7F9"/>
+  <circle cx="512" cy="512" r="166" fill="#DCE8EE"/>
+  <circle cx="512" cy="512" r="68" fill="#12314A"/>
+  <path d="M320 525 458 663 720 388" fill="none" stroke="#2F9E74" stroke-width="78" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M790 182 818 250 886 278 818 306 790 374 762 306 694 278 762 250Z" fill="#F2B134"/>
+</svg>
