@@ -14,7 +14,7 @@ pub use crate::git_worktree_impl::{
     GitWorktreeReferenceBinding, GitWorktreeRemovalApproval, GitWorktreeRemovalItemResult,
     GitWorktreeRemovalResult, GitWorktreeSizeEvidence, PullRequestCommitMembership,
     PullRequestCommits, StaleOpenPullRequestHeads, GIT_WORKTREE_AUDIT_SCHEMA_KIND,
-    MAX_REFERENCE_BYTES,
+    GIT_WORKTREE_AUDIT_VERSION, MAX_REFERENCE_BYTES,
 };
 
 use std::path::Path;
@@ -24,6 +24,18 @@ use std::path::Path;
 /// Two minutes bounds a single command independently while the higher-level GitHub evidence phase
 /// may budget several sequential calls.
 pub const MAX_LOCAL_COMMAND_TIMEOUT_MS: u64 = 120_000;
+
+/// Fail closed while Windows worktree removal is still pathname-selected after object validation.
+#[cfg(windows)]
+fn ensure_identity_bound_worktree_mutation_available() -> Result<(), String> {
+    Err("git-worktree-removal-windows-identity-bound-mutation-unavailable".into())
+}
+
+/// Admit mutation only on platforms whose existing removal path is not capability-gated here.
+#[cfg(not(windows))]
+fn ensure_identity_bound_worktree_mutation_available() -> Result<(), String> {
+    Ok(())
+}
 
 fn validate_local_command_timeout(timeout_ms: u64) -> Result<(), String> {
     if timeout_ms == 0 || timeout_ms > MAX_LOCAL_COMMAND_TIMEOUT_MS {
@@ -243,6 +255,7 @@ pub fn execute_stale_worktree_removal(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     crate::git_worktree_impl::execute_stale_worktree_removal(
         approved_report,
         approval,
@@ -262,6 +275,7 @@ pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_closed_pull_requests(
         approved_report,
         approval,
@@ -283,6 +297,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
     validate_local_options(&options)?;
+    ensure_identity_bound_worktree_mutation_available()?;
     crate::git_worktree_impl::execute_stale_worktree_removal_with_github_pull_requests(
         approved_report,
         approval,

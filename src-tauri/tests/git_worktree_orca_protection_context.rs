@@ -10,7 +10,10 @@ use disksage_lib::git_worktree::{
     GitWorktreeAuditEntry, GitWorktreeAuditOptions, GitWorktreeAuditReport,
     GitWorktreeDisposition,
 };
-use disksage_lib::reclaim_protection::{ProtectionContext, REASON_ORCA_TERMINAL_LIVE};
+use disksage_lib::reclaim_protection::{
+    ProtectionContext, REASON_INCOMPLETE_DISPATCH, REASON_ORCA_SESSION_SLEEPING,
+    REASON_ORCA_TERMINAL_LIVE,
+};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -184,11 +187,20 @@ fn shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recen
     fs::write(
         &terminal_json,
         serde_json::to_vec(&serde_json::json!({
-            "result": {"terminals": [{"worktreePath": live_path}]}
+            "result": {"terminals": [{"worktreePath": live_path.clone()}]}
         }))
         .expect("serialize terminal fixture"),
     )
     .expect("write terminal fixture");
+    let worktree_json = temp.path().join("orca-worktrees.json");
+    fs::write(
+        &worktree_json,
+        serde_json::to_vec(&serde_json::json!({
+            "result": {"worktrees": [{"path": live_path.clone(), "workspaceStatus": "Sleeping"}]}
+        }))
+        .expect("serialize worktree fixture"),
+    )
+    .expect("write worktree fixture");
     let lead_queue = temp.path().join("LEAD_QUEUE.md");
     fs::write(&lead_queue, "# empty-but-real lead queue fixture\n").expect("write lead queue fixture");
 
@@ -203,6 +215,10 @@ fn shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recen
         .arg("3600")
         .arg("--orca-terminal-json")
         .arg(&terminal_json)
+        .arg("--orca-worktree-json")
+        .arg(&worktree_json)
+        .arg("--incomplete-dispatch-worktree-path")
+        .arg(&live_path)
         .arg("--open-pr-head-oid")
         .arg("0000000000000000000000000000000000000000")
         .arg("--open-pr-head-branch")
@@ -226,6 +242,14 @@ fn shipped_audit_cli_acquires_live_protection_inputs_and_requires_explicit_recen
         .expect("public summary protection reason codes");
     assert!(
         reasons.iter().any(|reason| reason == REASON_ORCA_TERMINAL_LIVE),
+        "summary={summary:#}"
+    );
+    assert!(
+        reasons.iter().any(|reason| reason == REASON_ORCA_SESSION_SLEEPING),
+        "summary={summary:#}"
+    );
+    assert!(
+        reasons.iter().any(|reason| reason == REASON_INCOMPLETE_DISPATCH),
         "summary={summary:#}"
     );
     assert_eq!(summary["removal_candidate_count"], 0);
@@ -283,11 +307,20 @@ fn shipped_remove_cli_reacquires_live_protection_before_mutation() {
     fs::write(
         &terminal_json,
         serde_json::to_vec(&serde_json::json!({
-            "result": {"terminals": [{"worktreePath": live_path}]}
+            "result": {"terminals": [{"worktreePath": live_path.clone()}]}
         }))
         .expect("serialize post-review terminal fixture"),
     )
     .expect("write post-review terminal fixture");
+    let worktree_json = temp.path().join("orca-worktrees-after-review.json");
+    fs::write(
+        &worktree_json,
+        serde_json::to_vec(&serde_json::json!({
+            "result": {"worktrees": [{"path": live_path.clone(), "workspaceStatus": "Sleep"}]}
+        }))
+        .expect("serialize post-review worktree fixture"),
+    )
+    .expect("write post-review worktree fixture");
     let record_root = temp.path().join("records");
 
     let remove_binary = env!("CARGO_BIN_EXE_disksage-git-worktree-remove");
@@ -301,6 +334,10 @@ fn shipped_remove_cli_reacquires_live_protection_before_mutation() {
         .arg("3600")
         .arg("--orca-terminal-json")
         .arg(&terminal_json)
+        .arg("--orca-worktree-json")
+        .arg(&worktree_json)
+        .arg("--incomplete-dispatch-worktree-path")
+        .arg(&live_path)
         .arg("--approved-removal-plan-fingerprint")
         .arg(plan_fingerprint)
         .arg("--confirmation-exact-approval-phrase")

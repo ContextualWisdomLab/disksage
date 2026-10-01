@@ -740,8 +740,10 @@ export interface GitWorktreeReferenceBinding {
 }
 
 export interface GitWorktreeAuditReport {
-  schema_kind: "disksage.git-worktree-audit/v4";
+  schema_kind: "disksage.git-worktree-audit/v5";
   version: number;
+  path_fingerprint_algorithm: "disksage.git-worktree-path/blake3-v2";
+  entry_fingerprint_algorithm: "disksage.git-worktree-entry/blake3-v3";
   repository_root: string;
   common_dir: string;
   generated_at_ms: number;
