@@ -611,6 +611,37 @@ fn process_command_matches_target(command: &str, path: &Path) -> bool {
 }
 
 #[cfg(all(unix, not(coverage)))]
+fn is_known_read_only_probe(command: &str, path: &Path) -> bool {
+    let Some(program) = command.split_whitespace().next() else {
+        return false;
+    };
+    if Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("grep")
+    {
+        return false;
+    }
+    let Some(proc_paths) = command[program.len()..]
+        .trim_start()
+        .strip_prefix("-lF ")
+        .and_then(|args| args.strip_prefix(path.to_string_lossy().as_ref()))
+        .and_then(|args| args.strip_prefix(' '))
+    else {
+        return false;
+    };
+    let mut proc_paths = proc_paths.split_whitespace();
+    let is_proc_cmdline = |proc_path: &str| {
+        proc_path
+            .strip_prefix("/proc/")
+            .and_then(|suffix| suffix.strip_suffix("/cmdline"))
+            .is_some_and(|pid| {
+                pid == "*" || (!pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))
+            })
+    };
+    proc_paths.next().is_some_and(is_proc_cmdline) && proc_paths.all(is_proc_cmdline)
+}
+
 fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) -> Vec<u32> {
     let text = String::from_utf8_lossy(output);
     let mut records = Vec::new();
@@ -652,11 +683,24 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
         lineage_pid = parent_pid;
     }
 
+    // A gate's `grep -lF <target> /proc/*/cmdline` carries the target in argv without opening it.
+    // Exclude only that known descendant probe; other descendants still count as active use.
+    let mut descendants = BTreeSet::new();
+    let mut frontier = vec![own_pid];
+    while let Some(parent) = frontier.pop() {
+        for (pid, parent_pid, _) in &records {
+            if *parent_pid == parent && *pid != parent && descendants.insert(*pid) {
+                frontier.push(*pid);
+            }
+        }
+    }
     let mut pids: Vec<u32> = records
         .into_iter()
         .filter_map(|(pid, _, command)| {
-            (!planner_lineage.contains(&pid) && process_command_matches_target(command, path))
-                .then_some(pid)
+            (!planner_lineage.contains(&pid)
+                && !(descendants.contains(&pid) && is_known_read_only_probe(command, path))
+                && process_command_matches_target(command, path))
+            .then_some(pid)
         })
         .collect();
     pids.sort_unstable();
@@ -1643,6 +1687,35 @@ mod tests {
         assert_eq!(
             parse_process_command_references(output, path, 501),
             vec![502]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn process_command_reference_parser_excludes_own_probe_children_only() {
+        // A gate's own grep of /proc cmdlines carries the target in argv without reading it.
+        let path = Path::new("/data/grok/grok-1");
+        let output = b"  500 1 bash reclaim_gate.sh\n\
+  600 500 grep -lF /data/grok/grok-1 /proc/1/cmdline\n\
+  601 500 cp -R /data/grok/grok-1 /backup/grok-1\n\
+  700 1 python loader.py --weights /data/grok/grok-1\n";
+        assert_eq!(
+            parse_process_command_references(output, path, 500),
+            vec![601, 700]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn process_command_reference_parser_counts_descendant_grep_reading_target() {
+        let path = Path::new("/data/grok/grok-1");
+        let output = b"  500 1 bash reclaim_gate.sh\n\
+  600 500 grep -lF /data/grok/grok-1 /proc/1/cmdline\n\
+  601 500 grep -lF pattern /data/grok/grok-1\n\
+  602 500 grep -lF /data/grok/grok-1 /proc/1/cmdline /data/grok/grok-1\n";
+        assert_eq!(
+            parse_process_command_references(output, path, 500),
+            vec![601, 602]
         );
     }
 
