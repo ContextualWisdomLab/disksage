@@ -1360,8 +1360,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("setup.cfg"), "[tox:tox]").unwrap();
         fs::create_dir(tmp.path().join(".tox")).unwrap();
+        fs::write(tmp.path().join(".tox/payload.bin"), b"tox environment").unwrap();
         fs::write(tmp.path().join("noxfile.py"), "").unwrap();
         fs::create_dir(tmp.path().join(".nox")).unwrap();
+        fs::write(tmp.path().join(".nox/payload.bin"), b"nox environment").unwrap();
 
         let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
 
