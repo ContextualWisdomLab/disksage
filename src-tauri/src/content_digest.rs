@@ -1,3 +1,12 @@
+//! Computes byte-content digests used to bind DiskSage evidence to exact content.
+//!
+//! The module exposes one streaming accumulator so callers can derive the same
+//! BLAKE3, SHA-256, and Microsoft QuickXorHash-compatible evidence without
+//! buffering an entire file in memory. Digest values identify observed bytes;
+//! they do not grant filesystem mutation or deletion authority.
+
+#![deny(missing_docs)]
+
 use base64::Engine;
 use sha2::Digest;
 use std::fmt::Write;
@@ -5,10 +14,14 @@ use std::fmt::Write;
 const QUICK_XOR_WIDTH_BITS: usize = 160;
 const QUICK_XOR_SHIFT: usize = 11;
 
+/// Digest evidence calculated over one exact byte sequence.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContentDigests {
+    /// BLAKE3 digest encoded as lowercase hexadecimal.
     pub blake3: String,
+    /// SHA-256 digest encoded as lowercase hexadecimal for portable attestation.
     pub sha256: String,
+    /// Microsoft QuickXorHash-compatible digest encoded as standard Base64.
     pub quick_xor_base64: String,
 }
 
@@ -66,6 +79,10 @@ impl QuickXorHasher {
     }
 }
 
+/// Streaming accumulator for all content-digest formats DiskSage publishes.
+///
+/// A single input stream updates every digest so downstream evidence cannot
+/// accidentally compare hashes calculated from different byte snapshots.
 pub struct ContentHasher {
     blake3: blake3::Hasher,
     sha256: sha2::Sha256,
@@ -91,12 +108,14 @@ impl Default for ContentHasher {
 }
 
 impl ContentHasher {
+    /// Adds the next contiguous bytes from the same logical content snapshot.
     pub fn update(&mut self, bytes: &[u8]) {
         self.blake3.update(bytes);
         self.sha256.update(bytes);
         self.quick_xor.update(bytes);
     }
 
+    /// Consumes the accumulator and returns the three digest representations.
     pub fn finalize(self) -> ContentDigests {
         let sha256 = self.sha256.finalize();
         ContentDigests {
@@ -108,6 +127,7 @@ impl ContentHasher {
     }
 }
 
+/// Computes all DiskSage content digests for an in-memory byte slice.
 pub fn digest_bytes(bytes: &[u8]) -> ContentDigests {
     let mut hasher = ContentHasher::default();
     hasher.update(bytes);
