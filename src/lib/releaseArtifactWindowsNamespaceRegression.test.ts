@@ -51,9 +51,9 @@ function materializeReleaseArtifacts(root: string) {
 }
 
 /** Execute the production release verifier against an isolated artifact tree. */
-function verify(artifactRoot: string) {
+function verify(artifactRoot: string, shell = 'bash') {
   return spawnSync(
-    'bash',
+    shell,
     [
       resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
       artifactRoot,
@@ -76,6 +76,15 @@ function withFixture(assertion: (artifactRoot: string) => void) {
 }
 
 describe('release artifact Windows namespace regression', () => {
+  it.runIf(process.platform === 'darwin')(
+    'accepts a valid release tree with the macOS system Bash',
+    () => withFixture((artifactRoot) => {
+      const result = verify(artifactRoot, '/bin/bash');
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe('');
+    }),
+  );
+
   it.runIf(process.platform !== 'win32')(
     'accepts the exact windows-2022 directory emitted by the release matrix',
     () => withFixture((artifactRoot) => {
