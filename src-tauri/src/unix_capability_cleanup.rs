@@ -1,0 +1,550 @@
+//! Unix capability-rooted traversal and contents cleanup for destructive reclaim.
+//!
+//! The caller supplies an already-reviewed directory [`File`]. This module never
+//! re-selects that root by pathname. Descendants are inspected relative to the
+//! retained directory descriptor with `fstatat(AT_SYMLINK_NOFOLLOW)`, directories
+//! are opened with descriptor-relative no-follow semantics, and entries are removed
+//! with `unlinkat`. Symlinks are unlinked as entries and are never followed.
+//!
+//! Linux descent uses `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV)`
+//! so a pre-existing same-filesystem bind mount cannot turn a reviewed target tree
+//! into traversal of an external mount. macOS retains the dev/inode capability
+//! checks and rejects device transitions.
+//!
+//! The reviewed root itself is intentionally retained. POSIX does not provide an
+//! fd-self directory unlink primitive, so callers must prefer an empty retained
+//! root over re-introducing a pathname-selection race at root disposition.
+
+use std::collections::HashSet;
+use std::ffi::{CStr, CString};
+use std::fs::File;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(test)]
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+const MAX_ENTRIES: u64 = 2_000_000;
+const MAX_DEPTH: usize = 128;
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(600);
+
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_XDEV: u64 = 0x01;
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+#[cfg(target_os = "linux")]
+const RESOLVE_BENEATH: u64 = 0x08;
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CleanupStats {
+    pub(crate) entries_removed: u64,
+}
+
+/// Typed cleanup failure retained at the filesystem boundary.
+///
+/// `Partial` means one or more irreversible descendant unlinks already succeeded.
+/// Allocation fields describe only the reviewed target-tree view; they are not proof
+/// that physical blocks were released and therefore never grant reclaim credit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupFailure {
+    NoMutation {
+        cause: String,
+    },
+    Partial {
+        entries_removed: u64,
+        cause: String,
+        target_view_allocated_bytes_before: u64,
+        target_view_allocated_bytes_after: Option<u64>,
+    },
+}
+
+#[cfg(test)]
+struct BeforeFinalUnlinkHook {
+    target_name: Vec<u8>,
+    callback: Arc<dyn Fn() + Send + Sync + 'static>,
+}
+
+#[cfg(test)]
+static BEFORE_FINAL_UNLINK_HOOK: OnceLock<Mutex<Option<BeforeFinalUnlinkHook>>> = OnceLock::new();
+
+/// Scoped test scheduler for a real filesystem mutation immediately before final unlink.
+///
+/// The hook changes only test scheduling. The production traversal and kernel namespace
+/// operations remain unchanged, allowing race acceptance tests to select an exact interleaving
+/// without relying on thread timing or inflated fixture size.
+#[cfg(test)]
+pub(crate) struct BeforeFinalUnlinkHookGuard;
+
+#[cfg(test)]
+impl Drop for BeforeFinalUnlinkHookGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = BEFORE_FINAL_UNLINK_HOOK.get() {
+            *slot
+                .lock()
+                .expect("before-final-unlink test hook mutex poisoned") = None;
+        }
+    }
+}
+
+/// Installs a one-shot test scheduler for the named descendant's final unlink.
+#[cfg(test)]
+pub(crate) fn install_before_final_unlink_hook_for_test<F>(
+    target_name: &[u8],
+    callback: F,
+) -> BeforeFinalUnlinkHookGuard
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    let slot = BEFORE_FINAL_UNLINK_HOOK.get_or_init(|| Mutex::new(None));
+    let mut slot = slot
+        .lock()
+        .expect("before-final-unlink test hook mutex poisoned");
+    assert!(slot.is_none(), "before-final-unlink test hook already installed");
+    *slot = Some(BeforeFinalUnlinkHook {
+        target_name: target_name.to_vec(),
+        callback: Arc::new(callback),
+    });
+    BeforeFinalUnlinkHookGuard
+}
+
+#[cfg(test)]
+fn run_before_final_unlink_hook_for_test(name: &CStr) {
+    let Some(slot) = BEFORE_FINAL_UNLINK_HOOK.get() else {
+        return;
+    };
+    let callback = {
+        let mut slot = slot
+            .lock()
+            .expect("before-final-unlink test hook mutex poisoned");
+        let matched = slot
+            .as_ref()
+            .map(|hook| hook.target_name.as_slice() == name.to_bytes())
+            .unwrap_or(false);
+        if matched {
+            slot.take().map(|hook| hook.callback)
+        } else {
+            None
+        }
+    };
+    if let Some(callback) = callback {
+        callback();
+    }
+}
+
+struct DirStream(*mut libc::DIR);
+
+impl DirStream {
+    fn from_fd(fd: RawFd) -> Result<Self, String> {
+        // `dup` would share the caller's open-file-description offset. Reopen `.`
+        // relative to the reviewed descriptor so each walk owns an independent
+        // directory position without re-selecting the root through a global path.
+        let dot = b".\0";
+        let independent = unsafe {
+            libc::openat(
+                fd,
+                dot.as_ptr() as *const libc::c_char,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if independent < 0 {
+            return Err(format!(
+                "cargo-target-capability-stream-open-failed:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let stream = unsafe { libc::fdopendir(independent) };
+        if stream.is_null() {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                libc::close(independent);
+            }
+            return Err(format!("cargo-target-capability-fdopendir-failed:{error}"));
+        }
+        Ok(Self(stream))
+    }
+
+    fn next_name(&mut self) -> Result<Option<CString>, String> {
+        unsafe {
+            *errno_location() = 0;
+            let entry = libc::readdir(self.0);
+            if entry.is_null() {
+                let errno = *errno_location();
+                if errno == 0 {
+                    return Ok(None);
+                }
+                return Err(format!(
+                    "cargo-target-capability-readdir-failed:{}",
+                    std::io::Error::from_raw_os_error(errno)
+                ));
+            }
+            let name = CStr::from_ptr((*entry).d_name.as_ptr()).to_owned();
+            Ok(Some(name))
+        }
+    }
+}
+
+impl Drop for DirStream {
+    fn drop(&mut self) {
+        unsafe {
+            libc::closedir(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn errno_location() -> *mut libc::c_int {
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn errno_location() -> *mut libc::c_int {
+    unsafe { libc::__error() }
+}
+
+#[derive(Debug)]
+struct WalkState {
+    entries: u64,
+    deadline: Instant,
+    root_device: libc::dev_t,
+    seen_files: HashSet<(libc::dev_t, libc::ino_t)>,
+    allocated_bytes: u64,
+    removed: u64,
+}
+
+impl WalkState {
+    fn new(root_device: libc::dev_t) -> Self {
+        Self {
+            entries: 0,
+            deadline: Instant::now() + CLEANUP_TIMEOUT,
+            root_device,
+            seen_files: HashSet::new(),
+            allocated_bytes: 0,
+            removed: 0,
+        }
+    }
+
+    fn admit_entry(&mut self, depth: usize) -> Result<(), String> {
+        if depth > MAX_DEPTH {
+            return Err("cargo-target-capability-depth-limit".into());
+        }
+        if Instant::now() >= self.deadline {
+            return Err("cargo-target-capability-timeout".into());
+        }
+        self.entries = self
+            .entries
+            .checked_add(1)
+            .ok_or_else(|| "cargo-target-capability-entry-overflow".to_string())?;
+        if self.entries > MAX_ENTRIES {
+            return Err("cargo-target-capability-entry-limit".into());
+        }
+        Ok(())
+    }
+
+    fn add_allocation(&mut self, stat: &libc::stat) -> Result<(), String> {
+        if !self.seen_files.insert((stat.st_dev, stat.st_ino)) {
+            return Ok(());
+        }
+        let blocks = u64::try_from(stat.st_blocks)
+            .map_err(|_| "cargo-target-size-allocation-overflow".to_string())?;
+        let allocated = blocks
+            .checked_mul(512)
+            .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
+        self.allocated_bytes = self
+            .allocated_bytes
+            .checked_add(allocated)
+            .ok_or_else(|| "cargo-target-size-allocation-overflow".to_string())?;
+        Ok(())
+    }
+}
+
+fn stat_at(dir_fd: RawFd, name: &CStr) -> Result<libc::stat, String> {
+    let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
+    let rc = unsafe {
+        libc::fstatat(
+            dir_fd,
+            name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "cargo-target-capability-fstatat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(stat)
+}
+
+fn verify_opened_child(
+    file: File,
+    expected: &libc::stat,
+    root_device: libc::dev_t,
+) -> Result<File, String> {
+    let mut opened = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut opened) } != 0 {
+        return Err(format!(
+            "cargo-target-capability-fstat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if opened.st_dev != expected.st_dev || opened.st_ino != expected.st_ino {
+        return Err("cargo-target-capability-child-replaced".into());
+    }
+    if opened.st_dev != root_device {
+        return Err("cargo-target-capability-cross-device".into());
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+fn open_child_directory(
+    parent_fd: RawFd,
+    name: &CStr,
+    expected: &libc::stat,
+    root_device: libc::dev_t,
+) -> Result<File, String> {
+    let how = OpenHow {
+        flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+    };
+    let raw_fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            parent_fd,
+            name.as_ptr(),
+            &how as *const OpenHow,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if raw_fd < 0 {
+        return Err(format!(
+            "cargo-target-capability-openat2-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let fd = i32::try_from(raw_fd)
+        .map_err(|_| "cargo-target-capability-openat2-fd-overflow".to_string())?;
+    let file = unsafe { File::from_raw_fd(fd) };
+    verify_opened_child(file, expected, root_device)
+}
+
+#[cfg(target_os = "macos")]
+fn open_child_directory(
+    parent_fd: RawFd,
+    name: &CStr,
+    expected: &libc::stat,
+    root_device: libc::dev_t,
+) -> Result<File, String> {
+    let fd = unsafe {
+        libc::openat(
+            parent_fd,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "cargo-target-capability-openat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    verify_opened_child(file, expected, root_device)
+}
+
+fn unlink_at(dir_fd: RawFd, name: &CStr, flags: libc::c_int) -> Result<(), String> {
+    #[cfg(test)]
+    run_before_final_unlink_hook_for_test(name);
+    if unsafe { libc::unlinkat(dir_fd, name.as_ptr(), flags) } != 0 {
+        return Err(format!(
+            "cargo-target-capability-unlinkat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+fn walk_directory(
+    directory: &File,
+    depth: usize,
+    state: &mut WalkState,
+    remove: bool,
+) -> Result<(), String> {
+    let dir_fd = directory.as_raw_fd();
+    let mut stream = DirStream::from_fd(dir_fd)?;
+    while let Some(name) = stream.next_name()? {
+        if name.as_bytes() == b"." || name.as_bytes() == b".." {
+            continue;
+        }
+        state.admit_entry(depth)?;
+        let stat = stat_at(dir_fd, &name)?;
+        if stat.st_dev != state.root_device {
+            return Err("cargo-target-capability-cross-device".into());
+        }
+        let kind = stat.st_mode & libc::S_IFMT;
+        if kind == libc::S_IFDIR {
+            let child = open_child_directory(dir_fd, &name, &stat, state.root_device)?;
+            walk_directory(&child, depth + 1, state, remove)?;
+            if remove {
+                unlink_at(dir_fd, &name, libc::AT_REMOVEDIR)?;
+                state.removed = state
+                    .removed
+                    .checked_add(1)
+                    .ok_or_else(|| "cargo-target-capability-entry-overflow".to_string())?;
+            }
+        } else if kind == libc::S_IFREG {
+            state.add_allocation(&stat)?;
+            if remove {
+                unlink_at(dir_fd, &name, 0)?;
+                state.removed = state
+                    .removed
+                    .checked_add(1)
+                    .ok_or_else(|| "cargo-target-capability-entry-overflow".to_string())?;
+            }
+        } else if kind == libc::S_IFLNK {
+            if remove {
+                unlink_at(dir_fd, &name, 0)?;
+                state.removed = state
+                    .removed
+                    .checked_add(1)
+                    .ok_or_else(|| "cargo-target-capability-entry-overflow".to_string())?;
+            }
+        } else {
+            return Err("cargo-target-capability-unsafe-entry-type".into());
+        }
+    }
+    Ok(())
+}
+
+fn root_device(root: &File) -> Result<libc::dev_t, String> {
+    let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(root.as_raw_fd(), &mut stat) } != 0 {
+        return Err(format!(
+            "cargo-target-capability-root-fstat-failed:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err("cargo-target-capability-root-not-directory".into());
+    }
+    Ok(stat.st_dev)
+}
+
+/// Measures allocated regular-file bytes beneath an already-reviewed directory capability.
+///
+/// Hard-linked files are counted once per `(device, inode)` within this view. Symlinks are
+/// not followed or credited. The returned number is allocation evidence for this tree view,
+/// not proof that the underlying blocks would be physically released by unlinking entries.
+pub(crate) fn measure_allocated_bytes(root: &File) -> Result<u64, String> {
+    let mut state = WalkState::new(root_device(root)?);
+    walk_directory(root, 1, &mut state, false)?;
+    Ok(state.allocated_bytes)
+}
+
+/// Removes descendants beneath an already-reviewed directory capability while retaining root.
+///
+/// Partial failures remain typed at this filesystem boundary and carry target-view allocation
+/// evidence. The owner maps that typed failure directly to its canonical recovery receipt; this
+/// adapter never serializes buyer-facing JSON or grants physical reclaim credit.
+pub(crate) fn remove_contents(root: &File) -> Result<CleanupStats, CleanupFailure> {
+    let target_view_allocated_bytes_before = measure_allocated_bytes(root)
+        .map_err(|cause| CleanupFailure::NoMutation { cause })?;
+    let root_device = root_device(root).map_err(|cause| CleanupFailure::NoMutation { cause })?;
+    let mut state = WalkState::new(root_device);
+    match walk_directory(root, 1, &mut state, true) {
+        Ok(()) => Ok(CleanupStats {
+            entries_removed: state.removed,
+        }),
+        Err(cause) if state.removed > 0 => Err(CleanupFailure::Partial {
+            entries_removed: state.removed,
+            cause,
+            target_view_allocated_bytes_before,
+            target_view_allocated_bytes_after: measure_allocated_bytes(root).ok(),
+        }),
+        Err(cause) => Err(CleanupFailure::NoMutation { cause }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn cleanup_is_root_capability_relative_and_never_follows_symlink() {
+        let root = tempfile::tempdir().expect("temp root");
+        let target = root.path().join("target");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(target.join("nested")).expect("nested target");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(target.join("nested/artifact"), vec![7u8; 8192]).expect("artifact");
+        std::fs::write(outside.join("SENTINEL"), b"must-survive").expect("sentinel");
+        symlink(&outside, target.join("outside-link")).expect("symlink");
+
+        let reviewed = File::open(&target).expect("open target");
+        let before = measure_allocated_bytes(&reviewed).expect("measure before");
+        assert!(before > 0);
+        let stats = remove_contents(&reviewed).expect("capability cleanup");
+        assert!(stats.entries_removed >= 3);
+        assert!(target.is_dir(), "reviewed root must remain present");
+        assert_eq!(
+            std::fs::read_dir(&target).expect("read retained root").count(),
+            0,
+            "reviewed root must be empty after successful contents cleanup"
+        );
+        assert_eq!(
+            std::fs::read(outside.join("SENTINEL")).expect("outside sentinel"),
+            b"must-survive"
+        );
+        assert_eq!(measure_allocated_bytes(&reviewed).expect("measure after"), 0);
+    }
+
+    #[test]
+    fn allocation_measurement_deduplicates_hard_links() {
+        let root = tempfile::tempdir().expect("temp root");
+        let target = root.path().join("target");
+        std::fs::create_dir(&target).expect("target");
+        let first = target.join("first.bin");
+        let second = target.join("second.bin");
+        std::fs::write(&first, vec![3u8; 16384]).expect("first file");
+        std::fs::hard_link(&first, &second).expect("hard link");
+        let metadata = std::fs::metadata(&first).expect("metadata");
+        use std::os::unix::fs::MetadataExt;
+        let expected = metadata.blocks().checked_mul(512).expect("allocation");
+
+        let reviewed = File::open(&target).expect("open target");
+        assert_eq!(measure_allocated_bytes(&reviewed).expect("measure"), expected);
+    }
+
+    #[test]
+    fn repeated_walks_do_not_consume_retained_root_directory_offset() {
+        let root = tempfile::tempdir().expect("temp root");
+        let target = root.path().join("target");
+        std::fs::create_dir(&target).expect("target");
+        std::fs::write(target.join("artifact.bin"), vec![5u8; 8192]).expect("artifact");
+
+        let reviewed = File::open(&target).expect("open target");
+        let first = measure_allocated_bytes(&reviewed).expect("first measurement");
+        assert!(first > 0);
+        assert_eq!(
+            measure_allocated_bytes(&reviewed).expect("second measurement"),
+            first,
+            "a measurement must not consume the retained root's directory position"
+        );
+        let stats = remove_contents(&reviewed).expect("cleanup after repeated measurement");
+        assert_eq!(stats.entries_removed, 1);
+        assert_eq!(
+            std::fs::read_dir(&target).expect("read retained root").count(),
+            0
+        );
+    }
+}
