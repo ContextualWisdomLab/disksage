@@ -32,34 +32,53 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    # Exact-head evidence on 2026-08-29 used 17m33s for the base Rust suite and then
+    # exhausted the former 30m job deadline 11m36s into the combined feature suite,
+    # before frontend verification. Preserve the single combined feature build and
+    # give the complete, independently required suites one bounded 60m job budget.
+    timeout-minutes: 60
+    env:
+      # Test binaries do not need incremental object graphs or debug symbols. Keeping both out of
+      # the shared target prevents repeated feature builds from exhausting the hosted 14 GB disk.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Runner reclaim positive-evidence regression
+        shell: bash
+        run: bash .github/scripts/test-reclaim-test-runner-space.sh
+      - name: Reclaim preinstalled SDK space unused by DiskSage
+        shell: bash
+        run: |
+          # The official ubuntu-24.04 inventory includes these SDKs. This Rust/Tauri test job does
+          # not invoke Android, .NET, or Haskell, so their fixed image-owned roots are out of scope.
+          bash .github/scripts/reclaim-test-runner-space.sh \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get clean
+          sudo rm -rf -- /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           cache-targets: false
       - name: Rust tests (includes unix symlink test)
+        env:
+          # Mutation fixtures require an owned runner path rather than the globally protected /tmp.
+          TMPDIR: ${{ runner.temp }}
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Headless cloud planner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
-      - name: Exact duplicate audit tests
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
-      - name: Extraction-free archive tree proof tests
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree
-          cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --test archive_tree_help_exit
+      - name: Headless cloud and archive proof tests
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli,archive-cli
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20.19.0
