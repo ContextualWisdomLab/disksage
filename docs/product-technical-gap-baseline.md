@@ -7,6 +7,28 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## Open pull-request snapshot — 2026-08-29 20:53:28 +0900
+
+This table records the exact remote head observed immediately before this documentation commit.
+Because committing this table necessarily advances PR #304 itself, its listed SHA is the exact
+parent observed before this documentation commit, not a claim that the self-referential row remains
+its current head after the commit.
+Every push invalidates prior check and review evidence; the protected branch state must be queried
+again before a normal merge.
+
+| PR | Exact head observed | Product responsibility | Protected-gate state at observation |
+| --- | --- | --- | --- |
+| #298 | `a21c1eb5a5af6fea696dcd8f26e498e91eb5ae49` | Bound test-runner disk allocation. | Blocked: source checks passed, but the central Strix path aborted on unknown model-price authority at `.github` PR #1408 head `3aa71941`; OpenCode produced no qualifying exact-head verdict. |
+| #300 | `c8af6ada10c2a8ca369ad5c41b2d4b923498a254` | Prove when a standalone clone is safely reclaimable. | Unstable: release builds passed, while `test` failed in the container-orphan regression suite and still required source-versus-environment diagnosis. |
+| #302 | `1878181f6cccf691a8de56a9380db94f375059e2` | Preserve dormant checkout ownership with durable leases. | Unstable: fresh platform builds and tests were running after the lease serialization fix. |
+| #303 | `d763e6eb1cdd8429d4e0eac9c61bde8a83bc17f2` | Reclaim provider caches only from identity-bound evidence. | Blocked: fresh platform, LLM, test, and Noema checks were running after the portable cache-fixture fix; OpenCode had no passing exact-head verdict. |
+| #304 | `81fd7cf74d456a4cd931cc560bf827188e727fe4` | Diagnose OneDrive provider-cache pressure without granting deletion authority. | Blocked: this row records the documentation commit's observed parent; platform, test, LLM, and Strix checks were running, while OpenCode and Noema had no passing exact-head evidence. |
+
+The immediate loop is therefore: diagnose source-owned test failures on #300 and #303, allow
+PR #302's new exact-head checks to finish while doing that work, and treat provider/review-agent
+failures separately from source defects. No row above authorizes bypass, force-push, self-approval,
+cloud mutation, or local deletion.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
@@ -679,3 +701,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-29 OneDrive provider-cache pressure boundary
+
+- A bounded read-only live observation found 13,663,981,568 allocated bytes across 13
+  provider-managed cache files. The aggregate File Provider state was `error` and contained the
+  provider's local-disk-full marker. Active-use collection for the cache root completed with no
+  observed users. No item name, user path, provider blob, or database row is retained in the report.
+- DiskSage now reports `internal-pressure` from that conjunction. It does not infer orphanhood from
+  cache age or size and cannot authorize provider-internal deletion, reset, or restart. A sync stall
+  requires two complete equal aggregate observations separated by an explicit service deadline;
+  incomplete evidence is `unavailable`.
+- The remaining physical-reclaim path is item-level native eviction after exact upload and safety
+  attestation. Provider-owned cache compaction has no safe public DiskSage authority and remains an
+  explicit non-feature rather than a destructive cleanup candidate.
