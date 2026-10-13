@@ -109,7 +109,9 @@ fn manifest_refuses_placeholders_deprecated_authors_and_registry_publication() {
         "Cargo's parsed package metadata must forbid every registry, not merely contain publish = false text"
     );
     assert!(
-        !manifest.lines().any(|line| line.trim_start().starts_with("authors =")),
+        !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("authors =")),
         "Cargo's deprecated authors field must not be reintroduced"
     );
 
@@ -154,11 +156,55 @@ note = "publish = false"
 fn tauri_bin_directory_contains_only_rust_sources() {
     let bin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin");
     for entry in fs::read_dir(&bin_dir).expect("Tauri bin directory must be readable") {
-        let path = entry.expect("Tauri bin directory entries must be readable").path();
+        let path = entry
+            .expect("Tauri bin directory entries must be readable")
+            .path();
         assert!(
             path.is_file() && path.extension().is_some_and(|extension| extension == "rs"),
             "Tauri scans every src/bin entry as a binary; keep non-Rust source fragments outside it: {}",
             path.display()
         );
     }
+}
+
+#[test]
+fn colima_execution_target_is_opt_in_for_macos_packaging_only() {
+    let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--no-deps")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output()
+        .expect("cargo metadata must execute for target validation");
+    assert!(output.status.success());
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let target = metadata["packages"][0]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["name"] == "disksage-colima-disk-reclaim")
+        .expect("Colima target must remain declared for supported macOS packaging");
+    assert_eq!(
+        target["required-features"],
+        serde_json::json!(["colima-macos-cli"]),
+        "default Windows and Linux package builds must not expose the macOS-only executable"
+    );
+
+    let workflow = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/release.yml"),
+    )
+    .expect("release workflow must be readable");
+    assert_eq!(workflow.matches("tauri_features: llm-engine\n").count(), 2);
+    assert_eq!(
+        workflow
+            .matches("tauri_features: llm-engine,colima-macos-cli\n")
+            .count(),
+        1,
+        "only the macOS release matrix entry may opt into the Colima executable"
+    );
+    assert!(workflow.contains("if: matrix.os == 'macos-latest'\n        run: cargo check --manifest-path src-tauri/Cargo.toml --features colima-macos-cli --bin disksage-colima-disk-reclaim"));
 }
