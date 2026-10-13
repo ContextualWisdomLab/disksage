@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -76,6 +77,18 @@ function withFixture(assertion: (artifactRoot: string) => void) {
 }
 
 describe('release artifact Windows namespace regression', () => {
+  it('runs the system-Bash regression in the macOS release job', () => {
+    const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
+    const step = [
+      '      - name: macOS release verifier regression',
+      "        if: runner.os == 'macOS'",
+      '        run: npm test -- src/lib/releaseArtifactWindowsNamespaceRegression.test.ts',
+    ].join('\n');
+    expect(workflow).toContain(step);
+    expect(workflow.indexOf(step)).toBeGreaterThan(workflow.indexOf('      - run: npm ci'));
+    expect(workflow.indexOf(step)).toBeLessThan(workflow.indexOf('      - name: Tauri build (with embedded LLM)'));
+  });
+
   it.runIf(process.platform === 'darwin')(
     'accepts a valid release tree with the macOS system Bash',
     () => withFixture((artifactRoot) => {

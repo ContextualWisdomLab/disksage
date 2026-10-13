@@ -95,8 +95,8 @@ if [[ ${#checksum_files[@]} -ne 6 ]]; then
 fi
 
 for checksum_file in "${checksum_files[@]}"; do
-  checksum_dir="$(dirname "$checksum_file")"
-  checksum_name="$(basename "$checksum_file")"
+  checksum_dir="${checksum_file%/*}"
+  checksum_name="${checksum_file##*/}"
   expected_asset_name="${checksum_name%.sha256}"
   checksum_line="" line="" line_count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
