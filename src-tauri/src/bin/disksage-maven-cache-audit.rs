@@ -1,12 +1,16 @@
 //! Read-only Maven local-repository provenance audit. This command never removes artifacts.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs::OpenOptions, io::Write};
 
 use disksage_lib::maven_cache::{
     audit_maven_repository, MavenCacheAuditOptions, MavenCacheAuditReport,
 };
+use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
+
+const MAX_MAVEN_CACHE_ENTRIES: u64 = 2_000_000;
+const MAX_MAVEN_CACHE_OUTPUT_ITEMS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -18,45 +22,85 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]"
+    "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]\n\
+다음 단계: 후보와 후보 집합 지문을 검토하세요. 이 명령은 캐시를 제거하지 않습니다."
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "알 수 없는 인자".to_string())
+}
+
 fn number<T: std::str::FromStr>(
-    args: &[String],
+    args: &[OsString],
     index: &mut usize,
     flag: &str,
 ) -> Result<T, String> {
-    value(args, index, flag)?
+    text_value(args, index, flag)?
         .parse()
         .map_err(|_| format!("{flag}는 정수여야 함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let defaults = MavenCacheAuditOptions::default();
     let mut repository_root = None;
     let mut output = None;
     let mut max_entries = defaults.max_entries;
+    let mut max_entries_seen = false;
     let mut max_candidates = defaults.max_candidates;
+    let mut max_candidates_seen = false;
     let mut max_issues = defaults.max_issues;
+    let mut max_issues_seen = false;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--repository-root" => {
-                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?))
+        match args[index].to_str() {
+            Some("--repository-root") => {
+                if repository_root.is_some() {
+                    return Err("--repository-root는 한 번만 지정할 수 있음".into());
+                }
+                repository_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--repository-root",
+                )?));
             }
-            "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
-            "--max-entries" => max_entries = number(args, &mut index, "--max-entries")?,
-            "--max-candidates" => max_candidates = number(args, &mut index, "--max-candidates")?,
-            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            Some("--output") => {
+                if output.is_some() {
+                    return Err("--output은 한 번만 지정할 수 있음".into());
+                }
+                output = Some(PathBuf::from(native_value(args, &mut index, "--output")?));
+            }
+            Some("--max-entries") => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
+                max_entries = number(args, &mut index, "--max-entries")?;
+            }
+            Some("--max-candidates") => {
+                if max_candidates_seen {
+                    return Err("--max-candidates는 한 번만 지정할 수 있음".into());
+                }
+                max_candidates_seen = true;
+                max_candidates = number(args, &mut index, "--max-candidates")?;
+            }
+            Some("--max-issues") => {
+                if max_issues_seen {
+                    return Err("--max-issues는 한 번만 지정할 수 있음".into());
+                }
+                max_issues_seen = true;
+                max_issues = number(args, &mut index, "--max-issues")?;
+            }
+            Some("--help" | "-h") => return Err(usage().into()),
+            Some(_) | None => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -68,8 +112,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if output.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err("--output은 절대 경로여야 함".into());
     }
-    if max_entries == 0 {
-        return Err("--max-entries는 1 이상이어야 함".into());
+    if !(1..=MAX_MAVEN_CACHE_ENTRIES).contains(&max_entries) {
+        return Err(format!(
+            "--max-entries는 1..={MAX_MAVEN_CACHE_ENTRIES} 범위여야 함"
+        ));
+    }
+    if max_candidates > MAX_MAVEN_CACHE_OUTPUT_ITEMS {
+        return Err(format!(
+            "--max-candidates는 0..={MAX_MAVEN_CACHE_OUTPUT_ITEMS} 범위여야 함"
+        ));
+    }
+    if max_issues > MAX_MAVEN_CACHE_OUTPUT_ITEMS {
+        return Err(format!(
+            "--max-issues는 0..={MAX_MAVEN_CACHE_OUTPUT_ITEMS} 범위여야 함"
+        ));
     }
     Ok(Args {
         repository_root,
@@ -78,6 +134,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_candidates,
         max_issues,
     })
+}
+
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
 }
 
 fn now_ms() -> u64 {
@@ -100,27 +162,13 @@ fn report(args: &Args) -> Result<MavenCacheAuditReport, String> {
     )
 }
 
-fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|_| "maven-cache-audit-output-create-failed".to_string())?;
-    file.write_all(encoded)
-        .map_err(|_| "maven-cache-audit-output-write-failed".to_string())?;
-    file.sync_all()
-        .map_err(|_| "maven-cache-audit-output-sync-failed".to_string())
-}
-
-fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<String, String> {
+fn output_summary(
+    receipt: &PrivateEvidenceReceipt,
+    report: &MavenCacheAuditReport,
+) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "schema_kind": report.schema_kind,
-        "output": path.to_string_lossy(),
+        "private_output": receipt,
         "candidate_set_fingerprint": report.candidate_set_fingerprint,
         "remote_recoverable_directories": report.remote_recoverable_directories,
         "remote_recoverable_bytes": report.remote_recoverable_bytes,
@@ -134,14 +182,18 @@ fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<Stri
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let args = parse_args(&raw)?;
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args_os(&raw)?;
     let report = report(&args)?;
-    let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
-        write_new_private_json(output, &encoded)?;
-        println!("{}", output_summary(output, &report)?);
+        let receipt = write_private_json_create_new(&args.repository_root, output, &report)?;
+        println!("{}", output_summary(&receipt, &report)?);
     } else {
+        let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         println!("{}", String::from_utf8_lossy(&encoded));
     }
     Ok(())
@@ -200,37 +252,28 @@ mod tests {
     }
 
     #[test]
-    fn private_output_is_create_new_and_not_overwritten() {
-        let tmp = tempfile::tempdir().unwrap();
-        let output = tmp.path().join("audit.json");
-
-        write_new_private_json(&output, b"{\"first\":true}").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-
-    #[test]
-    fn output_summary_escapes_unusual_path_characters_as_valid_json() {
+    fn output_summary_exposes_only_private_evidence_commitment() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("repository");
         std::fs::create_dir(&root).unwrap();
         let report = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
-        let output = PathBuf::from("/tmp/audit-\"quoted\"\nline.json");
+        let receipt = PrivateEvidenceReceipt {
+            written: true,
+            sha256: "a".repeat(64),
+            bytes: 123,
+            unix_mode: "0600".into(),
+            create_new: true,
+            contains_sensitive_local_paths: true,
+            is_approval: false,
+        };
 
-        let encoded = output_summary(&output, &report).unwrap();
+        let encoded = output_summary(&receipt, &report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
-        assert_eq!(parsed["output"], output.to_string_lossy().as_ref());
+        assert_eq!(parsed["private_output"]["written"], true);
+        assert_eq!(parsed["private_output"]["sha256"], "a".repeat(64));
+        assert_eq!(parsed["private_output"]["unix_mode"], "0600");
+        assert!(parsed.get("output").is_none());
         assert_eq!(parsed["provider_write_executed"], false);
     }
 }
