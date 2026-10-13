@@ -45,7 +45,11 @@ expected_dirs=(
   "release-disksage-macos-latest-${run_identity}"
 )
 
-mapfile -d '' top_level_entries < <(find "$artifact_root" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+# Keep the verifier usable with macOS system Bash (3.2); order is immaterial.
+top_level_entries=()
+while IFS= read -r -d '' entry; do
+  top_level_entries+=("$entry")
+done < <(find "$artifact_root" -mindepth 1 -maxdepth 1 -print0)
 if [[ ${#top_level_entries[@]} -ne ${#expected_dirs[@]} ]]; then
   printf 'Expected exactly three release artifact directories, found %s.\n' "${#top_level_entries[@]}" >&2
   exit 1
@@ -91,8 +95,8 @@ if [[ ${#checksum_files[@]} -ne 6 ]]; then
 fi
 
 for checksum_file in "${checksum_files[@]}"; do
-  checksum_dir="$(dirname "$checksum_file")"
-  checksum_name="$(basename "$checksum_file")"
+  checksum_dir="${checksum_file%/*}"
+  checksum_name="${checksum_file##*/}"
   expected_asset_name="${checksum_name%.sha256}"
   checksum_line="" line="" line_count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
