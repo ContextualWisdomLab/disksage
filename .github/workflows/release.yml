@@ -213,7 +213,7 @@ jobs:
           codesign --display --verbose=4 "${app_bundles[0]}"
 
       - name: Upload release artifact set
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}
           path: ${{ matrix.bundles }}
@@ -371,7 +371,7 @@ jobs:
           subject-path: release-artifacts/**/*
 
       - name: Upload attested release SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-sbom-${{ github.run_attempt }}
           path: release-artifacts/sbom/disksage.spdx.json
@@ -495,7 +495,7 @@ jobs:
           echo "== staged =="; ls -la gpu-run/ || true
       - name: Upload GPU run bundle (for manual GPU verification)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: disksage-gpu-${{ matrix.os }}
           path: gpu-run/
