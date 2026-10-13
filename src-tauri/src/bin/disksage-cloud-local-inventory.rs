@@ -3,30 +3,27 @@
 #[cfg(target_os = "macos")]
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
-#[cfg(not(coverage))]
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
-#[cfg(not(coverage))]
 use std::process::{Command, Stdio};
-#[cfg(not(coverage))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudRoot};
-#[cfg(not(coverage))]
 use disksage_lib::cloud_local_inventory::{
     hard_timeout_inventory, hard_timeout_inventory_from_checkpoint,
     inventory_cloud_local_allocations_with_checkpoints, CloudLocalAllocationInventory,
     CloudLocalInventoryOptions,
 };
 
-#[cfg(not(coverage))]
 const WORKER_REPORT_GRACE_MS: u64 = 2_000;
+const MAX_MIN_ALLOCATED_MIB: u64 = u64::MAX / (1024 * 1024);
+const MAX_ENTRY_LIMIT: u64 = 1_000_000;
+const MAX_RESULT_LIMIT: usize = 10_000;
+const MAX_DEPTH_LIMIT: usize = 64;
+const MAX_DURATION_LIMIT_MS: u64 = 300_000;
+const MAX_ISSUE_LIMIT: usize = 1_000;
 
-#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: Option<PathBuf>,
@@ -40,12 +37,11 @@ struct Args {
     max_issues: usize,
 }
 
-#[cfg(not(coverage))]
 fn usage() -> &'static str {
-    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
+    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]\n\
+다음 단계: 결과의 완전성과 공급자 상태를 검토하세요. 이 명령은 파일을 다운로드하거나 제거하지 않습니다."
 }
 
-#[cfg(not(coverage))]
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -53,7 +49,6 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-#[cfg(not(coverage))]
 fn number<T: std::str::FromStr>(
     args: &[String],
     index: &mut usize,
@@ -64,42 +59,116 @@ fn number<T: std::str::FromStr>(
         .map_err(|_| format!("{flag}는 정수여야 함"))
 }
 
-#[cfg(not(coverage))]
+fn validate_option_bounds(args: &Args) -> Result<(), String> {
+    if args.min_allocated_mib > MAX_MIN_ALLOCATED_MIB {
+        return Err("cloud-local-inventory-min-allocated-mib-invalid".into());
+    }
+    if args.max_entries == 0 || args.max_entries > MAX_ENTRY_LIMIT {
+        return Err("cloud-local-inventory-max-entries-invalid".into());
+    }
+    if args.max_results == 0 || args.max_results > MAX_RESULT_LIMIT {
+        return Err("cloud-local-inventory-max-results-invalid".into());
+    }
+    if args.max_depth > MAX_DEPTH_LIMIT {
+        return Err("cloud-local-inventory-max-depth-invalid".into());
+    }
+    if args.max_duration_ms == 0 || args.max_duration_ms > MAX_DURATION_LIMIT_MS {
+        return Err("cloud-local-inventory-max-duration-invalid".into());
+    }
+    if args.max_issues == 0 || args.max_issues > MAX_ISSUE_LIMIT {
+        return Err("cloud-local-inventory-max-issues-invalid".into());
+    }
+    Ok(())
+}
+
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let defaults = CloudLocalInventoryOptions::default();
     let mut cloud_root = None;
     let mut all_roots = false;
+    let mut all_roots_seen = false;
     let mut relative_subpath = None;
     let mut min_allocated_mib = defaults.min_allocated_bytes / (1024 * 1024);
+    let mut min_allocated_mib_seen = false;
     let mut max_entries = defaults.max_entries;
+    let mut max_entries_seen = false;
     let mut max_results = defaults.max_results;
+    let mut max_results_seen = false;
     let mut max_depth = defaults.max_depth;
+    let mut max_depth_seen = false;
     let mut max_duration_ms = defaults.max_duration_ms;
+    let mut max_duration_ms_seen = false;
     let mut max_issues = defaults.max_issues;
+    let mut max_issues_seen = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--cloud-root" => {
-                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
+                if cloud_root.is_some() {
+                    return Err("--cloud-root는 한 번만 지정할 수 있음".into());
+                }
+                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?));
             }
-            "--all-roots" => all_roots = true,
+            "--all-roots" => {
+                if all_roots_seen {
+                    return Err("--all-roots는 한 번만 지정할 수 있음".into());
+                }
+                all_roots_seen = true;
+                all_roots = true;
+            }
             "--relative-subpath" => {
+                if relative_subpath.is_some() {
+                    return Err("--relative-subpath는 한 번만 지정할 수 있음".into());
+                }
                 relative_subpath = Some(PathBuf::from(value(
                     args,
                     &mut index,
                     "--relative-subpath",
-                )?))
+                )?));
             }
             "--min-allocated-mib" => {
-                min_allocated_mib = number(args, &mut index, "--min-allocated-mib")?
+                if min_allocated_mib_seen {
+                    return Err("--min-allocated-mib는 한 번만 지정할 수 있음".into());
+                }
+                min_allocated_mib_seen = true;
+                min_allocated_mib = number(args, &mut index, "--min-allocated-mib")?;
             }
-            "--max-entries" => max_entries = number(args, &mut index, "--max-entries")?,
-            "--max-results" => max_results = number(args, &mut index, "--max-results")?,
-            "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
-            "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
-            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
+            "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
+                max_entries = number(args, &mut index, "--max-entries")?;
+            }
+            "--max-results" => {
+                if max_results_seen {
+                    return Err("--max-results는 한 번만 지정할 수 있음".into());
+                }
+                max_results_seen = true;
+                max_results = number(args, &mut index, "--max-results")?;
+            }
+            "--max-depth" => {
+                if max_depth_seen {
+                    return Err("--max-depth는 한 번만 지정할 수 있음".into());
+                }
+                max_depth_seen = true;
+                max_depth = number(args, &mut index, "--max-depth")?;
+            }
+            "--max-duration-ms" => {
+                if max_duration_ms_seen {
+                    return Err("--max-duration-ms는 한 번만 지정할 수 있음".into());
+                }
+                max_duration_ms_seen = true;
+                max_duration_ms = number(args, &mut index, "--max-duration-ms")?;
+            }
+            "--max-issues" => {
+                if max_issues_seen {
+                    return Err("--max-issues는 한 번만 지정할 수 있음".into());
+                }
+                max_issues_seen = true;
+                max_issues = number(args, &mut index, "--max-issues")?;
+            }
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("cloud-local-inventory-unknown-argument".into()),
         }
         index += 1;
     }
@@ -127,7 +196,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if all_roots && relative_subpath.is_some() {
         return Err("--relative-subpath는 --all-roots와 함께 사용할 수 없음".into());
     }
-    Ok(Args {
+    let parsed = Args {
         cloud_root,
         all_roots,
         relative_subpath,
@@ -137,18 +206,33 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_depth,
         max_duration_ms,
         max_issues,
-    })
+    };
+    validate_option_bounds(&parsed)?;
+    Ok(parsed)
 }
 
-#[cfg(not(coverage))]
+fn command_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "cloud-local-inventory-argument-not-utf8".to_string())
+        })
+        .collect()
+}
+
 fn home_dir() -> Result<PathBuf, String> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .map_err(|_| "HOME/USERPROFILE을 찾을 수 없음".into())
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(value) = std::env::var_os(key) {
+            if !value.is_empty() {
+                return Ok(PathBuf::from(value));
+            }
+        }
+    }
+    Err("HOME/USERPROFILE을 찾을 수 없음".into())
 }
 
-#[cfg(not(coverage))]
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
@@ -161,7 +245,6 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     }
 }
 
-#[cfg(not(coverage))]
 fn scan_root(discovered: &CloudRoot, relative_subpath: Option<&Path>) -> Result<CloudRoot, String> {
     let Some(relative) = relative_subpath else {
         return Ok(discovered.clone());
@@ -185,10 +268,9 @@ fn scan_root(discovered: &CloudRoot, relative_subpath: Option<&Path>) -> Result<
     Ok(selected)
 }
 
-#[cfg(not(coverage))]
 fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
     CloudLocalInventoryOptions {
-        min_allocated_bytes: args.min_allocated_mib.saturating_mul(1024 * 1024),
+        min_allocated_bytes: args.min_allocated_mib * (1024 * 1024),
         max_entries: args.max_entries,
         max_results: args.max_results,
         max_depth: args.max_depth,
@@ -197,7 +279,6 @@ fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
     }
 }
 
-#[cfg(not(coverage))]
 fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
     println!(
         "{}",
@@ -206,7 +287,6 @@ fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct CloudLocalInventoryBatchFailure {
     cloud_root_id: String,
@@ -216,7 +296,6 @@ struct CloudLocalInventoryBatchFailure {
     reason: String,
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct CloudLocalInventoryBatchReport {
     version: u32,
@@ -233,7 +312,6 @@ struct CloudLocalInventoryBatchReport {
     notices: Vec<String>,
 }
 
-#[cfg(not(coverage))]
 fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), String> {
     println!(
         "{}",
@@ -242,7 +320,6 @@ fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), Str
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) {
     let raw = vec![
         "--cloud-root".into(),
@@ -276,7 +353,6 @@ fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) 
     )
 }
 
-#[cfg(not(coverage))]
 fn inventory_all_roots(
     discovery: cloud::CloudRootDiscoveryReport,
     args: &Args,
@@ -306,7 +382,6 @@ fn inventory_all_roots(
     )
 }
 
-#[cfg(not(coverage))]
 fn finish_batch_report(
     observed_at_ms: u64,
     discovered_roots: usize,
@@ -355,7 +430,6 @@ fn finish_batch_report(
     }
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
 enum WorkerMessageRef<'a> {
@@ -363,7 +437,6 @@ enum WorkerMessageRef<'a> {
     Complete(&'a CloudLocalAllocationInventory),
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
 enum WorkerMessage {
@@ -371,7 +444,6 @@ enum WorkerMessage {
     Complete(CloudLocalAllocationInventory),
 }
 
-#[cfg(not(coverage))]
 fn write_worker_message(
     writer: &mut impl Write,
     message: &WorkerMessageRef<'_>,
@@ -385,7 +457,6 @@ fn write_worker_message(
         .map_err(|_| "inventory-worker-output-failed".to_string())
 }
 
-#[cfg(not(coverage))]
 fn run_worker(root: &CloudRoot, args: &Args) -> Result<(), String> {
     let stdout = std::io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
@@ -398,7 +469,6 @@ fn run_worker(root: &CloudRoot, args: &Args) -> Result<(), String> {
     write_worker_message(&mut writer, &WorkerMessageRef::Complete(&report))
 }
 
-#[cfg(not(coverage))]
 fn drain_pipe<R: Read + Send + 'static>(
     mut pipe: R,
 ) -> std::thread::JoinHandle<Result<String, String>> {
@@ -410,14 +480,12 @@ fn drain_pipe<R: Read + Send + 'static>(
     })
 }
 
-#[cfg(not(coverage))]
 fn join_pipe(reader: std::thread::JoinHandle<Result<String, String>>) -> Result<String, String> {
     reader
         .join()
         .map_err(|_| "inventory-worker-output-thread-failed".to_string())?
 }
 
-#[cfg(not(coverage))]
 fn drain_worker_stdout<R: Read + Send + 'static>(
     reader: R,
     latest_checkpoint: Arc<Mutex<Option<CloudLocalAllocationInventory>>>,
@@ -442,7 +510,6 @@ fn drain_worker_stdout<R: Read + Send + 'static>(
     })
 }
 
-#[cfg(not(coverage))]
 fn join_worker_stdout(
     reader: std::thread::JoinHandle<Result<CloudLocalAllocationInventory, String>>,
 ) -> Result<CloudLocalAllocationInventory, String> {
@@ -451,12 +518,10 @@ fn join_worker_stdout(
         .map_err(|_| "inventory-worker-output-thread-failed".to_string())?
 }
 
-#[cfg(not(coverage))]
 fn watchdog_deadline_ms(max_duration_ms: u64) -> u64 {
     max_duration_ms.saturating_add(WORKER_REPORT_GRACE_MS)
 }
 
-#[cfg(not(coverage))]
 fn run_watchdog(
     raw: &[String],
     root: &CloudRoot,
@@ -528,9 +593,12 @@ fn run_watchdog(
     }
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_args()?;
+    if matches!(raw.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let discovery = cloud::discover_cloud_roots_report(&home_dir()?);
     if args.all_roots {
@@ -551,16 +619,12 @@ fn run() -> Result<(), String> {
     print_report(&run_watchdog(&raw, &root, &args)?)
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
