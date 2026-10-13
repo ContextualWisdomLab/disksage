@@ -45,4 +45,15 @@ describe("iCloud local eviction safety UI", () => {
       "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 판정하세요.",
     ]);
   });
+
+  it("retains provider-aware progress and deduplicated blocker feedback", () => {
+    const source = readSource();
+
+    expect(source).toContain("function uploadLabel");
+    expect(source).toContain("업로드 중");
+    expect(source).toContain("function syncLabel");
+    expect(source).toContain("공급자 상태");
+    expect(source).toContain("planBlockerActions(plan.blockers");
+    expect(source).not.toContain("plan.blockers.join(\", \")");
+  });
 });
