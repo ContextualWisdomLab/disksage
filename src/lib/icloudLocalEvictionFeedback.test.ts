@@ -145,6 +145,24 @@ describe("iCloud local eviction next-action feedback", () => {
     );
   });
 
+  it("keeps every projected message implementation-neutral and actionable", () => {
+    const messages = [
+      ICLOUD_FILE_SELECTION_FAILURE,
+      ICLOUD_STATE_INSPECTION_FAILURE,
+      ICLOUD_EVICTION_EXECUTION_FAILURE,
+      ICLOUD_RESULT_RECORD_FAILURE,
+      ...planBlockerActions(["icloud-file-provider-native-status-unavailable"]),
+      ...verificationBlockerActions(["local-allocation-reduction-unverified"]),
+    ];
+    const forbidden = ["File Provider", "attestation", "eviction permit", "lineage", "Goal/ADR"];
+    const nextAction = /(확인|다시|선택|진행|기다|보관|복원|회수|승인|시도)/;
+
+    for (const message of messages) {
+      for (const term of forbidden) expect(message).not.toContain(term);
+      expect(message).toMatch(nextAction);
+    }
+  });
+
   it("projects only bounded guidance in the desktop component", () => {
     const source = readComponent();
 

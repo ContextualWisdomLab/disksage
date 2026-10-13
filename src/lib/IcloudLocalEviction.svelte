@@ -99,8 +99,8 @@
 
   function observationLabel(method: api.IcloudStateObservationMethod): string {
     return method === "file-provider-ctl-evaluate"
-      ? "macOS File Provider"
-      : "Foundation ubiquitous item";
+      ? "macOS 상태 확인"
+      : "iCloud 상태 확인";
   }
 
   function uploadLabel(state: api.IcloudLocalState): string {
@@ -113,9 +113,9 @@
     if (state.downloading_status_current && !state.is_uploaded && !state.is_uploading) {
       return "로컬 최신본·업로드 미확인";
     }
-    if (state.is_uploaded && !state.is_uploading) return "공급자 동기화 완료";
-    if (state.is_uploading) return "공급자 업로드 중";
-    return "공급자 동기화 미완료";
+    if (state.is_uploaded && !state.is_uploading) return "iCloud 동기화 완료";
+    if (state.is_uploading) return "iCloud 업로드 중";
+    return "iCloud 동기화 미완료";
   }
 
 </script>
@@ -140,7 +140,7 @@
     </label>
     <button onclick={chooseFile} disabled={planning || executing}>파일 선택</button>
     <button onclick={inspectLocalCopy} disabled={planning || executing || !path.trim()}>
-      {planning ? "File Provider 상태 확인 중…" : "로컬 사본 판정"}
+      {planning ? "iCloud 상태 확인 중…" : "로컬 사본 확인"}
     </button>
   </div>
 
@@ -155,24 +155,24 @@
       </div>
       <div class="status-grid">
         <span>업로드 {uploadLabel(plan.icloud_state)}</span>
-        <span>공급자 상태 {syncLabel(plan.icloud_state)}</span>
-        <span>로컬 current {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
+        <span>클라우드 상태 {syncLabel(plan.icloud_state)}</span>
+        <span>로컬 최신 상태 {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
         <span>충돌 {plan.icloud_state.has_unresolved_conflicts ? "있음" : "없음"}</span>
-        <span>활성 사용 {plan.active_use.active ? "감지" : "없음"}</span>
+        <span>사용 중 {plan.active_use.active ? "감지" : "없음"}</span>
         <span>동기화 일시정지 {plan.icloud_state.is_sync_paused === false ? "아님" : "미확인/해당"}</span>
         <span>동기화 제외 {plan.icloud_state.is_excluded_from_sync ? "해당" : "아님"}</span>
         <span>휴지통 {plan.icloud_state.is_trashed === false ? "아님" : "미확인/해당"}</span>
-        <span>축출 정책 {plan.icloud_state.allows_eviction === true ? "허용" : "미확인/불가"}</span>
+        <span>로컬 사본 회수 {plan.icloud_state.allows_eviction === true ? "가능" : "미확인/불가"}</span>
       </div>
       <div class="fingerprint">
-        계획 지문: {plan.plan_fingerprint}
+        입력할 확인 문구: {plan.plan_fingerprint}
       </div>
 
       {#if eviction}
         {#if eviction.result.verification_complete}
           <p class="safe">
             로컬 할당 {fmtBytes(eviction.result.observed_allocation_reduction_bytes)} 감소를 확인했습니다.
-            iCloud 항목 경로와 ubiquitous identity는 유지되었습니다.
+            iCloud 파일 경로와 클라우드 항목 식별 정보는 유지되었습니다.
           </p>
         {:else}
           <div class="warning" role="alert">
@@ -184,19 +184,18 @@
             </ul>
           </div>
         {/if}
-        <p class="muted">승인 기록: {eviction.approval_path}</p>
         {#if eviction.result_path}
-          <p class="muted">결과 기록: {eviction.result_path}</p>
+          <p class="muted">로컬 사본 회수 결과를 확인했습니다.</p>
         {:else}
           <p class="error" role="alert">{ICLOUD_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if plan.eligible_after_human_approval}
         <div class="approval-controls">
           <p class="warning">
-            아래 계획 지문 전체를 직접 입력해야 합니다. 실행 시 크기·업로드·충돌·정책·항목 정체성·활성 사용을 다시 검사하며 달라지면 중단합니다.
+            아래 확인 문구 전체를 직접 입력해야 합니다. 실행 시 파일 크기·업로드·충돌·회수 가능 여부를 다시 확인하며 달라지면 중단합니다.
           </p>
           <label>
-            전체 계획 지문 확인
+            전체 확인 문구
             <input
               class="fingerprint-input"
               type="text"
@@ -241,11 +240,11 @@
   .local-path, .fingerprint-input { width: min(56rem, 88vw); font-family: ui-monospace, monospace; }
   .plan { padding: 0.7rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; display: grid; gap: 0.5rem; }
   .status-grid { display: flex; flex-wrap: wrap; gap: 0.65rem; font-size: 0.78rem; color: #3f5368; }
-  .fingerprint { overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
+  .fingerprint { overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: var(--ds-text-muted); }
   .approval-controls { padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; display: grid; gap: 0.55rem; justify-items: start; }
   .approval-controls textarea { width: min(56rem, 88vw); min-height: 3.5rem; resize: vertical; }
   label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
-  .muted { color: #777; margin: 0; }
+  .muted { color: var(--ds-text-muted); margin: 0; }
   .warning { color: #8a5700; margin: 0; }
   .warning > p { margin: 0; }
   .warning ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
