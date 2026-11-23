@@ -6,46 +6,6 @@ id = "RUSTSEC-2025-0098"
 reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"
 
 [[IgnoredVulns]]
-id = "RUSTSEC-2024-0411"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0412"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0413"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0414"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0415"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0416"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0417"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0418"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0419"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0420"
-reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
-
-[[IgnoredVulns]]
 id = "RUSTSEC-2024-0429"
 reason = "glib 0.18 VariantStrIter unsoundness; glib version pinned by tauri GTK3 stack, API not used by this crate; revisit on tauri upgrade"
 
